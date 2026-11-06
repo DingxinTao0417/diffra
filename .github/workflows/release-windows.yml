@@ -47,3 +47,5 @@ jobs:
             packages/desktop/release/*.blockmap
             packages/desktop/release/latest.yml
           if-no-files-found: error
+          # 每次约 116MB，会占账号的 Actions 存储配额；正式产物以更新源上的为准
+          retention-days: 7
