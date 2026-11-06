@@ -239,6 +239,7 @@ async function runToolCall(
       signal,
       readHashes: session.readHashes,
       trustedCommands: session.trustedCommands,
+      readOnlyPaths: session.config.readOnlyPaths,
       requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
     }
     const output = await executeTool(name, call.input, context)
@@ -269,7 +270,12 @@ async function askCommandPermission(
   command: string,
   io: TurnIO,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-  const decision = classifyCommand(command, session.trustedCommands, session.alwaysAllowed)
+  const decision = classifyCommand(command, {
+    cwd: session.cwd,
+    trusted: session.trustedCommands,
+    alwaysAllowed: session.alwaysAllowed,
+    readOnlyPaths: session.config.readOnlyPaths,
+  })
   if (decision.level === 'allow') return { allowed: true }
   if (decision.level === 'deny') {
     return { allowed: false, reason: `This command is blocked by Diffra (${decision.reason}). Do not retry it.` }

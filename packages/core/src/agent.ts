@@ -42,7 +42,7 @@ export function createAgent(): acp.AgentApp {
       const config = meta.data.diffra
       const environment = { bashPath: await findBash(), rgPath: await findRipgrep() }
       const checkpoints = config.checkpointDir
-        ? await Checkpoints.open(config.checkpointDir, params.cwd).catch((error: unknown) => {
+        ? await Checkpoints.open(config.checkpointDir, params.cwd, config.readOnlyPaths).catch((error: unknown) => {
             console.error('[session] 检查点仓库初始化失败', error)
             return null
           })
@@ -52,7 +52,7 @@ export function createAgent(): acp.AgentApp {
         config,
         environment,
         checkpoints,
-        systemPrompt: await buildSystemPrompt(params.cwd, environment.bashPath, config.checks),
+        systemPrompt: await buildSystemPrompt(params.cwd, environment.bashPath, config),
       })
       sessions.set(session.id, session)
       const sessionInfo: SessionInfo = { bashPath: environment.bashPath, checkpoints: checkpoints !== null }

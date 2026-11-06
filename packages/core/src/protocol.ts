@@ -24,6 +24,8 @@ export interface SessionChecks {
 export interface SessionConfig {
   model: { endpoint: ModelEndpoint; modelId: string; contextWindow: number | null }
   checks: SessionChecks
+  // 禁写目录（相对项目根目录），比如用户的数据目录：agent 不能改，检查点也不碰
+  readOnlyPaths: string[]
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }

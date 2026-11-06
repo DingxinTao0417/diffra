@@ -1,7 +1,20 @@
 import { basename } from 'node:path'
 import { parse } from 'shell-quote'
+import { isUnderReadOnly } from './tools/protected.js'
 
 export type CommandDecision = { level: 'allow' } | { level: 'ask' } | { level: 'deny'; reason: string }
+
+export interface CommandPolicy {
+  cwd: string
+  // 用户配置的检查命令，整条完全一致时自动放行
+  trusted: string[]
+  // 「本会话内允许同类命令」记下的命令键
+  alwaysAllowed: ReadonlySet<string>
+  readOnlyPaths: string[]
+}
+
+// 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）
+const MENTIONS_SECRET = /\.env|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_ed25519|id_ecdsa|\.(pem|key|p12|pfx)\b/i
 
 // 只读命令：不改文件、不联网、不执行别的程序
 const READ_ONLY = new Set([
@@ -19,7 +32,7 @@ const DENY_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 ]
 
 // 把命令拆成若干段（&& || ; |），每段都是只读或在白名单里才自动放行
-export function classifyCommand(command: string, trusted: string[], alwaysAllowed: ReadonlySet<string>): CommandDecision {
+export function classifyCommand(command: string, policy: CommandPolicy): CommandDecision {
   const trimmed = command.trim()
   for (const { pattern, reason } of DENY_PATTERNS) {
     if (pattern.test(trimmed)) return { level: 'deny', reason }
@@ -27,16 +40,27 @@ export function classifyCommand(command: string, trusted: string[], alwaysAllowe
   if (splitSegments(trimmed, true)?.some(isRecursiveDeleteOfRoot)) {
     return { level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' }
   }
-  if (trusted.some((item) => item.trim() === trimmed)) return { level: 'allow' }
+  if (policy.trusted.some((item) => item.trim() === trimmed)) return { level: 'allow' }
+  if (MENTIONS_SECRET.test(trimmed)) return { level: 'ask' }
   // 命令替换、反引号里可以藏任何命令，交给用户确认
   if (/\$\(|`|<\(|>\(/.test(trimmed)) return { level: 'ask' }
 
   const segments = splitSegments(trimmed)
   if (segments === null) return { level: 'ask' }
-  const allowed = segments.every(
-    (argv) => isReadOnly(argv) || alwaysAllowed.has(commandKey(argv)) || trusted.some((item) => item.trim() === argv.join(' ')),
-  )
+  const allowed = segments.every((argv) => {
+    if (isReadOnly(argv)) return true
+    // 涉及禁写目录的非只读命令，即使之前选过「同类命令始终允许」也要再问
+    if (argv.some((arg) => argumentPaths(arg).some((path) => isUnderReadOnly(policy.cwd, path, policy.readOnlyPaths)))) {
+      return false
+    }
+    return policy.alwaysAllowed.has(commandKey(argv)) || policy.trusted.some((item) => item.trim() === argv.join(' '))
+  })
   return allowed ? { level: 'allow' } : { level: 'ask' }
+}
+
+// 参数本身和 --flag=value 里的 value 都可能是路径
+function argumentPaths(arg: string): string[] {
+  return [arg, ...arg.split('=').slice(1)].filter(Boolean)
 }
 
 // 「本会话内允许同类命令」的粒度：程序名，加上不以 - 开头的第一个子命令（如 pnpm test、git commit）

@@ -26,7 +26,7 @@ export function contentHash(text: string): string {
 }
 
 // 模型在 Git Bash 里看到的是 /d/workspace/... 这种路径，转成 Windows 路径
-function fromMsysPath(input: string): string {
+export function fromMsysPath(input: string): string {
   if (process.platform !== 'win32') return input
   const match = /^\/([a-zA-Z])(\/|$)(.*)$/.exec(input)
   return match ? `${match[1]}:/${match[3]}` : input

@@ -17,6 +17,7 @@ export const sessionConfigSchema = z.object({
     contextWindow: z.number().int().positive().nullable(),
   }),
   checks: z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema }),
+  readOnlyPaths: z.array(z.string().trim().min(1)),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 

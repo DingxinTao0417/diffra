@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { CheckpointChange } from './protocol.js'
+import { cleanReadOnlyPath, PROTECTED_GLOBS } from './tools/protected.js'
 
 const GIT_TIMEOUT_MS = 120_000
 // 快照不经过用户的 git 配置：身份写死，换行符原样保存
@@ -21,15 +22,24 @@ const REPO_CONFIG: Array<[string, string]> = [
 ]
 const DEFAULT_EXCLUDES = ['node_modules/']
 
-// 检查点存在应用数据目录下的独立裸仓库里，用 --work-tree 指向项目，不碰项目自己的 .git
+// 检查点存在应用数据目录下的独立裸仓库里，用 --work-tree 指向项目，不碰项目自己的 .git。
+// 受保护文件和禁写目录不进快照：密钥不会被复制到快照仓库，撤销时也不会还原用户在这些地方的改动。
 export class Checkpoints {
+  private readonly excludes: string[]
+
   private constructor(
     private readonly gitDir: string,
     private readonly workTree: string,
-  ) {}
+    readOnlyPaths: string[],
+  ) {
+    this.excludes = [
+      ...PROTECTED_GLOBS.map((glob) => `:(exclude,glob)**/${glob}`),
+      ...readOnlyPaths.map(cleanReadOnlyPath).filter(Boolean).map((path) => `:(exclude,literal)${path}`),
+    ]
+  }
 
-  static async open(gitDir: string, workTree: string): Promise<Checkpoints> {
-    const store = new Checkpoints(gitDir, workTree)
+  static async open(gitDir: string, workTree: string, readOnlyPaths: string[] = []): Promise<Checkpoints> {
+    const store = new Checkpoints(gitDir, workTree, readOnlyPaths)
     const initialized = await access(join(gitDir, 'HEAD')).then(
       () => true,
       () => false,
@@ -79,7 +89,7 @@ export class Checkpoints {
   }
 
   private async writeTree(): Promise<string> {
-    await this.git(['add', '--all', '.'])
+    await this.git(['add', '--all', '--', '.', ...this.excludes])
     return (await this.git(['write-tree'])).trim()
   }
 

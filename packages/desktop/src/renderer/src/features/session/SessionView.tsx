@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
-import type { CheckpointChange, SessionChecks } from '@diffra/core/types'
+import type { CheckpointChange } from '@diffra/core/types'
 import { FolderOpen, Send, Square } from 'lucide-react'
 import type { PermissionRequestEvent, ProjectState, SessionHandle } from '../../../../shared/ipc'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { errorMessage } from '@/lib/errors'
 import { PermissionCard } from './PermissionCard'
-import { ProjectPanel } from './ProjectPanel'
+import { ProjectPanel, type ProjectSettingsInput } from './ProjectPanel'
 import { RestoreDialog } from './RestoreDialog'
 import { applyUpdate, type TranscriptItem, type Turn } from './transcript'
 import { TranscriptView } from './TranscriptView'
@@ -106,14 +106,14 @@ export function SessionView({ onOpenModels }: SessionViewProps) {
     }
   }
 
-  const saveChecks = async (checks: SessionChecks) => {
+  const saveProjectSettings = async (settings: ProjectSettingsInput) => {
     if (!project) return
     try {
-      const updated = await window.diffra.saveProjectChecks(project.path, checks)
+      const updated = await window.diffra.saveProject(project.path, settings)
       setProject(updated)
-      // 检查命令在新建会话时传给 core；还没开始干活就直接换一个新会话
+      // 项目设置在新建会话时传给 core；还没开始干活就直接换一个新会话
       if (turns.length === 0) await startSession(updated)
-      else setHint('检查命令已保存，从下一个新会话开始生效')
+      else setHint('项目设置已保存，从下一个新会话开始生效')
     } catch (error) {
       setSessionError(errorMessage(error))
     }
@@ -207,7 +207,7 @@ export function SessionView({ onOpenModels }: SessionViewProps) {
         session={session}
         running={running}
         onPick={pickProject}
-        onSaveChecks={saveChecks}
+        onSave={saveProjectSettings}
         onNewSession={() => void startSession(project)}
       />
 

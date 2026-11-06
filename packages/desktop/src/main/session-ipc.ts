@@ -17,7 +17,7 @@ import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint } from './settings-ipc'
-import { sessionChecksSchema, type SettingsStore } from './settings-store'
+import { projectSettingsSchema, type SettingsStore } from './settings-store'
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 
@@ -66,7 +66,10 @@ function settlePermission(requestId: string, optionId: string | null): void {
 }
 
 export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): void {
-  const projectState = (path: string): ProjectState => ({ path, checks: settings.get().projects[path]?.checks ?? NO_CHECKS })
+  const projectState = (path: string): ProjectState => {
+    const project = settings.get().projects[path]
+    return { path, checks: project?.checks ?? NO_CHECKS, readOnlyPaths: project?.readOnlyPaths ?? [] }
+  }
 
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
 
@@ -88,10 +91,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return info?.isDirectory() ? projectState(path) : null
   })
 
-  ipcMain.handle(IPC_CHANNELS.projectSaveChecks, async (_event, rawPath: unknown, rawChecks: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
-    const checks = parse(sessionChecksSchema, rawChecks)
-    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks } } }))
+    const project = parse(projectSettingsSchema, rawSettings)
+    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: project } }))
     return projectState(path)
   })
 
@@ -106,9 +109,11 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const target = await providerEndpoint(settings, secrets, provider.id)
     if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
 
+    const project = projectState(path)
     const { sessionId, info } = await createSession(await coreConnection(), path, {
       model: { endpoint: target.endpoint, modelId: model.id, contextWindow: model.contextWindow },
-      checks: projectState(path).checks,
+      checks: project.checks,
+      readOnlyPaths: project.readOnlyPaths,
       checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
     })
     await rememberProject(path)

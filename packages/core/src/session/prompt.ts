@@ -1,13 +1,17 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { SessionChecks } from '../protocol.js'
+import type { SessionChecks, SessionConfig } from '../protocol.js'
 
 // 项目里的规则文件，按顺序都读，合计最多 8000 字
 const RULE_FILES = ['AGENTS.md', 'CLAUDE.md']
 const MAX_RULES_CHARS = 8000
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
-export async function buildSystemPrompt(cwd: string, bashPath: string | null, checks: SessionChecks): Promise<string> {
+export async function buildSystemPrompt(
+  cwd: string,
+  bashPath: string | null,
+  { checks, readOnlyPaths }: Pick<SessionConfig, 'checks' | 'readOnlyPaths'>,
+): Promise<string> {
   const shell = bashPath
     ? 'run_command uses bash (Git Bash on Windows): use bash syntax and forward slashes.'
     : 'run_command is unavailable because bash was not found.'
@@ -20,6 +24,10 @@ export async function buildSystemPrompt(cwd: string, bashPath: string | null, ch
     '- Explore before you edit: use list_files, search and read_file. Never guess what a file contains.',
     '- Read a file before editing it. Make small, focused edits with edit_file, copying old_string exactly from read_file output (without line numbers).',
     '- Only change files inside the project directory.',
+    '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: you cannot read, search or edit them. If you need something from them, ask the user.',
+    ...(readOnlyPaths.length > 0
+      ? [`- Never modify anything under these paths, they hold the user's data: ${readOnlyPaths.join(', ')}. Reading them is fine.`]
+      : []),
     '- Do not weaken tests to make them pass: no deleting or skipping tests, no catch-all exception handling, no hard-coded expected values, unless the user asks for it.',
     ...checkLines(checks),
     '- If the user only asked a question and you changed nothing, just answer without calling finish.',

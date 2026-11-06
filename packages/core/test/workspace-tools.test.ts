@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -19,6 +19,7 @@ beforeEach(async () => {
     signal: new AbortController().signal,
     readHashes: new Map(),
     trustedCommands: [],
+    readOnlyPaths: [],
     requestCommandPermission: async () => ({ allowed: true }),
   }
 })
@@ -103,6 +104,59 @@ describe('检查点', () => {
       expect(() => readFileSync(join(project, 'added.txt'))).toThrow()
       expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('keep\r\n')
       expect(await checkpoints.changesSince(commit)).toEqual([])
+    } finally {
+      rmSync(gitDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('受保护文件和禁写目录', () => {
+  test('.env 不能读、不能改，搜索结果里也没有；.env.example 照常可读', async () => {
+    writeFileSync(join(project, '.env'), 'API_KEY=super-secret-value\n')
+    writeFileSync(join(project, '.env.example'), 'API_KEY=\n')
+    writeFileSync(join(project, 'config.ts'), 'export const key = process.env.API_KEY\n')
+    await expect(readFileTool(context, { path: '.env' })).rejects.toThrow('protected')
+    await expect(editFileTool(context, { path: '.env', old_string: '', new_string: 'X=1' })).rejects.toThrow('protected')
+    await expect(searchTool(context, { pattern: 'API_KEY', path: '.env' })).rejects.toThrow('protected')
+    const found = await searchTool(context, { pattern: 'API_KEY' })
+    expect(found.text).toContain('config.ts')
+    expect(found.text).not.toContain('super-secret-value')
+    expect((await readFileTool(context, { path: '.env.example' })).text).toContain('API_KEY=')
+  })
+
+  test('禁写目录里的文件不能改，也不能新建', async () => {
+    mkdirSync(join(project, 'data'))
+    writeFileSync(join(project, 'data', 'db.json'), '{"users":[]}\n')
+    const readOnlyContext = { ...context, readOnlyPaths: ['data'] }
+    await readFileTool(readOnlyContext, { path: 'data/db.json' })
+    await expect(
+      editFileTool(readOnlyContext, { path: 'data/db.json', old_string: '[]', new_string: '[1]' }),
+    ).rejects.toThrow('read-only')
+    await expect(editFileTool(readOnlyContext, { path: 'data/new.json', old_string: '', new_string: '{}' })).rejects.toThrow('read-only')
+    expect(readFileSync(join(project, 'data', 'db.json'), 'utf8')).toBe('{"users":[]}\n')
+  })
+
+  test('检查点不包含受保护文件和禁写目录，撤销时不动它们', async () => {
+    const gitDir = mkdtempSync(join(tmpdir(), 'diffra-cp-'))
+    try {
+      mkdirSync(join(project, 'data'))
+      writeFileSync(join(project, '.env'), 'TOKEN=old\n')
+      writeFileSync(join(project, 'data', 'db.json'), 'v1\n')
+      writeFileSync(join(project, 'app.ts'), 'a\n')
+      const checkpoints = await Checkpoints.open(gitDir, project, ['data'])
+      const commit = await checkpoints.snapshot()
+
+      // 这一轮里用户自己改了 .env 和数据目录，agent 改了 app.ts
+      writeFileSync(join(project, '.env'), 'TOKEN=new\n')
+      writeFileSync(join(project, 'data', 'db.json'), 'v2\n')
+      writeFileSync(join(project, 'app.ts'), 'b\n')
+
+      const changes = await checkpoints.changesSince(commit)
+      expect(changes).toEqual([{ path: 'app.ts', change: 'modified' }])
+      await checkpoints.restore(commit, changes)
+      expect(readFileSync(join(project, 'app.ts'), 'utf8')).toBe('a\n')
+      expect(readFileSync(join(project, '.env'), 'utf8')).toBe('TOKEN=new\n')
+      expect(readFileSync(join(project, 'data', 'db.json'), 'utf8')).toBe('v2\n')
     } finally {
       rmSync(gitDir, { recursive: true, force: true })
     }

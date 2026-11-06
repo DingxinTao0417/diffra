@@ -2,8 +2,16 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { runProcess, truncateLines } from '../process.js'
 import { applyEdit } from './edit-match.js'
+import { isProtectedFile, isUnderReadOnly, PROTECTED_GLOBS } from './protected.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
 import { contentHash, resolveInWorkspace } from './workspace.js'
+
+function protectedFileError(display: string): ToolError {
+  return new ToolError(
+    `${display} is protected because it may contain secrets. Diffra does not let you read, search or edit it. ` +
+      'If you need something from it, ask the user.',
+  )
+}
 
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const DEFAULT_READ_LINES = 400
@@ -17,6 +25,7 @@ export async function readFileTool(
   input: { path: string; offset?: number; limit?: number },
 ): Promise<ToolOutput> {
   const target = await resolveInWorkspace(context.cwd, input.path)
+  if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   const info = await stat(target.absolute).catch(() => null)
   if (!info) throw new ToolError(`File not found: ${target.display}`)
   if (info.isDirectory()) throw new ToolError(`${target.display} is a directory. Use list_files instead.`)
@@ -69,6 +78,7 @@ export async function searchTool(
   input: { pattern: string; path?: string; glob?: string; literal?: boolean },
 ): Promise<ToolOutput> {
   const target = await resolveInWorkspace(context.cwd, input.path ?? '.')
+  if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   const args = [
     '--line-number',
     '--no-heading',
@@ -86,6 +96,8 @@ export async function searchTool(
     '--path-separator',
     '/',
   ]
+  // 只用排除规则：rg 里出现任何正向 glob 就会变成「只搜匹配的文件」
+  for (const glob of PROTECTED_GLOBS) args.push('--glob', `!${glob}`)
   if (input.literal) args.push('--fixed-strings')
   if (input.glob) args.push('--glob', input.glob)
   args.push('--', input.pattern, target.display)
@@ -101,6 +113,13 @@ export async function editFileTool(
   input: { path: string; old_string: string; new_string: string; replace_all?: boolean },
 ): Promise<ToolOutput> {
   const target = await resolveInWorkspace(context.cwd, input.path)
+  if (isProtectedFile(target.display)) throw protectedFileError(target.display)
+  if (isUnderReadOnly(context.cwd, target.absolute, context.readOnlyPaths)) {
+    throw new ToolError(
+      `${target.display} is inside a directory the user marked as read-only (${context.readOnlyPaths.join(', ')}). ` +
+        'Do not change anything there; ask the user if the task needs it.',
+    )
+  }
   const existing = await readFile(target.absolute, 'utf8').catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
     throw error

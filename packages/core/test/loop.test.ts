@@ -81,18 +81,23 @@ afterEach(() => {
   rmSync(checkpointDir, { recursive: true, force: true })
 })
 
-async function makeSession(model: MockLanguageModelV4, checks: SessionChecks = { afterEdit: null, beforeFinish: null }) {
+async function makeSession(
+  model: MockLanguageModelV4,
+  checks: SessionChecks = { afterEdit: null, beforeFinish: null },
+  readOnlyPaths: string[] = [],
+) {
   const bashPath = await findBash()
   return new Session({
     cwd: project,
     config: {
       model: { endpoint: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }, modelId: 'mock', contextWindow: 100_000 },
       checks,
+      readOnlyPaths,
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
-    checkpoints: await Checkpoints.open(checkpointDir, project),
-    systemPrompt: await buildSystemPrompt(project, bashPath, checks),
+    checkpoints: await Checkpoints.open(checkpointDir, project, readOnlyPaths),
+    systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths }),
     model,
   })
 }
@@ -227,21 +232,29 @@ describe('主循环', () => {
 
 describe('系统提示词', () => {
   test('配了检查命令时告诉模型会自动跑、不用自己跑', async () => {
-    const prompt = await buildSystemPrompt(project, null, { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' }, readOnlyPaths: [] })
     expect(prompt).toContain('automatically runs `pnpm typecheck`')
     expect(prompt).toContain('Do not run it yourself')
     expect(prompt).toContain('Diffra then runs `pnpm test`')
   })
 
   test('没配检查命令时要求模型自己验证', async () => {
-    const prompt = await buildSystemPrompt(project, null, { afterEdit: null, beforeFinish: null })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [] })
     expect(prompt).toContain('verify it, for example by running the relevant tests')
     expect(prompt).toContain('No project checks are configured')
   })
 
   test('读入项目根目录的 AGENTS.md', async () => {
     writeFileSync(join(project, 'AGENTS.md'), '用 pnpm，不要用 npm\n')
-    const prompt = await buildSystemPrompt(project, null, { afterEdit: null, beforeFinish: null })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [] })
     expect(prompt).toContain('--- AGENTS.md ---\n用 pnpm，不要用 npm')
+  })
+})
+
+describe('系统提示词里的保护说明', () => {
+  test('写明受保护文件和禁写目录', async () => {
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: ['data', 'uploads'] })
+    expect(prompt).toContain('Files that may contain secrets (.env')
+    expect(prompt).toContain("Never modify anything under these paths, they hold the user's data: data, uploads")
   })
 })

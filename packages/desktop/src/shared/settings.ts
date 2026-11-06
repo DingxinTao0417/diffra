@@ -24,6 +24,8 @@ export interface ProviderConfig {
 
 export interface ProjectSettings {
   checks: SessionChecks
+  // 禁写目录，相对项目根目录、/ 分隔
+  readOnlyPaths: string[]
 }
 
 export interface Settings {

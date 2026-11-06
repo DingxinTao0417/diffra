@@ -26,8 +26,7 @@ export const IPC_CHANNELS = {
   modelsTest: 'models:test',
   projectPick: 'project:pick',
   projectLast: 'project:last',
-  projectState: 'project:state',
-  projectSaveChecks: 'project:save-checks',
+  projectSave: 'project:save',
   sessionCreate: 'session:create',
   sessionPrompt: 'session:prompt',
   sessionCancel: 'session:cancel',
@@ -55,6 +54,7 @@ export type UpdateStatus =
 export interface ProjectState {
   path: string
   checks: SessionChecks
+  readOnlyPaths: string[]
 }
 
 export interface SessionHandle {
@@ -86,7 +86,7 @@ export interface DiffraApi {
   testProviderModel(providerId: string, modelId: string): Promise<TestModelResult>
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
-  saveProjectChecks(path: string, checks: SessionChecks): Promise<ProjectState>
+  saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
   createSession(projectPath: string): Promise<SessionHandle>
   sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
   cancelSession(sessionId: string): Promise<void>

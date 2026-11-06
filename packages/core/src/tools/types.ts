@@ -12,6 +12,8 @@ export interface ToolContext {
   requestCommandPermission(command: string): Promise<{ allowed: true } | { allowed: false; reason: string }>
   // 用户为项目配置的检查命令，自动放行
   trustedCommands: string[]
+  // 禁写目录（相对项目根目录）
+  readOnlyPaths: string[]
 }
 
 export interface ToolOutput {

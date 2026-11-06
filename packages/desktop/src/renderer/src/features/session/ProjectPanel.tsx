@@ -6,31 +6,44 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
+export interface ProjectSettingsInput {
+  checks: SessionChecks
+  readOnlyPaths: string[]
+}
+
 interface ProjectPanelProps {
   project: ProjectState
   session: SessionHandle | null
   running: boolean
   onPick(): void
-  onSaveChecks(checks: SessionChecks): Promise<void>
+  onSave(settings: ProjectSettingsInput): Promise<void>
   onNewSession(): void
 }
 
-export function ProjectPanel({ project, session, running, onPick, onSaveChecks, onNewSession }: ProjectPanelProps) {
+export function ProjectPanel({ project, session, running, onPick, onSave, onNewSession }: ProjectPanelProps) {
   const [afterEdit, setAfterEdit] = useState(project.checks.afterEdit ?? '')
   const [beforeFinish, setBeforeFinish] = useState(project.checks.beforeFinish ?? '')
+  const [readOnly, setReadOnly] = useState(project.readOnlyPaths.join(', '))
   const [saving, setSaving] = useState(false)
+
+  const draft: ProjectSettingsInput = {
+    checks: { afterEdit: afterEdit.trim() || null, beforeFinish: beforeFinish.trim() || null },
+    readOnlyPaths: readOnly.split(/[,，\s]+/).filter(Boolean),
+  }
+  const dirty =
+    draft.checks.afterEdit !== project.checks.afterEdit ||
+    draft.checks.beforeFinish !== project.checks.beforeFinish ||
+    draft.readOnlyPaths.join('\n') !== project.readOnlyPaths.join('\n')
 
   const save = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true)
     try {
-      await onSaveChecks({ afterEdit: afterEdit.trim() || null, beforeFinish: beforeFinish.trim() || null })
+      await onSave(draft)
     } finally {
       setSaving(false)
     }
   }
-
-  const dirty = (afterEdit.trim() || null) !== project.checks.afterEdit || (beforeFinish.trim() || null) !== project.checks.beforeFinish
 
   return (
     <div className="space-y-3 border-b px-6 py-4 text-sm">
@@ -50,7 +63,7 @@ export function ProjectPanel({ project, session, running, onPick, onSaveChecks, 
       </div>
 
       <form onSubmit={save} className="flex flex-wrap items-end gap-3">
-        <div className="min-w-56 flex-1 space-y-1">
+        <div className="min-w-48 flex-1 space-y-1">
           <Label htmlFor="check-after-edit">快速检查（每步改动后）</Label>
           <Input
             id="check-after-edit"
@@ -59,7 +72,7 @@ export function ProjectPanel({ project, session, running, onPick, onSaveChecks, 
             onChange={(event) => setAfterEdit(event.target.value)}
           />
         </div>
-        <div className="min-w-56 flex-1 space-y-1">
+        <div className="min-w-48 flex-1 space-y-1">
           <Label htmlFor="check-before-finish">完成检查（完成时）</Label>
           <Input
             id="check-before-finish"
@@ -68,14 +81,25 @@ export function ProjectPanel({ project, session, running, onPick, onSaveChecks, 
             onChange={(event) => setBeforeFinish(event.target.value)}
           />
         </div>
+        <div className="min-w-48 flex-1 space-y-1">
+          <Label htmlFor="read-only-paths">禁止修改的目录</Label>
+          <Input
+            id="read-only-paths"
+            placeholder="例如 data, uploads（相对项目根目录）"
+            value={readOnly}
+            onChange={(event) => setReadOnly(event.target.value)}
+          />
+        </div>
         <Button type="submit" size="sm" variant="secondary" disabled={!dirty || saving}>
-          保存检查命令
+          保存项目设置
         </Button>
       </form>
 
       {session && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="session-info">
           <span>模型：{session.modelLabel}</span>
+          {project.readOnlyPaths.length > 0 && <span>禁写：{project.readOnlyPaths.join(', ')}</span>}
+          <span>.env、私钥等密钥文件不会读进模型</span>
           {!session.info.bashPath && <span className="text-destructive">没找到 Git Bash，命令执行不可用</span>}
           {!session.info.checkpoints && <span className="text-destructive">检查点不可用（需要 Git），改动无法撤销</span>}
         </div>

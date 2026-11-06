@@ -25,6 +25,21 @@ const checkCommandSchema = z.string().trim().min(1).nullable()
 
 export const sessionChecksSchema = z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema })
 
+// 只接受项目内的相对路径；统一成 / 分隔、去掉 ./ 和首尾斜杠
+export const readOnlyPathSchema = z
+  .string()
+  .trim()
+  .transform((path) => path.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, ''))
+  .refine(
+    (path) => path !== '' && !/^[a-zA-Z]:/.test(path) && !path.split('/').includes('..'),
+    '禁写目录要填相对项目根目录的路径，不能是绝对路径，也不能包含 ..',
+  )
+
+export const projectSettingsSchema = z.object({
+  checks: sessionChecksSchema,
+  readOnlyPaths: z.array(readOnlyPathSchema).default([]),
+})
+
 // projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
   version: z.literal(1),
@@ -35,7 +50,7 @@ const settingsSchema = z.object({
     reviewer: modelRefSchema.nullable(),
     fallback: modelRefSchema.nullable(),
   }),
-  projects: z.record(z.string(), z.object({ checks: sessionChecksSchema })).default({}),
+  projects: z.record(z.string(), projectSettingsSchema).default({}),
   lastProject: z.string().nullable().default(null),
 })
 
