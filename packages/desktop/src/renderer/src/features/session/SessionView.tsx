@@ -35,7 +35,11 @@ export function SessionView({ onOpenModels }: SessionViewProps) {
     setTurns((current) => current.map((turn) => (turn.id === turnId ? change(turn) : turn)))
   }, [])
 
+  // 建会话可能很慢（第一次要初始化检查点仓库），期间又开了新会话时，先发起的晚返回不能覆盖后来的
+  const startSeqRef = useRef(0)
+
   const startSession = useCallback(async (target: ProjectState) => {
+    const seq = ++startSeqRef.current
     sessionIdRef.current = null
     setSession(null)
     setTurns([])
@@ -45,10 +49,11 @@ export function SessionView({ onOpenModels }: SessionViewProps) {
     setHint(null)
     try {
       const handle = await window.diffra.createSession(target.path)
+      if (seq !== startSeqRef.current) return
       sessionIdRef.current = handle.sessionId
       setSession(handle)
     } catch (error) {
-      setSessionError(errorMessage(error))
+      if (seq === startSeqRef.current) setSessionError(errorMessage(error))
     }
   }, [])
 
