@@ -2,7 +2,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogle } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { generateText, type LanguageModel } from 'ai'
+import { generateText, type LanguageModel, tool } from 'ai'
 import { z } from 'zod'
 import { CORE_VERSION } from '../version.js'
 import { httpError, toModelError } from './errors.js'
@@ -120,18 +120,47 @@ export async function testModel(
   options: TimeoutOptions = {},
 ): Promise<TestModelResult> {
   const timeoutMs = options.timeoutMs ?? TEST_TIMEOUT_MS
+  const model = createLanguageModel(endpoint, modelId)
   const started = performance.now()
+  let reply: string
   try {
     const result = await generateText({
-      model: createLanguageModel(endpoint, modelId),
+      model,
       prompt: 'Reply with exactly: OK',
       maxOutputTokens: 64,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(timeoutMs),
       headers: MODEL_CALL_HEADERS,
     })
-    return { ok: true, latencyMs: Math.round(performance.now() - started), reply: result.text.trim().slice(0, 200) }
+    reply = result.text.trim().slice(0, 200)
   } catch (error) {
     return { ok: false, error: toModelError(error, endpoint.apiKey, timeoutMs) }
+  }
+  const latencyMs = Math.round(performance.now() - started)
+  return { ok: true, latencyMs, reply, tools: await probeToolCalling(model, endpoint.apiKey, timeoutMs) }
+}
+
+// agent 靠工具调用干活：让模型必须调用一个工具，看它会不会
+async function probeToolCalling(
+  model: LanguageModel,
+  apiKey: string,
+  timeoutMs: number,
+): Promise<{ supported: boolean; detail: string | null }> {
+  try {
+    const result = await generateText({
+      model,
+      prompt: 'Call the echo tool with text "OK".',
+      tools: { echo: tool({ description: 'Echo the given text', inputSchema: z.object({ text: z.string() }) }) },
+      toolChoice: 'required',
+      maxOutputTokens: 256,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(timeoutMs),
+      headers: MODEL_CALL_HEADERS,
+    })
+    return result.toolCalls.length > 0
+      ? { supported: true, detail: null }
+      : { supported: false, detail: '模型没有按要求调用工具' }
+  } catch (error) {
+    return { supported: false, detail: toModelError(error, apiKey, timeoutMs).message }
   }
 }

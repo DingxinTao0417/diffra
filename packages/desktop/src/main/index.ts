@@ -2,7 +2,10 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { startCore, stopCore } from './core-process'
+import { SecretStore } from './secret-store'
+import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
+import { SettingsStore } from './settings-store'
 import { setupUpdater } from './updater'
 
 // 开发模式和 e2e 不碰正式安装版的数据目录（%APPDATA%\Diffra），必须在 ready 之前设置
@@ -12,8 +15,8 @@ if (!app.isPackaged) {
 
 function createWindow(): void {
   const window = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: 1200,
+    height: 820,
     show: false,
     title: 'Diffra',
     webPreferences: {
@@ -33,10 +36,14 @@ function createWindow(): void {
 app
   .whenReady()
   .then(async () => {
-    const coreStatus = startCore()
+    const coreStatus = startCore(coreClientHandlers)
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
     ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
-    await registerSettingsIpc(app.getPath('userData'))
+    const userDataDir = app.getPath('userData')
+    const settings = await SettingsStore.open(userDataDir)
+    const secrets = await SecretStore.open(userDataDir)
+    registerSettingsIpc(settings, secrets)
+    registerSessionIpc(settings, secrets, userDataDir)
     setupUpdater()
     createWindow()
   })

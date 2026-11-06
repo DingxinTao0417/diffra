@@ -5,7 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/client.ts",
-    "./types": "./src/models/types.ts"
+    "./types": "./src/protocol.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -18,11 +18,14 @@
     "@ai-sdk/google": "^4.0.112",
     "@ai-sdk/openai": "^4.0.109",
     "@ai-sdk/openai-compatible": "^3.0.85",
+    "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.163",
+    "shell-quote": "^1.12.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "@types/shell-quote": "^1.7.5",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }

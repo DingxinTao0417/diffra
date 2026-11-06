@@ -21,6 +21,11 @@ export const providerFieldsSchema = z.object({
     .refine((models) => new Set(models.map((model) => model.id)).size === models.length, '模型 ID 重复'),
 })
 
+const checkCommandSchema = z.string().trim().min(1).nullable()
+
+export const sessionChecksSchema = z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema })
+
+// projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
   version: z.literal(1),
   providers: z.array(providerFieldsSchema.extend({ id: z.string().min(1) })),
@@ -30,12 +35,16 @@ const settingsSchema = z.object({
     reviewer: modelRefSchema.nullable(),
     fallback: modelRefSchema.nullable(),
   }),
+  projects: z.record(z.string(), z.object({ checks: sessionChecksSchema })).default({}),
+  lastProject: z.string().nullable().default(null),
 })
 
 const EMPTY_SETTINGS: Settings = {
   version: 1,
   providers: [],
   roles: { coder: null, planner: null, reviewer: null, fallback: null },
+  projects: {},
+  lastProject: null,
 }
 
 export class SettingsStore {

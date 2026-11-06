@@ -44,7 +44,7 @@ describe('OpenAI 兼容', () => {
 
   test('测试连接返回模型回复，并带上 Diffra 的 User-Agent', async () => {
     const result = await testModel(openai(), 'mock-a')
-    expect(result).toMatchObject({ ok: true, reply: 'OK' })
+    expect(result).toMatchObject({ ok: true, reply: 'OK', tools: { supported: true } })
     const call = mock.requests.findLast((r) => r.path === '/openai/v1/chat/completions')
     expect(call?.headers['user-agent']).toContain('diffra-core/')
   })
@@ -72,7 +72,7 @@ describe('Anthropic 兼容', () => {
   })
 
   test('测试连接请求 /v1/messages', async () => {
-    await expect(testModel(endpoint(), 'claude-mock')).resolves.toMatchObject({ ok: true, reply: 'OK' })
+    await expect(testModel(endpoint(), 'claude-mock')).resolves.toMatchObject({ ok: true, reply: 'OK', tools: { supported: true } })
     expect(mock.requests.some((r) => r.method === 'POST' && r.path === '/anthropic/v1/messages')).toBe(true)
   })
 })

@@ -1,8 +1,15 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
+import { type CheckpointChange, SESSION_EXT_METHODS, type SessionConfig, type SessionInfo } from './protocol.js'
 
-export * from './models/types.js'
+export * from './protocol.js'
+
+// 客户端（桌面端）接收 core 推来的会话更新和权限请求
+export interface CoreClientHandlers {
+  onSessionUpdate(notification: acp.SessionNotification): void
+  onPermissionRequest(request: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse>
+}
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
 const EXT_REQUEST_TIMEOUT_MS = 60_000
@@ -13,8 +20,69 @@ export interface CoreHandshake {
   protocolVersion: number
 }
 
-export function connectToCore(coreStdin: Writable, coreStdout: Readable): acp.ClientConnection {
-  return acp.client({ name: 'diffra' }).connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
+export function connectToCore(coreStdin: Writable, coreStdout: Readable, handlers?: CoreClientHandlers): acp.ClientConnection {
+  const app = acp.client({ name: 'diffra' })
+  if (handlers) {
+    app
+      .onNotification(acp.methods.client.session.update, ({ params }) => handlers.onSessionUpdate(params))
+      .onRequest(acp.methods.client.session.requestPermission, ({ params }) => handlers.onPermissionRequest(params))
+  }
+  return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
+}
+
+export async function createSession(
+  connection: acp.ClientConnection,
+  cwd: string,
+  config: SessionConfig,
+): Promise<{ sessionId: string; info: SessionInfo }> {
+  const response = await connection.agent.request(
+    acp.methods.agent.session.new,
+    { cwd, mcpServers: [], _meta: { diffra: config } },
+    extRequestOptions(),
+  )
+  return { sessionId: response.sessionId, info: readSessionInfo(response._meta) }
+}
+
+// 一轮任务可能跑很久，不设超时；用 cancelSession 停止
+export function sendPrompt(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  turnId: string,
+  text: string,
+): Promise<acp.PromptResponse> {
+  return connection.agent.request(acp.methods.agent.session.prompt, {
+    sessionId,
+    prompt: [{ type: 'text', text }],
+    _meta: { diffra: { turnId } },
+  })
+}
+
+export function cancelSession(connection: acp.ClientConnection, sessionId: string): Promise<void> {
+  return connection.agent.notify(acp.methods.agent.session.cancel, { sessionId })
+}
+
+export function previewCheckpoint(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<CheckpointChange[]> {
+  return connection.agent.request<CheckpointChange[], { sessionId: string; turnId: string }>(
+    SESSION_EXT_METHODS.checkpointPreview,
+    { sessionId, turnId },
+    extRequestOptions(),
+  )
+}
+
+export function restoreCheckpoint(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<CheckpointChange[]> {
+  return connection.agent.request<CheckpointChange[], { sessionId: string; turnId: string }>(
+    SESSION_EXT_METHODS.checkpointRestore,
+    { sessionId, turnId },
+    extRequestOptions(),
+  )
+}
+
+function readSessionInfo(meta: unknown): SessionInfo {
+  const diffra = typeof meta === 'object' && meta !== null && 'diffra' in meta ? meta.diffra : null
+  if (typeof diffra !== 'object' || diffra === null) throw new Error('core 的 session/new 响应缺少 _meta.diffra')
+  const bashPath = 'bashPath' in diffra && typeof diffra.bashPath === 'string' ? diffra.bashPath : null
+  const checkpoints = 'checkpoints' in diffra && diffra.checkpoints === true
+  return { bashPath, checkpoints }
 }
 
 export async function handshake(connection: acp.ClientConnection, timeoutMs: number): Promise<CoreHandshake> {

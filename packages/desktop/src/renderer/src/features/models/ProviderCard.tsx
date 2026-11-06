@@ -81,7 +81,12 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
     try {
       const result = await window.diffra.testProviderModel(provider.id, modelId)
       next = result.ok
-        ? { state: 'ok', text: `连接正常 · ${result.latencyMs}ms · 回复：${result.reply || '（没有文字输出）'}` }
+        ? {
+            state: 'ok',
+            text:
+              `连接正常 · ${result.latencyMs}ms · 回复：${result.reply || '（没有文字输出）'} · ` +
+              (result.tools.supported ? '工具调用：支持' : `工具调用：不支持，agent 用不了这个模型（${result.tools.detail ?? '原因未知'}）`),
+          }
         : { state: 'error', text: result.error.message }
     } catch (caught) {
       next = { state: 'error', text: errorMessage(caught) }

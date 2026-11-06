@@ -1,0 +1,78 @@
+import type { SessionUpdate, StopReason, ToolCallContent, ToolCallStatus, ToolKind } from '@diffra/core/types'
+
+export type TranscriptItem =
+  | { kind: 'user'; id: string; text: string }
+  | { kind: 'agent'; id: string; text: string }
+  | { kind: 'thought'; id: string; text: string }
+  | {
+      kind: 'tool'
+      id: string
+      title: string
+      toolKind: ToolKind | null
+      status: ToolCallStatus
+      content: ToolCallContent[]
+    }
+  | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
+
+export interface Turn {
+  id: string
+  items: TranscriptItem[]
+  stopReason: StopReason | null
+  error: string | null
+}
+
+// 把 core 推来的一条会话更新合进这一轮的记录：连续的文字片段拼在一起，工具调用按 id 更新
+export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): TranscriptItem[] {
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+    case 'agent_thought_chunk': {
+      const kind = update.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought'
+      const text = update.content.type === 'text' ? update.content.text : ''
+      const last = items.at(-1)
+      if (last && last.kind === kind) return [...items.slice(0, -1), { ...last, text: last.text + text }]
+      return [...items, { kind, id: crypto.randomUUID(), text }]
+    }
+    case 'tool_call': {
+      const item: TranscriptItem = {
+        kind: 'tool',
+        id: update.toolCallId,
+        title: update.title,
+        toolKind: update.kind ?? null,
+        status: update.status ?? 'pending',
+        content: update.content ?? [],
+      }
+      return upsertTool(items, update.toolCallId, () => item)
+    }
+    case 'tool_call_update':
+      return upsertTool(items, update.toolCallId, (existing) => ({
+        kind: 'tool',
+        id: update.toolCallId,
+        title: update.title ?? existing?.title ?? update.toolCallId,
+        toolKind: update.kind ?? existing?.toolKind ?? null,
+        status: update.status ?? existing?.status ?? 'pending',
+        content: update.content ?? existing?.content ?? [],
+      }))
+    case 'notice':
+      return [
+        ...items,
+        {
+          kind: 'notice',
+          id: crypto.randomUUID(),
+          severity: update.severity,
+          title: update.title,
+          description: update.description ?? null,
+        },
+      ]
+    default:
+      return items
+  }
+}
+
+type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
+
+function upsertTool(items: TranscriptItem[], id: string, build: (existing: ToolItem | null) => ToolItem): TranscriptItem[] {
+  const index = items.findIndex((item) => item.kind === 'tool' && item.id === id)
+  if (index < 0) return [...items, build(null)]
+  const existing = items[index]
+  return items.map((item, position) => (position === index ? build(existing?.kind === 'tool' ? existing : null) : item))
+}

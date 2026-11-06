@@ -40,7 +40,9 @@ export interface ListedModel {
 
 export type ListModelsResult = { ok: true; models: ListedModel[] } | { ok: false; error: ModelError }
 
-export type TestModelResult = { ok: true; latencyMs: number; reply: string } | { ok: false; error: ModelError }
+export type TestModelResult =
+  | { ok: true; latencyMs: number; reply: string; tools: { supported: boolean; detail: string | null } }
+  | { ok: false; error: ModelError }
 
 // ACP 规定扩展方法名以下划线开头
 export const EXT_METHODS = {

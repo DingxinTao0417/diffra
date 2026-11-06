@@ -1,14 +1,12 @@
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, type Page, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
 import { launchApp, makeUserDataDir } from './launch'
+import { openModelsPage, providerCard } from './model-setup'
 
 const WRONG_KEY = 'wrong-key-0000-abcd'
 
-function providerCard(window: Page, name: string) {
-  return window.getByTestId('provider-card').filter({ hasText: name })
-}
 
 test('添加供应商、拉模型、测试连接、分配角色，重启后保留，密钥不落明文', async () => {
   const userDataDir = makeUserDataDir()
@@ -16,6 +14,7 @@ test('添加供应商、拉模型、测试连接、分配角色，重启后保�
   try {
     let app = await launchApp(userDataDir)
     let window = await app.firstWindow()
+    await openModelsPage(window)
 
     // 添加自定义供应商，先故意填错密钥
     await window.getByRole('button', { name: '添加供应商' }).click()
@@ -52,6 +51,7 @@ test('添加供应商、拉模型、测试连接、分配角色，重启后保�
     await row.getByRole('button', { name: '测试' }).click()
     await expect(row.getByTestId('test-result-mock-a')).toContainText('连接正常')
     await expect(row.getByTestId('test-result-mock-a')).toContainText('回复：OK')
+    await expect(row.getByTestId('test-result-mock-a')).toContainText('工具调用：支持')
 
     // 分配编码角色
     const coder = window.getByRole('combobox', { name: '编码' })
@@ -64,6 +64,7 @@ test('添加供应商、拉模型、测试连接、分配角色，重启后保�
     // 重启后配置还在
     app = await launchApp(userDataDir)
     window = await app.firstWindow()
+    await openModelsPage(window)
     const reopened = providerCard(window, '本地测试')
     await expect(reopened.getByTestId('model-row-mock-a')).toBeVisible()
     await expect(reopened.getByTestId('key-hint')).toHaveText('…1234')

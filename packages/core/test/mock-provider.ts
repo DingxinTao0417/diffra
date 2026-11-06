@@ -16,9 +16,13 @@ export async function startMockProvider(): Promise<MockProvider> {
   const server: Server = createServer((req, res) => {
     const path = req.url ?? ''
     requests.push({ method: req.method ?? '', path, headers: req.headers })
-    req.resume()
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
       if (path.startsWith('/slow/')) return
+      const raw = Buffer.concat(chunks).toString('utf8')
+      // 请求里带了工具（测试连接的工具调用探测），就返回一次工具调用
+      const wantsTool = raw.includes('"tools"')
 
       const bearer = req.headers.authorization === `Bearer ${GOOD_KEY}`
       const xApiKey = req.headers['x-api-key'] === GOOD_KEY
@@ -36,12 +40,19 @@ export async function startMockProvider(): Promise<MockProvider> {
           return send(200, { object: 'list', data: [{ id: 'mock-b' }, { id: 'mock-a' }] })
         }
         if (req.method === 'POST' && path === '/openai/v1/chat/completions') {
+          const message = wantsTool
+            ? {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'echo', arguments: '{"text":"OK"}' } }],
+              }
+            : { role: 'assistant', content: 'OK' }
           return send(200, {
             id: 'chatcmpl-1',
             object: 'chat.completion',
             created: 1,
             model: 'mock-a',
-            choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            choices: [{ index: 0, message, finish_reason: wantsTool ? 'tool_calls' : 'stop' }],
             usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
           })
         }
@@ -58,8 +69,10 @@ export async function startMockProvider(): Promise<MockProvider> {
             type: 'message',
             role: 'assistant',
             model: 'claude-mock',
-            content: [{ type: 'text', text: 'OK' }],
-            stop_reason: 'end_turn',
+            content: wantsTool
+              ? [{ type: 'tool_use', id: 'toolu_1', name: 'echo', input: { text: 'OK' } }]
+              : [{ type: 'text', text: 'OK' }],
+            stop_reason: wantsTool ? 'tool_use' : 'end_turn',
             stop_sequence: null,
             usage: { input_tokens: 5, output_tokens: 1 },
           })

@@ -1,4 +1,14 @@
-import type { ListModelsResult, TestModelResult } from '@diffra/core/types'
+import type {
+  CheckpointChange,
+  ListModelsResult,
+  PermissionOption,
+  RequestPermissionRequest,
+  SessionChecks,
+  SessionInfo,
+  SessionNotification,
+  StopReason,
+  TestModelResult,
+} from '@diffra/core/types'
 import type { ModelRef, ProviderInput, Role, SettingsView } from './settings'
 
 export const IPC_CHANNELS = {
@@ -14,6 +24,18 @@ export const IPC_CHANNELS = {
   roleSet: 'settings:role-set',
   modelsList: 'models:list',
   modelsTest: 'models:test',
+  projectPick: 'project:pick',
+  projectLast: 'project:last',
+  projectState: 'project:state',
+  projectSaveChecks: 'project:save-checks',
+  sessionCreate: 'session:create',
+  sessionPrompt: 'session:prompt',
+  sessionCancel: 'session:cancel',
+  sessionUpdate: 'session:update',
+  sessionPermission: 'session:permission',
+  sessionPermissionRespond: 'session:permission-respond',
+  checkpointPreview: 'session:checkpoint-preview',
+  checkpointRestore: 'session:checkpoint-restore',
 } as const
 
 export type CoreStatus =
@@ -30,6 +52,25 @@ export type UpdateStatus =
   | { state: 'downloaded'; version: string }
   | { state: 'error'; message: string }
 
+export interface ProjectState {
+  path: string
+  checks: SessionChecks
+}
+
+export interface SessionHandle {
+  sessionId: string
+  info: SessionInfo
+  // 编码角色用的模型，显示在会话页上
+  modelLabel: string
+}
+
+export interface PermissionRequestEvent {
+  requestId: string
+  sessionId: string
+  toolCall: RequestPermissionRequest['toolCall']
+  options: PermissionOption[]
+}
+
 export interface DiffraApi {
   getCoreStatus(): Promise<CoreStatus>
   getAppVersion(): Promise<string>
@@ -43,4 +84,15 @@ export interface DiffraApi {
   setRole(role: Role, ref: ModelRef | null): Promise<SettingsView>
   listProviderModels(providerId: string): Promise<ListModelsResult>
   testProviderModel(providerId: string, modelId: string): Promise<TestModelResult>
+  pickProject(): Promise<ProjectState | null>
+  getLastProject(): Promise<ProjectState | null>
+  saveProjectChecks(path: string, checks: SessionChecks): Promise<ProjectState>
+  createSession(projectPath: string): Promise<SessionHandle>
+  sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
+  cancelSession(sessionId: string): Promise<void>
+  onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
+  onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void
+  respondPermission(requestId: string, optionId: string | null): Promise<void>
+  previewCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
+  restoreCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
 }

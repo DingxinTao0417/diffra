@@ -1,4 +1,4 @@
-import type { Protocol } from '@diffra/core/types'
+import type { Protocol, SessionChecks } from '@diffra/core/types'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
@@ -22,10 +22,18 @@ export interface ProviderConfig {
   models: ModelConfig[]
 }
 
+export interface ProjectSettings {
+  checks: SessionChecks
+}
+
 export interface Settings {
   version: 1
   providers: ProviderConfig[]
   roles: Record<Role, ModelRef | null>
+  // 按项目目录保存的检查命令，不往用户仓库里写文件
+  projects: Record<string, ProjectSettings>
+  // 会话不持久化，至少记住上次打开的项目
+  lastProject: string | null
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身

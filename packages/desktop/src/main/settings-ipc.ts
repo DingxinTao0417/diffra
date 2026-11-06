@@ -5,18 +5,28 @@ import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
-import { SecretStore } from './secret-store'
-import { modelRefSchema, providerFieldsSchema, SettingsStore } from './settings-store'
+import { parse } from './ipc-input'
+import type { SecretStore } from './secret-store'
+import { modelRefSchema, providerFieldsSchema, type SettingsStore } from './settings-store'
 
 const providerInputSchema = providerFieldsSchema.extend({
   id: z.string().min(1).optional(),
   apiKey: z.string().trim().optional(),
 })
 
-export async function registerSettingsIpc(userDataDir: string): Promise<void> {
-  const settings = await SettingsStore.open(userDataDir)
-  const secrets = await SecretStore.open(userDataDir)
+export async function providerEndpoint(
+  settings: SettingsStore,
+  secrets: SecretStore,
+  providerId: string,
+): Promise<{ ok: true; endpoint: ModelEndpoint } | { ok: false; error: ModelError }> {
+  const provider = settings.get().providers.find((item) => item.id === providerId)
+  if (!provider) return { ok: false, error: { kind: 'not-found', message: '供应商不存在' } }
+  const apiKey = await secrets.get(providerId)
+  if (!apiKey) return { ok: false, error: { kind: 'auth', message: '还没有填写密钥' } }
+  return { ok: true, endpoint: { protocol: provider.protocol, baseUrl: provider.baseUrl, apiKey } }
+}
 
+export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
     const { providers, roles } = settings.get()
     return {
@@ -28,15 +38,7 @@ export async function registerSettingsIpc(userDataDir: string): Promise<void> {
     }
   }
 
-  const endpointFor = async (
-    providerId: string,
-  ): Promise<{ ok: true; endpoint: ModelEndpoint } | { ok: false; error: ModelError }> => {
-    const provider = settings.get().providers.find((item) => item.id === providerId)
-    if (!provider) return { ok: false, error: { kind: 'not-found', message: '供应商不存在' } }
-    const apiKey = await secrets.get(providerId)
-    if (!apiKey) return { ok: false, error: { kind: 'auth', message: '还没有填写密钥' } }
-    return { ok: true, endpoint: { protocol: provider.protocol, baseUrl: provider.baseUrl, apiKey } }
-  }
+  const endpointFor = (providerId: string) => providerEndpoint(settings, secrets, providerId)
 
   ipcMain.handle(IPC_CHANNELS.settingsGet, () => view())
 
@@ -86,13 +88,6 @@ export async function registerSettingsIpc(userDataDir: string): Promise<void> {
     if (!target.ok) return target
     return requestTestModel(await coreConnection(), target.endpoint, parse(z.string().min(1), rawModelId))
   })
-}
-
-// 界面传来的数据在这里校验，校验失败的说明直接给用户看
-function parse<T>(schema: z.ZodType<T>, raw: unknown): T {
-  const result = schema.safeParse(raw)
-  if (result.success) return result.data
-  throw new Error(`输入不合法：${result.error.issues.map((issue) => issue.message).join('；')}`)
 }
 
 function modelExists(settings: Settings, ref: ModelRef): boolean {
