@@ -1,3 +1,6 @@
+import type { ListModelsResult, TestModelResult } from '@diffra/core/types'
+import type { ModelRef, ProviderInput, Role, SettingsView } from './settings'
+
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
   appVersion: 'app:version',
@@ -5,6 +8,12 @@ export const IPC_CHANNELS = {
   updateStatusChanged: 'update:status-changed',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
+  settingsGet: 'settings:get',
+  providerSave: 'settings:provider-save',
+  providerDelete: 'settings:provider-delete',
+  roleSet: 'settings:role-set',
+  modelsList: 'models:list',
+  modelsTest: 'models:test',
 } as const
 
 export type CoreStatus =
@@ -28,4 +37,10 @@ export interface DiffraApi {
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void
   checkForUpdates(): Promise<void>
   installUpdate(): Promise<void>
+  getSettings(): Promise<SettingsView>
+  saveProvider(input: ProviderInput): Promise<SettingsView>
+  deleteProvider(providerId: string): Promise<SettingsView>
+  setRole(role: Role, ref: ModelRef | null): Promise<SettingsView>
+  listProviderModels(providerId: string): Promise<ListModelsResult>
+  testProviderModel(providerId: string, modelId: string): Promise<TestModelResult>
 }

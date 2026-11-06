@@ -28,17 +28,46 @@ v2：
 - 运行时代码面向 Electron 内置的 Node（Electron 45 对应 Node 24），所以 `@types/node` 用 24，不跟本机的 Node 版本走。
 - 测试：core 用 vitest；界面用 Playwright 直接驱动 Electron 窗口。
 - 打包和更新：electron-builder + electron-updater。electron-updater 打进主进程的 bundle，安装包里不带 node_modules。
-- 按步骤再加：Tailwind + shadcn/ui（第 3 步出现第一个真实界面时）。
+- 界面：Tailwind 4 + shadcn/ui（radix-nova 样式，底层是 Radix）。
+  - shadcn CLI 识别不了 electron-vite 项目，`components.json` 和主题变量是手写的；之后加组件用 `pnpm exec shadcn add <名字>`。
+  - 合并 class 用 shadcn 作者发布的 `cn` 包，代替 clsx + tailwind-merge。
+  - CLI 加依赖时会写进 `dependencies`，要挪到 `devDependencies`：界面代码打进 bundle，安装包里不需要它们。
+- 模型调用：AI SDK 7（`ai` 和 `@ai-sdk/*`），只在 core 里用。
 
 ## 进程结构
 
-- 主进程：窗口、IPC、自动更新；以后还负责密钥。
+- 主进程：窗口、IPC、自动更新、设置和密钥。
 - core：独立子进程，在 stdio 上跑 ACP v1（`@agentclientprotocol/sdk`）。
   - 主进程用 Electron 自己的可执行文件加 `ELECTRON_RUN_AS_NODE=1` 启动它，不额外打包 Node。所以打包时不能关闭 Electron 的 RunAsNode fuse，否则 core 起不来。
   - electron-vite 把 core 打成 `out/main/core.js`，桌面端不依赖 core 的 `dist`。
   - 同一份 core 也能直接跑：`node packages/core/dist/index.js`。评测集走这条路。
 - 渲染进程：开启沙箱和 contextIsolation，只能通过 preload 暴露的 `window.diffra` 和主进程通信，拿不到密钥。
   - 沙箱里的 preload 只能是 CJS。desktop 包是 `"type": "module"`，electron-vite 默认会打成 ESM，所以在 `electron.vite.config.ts` 里显式指定了 CJS。
+
+## 模型接入
+
+- 调用模型的事都放在 core 里：拉取模型列表、测试连接，以后的 agent 主循环也在 core。
+  - 主进程解密密钥后，通过 ACP 扩展方法 `_diffra/models/list`、`_diffra/models/test` 把 `{协议, 地址, 密钥, 模型}` 传给 core。
+  - 模型调用失败（密钥错、限流、超时等）作为正常结果返回 `{ ok: false, error }`；只有参数不合法才是 JSON-RPC 错误。
+  - 超时：拉列表 15 秒，测试连接 30 秒，ACP 请求再兜底 60 秒。
+- 协议有 5 种：`anthropic`、`anthropic-compatible`、`openai-responses`、`openai-compatible`、`gemini`。自定义供应商只能选两种兼容协议。
+  - Anthropic 系的地址按 Claude Code 的写法填，不带 `/v1`（各家文档给的也是这种），core 拼 `/v1/messages`；OpenAI 系地址带 `/v1`。
+  - `anthropic-compatible` 同时带 `x-api-key` 和 `Authorization: Bearer`，因为兼容服务认哪个的都有；官方 Anthropic 只带 `x-api-key`。
+  - User-Agent 如实写 `diffra-core/版本号`，不冒充其他工具。要放在每次调用的 headers 里，provider 层设置的会被 AI SDK 覆盖。
+- 预置清单在 `packages/desktop/src/shared/presets.ts`，地址允许用户修改。2026-11-06 核对过的来源：
+  - 官方文档：DeepSeek、百炼按量、智谱开放平台、Kimi 开放平台、OpenRouter、智谱 GLM Coding Plan、百炼 Token Plan、百炼 Coding Plan、Kimi Code。
+  - AI SDK 默认值：Anthropic、OpenAI、Gemini。
+  - DeepSeek 的 Anthropic 兼容接口只接受 `claude-` 开头的模型名，所以预置走 OpenAI 兼容接口。
+  - 百炼 Coding Plan 在官方文档里已标为「旧版」（Lite 停售，Pro 在售），所以同时预置了 Token Plan。
+- 套餐条款：智谱 Coding Plan 只允许在官方列出的工具里用，Diffra 不在列表里；百炼套餐只允许交互式编程工具使用；Kimi Code 支持第三方 agent，但禁止伪造客户端身份。这些写在预置的说明里，添加时会显示。
+- 存储：都在用户数据目录下。
+  - `settings.json`：供应商、模型、角色。
+  - `secrets.json`：只存 Electron safeStorage（Windows 上是 DPAPI）加密后的密文。系统加密不可用时拒绝保存，不会退回明文。
+  - 写文件时先写临时文件再改名；同一个文件的写入排队执行。
+  - 读取时文件解析失败，就暂停保存并在界面提示，不覆盖原文件。
+  - 界面拿不到密钥，只能看到末 4 位；服务返回的报错里如果带着密钥原文，会先抹掉。
+- 数据目录：正式安装版用 `%APPDATA%\Diffra`；未打包运行（开发模式）用 `%APPDATA%\Diffra-dev`；e2e 用 `DIFFRA_USER_DATA_DIR` 指定的临时目录（只在未打包时生效）。
+- 角色：编码必选；规划、评审不选就用编码模型；兜底不选就不升级。供应商或模型被删除后，指向它的角色会自动清空。
 
 ## 发布与更新
 

@@ -1,12 +1,13 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { _electron as electron, expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { desktopDir, launchApp, makeUserDataDir } from './launch'
 
-const desktopDir = resolve(import.meta.dirname, '..')
 const { version } = JSON.parse(readFileSync(resolve(desktopDir, 'package.json'), 'utf8')) as { version: string }
 
-test('窗口显示版本号、core 的 ACP 握手结果和更新状态', async () => {
-  const app = await electron.launch({ args: ['.'], cwd: desktopDir })
+test('顶栏显示版本号、core 的 ACP 握手结果和更新状态', async () => {
+  const userDataDir = makeUserDataDir()
+  const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
     await expect(window.getByTestId('app-version')).toHaveText(`版本 ${version}`)
@@ -16,5 +17,6 @@ test('窗口显示版本号、core 的 ACP 握手结果和更新状态', async (
     await window.screenshot({ path: 'test-results/core-handshake.png' })
   } finally {
     await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
   }
 })

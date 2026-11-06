@@ -12,6 +12,12 @@ const api: DiffraApi = {
   },
   checkForUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
   installUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.updateInstall),
+  getSettings: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
+  saveProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.providerSave, input),
+  deleteProvider: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.providerDelete, providerId),
+  setRole: (role, ref) => ipcRenderer.invoke(IPC_CHANNELS.roleSet, role, ref),
+  listProviderModels: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.modelsList, providerId),
+  testProviderModel: (providerId, modelId) => ipcRenderer.invoke(IPC_CHANNELS.modelsTest, providerId, modelId),
 }
 
 contextBridge.exposeInMainWorld('diffra', api)

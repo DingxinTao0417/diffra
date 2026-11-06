@@ -1,44 +1,19 @@
-import { type ChildProcessByStdio, spawn } from 'node:child_process'
 import { join } from 'node:path'
-import type { Readable, Writable } from 'node:stream'
-import { connectToCore, handshake } from '@diffra/core'
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { type CoreStatus, IPC_CHANNELS } from '../shared/ipc'
+import { IPC_CHANNELS } from '../shared/ipc'
+import { startCore, stopCore } from './core-process'
+import { registerSettingsIpc } from './settings-ipc'
 import { setupUpdater } from './updater'
 
-const HANDSHAKE_TIMEOUT_MS = 10_000
-
-let coreProcess: ChildProcessByStdio<Writable, Readable, null> | undefined
-let quitting = false
-
-function startCore(): ChildProcessByStdio<Writable, Readable, null> {
-  // 用 Electron 自带的 Node 跑 core，不额外打包 Node；打包时不能关闭 RunAsNode fuse。
-  const child = spawn(process.execPath, [join(import.meta.dirname, 'core.js')], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    stdio: ['pipe', 'pipe', 'inherit'],
-  })
-  child.on('error', (error) => console.error('[core] 进程启动失败', error))
-  child.on('exit', (code, signal) => {
-    if (!quitting) console.error(`[core] 进程意外退出 code=${code} signal=${signal}`)
-  })
-  return child
-}
-
-async function connectCore(): Promise<CoreStatus> {
-  coreProcess = startCore()
-  try {
-    const info = await handshake(connectToCore(coreProcess.stdin, coreProcess.stdout), HANDSHAKE_TIMEOUT_MS)
-    return { state: 'connected', ...info }
-  } catch (error) {
-    console.error('[core] 握手失败', error)
-    return { state: 'failed', error: error instanceof Error ? error.message : String(error) }
-  }
+// 开发模式和 e2e 不碰正式安装版的数据目录（%APPDATA%\Diffra），必须在 ready 之前设置
+if (!app.isPackaged) {
+  app.setPath('userData', process.env.DIFFRA_USER_DATA_DIR || join(app.getPath('appData'), 'Diffra-dev'))
 }
 
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1100,
-    height: 720,
+    height: 760,
     show: false,
     title: 'Diffra',
     webPreferences: {
@@ -57,10 +32,11 @@ function createWindow(): void {
 
 app
   .whenReady()
-  .then(() => {
-    const coreStatus = connectCore()
+  .then(async () => {
+    const coreStatus = startCore()
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
     ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
+    await registerSettingsIpc(app.getPath('userData'))
     setupUpdater()
     createWindow()
   })
@@ -71,7 +47,4 @@ app
 
 app.on('window-all-closed', () => app.quit())
 
-app.on('will-quit', () => {
-  quitting = true
-  coreProcess?.kill()
-})
+app.on('will-quit', () => stopCore())

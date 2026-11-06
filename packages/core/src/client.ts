@@ -1,5 +1,11 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
+import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
+
+export * from './models/types.js'
+
+// core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
+const EXT_REQUEST_TIMEOUT_MS = 60_000
 
 export interface CoreHandshake {
   agentName: string
@@ -33,4 +39,28 @@ export async function handshake(connection: acp.ClientConnection, timeoutMs: num
     agentVersion: response.agentInfo.version,
     protocolVersion: response.protocolVersion,
   }
+}
+
+export function requestListModels(connection: acp.ClientConnection, endpoint: ModelEndpoint): Promise<ListModelsResult> {
+  return connection.agent.request<ListModelsResult, { endpoint: ModelEndpoint }>(
+    EXT_METHODS.listModels,
+    { endpoint },
+    extRequestOptions(),
+  )
+}
+
+export function requestTestModel(
+  connection: acp.ClientConnection,
+  endpoint: ModelEndpoint,
+  modelId: string,
+): Promise<TestModelResult> {
+  return connection.agent.request<TestModelResult, { endpoint: ModelEndpoint; modelId: string }>(
+    EXT_METHODS.testModel,
+    { endpoint, modelId },
+    extRequestOptions(),
+  )
+}
+
+function extRequestOptions(): acp.SendRequestOptions {
+  return { cancellationSignal: AbortSignal.timeout(EXT_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true }
 }
