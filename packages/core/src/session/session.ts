@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { LanguageModel, ModelMessage } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, SessionConfig } from '../protocol.js'
+import type { CheckpointChange, RulePack, SessionConfig } from '../protocol.js'
 
 export interface SessionEnvironment {
   bashPath: string | null
@@ -14,9 +14,12 @@ export interface SessionOptions {
   config: SessionConfig
   environment: SessionEnvironment
   checkpoints: Checkpoints | null
+  // 按项目语言选中的规则包，写进了 systemPrompt，完成前的审查也用它
+  rulePacks: RulePack[]
   systemPrompt: string
   // 测试时注入模拟模型；正常运行按 config 创建
   model?: LanguageModel
+  reviewModel?: LanguageModel
 }
 
 export class Session {
@@ -25,8 +28,11 @@ export class Session {
   readonly config: SessionConfig
   readonly environment: SessionEnvironment
   readonly checkpoints: Checkpoints | null
+  readonly rulePacks: RulePack[]
   readonly systemPrompt: string
   readonly model: LanguageModel
+  // 没有单独配置评审模型时用编码模型
+  readonly reviewModel: LanguageModel
   readonly messages: ModelMessage[] = []
   readonly readHashes = new Map<string, string>()
   // 「本会话内允许同类命令」记下的命令键，见 permissions.commandKey
@@ -40,8 +46,11 @@ export class Session {
     this.config = options.config
     this.environment = options.environment
     this.checkpoints = options.checkpoints
+    this.rulePacks = options.rulePacks
     this.systemPrompt = options.systemPrompt
     this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId)
+    const review = options.config.reviewModel
+    this.reviewModel = options.reviewModel ?? (review ? createLanguageModel(review.endpoint, review.modelId) : this.model)
   }
 
   get running(): boolean {

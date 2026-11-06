@@ -7,6 +7,8 @@ import { findBash, findRipgrep } from './environment.js'
 import { listModels, testModel } from './models/operations.js'
 import { EXT_METHODS } from './models/types.js'
 import { SESSION_EXT_METHODS, type SessionInfo } from './protocol.js'
+import { detectLanguages } from './rules/languages.js'
+import { selectRulePacks } from './rules/select.js'
 import { endpointSchema, newSessionMetaSchema, promptMetaSchema } from './session/config.js'
 import { runTurn } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
@@ -47,15 +49,22 @@ export function createAgent(): acp.AgentApp {
             return null
           })
         : null
+      const rulePacks =
+        config.rules.packs.length > 0 ? selectRulePacks(config.rules.packs, await detectLanguages(params.cwd, environment.rgPath)) : []
       const session = new Session({
         cwd: params.cwd,
         config,
         environment,
         checkpoints,
-        systemPrompt: await buildSystemPrompt(params.cwd, environment.bashPath, config),
+        rulePacks,
+        systemPrompt: await buildSystemPrompt(params.cwd, environment.bashPath, config, rulePacks),
       })
       sessions.set(session.id, session)
-      const sessionInfo: SessionInfo = { bashPath: environment.bashPath, checkpoints: checkpoints !== null }
+      const sessionInfo: SessionInfo = {
+        bashPath: environment.bashPath,
+        checkpoints: checkpoints !== null,
+        rulePacks: rulePacks.map((pack) => pack.name),
+      }
       return { sessionId: session.id, _meta: { diffra: sessionInfo } }
     })
     .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {

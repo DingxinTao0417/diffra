@@ -22,10 +22,21 @@ export interface ProviderConfig {
   models: ModelConfig[]
 }
 
+export interface ProjectRuleSettings {
+  // 关掉的规则包和单条规则；新加的规则包默认启用
+  disabledPacks: string[]
+  disabledRules: string[]
+  // 推荐级规则也写进提示词；默认只放强制级
+  includeRecommended: boolean
+  // 完成前用评审模型按规则审查这一轮的改动
+  review: boolean
+}
+
 export interface ProjectSettings {
   checks: SessionChecks
   // 禁写目录，相对项目根目录、/ 分隔
   readOnlyPaths: string[]
+  rules: ProjectRuleSettings
 }
 
 export interface Settings {

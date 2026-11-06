@@ -13,13 +13,16 @@ import {
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS, type PermissionRequestEvent, type ProjectState, type SessionHandle } from '../shared/ipc'
+import type { ProjectRuleSettings } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
+import { type RulePackStore, sessionRules } from './rule-packs'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint } from './settings-ipc'
-import { projectSettingsSchema, type SettingsStore } from './settings-store'
+import { projectRuleSettingsSchema, projectSettingsSchema, type SettingsStore } from './settings-store'
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
+const DEFAULT_RULE_SETTINGS: ProjectRuleSettings = { disabledPacks: [], disabledRules: [], includeRecommended: false, review: false }
 
 interface PendingPermission {
   sessionId: string
@@ -65,10 +68,34 @@ function settlePermission(requestId: string, optionId: string | null): void {
   pending.resolve(optionId)
 }
 
-export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): void {
+export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string, rulePacks: RulePackStore): void {
   const projectState = (path: string): ProjectState => {
     const project = settings.get().projects[path]
-    return { path, checks: project?.checks ?? NO_CHECKS, readOnlyPaths: project?.readOnlyPaths ?? [] }
+    return {
+      path,
+      checks: project?.checks ?? NO_CHECKS,
+      readOnlyPaths: project?.readOnlyPaths ?? [],
+      rules: project?.rules ?? DEFAULT_RULE_SETTINGS,
+    }
+  }
+
+  const saveProjectState = async (path: string, change: (current: ProjectState) => ProjectState) => {
+    const { checks, readOnlyPaths, rules } = change(projectState(path))
+    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths, rules } } }))
+    return projectState(path)
+  }
+
+  // 角色指向的模型和它的接入点；配置不完整时报错说明去哪里改
+  const resolveRole = async (role: 'coder' | 'reviewer', label: string) => {
+    const { roles, providers } = settings.get()
+    const ref = roles[role]
+    if (!ref) return null
+    const provider = providers.find((item) => item.id === ref.providerId)
+    const model = provider?.models.find((item) => item.id === ref.modelId)
+    if (!provider || !model) throw new Error(`「${label}」角色指向的模型不存在，请到「模型」页重新分配`)
+    const target = await providerEndpoint(settings, secrets, provider.id)
+    if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
+    return { provider, model, endpoint: target.endpoint }
   }
 
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
@@ -93,31 +120,35 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
-    const project = parse(projectSettingsSchema, rawSettings)
-    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: project } }))
-    return projectState(path)
+    const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }), rawSettings)
+    return saveProjectState(path, (current) => ({ ...current, ...input }))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.projectSaveRules, async (_event, rawPath: unknown, rawRules: unknown) => {
+    const path = parse(z.string().min(1), rawPath)
+    const rules = parse(projectRuleSettingsSchema, rawRules)
+    return saveProjectState(path, (current) => ({ ...current, rules }))
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown): Promise<SessionHandle> => {
     const path = parse(z.string().min(1), rawPath)
-    const { roles, providers } = settings.get()
-    const coder = roles.coder
+    const coder = await resolveRole('coder', '编码')
     if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
-    const provider = providers.find((item) => item.id === coder.providerId)
-    const model = provider?.models.find((item) => item.id === coder.modelId)
-    if (!provider || !model) throw new Error('「编码」角色指向的模型不存在，请到「模型」页重新分配')
-    const target = await providerEndpoint(settings, secrets, provider.id)
-    if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
 
     const project = projectState(path)
+    const rules = sessionRules((await rulePacks.list()).packs.map((entry) => entry.pack), project.rules)
+    // 只有开了审查才用到评审模型；没分配评审角色时 core 用编码模型审查
+    const reviewer = rules.review ? await resolveRole('reviewer', '评审') : null
     const { sessionId, info } = await createSession(await coreConnection(), path, {
-      model: { endpoint: target.endpoint, modelId: model.id, contextWindow: model.contextWindow },
+      model: { endpoint: coder.endpoint, modelId: coder.model.id, contextWindow: coder.model.contextWindow },
+      reviewModel: reviewer ? { endpoint: reviewer.endpoint, modelId: reviewer.model.id } : null,
       checks: project.checks,
       readOnlyPaths: project.readOnlyPaths,
+      rules,
       checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
     })
     await rememberProject(path)
-    return { sessionId, info, modelLabel: `${provider.name} / ${model.id}` }
+    return { sessionId, info, modelLabel: `${coder.provider.name} / ${coder.model.id}` }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown) => {

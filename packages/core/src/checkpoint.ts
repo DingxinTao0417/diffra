@@ -74,6 +74,12 @@ export class Checkpoints {
     return changes
   }
 
+  // 快照之后的改动，unified diff 格式；受保护文件和禁写目录同样不在里面
+  async diffSince(commit: string): Promise<string> {
+    const current = await this.writeTree()
+    return this.git(['diff-tree', '-p', '-r', '--no-renames', '--no-color', '-U3', commit, current])
+  }
+
   // 只动 changesSince 列出的文件：改过和删掉的恢复成快照里的内容，快照之后新建的删掉
   async restore(commit: string, changes: CheckpointChange[]): Promise<void> {
     const restorable = changes.filter((item) => item.change !== 'added').map((item) => item.path)

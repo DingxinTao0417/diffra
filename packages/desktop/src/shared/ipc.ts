@@ -3,13 +3,14 @@ import type {
   ListModelsResult,
   PermissionOption,
   RequestPermissionRequest,
+  RulePack,
   SessionChecks,
   SessionInfo,
   SessionNotification,
   StopReason,
   TestModelResult,
 } from '@diffra/core/types'
-import type { ModelRef, ProviderInput, Role, SettingsView } from './settings'
+import type { ModelRef, ProjectRuleSettings, ProviderInput, Role, SettingsView } from './settings'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -27,6 +28,10 @@ export const IPC_CHANNELS = {
   projectPick: 'project:pick',
   projectLast: 'project:last',
   projectSave: 'project:save',
+  projectSaveRules: 'project:save-rules',
+  rulesList: 'rules:list',
+  rulesImport: 'rules:import',
+  rulesDelete: 'rules:delete',
   sessionCreate: 'session:create',
   sessionPrompt: 'session:prompt',
   sessionCancel: 'session:cancel',
@@ -55,6 +60,19 @@ export interface ProjectState {
   path: string
   checks: SessionChecks
   readOnlyPaths: string[]
+  rules: ProjectRuleSettings
+}
+
+export interface RulePackEntry {
+  pack: RulePack
+  // 内置的不能删除，只能在项目里关闭
+  builtin: boolean
+}
+
+export interface RulePacksView {
+  packs: RulePackEntry[]
+  // 用户规则包目录里解析失败的文件
+  errors: Array<{ file: string; message: string }>
 }
 
 export interface SessionHandle {
@@ -87,6 +105,11 @@ export interface DiffraApi {
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
   saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
+  saveProjectRules(path: string, rules: ProjectRuleSettings): Promise<ProjectState>
+  listRulePacks(): Promise<RulePacksView>
+  // 弹出文件选择框导入 markdown 规则包；取消时 imported 为 null
+  importRulePack(): Promise<{ view: RulePacksView; imported: string | null }>
+  deleteRulePack(packId: string): Promise<RulePacksView>
   createSession(projectPath: string): Promise<SessionHandle>
   sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
   cancelSession(sessionId: string): Promise<void>

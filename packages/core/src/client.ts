@@ -4,6 +4,7 @@ import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelR
 import { type CheckpointChange, SESSION_EXT_METHODS, type SessionConfig, type SessionInfo } from './protocol.js'
 
 export * from './protocol.js'
+export { parseRulePack, RulePackError } from './rules/pack.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {
@@ -82,7 +83,8 @@ function readSessionInfo(meta: unknown): SessionInfo {
   if (typeof diffra !== 'object' || diffra === null) throw new Error('core 的 session/new 响应缺少 _meta.diffra')
   const bashPath = 'bashPath' in diffra && typeof diffra.bashPath === 'string' ? diffra.bashPath : null
   const checkpoints = 'checkpoints' in diffra && diffra.checkpoints === true
-  return { bashPath, checkpoints }
+  const packs = 'rulePacks' in diffra && Array.isArray(diffra.rulePacks) ? diffra.rulePacks : []
+  return { bashPath, checkpoints, rulePacks: packs.filter((name): name is string => typeof name === 'string') }
 }
 
 export async function handshake(connection: acp.ClientConnection, timeoutMs: number): Promise<CoreHandshake> {

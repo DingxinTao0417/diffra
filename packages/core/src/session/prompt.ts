@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { SessionChecks, SessionConfig } from '../protocol.js'
+import type { RulePack, SessionChecks, SessionConfig } from '../protocol.js'
+import { renderRules } from '../rules/select.js'
 
 // 项目里的规则文件，按顺序都读，合计最多 8000 字
 const RULE_FILES = ['AGENTS.md', 'CLAUDE.md']
@@ -10,7 +11,8 @@ const MAX_RULES_CHARS = 8000
 export async function buildSystemPrompt(
   cwd: string,
   bashPath: string | null,
-  { checks, readOnlyPaths }: Pick<SessionConfig, 'checks' | 'readOnlyPaths'>,
+  { checks, readOnlyPaths, rules }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules'>,
+  rulePacks: RulePack[],
 ): Promise<string> {
   const shell = bashPath
     ? 'run_command uses bash (Git Bash on Windows): use bash syntax and forward slashes.'
@@ -33,9 +35,24 @@ export async function buildSystemPrompt(
     '- If the user only asked a question and you changed nothing, just answer without calling finish.',
     '- Reply in the same language the user writes in.',
   ]
-  const rules = await readProjectRules(cwd)
-  if (rules) lines.push('', 'Project rules from the repository (follow them):', rules)
+  const projectRules = await readProjectRules(cwd)
+  if (projectRules) lines.push('', 'Project rules from the repository (follow them):', projectRules)
+  lines.push(...codingRuleLines(rulePacks, rules.review))
   return lines.join('\n')
+}
+
+// 编码规范排在项目规则之后，并写明优先级更低；只约束这次写或改的代码，免得模型顺手大改旧代码
+function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
+  const { text, omitted } = renderRules(rulePacks)
+  if (!text) return []
+  return [
+    '',
+    "Coding rules (written in Chinese; each starts with its rule ID). They rank below the user's instructions and the project rules: when they conflict, follow those. " +
+      'Apply them to the code you write or change; do not rewrite unrelated existing code just to satisfy them.',
+    ...(review ? ['When you call finish, a reviewer checks your changes against these rules and reports violations by rule ID.'] : []),
+    text,
+    ...(omitted > 0 ? [`(${omitted} more rules were left out to save space.)`] : []),
+  ]
 }
 
 // 告诉模型哪些检查会自动跑，免得它自己再跑一遍、还多弹一次权限确认

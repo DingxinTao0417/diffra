@@ -7,7 +7,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { SessionChecks } from '../src/protocol.js'
+import type { RulePack, SessionChecks } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
@@ -81,24 +81,32 @@ afterEach(() => {
   rmSync(checkpointDir, { recursive: true, force: true })
 })
 
+const NO_RULES = { packs: [], review: false }
+
 async function makeSession(
   model: MockLanguageModelV4,
   checks: SessionChecks = { afterEdit: null, beforeFinish: null },
   readOnlyPaths: string[] = [],
+  review?: { packs: RulePack[]; model: MockLanguageModelV4 },
 ) {
   const bashPath = await findBash()
+  const rules = review ? { packs: review.packs, review: true } : NO_RULES
   return new Session({
     cwd: project,
     config: {
       model: { endpoint: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }, modelId: 'mock', contextWindow: 100_000 },
+      reviewModel: null,
       checks,
       readOnlyPaths,
+      rules,
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
     checkpoints: await Checkpoints.open(checkpointDir, project, readOnlyPaths),
-    systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths }),
+    rulePacks: rules.packs,
+    systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths, rules }, rules.packs),
     model,
+    reviewModel: review?.model,
   })
 }
 
@@ -232,29 +240,147 @@ describe('主循环', () => {
 
 describe('系统提示词', () => {
   test('配了检查命令时告诉模型会自动跑、不用自己跑', async () => {
-    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' }, readOnlyPaths: [] })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('automatically runs `pnpm typecheck`')
     expect(prompt).toContain('Do not run it yourself')
     expect(prompt).toContain('Diffra then runs `pnpm test`')
   })
 
   test('没配检查命令时要求模型自己验证', async () => {
-    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [] })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('verify it, for example by running the relevant tests')
     expect(prompt).toContain('No project checks are configured')
   })
 
   test('读入项目根目录的 AGENTS.md', async () => {
     writeFileSync(join(project, 'AGENTS.md'), '用 pnpm，不要用 npm\n')
-    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [] })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('--- AGENTS.md ---\n用 pnpm，不要用 npm')
   })
 })
 
 describe('系统提示词里的保护说明', () => {
   test('写明受保护文件和禁写目录', async () => {
-    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: ['data', 'uploads'] })
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: ['data', 'uploads'], rules: NO_RULES }, [])
     expect(prompt).toContain('Files that may contain secrets (.env')
     expect(prompt).toContain("Never modify anything under these paths, they hold the user's data: data, uploads")
+  })
+})
+
+describe('系统提示词里的编码规范', () => {
+  const pack: RulePack = {
+    id: 'sample',
+    name: '示例',
+    languages: ['*'],
+    source: '',
+    license: '',
+    rules: [{ id: 'GEN-ERR-1', level: 'required', section: null, text: '不吞异常。' }],
+  }
+  const checks = { afterEdit: null, beforeFinish: null }
+
+  test('排在项目规则之后，写明优先级更低、只约束改动的代码', async () => {
+    writeFileSync(join(project, 'AGENTS.md'), '项目规则\n')
+    const prompt = await buildSystemPrompt(project, null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: false } }, [pack])
+    const rulesAt = prompt.indexOf('Coding rules')
+    expect(rulesAt).toBeGreaterThan(prompt.indexOf('--- AGENTS.md ---'))
+    expect(prompt.slice(rulesAt)).toContain("rank below the user's instructions and the project rules")
+    expect(prompt.slice(rulesAt)).toContain('### 示例\n- GEN-ERR-1: 不吞异常。')
+    expect(prompt).not.toContain('a reviewer checks your changes')
+  })
+
+  test('开了审查时告诉模型完成后会按规则审查；没有选中的包就不写这一段', async () => {
+    const reviewed = await buildSystemPrompt(project, null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: true } }, [pack])
+    expect(reviewed).toContain('a reviewer checks your changes against these rules')
+    const none = await buildSystemPrompt(project, null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: true } }, [])
+    expect(none).not.toContain('Coding rules')
+  })
+})
+
+describe('完成前的规范审查', () => {
+  const pack: RulePack = {
+    id: 'u',
+    name: '通用',
+    languages: ['*'],
+    source: '',
+    license: '',
+    rules: [
+      { id: 'GEN-ERR-1', level: 'required', section: null, text: '不吞异常。' },
+      { id: 'GEN-NAME-4', level: 'recommended', section: null, text: '常量名说完整。' },
+    ],
+  }
+  const finishResults = (session: Session) =>
+    session.messages
+      .flatMap((message) => (message.role === 'tool' ? message.content : []))
+      .filter((part) => part.type === 'tool-result' && part.toolName === 'finish')
+
+  test('审查发现违规时打回；推荐级、不在本轮改动里的意见丢掉；改好后再审查通过', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: '', new_string: 'try {\n  run()\n} catch {}\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了 run 调用' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'app.ts' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: '} catch {}', new_string: '} catch (error) {\n  log(error)\n  throw error\n}' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '异常记日志后抛出' } }] },
+    ])
+    const reviewer = scriptedModel([
+      {
+        text:
+          '检查了一下：\n- GEN-ERR-1 | app.ts:3 | catch 块是空的，吞掉了异常\n' +
+          'GEN-NAME-4 | app.ts:2 | 推荐级不拦\nGEN-ERR-1 | other.ts:1 | 不是这次改的文件\nGEN-ERR-1 | app.ts:9 | 不是新增的行',
+      },
+      { text: 'NO_VIOLATIONS' },
+    ])
+    const session = await makeSession(model, undefined, [], { packs: [pack], model: reviewer })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 't', text: '调用 run' }, io)).resolves.toBe('end_turn')
+    expect(reviewer.doStreamCalls).toHaveLength(2)
+    const [first, second] = finishResults(session).map((part) => JSON.stringify(part))
+    expect(first).toContain('GEN-ERR-1 at app.ts:3')
+    expect(first).not.toContain('GEN-NAME-4')
+    expect(first).not.toContain('other.ts')
+    expect(first).not.toContain('app.ts:9')
+    expect(second).toContain('Done.')
+    // 审查模型看到带新文件行号的 diff、只含强制级的规则，第二次还看到作者的说明
+    const reviewRequest = JSON.stringify(reviewer.doStreamCalls[0]?.prompt)
+    expect(reviewRequest).toContain('=== app.ts')
+    expect(reviewRequest).toContain('    3 + } catch {}')
+    expect(reviewRequest).toContain('GEN-ERR-1: 不吞异常。')
+    expect(reviewRequest).not.toContain('GEN-NAME-4')
+    expect(JSON.stringify(reviewer.doStreamCalls[1]?.prompt)).toContain('异常记日志后抛出')
+    // 界面上：两张审查卡片，第一张失败，最后的「完成」是通过的
+    const reviewCards = io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '规范审查')
+    expect(reviewCards).toHaveLength(2)
+    expect(toolUpdates(io, 'failed').some((update) => JSON.stringify(update).includes('catch 块是空的'))).toBe(true)
+    expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+  })
+
+  test('评审模型出错时不拦截完成，卡片上说明', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: '', new_string: 'run()\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+    ])
+    const reviewer = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error('reviewer down')
+      },
+    })
+    const session = await makeSession(model, undefined, [], { packs: [pack], model: reviewer })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '调用 run' }, io)).resolves.toBe('end_turn')
+    expect(JSON.stringify(toolUpdates(io, 'failed'))).toContain('审查没有完成，这次不拦截')
+    expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+  })
+
+  test('这一轮只改了非代码文件时不审查', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'README.md', old_string: '', new_string: '# 说明\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写了说明' } }] },
+    ])
+    const reviewer = scriptedModel([{ text: 'GEN-ERR-1 | README.md:1 | x' }])
+    const session = await makeSession(model, undefined, [], { packs: [pack], model: reviewer })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写说明' }, io)).resolves.toBe('end_turn')
+    expect(reviewer.doStreamCalls).toHaveLength(0)
+    expect(io.updates.some((update) => update.sessionUpdate === 'tool_call' && update.title === '规范审查')).toBe(false)
   })
 })

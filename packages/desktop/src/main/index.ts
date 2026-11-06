@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { startCore, stopCore } from './core-process'
+import { RulePackStore } from './rule-packs'
+import { registerRulesIpc } from './rules-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
@@ -42,8 +44,10 @@ app
     const userDataDir = app.getPath('userData')
     const settings = await SettingsStore.open(userDataDir)
     const secrets = await SecretStore.open(userDataDir)
+    const rulePacks = new RulePackStore(join(userDataDir, 'rules'))
     registerSettingsIpc(settings, secrets)
-    registerSessionIpc(settings, secrets, userDataDir)
+    registerRulesIpc(rulePacks)
+    registerSessionIpc(settings, secrets, userDataDir, rulePacks)
     setupUpdater()
     createWindow()
   })

@@ -6,6 +6,14 @@ import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
 import { truncateLines } from '../process.js'
 import { PERMISSION_OPTIONS } from '../protocol.js'
+import {
+  annotateDiff,
+  buildReviewRequest,
+  callReviewer,
+  parseReviewOutput,
+  type ReviewFinding,
+  reviewRulePacks,
+} from '../rules/review.js'
 import { runShell } from '../tools/command.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 import type { Session } from './session.js'
@@ -85,7 +93,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
           continue
         }
         if (call.toolName === 'finish' && !call.invalid) {
-          const gate = await runFinishGate(session, call, editedThisTurn, signal, io)
+          const gate = await runFinishGate(session, call, turn.id, editedThisTurn, signal, io)
           results.push(gate.result)
           if (gate.passed) finished = true
           else gateAttempts++
@@ -294,6 +302,7 @@ async function askCommandPermission(
 async function runFinishGate(
   session: Session,
   call: StepToolCall,
+  turnId: string,
   editedThisTurn: boolean,
   signal: AbortSignal,
   io: TurnIO,
@@ -321,19 +330,80 @@ async function runFinishGate(
     return { result: textResult(call, 'Done.'), passed: true }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
+  if (command) {
+    const check = await runCheck(session, command, '完成检查', signal, io)
+    if (!check.passed) {
+      await showFinish('failed', `完成检查没有通过：${command}`)
+      return {
+        result: errorResult(call, `The check \`${command}\` failed, so the task is not finished:\n${check.output}\nFix the problems and call finish again.`),
+        passed: false,
+      }
+    }
+  }
+  // 检查通过（或没配检查）之后再审查规范，免得对跑不通的代码提风格意见
+  const findings = await runReview(session, turnId, summary, signal, io)
+  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false }
+  if (findings.length > 0) {
+    await showFinish('failed', `规范审查发现 ${findings.length} 处问题`)
+    const list = findings.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
+    return {
+      result: errorResult(
+        call,
+        `The rule review found violations in the code you changed, so the task is not finished:\n${list}\n` +
+          'Fix them and call finish again. If you are sure a finding is wrong, keep the code and explain why in the finish summary.',
+      ),
+      passed: false,
+    }
+  }
   if (!command) {
     await showFinish('completed', `${summary}\n\n未配置检查命令，改动未经自动验证。`)
     return { result: textResult(call, 'Done. No project checks are configured, so the changes were not verified.'), passed: true }
   }
-  const check = await runCheck(session, command, '完成检查', signal, io)
-  if (check.passed) {
-    await showFinish('completed', summary)
-    return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true }
+  await showFinish('completed', summary)
+  return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true }
+}
+
+// 完成前的规范审查。没开审查、没有选中的规则包、这一轮没改代码文件时跳过；
+// 审查调用本身失败不拦截完成，只在卡片上说明，避免评审模型出问题时任务永远完不成
+async function runReview(session: Session, turnId: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<ReviewFinding[]> {
+  if (!session.config.rules.review || session.rulePacks.length === 0) return []
+  const commit = session.turnCheckpoints.get(turnId)
+  if (!session.checkpoints || !commit) {
+    await notice(io, 'warning', '规范审查需要检查点（Git），这一轮跳过了审查')
+    return []
   }
-  await showFinish('failed', `完成检查没有通过：${command}`)
-  return {
-    result: errorResult(call, `The check \`${command}\` failed, so the task is not finished:\n${check.output}\nFix the problems and call finish again.`),
-    passed: false,
+  const toolCallId = `review-${randomUUID()}`
+  let cardShown = false
+  const showCard = async () => {
+    if (cardShown) return
+    cardShown = true
+    await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '规范审查', kind: 'other', status: 'in_progress' })
+  }
+  const finishCard = (status: 'completed' | 'failed', text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  try {
+    const diff = annotateDiff(await session.checkpoints.diffSince(commit))
+    const packs = reviewRulePacks(session.rulePacks, [...diff.addedLines.keys()])
+    if (diff.addedLines.size === 0 || packs.length === 0) return []
+    await showCard()
+    const output = await callReviewer(session.reviewModel, buildReviewRequest(packs, diff, summary), signal)
+    const ruleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => rule.id)))
+    const findings = parseReviewOutput(output, ruleIds, diff.addedLines)
+    const partial = diff.truncated ? '\n（改动太多，只审查了前面一部分）' : ''
+    await finishCard(
+      findings.length > 0 ? 'failed' : 'completed',
+      findings.length > 0
+        ? `${findings.map((item) => `${item.ruleId}  ${item.path}:${item.line}  ${item.message}`).join('\n')}${partial}`
+        : `没有发现违反规范的地方${partial}`,
+    )
+    return findings
+  } catch (error) {
+    if (signal.aborted) return []
+    const apiKey = (session.config.reviewModel ?? session.config.model).endpoint.apiKey
+    console.error('[session] 规范审查失败', error)
+    await showCard()
+    await finishCard('failed', `审查没有完成，这次不拦截：${toModelError(error, apiKey, 0).message}`)
+    return []
   }
 }
 

@@ -99,6 +99,7 @@ export function ProjectPanel({ project, session, running, onPick, onSave, onNewS
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="session-info">
           <span>模型：{session.modelLabel}</span>
           {project.readOnlyPaths.length > 0 && <span>禁写：{project.readOnlyPaths.join(', ')}</span>}
+          {session.info.rulePacks.length > 0 && <span>规范：{session.info.rulePacks.join('、')}</span>}
           <span>.env、私钥等密钥文件不会读进模型</span>
           {!session.info.bashPath && <span className="text-destructive">没找到 Git Bash，命令执行不可用</span>}
           {!session.info.checkpoints && <span className="text-destructive">检查点不可用（需要 Git），改动无法撤销</span>}
