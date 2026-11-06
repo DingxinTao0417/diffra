@@ -17,16 +17,23 @@ export async function registerSettingsIpc(userDataDir: string): Promise<void> {
   const settings = await SettingsStore.open(userDataDir)
   const secrets = await SecretStore.open(userDataDir)
 
-  const view = (): SettingsView => ({
-    providers: settings.get().providers.map((provider) => ({ ...provider, keyHint: secrets.hint(provider.id) })),
-    roles: settings.get().roles,
-    loadError: settings.loadError ?? secrets.loadError,
-  })
+  const view = async (): Promise<SettingsView> => {
+    const { providers, roles } = settings.get()
+    return {
+      providers: await Promise.all(
+        providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
+      ),
+      roles,
+      loadError: settings.loadError ?? secrets.loadError,
+    }
+  }
 
-  const endpointFor = (providerId: string): { ok: true; endpoint: ModelEndpoint } | { ok: false; error: ModelError } => {
+  const endpointFor = async (
+    providerId: string,
+  ): Promise<{ ok: true; endpoint: ModelEndpoint } | { ok: false; error: ModelError }> => {
     const provider = settings.get().providers.find((item) => item.id === providerId)
     if (!provider) return { ok: false, error: { kind: 'not-found', message: '供应商不存在' } }
-    const apiKey = secrets.get(providerId)
+    const apiKey = await secrets.get(providerId)
     if (!apiKey) return { ok: false, error: { kind: 'auth', message: '还没有填写密钥' } }
     return { ok: true, endpoint: { protocol: provider.protocol, baseUrl: provider.baseUrl, apiKey } }
   }
@@ -69,13 +76,13 @@ export async function registerSettingsIpc(userDataDir: string): Promise<void> {
   })
 
   ipcMain.handle(IPC_CHANNELS.modelsList, async (_event, raw: unknown) => {
-    const target = endpointFor(parse(z.string().min(1), raw))
+    const target = await endpointFor(parse(z.string().min(1), raw))
     if (!target.ok) return target
     return requestListModels(await coreConnection(), target.endpoint)
   })
 
   ipcMain.handle(IPC_CHANNELS.modelsTest, async (_event, rawProviderId: unknown, rawModelId: unknown) => {
-    const target = endpointFor(parse(z.string().min(1), rawProviderId))
+    const target = await endpointFor(parse(z.string().min(1), rawProviderId))
     if (!target.ok) return target
     return requestTestModel(await coreConnection(), target.endpoint, parse(z.string().min(1), rawModelId))
   })
