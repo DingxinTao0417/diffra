@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
 import { ArrowLeft, Ellipsis } from 'lucide-react'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
-import { type Appearance, CONTENT_WIDTHS, FONT_SIZES, PALETTES, THEME_MODES } from '../../../../shared/settings'
+import { type Appearance, CONTENT_WIDTHS, FONT_SIZES, PALETTES, type SecuritySettings, THEME_MODES } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { ModelSettings } from '@/features/models/ModelSettings'
@@ -30,6 +30,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'models', label: '模型与角色', keywords: '供应商 API Key 编码 评审 规划' },
       { id: 'rules', label: '规范', keywords: '规则包 编码规范 审查' },
       { id: 'permissions', label: '命令权限', keywords: '权限模式 询问 自动 完全访问' },
+      { id: 'security', label: '安全', keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
     ],
   },
   {
@@ -102,6 +103,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <RulesSection />
     case 'permissions':
       return <PermissionsSection />
+    case 'security':
+      return <SecuritySection />
     case 'storage':
       return <StorageSection />
     case 'usage':
@@ -299,6 +302,81 @@ function PermissionsSection() {
         不管哪种模式：危险命令清单直接拦截；读写 .env、私钥等密钥文件和改动禁写目录的命令总要先问你。
       </p>
     </>
+  )
+}
+
+const SECURITY_LEVELS: Array<{ key: keyof SecuritySettings; label: string; badge?: string; description: string }> = [
+  {
+    key: 'staticCheck',
+    label: '静态检查',
+    badge: '本机',
+    description: '每轮完成前检查本轮新增的代码，按规则匹配常见高危写法：SQL 拼接、命令注入、eval、关闭证书校验、硬写的密钥等，发现就打回修改。不调用模型。',
+  },
+  {
+    key: 'lightScan',
+    label: '轻量扫描',
+    description: '每轮完成前用评审模型审查本轮改动和相关函数，找注入、SSRF、路径穿越、缺少权限校验、敏感信息泄露；依赖文件变了时顺带查已知漏洞（需要联网）。每轮多一次模型调用。',
+  },
+  {
+    key: 'deepScan',
+    label: '深度扫描',
+    description: '在任务页手动发起：只读地跨文件追踪数据流，从外部输入一路查到危险调用，出一份报告，勾选后交给智能体修复。会多次调用模型。',
+  },
+]
+
+function SecuritySection() {
+  const security = useAppState((state) => state.settings?.security ?? null)
+  if (!security) return null
+
+  const change = async (key: keyof SecuritySettings, value: boolean) => {
+    const updated = { ...security, [key]: value }
+    store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, security: updated } } : state))
+    try {
+      const settings = await window.diffra.savePreferences({ security: updated })
+      store.set((state) => ({ ...state, settings }))
+    } catch (error) {
+      store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, security } } : state))
+      showToast(`保存失败：${errorMessage(error)}`)
+    }
+  }
+
+  return (
+    <>
+      <Heading title="安全" description="让智能体写出的代码在完成前过安全检查，问题打回给它修。所有项目共用；新建或重新打开的任务生效。" />
+      <div className="mb-2 text-xs text-muted-foreground">扫描层级</div>
+      <div className="divide-y rounded-lg border" data-testid="security-levels">
+        {SECURITY_LEVELS.map((level) => (
+          <div key={level.key} className="flex items-start gap-4 px-4 py-3.5">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-2 font-medium">
+                {level.label}
+                {level.badge && <span className="rounded bg-muted px-1.5 text-xs font-normal text-muted-foreground">{level.badge}</span>}
+              </div>
+              <div className="text-sm text-muted-foreground">{level.description}</div>
+            </div>
+            <Switch label={level.label} checked={security[level.key]} onChange={(value) => void change(level.key, value)} />
+          </div>
+        ))}
+      </div>
+      <p className="mt-4 text-sm text-muted-foreground">
+        这些检查能拦下常见的问题，但不能保证没有漏洞；规则抓不到的业务逻辑问题，还要靠测试和你的审阅。
+      </p>
+    </>
+  )
+}
+
+function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange(value: boolean): void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={cn('mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors', checked ? 'bg-primary' : 'bg-input')}
+    >
+      <span className={cn('size-4 rounded-full bg-background shadow-sm transition-transform', checked && 'translate-x-4')} />
+    </button>
   )
 }
 

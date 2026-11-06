@@ -6,12 +6,15 @@ import { Checkpoints } from './checkpoint.js'
 import { findBash, findRipgrep } from './environment.js'
 import { listModels, testModel } from './models/operations.js'
 import { EXT_METHODS } from './models/types.js'
-import { type LoadedSession, SESSION_EXT_METHODS, type SessionInfo, type StoredSessionMeta } from './protocol.js'
+import { type LoadedSession, SESSION_EXT_METHODS, type SessionInfo, type StoredSessionMeta, type TurnKind } from './protocol.js'
 import { detectLanguages } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
 import { endpointSchema, modelConfigSchema, newSessionMetaSchema, promptMetaSchema } from './session/config.js'
-import { runTurn } from './session/loop.js'
+import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
+import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
+import { detectChecks } from './project/detect.js'
+import { runShell } from './tools/command.js'
 import { Session } from './session/session.js'
 import { type SessionRecord, SessionStore } from './session/store.js'
 import { toUsageRecord, UsageLog } from './usage/log.js'
@@ -39,6 +42,8 @@ const sessionConfigureParams = z.object({
   permissionMode: z.enum(['ask', 'auto', 'full']).optional(),
   model: modelConfigSchema.optional(),
 })
+
+const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
 
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
 const MAX_USAGE_RANGE_MS = 400 * 86_400_000
@@ -96,6 +101,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       bashPath: environment.bashPath,
       checkpoints: checkpoints !== null,
       rulePacks: rulePacks.map((pack) => pack.name),
+      security: config.security,
     }
     sessions.set(session.id, session)
     infos.set(session.id, info)
@@ -116,6 +122,56 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         description: error instanceof Error ? error.message : String(error),
       }).catch(() => {})
     }
+  }
+
+  // 开始一轮、保存、跑完后再保存；过程中的会话更新同时记进这一轮并推给界面
+  const runRecordedTurn = async (
+    session: Session,
+    client: acp.AgentContext,
+    turnId: string,
+    text: string,
+    kind: TurnKind,
+    run: (io: TurnIO) => Promise<acp.StopReason>,
+  ): Promise<acp.StopReason> => {
+    const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
+    session.startTurn(turnId, text, kind)
+    await persist(session, notify)
+    let stopReason: acp.StopReason = 'end_turn'
+    try {
+      stopReason = await run({
+        update: async (update) => {
+          session.recordUpdate(update)
+          await notify(update)
+        },
+        requestPermission: async (toolCall, options) => {
+          try {
+            const response = await client.request(
+              acp.methods.client.session.requestPermission,
+              { sessionId: session.id, toolCall, options },
+              // 用户点「停止」时不再等确认结果
+              session.activeTurn ? { cancellationSignal: session.activeTurn.signal, stopWaitingOnCancel: true } : undefined,
+            )
+            return response.outcome.outcome === 'selected' ? response.outcome.optionId : null
+          } catch (error) {
+            console.error('[session] 权限请求失败', error)
+            return null
+          }
+        },
+        // 用量只用于统计，写失败不打断任务
+        recordUsage: async (call) => {
+          if (!usageLog) return
+          try {
+            await usageLog.append(toUsageRecord(call, session, new Date()))
+          } catch (error) {
+            console.error(`[usage] 会话 ${session.id} 的用量记录写入失败`, error)
+          }
+        },
+      })
+    } finally {
+      session.endTurn(stopReason)
+      await persist(session, notify)
+    }
+    return stopReason
   }
 
   return acp
@@ -167,45 +223,16 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const text = params.prompt
         .map((block) => (block.type === 'text' ? block.text : `[${block.type} content is not supported yet]`))
         .join('\n')
-      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
-
-      session.startTurn(turnId, text)
-      await persist(session, notify)
-      let stopReason: acp.StopReason = 'end_turn'
-      try {
-        stopReason = await runTurn(session, { id: turnId, text }, {
-          update: async (update) => {
-            session.recordUpdate(update)
-            await notify(update)
-          },
-          requestPermission: async (toolCall, options) => {
-            try {
-              const response = await client.request(
-                acp.methods.client.session.requestPermission,
-                { sessionId: session.id, toolCall, options },
-                // 用户点「停止」时不再等确认结果
-                session.activeTurn ? { cancellationSignal: session.activeTurn.signal, stopWaitingOnCancel: true } : undefined,
-              )
-              return response.outcome.outcome === 'selected' ? response.outcome.optionId : null
-            } catch (error) {
-              console.error('[session] 权限请求失败', error)
-              return null
-            }
-          },
-          // 用量只用于统计，写失败不打断任务
-          recordUsage: async (call) => {
-            if (!usageLog) return
-            try {
-              await usageLog.append(toUsageRecord(call, session, new Date()))
-            } catch (error) {
-              console.error(`[usage] 会话 ${session.id} 的用量记录写入失败`, error)
-            }
-          },
-        })
-      } finally {
-        session.endTurn(stopReason)
-        await persist(session, notify)
-      }
+      const stopReason = await runRecordedTurn(session, client, turnId, text, 'prompt', (io) => runTurn(session, { id: turnId, text }, io))
+      return { stopReason }
+    })
+    // 深度安全扫描作为一轮记进会话：进度实时显示、能停止、存进历史
+    .onRequest(SESSION_EXT_METHODS.deepScan, deepScanParams, async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('上一个任务还没结束')
+      const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', (io) =>
+        runDeepScan(session, { id: params.turnId }, params.scope, io),
+      )
       return { stopReason }
     })
     .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
@@ -252,6 +279,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const aggregator = new UsageAggregator(from, to, params.timeZone)
       const { skippedLines } = await usageLog.scan(from, to, (record) => aggregator.add(record))
       return aggregator.result(skippedLines)
+    })
+    .onRequest(SESSION_EXT_METHODS.projectDetectChecks, z.object({ cwd: z.string().min(1) }), async ({ params }) => {
+      if (!(await stat(params.cwd).catch(() => null))?.isDirectory()) throw new Error(`项目目录不存在：${params.cwd}`)
+      return detectChecks(params.cwd)
+    })
+    // 用户在项目设置里点「试运行」；和任务里的检查一样用 Git Bash、同样的超时
+    .onRequest(SESSION_EXT_METHODS.projectRunCheck, z.object({ cwd: z.string().min(1), command: z.string().trim().min(1) }), async ({ params }) => {
+      const result = await runShell({ cwd: params.cwd, bashPath: await findBash(), signal: new AbortController().signal }, params.command, CHECK_TIMEOUT_SECONDS)
+      return { passed: result.exitCode === 0 && !result.timedOut && !result.aborted, summary: result.summary }
     })
     .onRequest(EXT_METHODS.listModels, z.object({ endpoint: endpointSchema }), ({ params }) =>
       listModels(params.endpoint),

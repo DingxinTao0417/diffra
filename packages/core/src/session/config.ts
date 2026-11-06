@@ -42,6 +42,7 @@ export const sessionConfigSchema = z.object({
   readOnlyPaths: z.array(z.string().trim().min(1)),
   rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),
   permissionMode: z.enum(['ask', 'auto', 'full']),
+  security: z.object({ staticCheck: z.boolean(), lightScan: z.boolean() }),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 

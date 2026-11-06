@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
-import { streamText, type ToolResultPart } from 'ai'
+import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
@@ -16,6 +16,10 @@ import {
 } from '../rules/review.js'
 import { runShell } from '../tools/command.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
+import { staticScan } from '../security/static.js'
+import { auditDependencies, dependenciesChanged } from '../security/deps.js'
+import { buildLightScanRequest, parseLightScanOutput } from '../security/light.js'
+import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityFinding } from '../security/types.js'
 import type { ModelCallUsage } from '../usage/log.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, parseFinishInput, TOOL_KINDS, TOOLS } from './tools.js'
@@ -24,9 +28,9 @@ const MAX_STEPS = 50
 // 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
 const MAX_CHECK_FAILURES = 3
 const MAX_GATE_ATTEMPTS = 3
-const CONTEXT_STOP_RATIO = 0.8
-const DEFAULT_CONTEXT_WINDOW = 128_000
-const CHECK_TIMEOUT_SECONDS = 300
+export const CONTEXT_STOP_RATIO = 0.8
+export const DEFAULT_CONTEXT_WINDOW = 128_000
+export const CHECK_TIMEOUT_SECONDS = 300
 
 // 主循环和外界（ACP 客户端）打交道的两个口子，测试时可以替换
 export interface TurnIO {
@@ -37,7 +41,7 @@ export interface TurnIO {
   recordUsage(call: ModelCallUsage): Promise<void>
 }
 
-interface StepToolCall {
+export interface StepToolCall {
   toolCallId: string
   toolName: string
   input: unknown
@@ -161,7 +165,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
   }
 }
 
-async function takeCheckpoint(session: Session, turnId: string, io: TurnIO): Promise<void> {
+export async function takeCheckpoint(session: Session, turnId: string, io: TurnIO): Promise<void> {
   if (!session.checkpoints) return
   try {
     session.turnCheckpoints.set(turnId, await session.checkpoints.snapshot())
@@ -171,16 +175,42 @@ async function takeCheckpoint(session: Session, turnId: string, io: TurnIO): Pro
   }
 }
 
-async function streamStep(
-  session: Session,
+function streamStep(session: Session, signal: AbortSignal, io: TurnIO) {
+  return streamModelStep(
+    {
+      model: session.model,
+      system: session.systemPrompt,
+      messages: session.messages,
+      tools: TOOLS,
+      usage: { role: 'coder', provider: session.config.model.provider, modelId: session.config.model.modelId },
+    },
+    signal,
+    io,
+  )
+}
+
+export interface StepSettings {
+  model: LanguageModel
+  system: string
+  // 本次调用的回复会追加到这个数组里
+  messages: ModelMessage[]
+  tools: ToolSet
+  toolChoice?: ToolChoice<ToolSet>
+  usage: Omit<ModelCallUsage, 'usage'>
+}
+
+// 调一次模型：文字和思考实时推给界面，收集工具调用，记用量
+export async function streamModelStep(
+  settings: StepSettings,
   signal: AbortSignal,
   io: TurnIO,
 ): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; answered: Set<string> }> {
   const result = streamText({
-    model: session.model,
-    system: session.systemPrompt,
-    messages: session.messages,
-    tools: TOOLS,
+    model: settings.model,
+    system: settings.system,
+    messages: settings.messages,
+    tools: settings.tools,
+    toolChoice: settings.toolChoice,
     maxRetries: 2,
     abortSignal: signal,
     headers: MODEL_CALL_HEADERS,
@@ -205,19 +235,14 @@ async function streamStep(
         break
       case 'finish-step':
         inputTokens = part.usage.inputTokens ?? inputTokens
-        await io.recordUsage({
-          role: 'coder',
-          provider: session.config.model.provider,
-          modelId: session.config.model.modelId,
-          usage: part.usage,
-        })
+        await io.recordUsage({ ...settings.usage, usage: part.usage })
         break
       case 'error':
         throw part.error
     }
   }
   const responseMessages = await result.responseMessages
-  session.messages.push(...responseMessages)
+  settings.messages.push(...responseMessages)
   const answered = new Set(
     responseMessages.flatMap((message) =>
       message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
@@ -226,7 +251,7 @@ async function streamStep(
   return { toolCalls, inputTokens, answered }
 }
 
-async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> {
+export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> {
   await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: call.toolName, kind: 'other', status: 'failed', rawInput: call.input })
   await io.update({
     sessionUpdate: 'tool_call_update',
@@ -236,7 +261,7 @@ async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> 
   })
 }
 
-async function runToolCall(
+export async function runToolCall(
   session: Session,
   call: StepToolCall,
   signal: AbortSignal,
@@ -357,8 +382,26 @@ async function runFinishGate(
       }
     }
   }
-  // 检查通过（或没配检查）之后再审查规范，免得对跑不通的代码提风格意见
-  const findings = await runReview(session, turnId, summary, signal, io)
+  // 检查通过（或没配检查）之后再做安全检查和规范审查，免得对跑不通的代码提意见
+  const diff = await turnDiff(session, turnId, io)
+  const security = diff === null ? [] : await runSecurityChecks(session, diff, summary, signal, io)
+  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false }
+  const blockers = blocking(security)
+  if (blockers.length > 0) {
+    await showFinish('failed', `安全检查发现 ${blockers.length} 处高危问题`)
+    const list = blockers.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
+    return {
+      result: errorResult(
+        call,
+        `Security checks found high-risk problems in the code you changed, so the task is not finished:\n${list}\n` +
+          'Fix them and call finish again. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
+          'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
+          'for any other finding, explain in the finish summary why it is safe.',
+      ),
+      passed: false,
+    }
+  }
+  const findings = diff === null ? [] : await runReview(session, diff, summary, signal, io)
   if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false }
   if (findings.length > 0) {
     await showFinish('failed', `规范审查发现 ${findings.length} 处问题`)
@@ -380,15 +423,108 @@ async function runFinishGate(
   return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true }
 }
 
-// 完成前的规范审查。没开审查、没有选中的规则包、这一轮没改代码文件时跳过；
-// 审查调用本身失败不拦截完成，只在卡片上说明，避免评审模型出问题时任务永远完不成
-async function runReview(session: Session, turnId: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<ReviewFinding[]> {
-  if (!session.config.rules.review || session.rulePacks.length === 0) return []
+// 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
+async function turnDiff(session: Session, turnId: string, io: TurnIO): Promise<string | null> {
+  const wanted = [
+    session.config.security.staticCheck || session.config.security.lightScan ? '安全检查' : null,
+    session.config.rules.review && session.rulePacks.length > 0 ? '规范审查' : null,
+  ].filter((item): item is string => item !== null)
+  if (wanted.length === 0) return null
   const commit = session.turnCheckpoints.get(turnId)
   if (!session.checkpoints || !commit) {
-    await notice(io, 'warning', '规范审查需要检查点（Git），这一轮跳过了审查')
+    await notice(io, 'warning', `${wanted.join('和')}需要检查点（Git），这一轮跳过了`)
+    return null
+  }
+  try {
+    return await session.checkpoints.diffSince(commit)
+  } catch (error) {
+    console.error('[session] 读取本轮改动失败', error)
+    await notice(io, 'warning', `读取本轮改动失败，${wanted.join('和')}这一轮跳过了`, error instanceof Error ? error.message : String(error))
+    return null
+  }
+}
+
+// 完成前的安全检查：静态检查按规则匹配本轮新增的代码；轻量扫描用评审模型审查改动。
+// 检查本身出错时不拦截完成，只在卡片上说明，免得工具出问题时任务永远完不成
+async function runSecurityChecks(session: Session, diff: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
+  const added = addedLinesOf(diff)
+  if (added.size === 0) return []
+  const findings: SecurityFinding[] = []
+  if (session.config.security.staticCheck) findings.push(...(await runStaticCheck(session, added, signal, io)))
+  // 静态检查已经要打回时先不花模型调用，改好之后再扫
+  if (session.config.security.lightScan && blocking(findings).length === 0 && !signal.aborted) {
+    findings.push(...(await runLightScan(session, diff, added, summary, signal, io)))
+  }
+  return findings
+}
+
+async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
+  const toolCallId = `security-static-${randomUUID()}`
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全检查', kind: 'other', status: 'in_progress' })
+  const finishCard = (status: 'completed' | 'failed', text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  try {
+    const findings = await staticScan(session.cwd, added)
+    if (signal.aborted) return []
+    await finishCard(blocking(findings).length > 0 ? 'failed' : 'completed', findings.length > 0 ? formatFindings(findings) : '没有发现常见的高危写法')
+    return findings
+  } catch (error) {
+    console.error('[session] 静态安全检查失败', error)
+    await finishCard('failed', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
     return []
   }
+}
+
+// 轻量扫描：评审模型看本轮改动和所在文件，找注入、越权、SSRF 这类问题；依赖文件变了时顺带审计依赖。
+// 模型调用或审计失败只在卡片上说明，不拦截
+async function runLightScan(
+  session: Session,
+  rawDiff: string,
+  added: AddedLines,
+  summary: string,
+  signal: AbortSignal,
+  io: TurnIO,
+): Promise<SecurityFinding[]> {
+  const diff = annotateDiff(rawDiff)
+  const depsChanged = dependenciesChanged(added)
+  if (diff.addedLines.size === 0 && !depsChanged) return []
+  const toolCallId = `security-scan-${randomUUID()}`
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全扫描', kind: 'other', status: 'in_progress' })
+  const findings: SecurityFinding[] = []
+  const notes: string[] = []
+  if (diff.addedLines.size > 0) {
+    const reviewer = session.config.reviewModel ?? session.config.model
+    try {
+      const { text, usage } = await callReviewer(session.reviewModel, await buildLightScanRequest(session.cwd, diff, summary), signal)
+      if (usage) await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
+      findings.push(...parseLightScanOutput(text, diff.addedLines))
+      if (diff.truncated) notes.push('改动太多，模型只看了前面一部分')
+    } catch (error) {
+      if (signal.aborted) return []
+      console.error('[session] 安全扫描的模型调用失败', error)
+      notes.push(`模型扫描没有完成，这次不拦截：${toModelError(error, reviewer.endpoint.apiKey, 0).message}`)
+    }
+  }
+  if (depsChanged && !signal.aborted) {
+    const audit = await auditDependencies(session.cwd, added, session.environment.bashPath, signal)
+    findings.push(...audit.findings)
+    notes.push(...audit.notes)
+  }
+  if (signal.aborted) return []
+  const text = [findings.length > 0 ? formatFindings(findings) : '没有发现安全问题', ...notes].join('\n')
+  await io.update({
+    sessionUpdate: 'tool_call_update',
+    toolCallId,
+    status: blocking(findings).length > 0 ? 'failed' : 'completed',
+    content: [{ type: 'content', content: { type: 'text', text } }],
+  })
+  return findings
+}
+
+// 完成前的规范审查。没开审查、没有选中的规则包、这一轮没改代码文件时跳过；
+// 审查调用本身失败不拦截完成，只在卡片上说明，避免评审模型出问题时任务永远完不成
+async function runReview(session: Session, rawDiff: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<ReviewFinding[]> {
+  if (!session.config.rules.review || session.rulePacks.length === 0) return []
   const toolCallId = `review-${randomUUID()}`
   let cardShown = false
   const showCard = async () => {
@@ -399,7 +535,7 @@ async function runReview(session: Session, turnId: string, summary: string, sign
   const finishCard = (status: 'completed' | 'failed', text: string) =>
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
   try {
-    const diff = annotateDiff(await session.checkpoints.diffSince(commit))
+    const diff = annotateDiff(rawDiff)
     const packs = reviewRulePacks(session.rulePacks, [...diff.addedLines.keys()])
     if (diff.addedLines.size === 0 || packs.length === 0) return []
     await showCard()
@@ -464,14 +600,14 @@ function toolContent(output: ToolOutput): ToolCallContent[] {
   return [{ type: 'content', content: { type: 'text', text: output.terminalOutput ?? output.text } }]
 }
 
-function textResult(call: StepToolCall, text: string): ToolResultPart {
+export function textResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'text', value: text } }
 }
 
-function errorResult(call: StepToolCall, text: string): ToolResultPart {
+export function errorResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'error-text', value: text } }
 }
 
-function notice(io: TurnIO, severity: 'info' | 'warning' | 'error', title: string, description?: string): Promise<void> {
+export function notice(io: TurnIO, severity: 'info' | 'warning' | 'error', title: string, description?: string): Promise<void> {
   return io.update({ sessionUpdate: 'notice', severity, title, description: description ?? null })
 }

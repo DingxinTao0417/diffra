@@ -7,7 +7,7 @@ import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/sessio
 import { PermissionCard } from '@/features/session/PermissionCard'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { formatDuration } from '@/lib/format'
-import { respondPermission } from '@/state/actions'
+import { respondPermission, sendMessage } from '@/state/actions'
 import { type LiveTask, showToast, store } from '@/state/store'
 import { Markdown } from './Markdown'
 
@@ -16,7 +16,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'check' | 'review' | 'finish'; item: ToolItem }
+  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'finish'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -27,9 +27,13 @@ const STOP_LABELS: Partial<Record<StopReason, string>> = {
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'finish' | null {
+const SECURITY_TITLES = ['安全检查', '安全扫描']
+
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'finish' | null {
   if (item.title === '完成') return 'finish'
+  if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
+  if (SECURITY_TITLES.includes(item.title)) return 'security'
   if (CHECK_PREFIXES.some((prefix) => item.title.startsWith(prefix))) return 'check'
   if (item.content.some((content) => content.type === 'diff')) return 'edit'
   return null
@@ -210,6 +214,10 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             return <CheckRow key={block.item.id} item={block.item} />
           case 'review':
             return <ReviewBlock key={block.item.id} item={block.item} />
+          case 'security':
+            return <SecurityBlock key={block.item.id} item={block.item} />
+          case 'deep-scan':
+            return <DeepScanReport key={block.item.id} item={block.item} task={task} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={changedFiles} projectPath={task.project} />
         }
@@ -237,7 +245,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
               <Undo2 className="size-3.5" />
             </ActionButton>
           )}
-          {last && (
+          {last && turn.kind === 'prompt' && (
             <ActionButton label="重新生成" disabled={task.running} onClick={onRegenerate}>
               <RefreshCw className="size-3.5" />
             </ActionButton>
@@ -445,6 +453,153 @@ function ReviewBlock({ item }: { item: ToolItem }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// 安全检查卡片的一行：级别  规则号  路径:行号  说明
+const SECURITY_LINE = /^(高危|提醒|已放行) {2}(\S+) {2}(\S+:\d+) {2}(.+)$/
+const LEVEL_STYLES: Record<string, string> = {
+  高危: 'bg-destructive/10 text-destructive',
+  提醒: 'bg-warning/10 text-warning',
+  已放行: 'bg-muted text-muted-foreground',
+}
+
+function SecurityBlock({ item }: { item: ToolItem }) {
+  const text = textOf(item)
+  const common = { 'data-testid': 'tool-call', 'data-kind': 'security', 'data-status': item.status }
+  if (item.status !== 'completed' && item.status !== 'failed') {
+    return (
+      <div {...common} className="flex items-center gap-2 text-[0.93rem] text-muted-foreground">
+        <StatusIcon status={item.status} />
+        {item.title}中…
+      </div>
+    )
+  }
+  const rows = text
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => ({ line, match: SECURITY_LINE.exec(line) }))
+  const findings = rows.filter((row) => row.match)
+  if (findings.length === 0) {
+    return (
+      <div {...common} className={cn('flex items-start gap-2 text-[0.93rem]', item.status === 'failed' && 'text-muted-foreground')}>
+        <StatusIcon status={item.status === 'failed' ? 'failed' : 'completed'} className="mt-1" />
+        <span className="shrink-0 text-muted-foreground">{item.title}</span>
+        <span className="whitespace-pre-wrap">{text}</span>
+      </div>
+    )
+  }
+  const high = findings.filter((row) => row.match?.[1] === '高危').length
+  return (
+    <div
+      {...common}
+      className={cn(
+        'flex flex-col gap-1.5 rounded-[10px] border px-3 py-2.5 text-[0.93rem]',
+        high > 0 ? 'border-destructive/25 bg-destructive/5' : 'border-warning/25 bg-warning/5',
+      )}
+    >
+      <div className={cn('flex items-center gap-2 font-medium', high > 0 && 'text-destructive')}>
+        {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <Check className="size-3.5 text-success" strokeWidth={2.6} />}
+        {high > 0 ? `${item.title} · ${high} 处高危问题，已打回` : `${item.title} · 没有高危问题，${findings.length} 条需要留意`}
+      </div>
+      {rows.map(({ line, match }, index) =>
+        match ? (
+          <div key={index} className="flex flex-wrap items-baseline gap-x-2.5 leading-relaxed" data-testid="security-finding">
+            <span className={cn('shrink-0 rounded px-1.5 text-xs', LEVEL_STYLES[match[1] ?? ''])}>{match[1]}</span>
+            <span className="font-mono text-xs">{match[2]}</span>
+            <span className="font-mono text-xs">{match[3]}</span>
+            <span>{match[4]}</span>
+          </div>
+        ) : (
+          <div key={index} className="leading-relaxed">
+            {line}
+          </div>
+        ),
+      )}
+    </div>
+  )
+}
+
+interface ReportFinding {
+  level: string
+  ruleId: string
+  location: string
+  problem: string
+  flow: string | null
+  fix: string | null
+}
+
+// 报告卡片：第一行总结，然后每个问题一行，下面缩进的「链路」「修复」行属于上面那个问题
+function parseReport(text: string): { summary: string; findings: ReportFinding[] } {
+  const [summary = '', ...rest] = text.split('\n')
+  const findings: ReportFinding[] = []
+  for (const line of rest) {
+    const match = SECURITY_LINE.exec(line)
+    if (match) {
+      findings.push({ level: match[1] ?? '', ruleId: match[2] ?? '', location: match[3] ?? '', problem: match[4] ?? '', flow: null, fix: null })
+      continue
+    }
+    const current = findings.at(-1)
+    if (current && line.startsWith('  链路：')) current.flow = line.slice('  链路：'.length)
+    else if (current && line.startsWith('  修复：')) current.fix = line.slice('  修复：'.length)
+  }
+  return { summary, findings }
+}
+
+function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
+  const { summary, findings } = useMemo(() => parseReport(textOf(item)), [item])
+  // 默认勾上高危的
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(findings.flatMap((finding, index) => (finding.level === '高危' ? [index] : []))))
+  const toggle = (index: number) =>
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  const fix = () => {
+    const lines = findings
+      .filter((_, index) => selected.has(index))
+      .map(
+        (finding, index) =>
+          `${index + 1}. [${finding.ruleId}] ${finding.location} ${finding.problem}` +
+          (finding.flow ? `\n   链路：${finding.flow}` : '') +
+          (finding.fix ? `\n   修复建议：${finding.fix}` : ''),
+      )
+    void sendMessage(task.sessionId, `修复深度安全扫描发现的这些问题：\n${lines.join('\n')}`)
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3 text-[0.93rem]" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
+      <div className="font-medium">深度扫描报告</div>
+      <p className="text-muted-foreground">{summary}</p>
+      {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
+      {findings.map((finding, index) => (
+        <label key={index} className="flex cursor-pointer gap-2.5 rounded-lg border px-3 py-2" data-testid="deep-scan-finding">
+          <input type="checkbox" className="mt-1" checked={selected.has(index)} onChange={() => toggle(index)} />
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className={cn('rounded px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
+              <span className="font-mono text-xs">{finding.ruleId}</span>
+              <span className="font-mono text-xs">{finding.location}</span>
+            </div>
+            <div>{finding.problem}</div>
+            {finding.flow && <div className="text-xs text-muted-foreground">链路：{finding.flow}</div>}
+            {finding.fix && <div className="text-xs text-muted-foreground">修复：{finding.fix}</div>}
+          </div>
+        </label>
+      ))}
+      {findings.length > 0 && (
+        <button
+          type="button"
+          disabled={selected.size === 0}
+          onClick={fix}
+          className="self-start rounded-lg bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-40"
+        >
+          {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
+        </button>
+      )}
     </div>
   )
 }

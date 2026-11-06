@@ -1,4 +1,4 @@
-import type { SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, UsageBreakdown } from '@diffra/core/types'
+import type { SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -16,6 +16,7 @@ export type TranscriptItem =
 
 export interface Turn {
   id: string
+  kind: TurnKind
   prompt: string
   items: TranscriptItem[]
   stopReason: StopReason | null
@@ -30,8 +31,8 @@ export interface Usage {
   breakdown: UsageBreakdown | null
 }
 
-export function newTurn(id: string, prompt: string): Turn {
-  return { id, prompt, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt'): Turn {
+  return { id, kind, prompt, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -39,6 +40,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
   const items = turn.updates.reduce(applyUpdate, [{ kind: 'user', id: `${turn.id}-user`, text: turn.prompt }] as TranscriptItem[])
   return {
     id: turn.id,
+    kind: turn.kind ?? 'prompt',
     prompt: turn.prompt,
     items,
     // 应用退出时没跑完的一轮记为已停止

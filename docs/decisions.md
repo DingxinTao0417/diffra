@@ -79,6 +79,8 @@ v2：
   - electron-builder 只会自动找 `electron-builder.yml/json/ts` 这类文件名，所以 `package` 脚本里用 `--config` 显式指定配置文件。
   - `npmRebuild: false`：唯一的原生依赖 node-pty 自带 N-API 预编译文件，Electron 能直接用。打包时默认会用 node-gyp 重新编译，本机没装 VS 编译工具就会失败。
   - node-pty 的原生文件由 electron-builder 自动解到 `app.asar.unpacked`（约 8.5MB）。
+  - 静态检查用的 `@ast-grep/napi`、`@ast-grep/lang-python` 也是原生依赖，和 node-pty 一样列在桌面端的 `dependencies` 里，electron-builder 会自动把原生文件解到 asar 外面。
+  - Python 语法的解析器（`parser.so`）由 ast-grep 的原生代码加载，不认 asar 路径，路径不对时会直接让进程崩溃（Rust panic，try/catch 接不住）。core 加载前先把路径换成 `app.asar.unpacked`，并确认文件存在。打包后用 Diffra.exe 启动包里的 core 实测过。
 - 更新源：electron-updater 走 generic，默认地址 `https://update.diffra.net/win/`，构建时写进客户端的 `resources/app-update.yml`。
   - 备案前先解析到海外存储（比如 Cloudflare R2），备案后改 DNS 指向国内 CDN，地址本身不变。
   - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置。
@@ -137,6 +139,14 @@ v2：
   - 都没配时 finish 照样通过，但界面标注「改动未经自动验证」。
   - 系统提示词会写明哪些检查命令会自动跑、要求模型不要自己再跑。真实模型试跑时发现，不写这条的话模型会自己再跑一遍测试，还会多弹一次权限确认。
   - 「完成」卡片在完成检查跑完后才显示，界面上的先后顺序和实际执行一致。
+- 自动识别检查命令（`packages/core/src/project/detect.ts`，原第 5 步的一部分）：
+  - 只读项目文件，不执行命令；识别结果只是建议，用户在项目设置里看过、点「填入」再保存才生效。检查命令运行时不再逐次确认，来路不明的仓库里 `package.json` 的脚本可能有害，所以确认时把脚本的实际内容一起列出来。
+  - TS/JS：包管理器按 `packageManager` 字段、再按锁文件判断。优先用 typecheck、lint、test 脚本；没有脚本时，项目依赖里有对应工具才用 `tsc --noEmit`、`vue-tsc --noEmit`、`eslint .`、`vitest run`、`jest`，npx 加 `--no-install`，不会去下载。
+  - 会改文件（`--fix`、`--write`）或进入监听模式的脚本不选，npm 生成的占位 test 不选；test 脚本是 vitest 时加 `--run`。
+  - Python：用项目的 `.venv` 或 `venv` 里的解释器跑 `-m ruff`、`-m mypy`（或 pyright）、`-m pytest`；配置里提到了、但虚拟环境里没装的工具不选。pytest 还要求有 tests 或 test 目录。
+  - 类型检查和 lint 合成快速检查，再加上测试作为完成检查。
+  - 项目里没有的工具不替用户装，也不改项目的配置。
+  - 首页在项目还没配检查时提示识别到几条；项目设置里每条命令可以「试运行」（Git Bash，和任务里的检查一样最长 5 分钟）。
 - 测试连接会额外探测工具调用（要求模型必须调用一个工具），不支持的模型在界面上会标出来，agent 用不了。
 - 受保护文件（`packages/core/src/tools/protected.ts`）：`.env`、`.env.*`（`.env.example`/`.sample`/`.template`/`.dist` 除外）、`*.pem`、`*.key`、`*.p12`、`*.pfx`、`id_rsa`/`id_ed25519`/`id_ecdsa` 私钥（`.pub` 除外）、`.npmrc`、`.pypirc`、`.netrc`、`.git-credentials`。
   - read_file 和 edit_file 直接拒绝；search 用 ripgrep 的排除规则把它们排除在外，指定搜它们也会被拒；list_files 照常显示文件名。
@@ -209,6 +219,32 @@ v2：
   - 浅色主题下换用 VS Code 浅色终端的 16 色，xterm 默认的配色按深色背景配，浅色背景上「白色」字看不见。
 - 状态：渲染进程用一个很小的 store（`useSyncExternalStore`），不引入状态管理库。
 
+## 安全检查
+
+- 目标是把智能体写出的代码的安全底线抬高，不是证明没有漏洞：按规则匹配的检查只抓已知写法，模型扫描有误报、要花钱。三档都在「设置 → 智能体 → 安全」里开关，所有项目共用，新建或重新打开的任务生效。默认三档都开。
+- 完成门禁的顺序：检查命令 → 静态检查 → 轻量扫描 → 规范审查。前面不过就打回，后面的不跑；安全检查和规范审查共用同一份本轮 diff，需要检查点（Git）。
+- 静态检查（`packages/core/src/security/`）：
+  - 只看本轮新增的行，在本机运行，不调用模型。用 ast-grep（`@ast-grep/napi`，按语法树匹配，字符串和注释里的写法不会误报），覆盖 TS、TSX、JS、Vue 的 `<script>` 和 Python。Java 等 v2 的 Java 适配器。
+  - 规则都对应「安全」规则包里的规则号：SQL 拼接、命令拼接、eval、写入 HTML、关闭 TLS 校验、反序列化、MD5/SHA-1 处理密码、用普通随机数生成令牌。另外按正则查所有文件新增行里硬写的密钥。
+  - 高危打回，中危只在卡片上提醒。
+  - 误报时，代码里可以写带理由的放行注释 `diffra-allow 规则号: 理由`（写在那一行或上一行）。没写理由或规则号不对的不算。所有放行都列在卡片上给用户看。
+  - 漏洞样例项目（22 处）：写法类的 14 处全部拦下，没有误报；越权、SSRF、开放跳转、路径穿越、无限制上传、错误泄露堆栈、缺登录校验这 8 处拦不住，交给模型扫描。
+- 轻量扫描：
+  - 用「评审」角色的模型（没分配时用编码模型）看本轮 diff，再加上改动所在文件的完整内容（每个文件最多 1.2 万字，合计 4 万字）。
+  - 只收规则号存在、并且落在本轮新增行上的问题，最多 10 条。高危打回，中低危提醒；模型可以在完成总结里解释。
+  - 静态检查已经要打回时先不调用模型，改好后再扫。
+  - 依赖文件（package.json、锁文件、requirements、pyproject）变了时顺带跑审计：pnpm 和 npm 用 `audit --json`；Python 要虚拟环境里装了 pip-audit 才跑；yarn、bun 暂不支持。
+  - 审计只把本轮新加或改了版本的依赖算到这一轮头上：高危、严重打回换版本，中低危提醒；项目原有的漏洞只报数量。审计要联网，60 秒超时，失败不拦截。
+  - 模型调用或审计失败都只在卡片上说明，不拦截。
+- 深度扫描：
+  - 在任务监控里手动发起，范围是「本任务改动」（从第一轮之前的快照取 diff 作为起点）或「整个项目」（从入口找起）。开始前确认，提示会多次调用模型。
+  - 跑在一轮里（`TurnKind = 'deep-scan'`），进度实时显示、能停止、存进历史；但审计过程不进编码模型的对话。
+  - 只读：只给读文件、列文件、搜索三个工具和一个「提交报告」工具，改文件、执行命令的调用会被拒绝。最多 40 步，最后一步或上下文快满时要求直接交报告。
+  - 报告里每个问题带数据流链路和修复建议；规则号不存在、文件不在项目里的当作臆测丢掉。
+  - 用户勾选后作为新的一轮发给编码模型修，默认勾上高危的。这一轮没有「重新生成」。
+- 用量：轻量扫描和深度扫描的模型调用都记在用量统计里，角色是 reviewer。
+- 不做（v2 再说）：CodeQL、Semgrep Pro 级别的污点分析（许可证或付费问题）、动态测试、许可证合规扫描、按项目单独设置安全开关。
+
 ## 用量统计
 
 - 统计对象：每次模型调用记一条，编码循环和规范审查都算。「测试模型」按钮的调用不算。
@@ -236,6 +272,8 @@ v2：
 
 - pnpm 11 对刚发布的包有冷却期。被拦时换稍旧的版本（比如 Playwright 用 1.64.x），不要写 `minimumReleaseAgeExclude` 绕过。
 - Electron 45 不在安装时下载二进制，改为首次运行时下载。新环境可以先执行 `pnpm --filter @diffra/desktop exec install-electron`。
-- pnpm 11 用 `pnpm-workspace.yaml` 的 `allowBuilds` 管理依赖的安装脚本。electron-winstaller（Squirrel 安装器用的）设为 false，Diffra 只打 NSIS 包；node-pty 设为 true，它的安装脚本会选用自带的预编译文件。
+- pnpm 11 用 `pnpm-workspace.yaml` 的 `allowBuilds` 管理依赖的安装脚本。electron-winstaller（Squirrel 安装器用的）设为 false，Diffra 只打 NSIS 包；node-pty 设为 true，它的安装脚本会选用自带的预编译文件；`@ast-grep/lang-python` 设为 false，包里带了各平台的预编译解析器，运行时直接加载，不需要安装脚本去本机编译。
+- e2e 的脚本模型按系统提示词认出轻量安全扫描的请求，单独按 `securityReplies` 作答（用完后回「没有问题」），不占普通剧本的步骤。
+- 测试里像真密钥的字符串在运行时拼出来，仓库里不出现完整的密钥格式，免得推送时被代码托管平台的密钥扫描拦下。
 - e2e 按卡片种类定位对话内容（`data-testid="tool-call"` 加 `data-kind`），不靠匹配文字；默认 9 个用例并行，每个都开一个 Electron。
 - core 和 desktop 的 Node 侧 tsconfig 把 `lib` 限定为 `es2023`（不含 DOM），否则 Node 的 web stream 类型会和 DOM 版冲突。

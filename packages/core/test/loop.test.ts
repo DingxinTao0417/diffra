@@ -7,7 +7,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { RulePack, SessionChecks } from '../src/protocol.js'
+import type { RulePack, SessionChecks, SessionSecurity } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
@@ -94,6 +94,7 @@ async function makeSession(
   checks: SessionChecks = { afterEdit: null, beforeFinish: null },
   readOnlyPaths: string[] = [],
   review?: { packs: RulePack[]; model: MockLanguageModelV4 },
+  security: SessionSecurity = { staticCheck: false, lightScan: false },
 ) {
   const bashPath = await findBash()
   const rules = review ? { packs: review.packs, review: true } : NO_RULES
@@ -106,6 +107,7 @@ async function makeSession(
       readOnlyPaths,
       rules,
       permissionMode: 'ask',
+      security,
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
@@ -419,5 +421,100 @@ describe('任务进行中读改动', () => {
     await expect(session.checkpointDiff('t1')).resolves.toBe('')
     session.activeTurn = null
     await expect(session.checkpointDiff('t1')).rejects.toThrow('没有检查点')
+  })
+})
+
+describe('完成前的静态安全检查', () => {
+  const securityCards = (io: { updates: SessionUpdate[] }) =>
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '安全检查')
+
+  test('新增的代码有高危写法时打回，改好后通过；没改代码的轮次不检查', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: 'export const calc = (input: string) => eval(input)\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了计算' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'calc.ts' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '改成 Number' } }] },
+      { text: '只是回答问题' },
+    ])
+    const session = await makeSession(model, undefined, [], undefined, { staticCheck: true, lightScan: false })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't1', text: '加一个计算函数' }, io)).resolves.toBe('end_turn')
+
+    const finishes = session.messages
+      .flatMap((message) => (message.role === 'tool' ? message.content : []))
+      .filter((part) => part.type === 'tool-result' && part.toolName === 'finish')
+      .map((part) => JSON.stringify(part))
+    expect(finishes[0]).toContain('SEC-INJ-2 at calc.ts:1')
+    expect(finishes[0]).toContain('diffra-allow')
+    expect(finishes[1]).toContain('Done.')
+    const results = io.updates.filter(
+      (update) => update.sessionUpdate === 'tool_call_update' && securityCards(io).some((card) => card.sessionUpdate === 'tool_call' && card.toolCallId === update.toolCallId),
+    )
+    expect(results.map((update) => (update.sessionUpdate === 'tool_call_update' ? update.status : null))).toEqual(['failed', 'completed'])
+    expect(JSON.stringify(results[0])).toContain('高危  SEC-INJ-2  calc.ts:1')
+    expect(JSON.stringify(results[1])).toContain('没有发现常见的高危写法')
+
+    // 下一轮只回答问题，不改文件，不跑安全检查
+    const second = recordingIO()
+    await runTurn(session, { id: 't2', text: '解释一下' }, second)
+    expect(securityCards(second)).toHaveLength(0)
+  })
+
+  test('写了带理由的放行注释就不拦，卡片上列出放行的地方', async () => {
+    const code = '// diffra-allow SEC-INJ-2: 输入来自内部配置，不来自用户\nexport const calc = (input: string) => eval(input)\n'
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: code } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了计算，eval 已说明' } }] },
+    ])
+    const session = await makeSession(model, undefined, [], undefined, { staticCheck: true, lightScan: false })
+    const io = recordingIO()
+    await runTurn(session, { id: 't1', text: '加一个计算函数' }, io)
+    expect(JSON.stringify(toolUpdates(io, 'completed'))).toContain('已放行  SEC-INJ-2  calc.ts:2')
+    expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+  })
+})
+
+describe('完成前的轻量安全扫描', () => {
+  const scanCards = (io: { updates: SessionUpdate[] }) =>
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '安全扫描')
+
+  test('模型发现高危问题时打回，改好后再扫描通过；请求里带着改动所在的完整文件', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: '', new_string: 'export const read = (req) => fs.readFileSync(path.join(UPLOAD, req.query.name))\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了读文件接口' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'files.ts' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: 'req.query.name', new_string: 'safeName(req.query.name)' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '文件名限制在上传目录内' } }] },
+    ])
+    const reviewer = scriptedModel([{ text: 'high | SEC-INJ-4 | files.ts:1 | 文件名来自请求参数，可以用 ../ 读到上传目录外的文件' }, { text: 'NO_FINDINGS' }])
+    const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: true, lightScan: true })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't1', text: '加一个读文件接口' }, io)).resolves.toBe('end_turn')
+
+    expect(reviewer.doStreamCalls).toHaveLength(2)
+    const request = JSON.stringify(reviewer.doStreamCalls[0]?.prompt)
+    expect(request).toContain('=== files.ts')
+    expect(request).toContain('Files touched by the change')
+    expect(JSON.stringify(reviewer.doStreamCalls[1]?.prompt)).toContain('文件名限制在上传目录内')
+    expect(scanCards(io)).toHaveLength(2)
+    expect(JSON.stringify(toolUpdates(io, 'failed'))).toContain('高危  SEC-INJ-4  files.ts:1')
+    expect(io.usage.filter((call) => call.role === 'reviewer')).toHaveLength(2)
+    expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+  })
+
+  test('静态检查已经打回时不调用模型扫描', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: 'export const calc = (input: string) => eval(input)\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了计算' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '改成 Number' } }] },
+    ])
+    const reviewer = scriptedModel([{ text: 'NO_FINDINGS' }])
+    const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: true, lightScan: true })
+    const io = recordingIO()
+    await runTurn(session, { id: 't1', text: '加一个计算函数' }, io)
+    expect(reviewer.doStreamCalls).toHaveLength(1)
+    expect(scanCards(io)).toHaveLength(1)
   })
 })

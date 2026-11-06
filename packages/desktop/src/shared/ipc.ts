@@ -1,5 +1,7 @@
 import type {
+  CheckDetection,
   CheckpointChange,
+  CheckRunResult,
   ListModelsResult,
   PermissionMode,
   PermissionOption,
@@ -16,7 +18,7 @@ import type {
   UsageQuery,
   UsageSummary,
 } from '@diffra/core/types'
-import type { Appearance, ModelRef, ProjectRuleSettings, ProviderInput, Role, SettingsView } from './settings'
+import type { Appearance, ModelRef, ProjectRuleSettings, ProviderInput, Role, SecuritySettings, SettingsView } from './settings'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -34,6 +36,8 @@ export const IPC_CHANNELS = {
   projectPick: 'project:pick',
   projectLast: 'project:last',
   projectGet: 'project:get',
+  projectDetectChecks: 'project:detect-checks',
+  projectRunCheck: 'project:run-check',
   projectSave: 'project:save',
   projectSaveRules: 'project:save-rules',
   rulesList: 'rules:list',
@@ -61,6 +65,7 @@ export const IPC_CHANNELS = {
   preferencesSave: 'settings:preferences-save',
   openExternal: 'shell:open-external',
   sessionPrompt: 'session:prompt',
+  sessionDeepScan: 'session:deep-scan',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -149,6 +154,10 @@ export interface DiffraApi {
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
   getProject(path: string): Promise<ProjectState>
+  // 只读项目文件，识别可以用的检查命令；不保存
+  detectChecks(path: string): Promise<CheckDetection>
+  // 在项目目录试跑一条检查命令
+  runCheck(path: string, command: string): Promise<CheckRunResult>
   saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
   saveProjectRules(path: string, rules: ProjectRuleSettings): Promise<ProjectState>
   listRulePacks(): Promise<RulePacksView>
@@ -171,7 +180,7 @@ export interface DiffraApi {
   killTerminal(id: string): Promise<void>
   onTerminalData(listener: (event: { id: string; data: string }) => void): () => void
   onTerminalExit(listener: (event: { id: string; exitCode: number }) => void): () => void
-  savePreferences(change: { appearance?: Appearance; defaultPermissionMode?: PermissionMode }): Promise<SettingsView>
+  savePreferences(change: { appearance?: Appearance; defaultPermissionMode?: PermissionMode; security?: SecuritySettings }): Promise<SettingsView>
   // 只打开 http(s) 链接
   openExternal(url: string): Promise<void>
   // 不给项目就列出所有项目的任务
@@ -181,6 +190,8 @@ export interface DiffraApi {
   updateSession(sessionId: string, change: { title?: string; archived?: boolean }): Promise<void>
   deleteSession(sessionId: string): Promise<void>
   sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
+  // 深度安全扫描作为一轮记进任务，像 sendPrompt 一样等它跑完
+  deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void

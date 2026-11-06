@@ -53,6 +53,15 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = { theme: 'system', palette: 'forest', fontSize: 'md', contentWidth: 'standard' }
 
+// 完成前的安全检查，所有项目共用；深度扫描是在任务页手动发起的，这里只控制入口
+export interface SecuritySettings {
+  staticCheck: boolean
+  lightScan: boolean
+  deepScan: boolean
+}
+
+export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true }
+
 export interface Settings {
   version: 1
   providers: ProviderConfig[]
@@ -63,6 +72,7 @@ export interface Settings {
   appearance: Appearance
   // 新任务默认的命令权限模式；在输入框里改了会记住
   defaultPermissionMode: PermissionMode
+  security: SecuritySettings
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
@@ -75,6 +85,7 @@ export interface SettingsView {
   roles: Settings['roles']
   appearance: Appearance
   defaultPermissionMode: PermissionMode
+  security: SecuritySettings
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

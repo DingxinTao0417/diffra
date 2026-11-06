@@ -1,4 +1,4 @@
-import type { PermissionMode, StoredSessionSummary } from '@diffra/core/types'
+import type { PermissionMode, StopReason, StoredSessionSummary, TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, turnFromStored, usageOf } from '../features/session/transcript'
@@ -150,14 +150,27 @@ export async function sendMessage(sessionId: string, text: string): Promise<void
     updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text }] }))
     return
   }
+  await runTurnOnCore(sessionId, text, 'prompt', (turnId) => window.diffra.sendPrompt(sessionId, turnId, text))
+}
+
+const DEEP_SCAN_TITLES = { task: '深度安全扫描 · 本任务改动', project: '深度安全扫描 · 整个项目' } as const
+
+// 深度安全扫描在界面上也是一轮：和 core 记下的标题一致
+export async function runDeepScan(sessionId: string, scope: 'task' | 'project'): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
+}
+
+async function runTurnOnCore(sessionId: string, text: string, kind: TurnKind, run: (turnId: string) => Promise<StopReason>): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏
   const refresh = setTimeout(() => void refreshTasks(), 800)
   try {
-    const stopReason = await window.diffra.sendPrompt(sessionId, turnId, text)
+    const stopReason = await run(turnId)
     patchTurn((turn) => ({ ...turn, stopReason, endedAt: Date.now() }))
   } catch (error) {
     patchTurn((turn) => ({ ...turn, error: errorMessage(error), endedAt: Date.now() }))
@@ -217,7 +230,8 @@ export async function restoreTurn(sessionId: string, turnId: string): Promise<vo
 export async function regenerate(sessionId: string, turnId: string): Promise<void> {
   const task = store.get().live[sessionId]
   const turn = task?.turns.find((item) => item.id === turnId)
-  if (!task || !turn || task.running) return
+  // 深度扫描的那一轮没有「重新生成」，要重扫就再发起一次
+  if (!task || !turn || task.running || turn.kind !== 'prompt') return
   try {
     const { filesRestored } = await window.diffra.rewindSession(sessionId, turnId)
     if (!filesRestored) showToast('这一轮没有检查点，文件改动没有撤销，只重新生成了回答')

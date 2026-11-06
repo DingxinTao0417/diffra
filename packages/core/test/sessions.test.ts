@@ -10,6 +10,7 @@ import {
   configureSession,
   connectToCore,
   createSession,
+  deepScan,
   deleteSession,
   handshake,
   listSessions,
@@ -61,6 +62,7 @@ function config(baseUrl: string): SessionConfig {
     readOnlyPaths: [],
     rules: { packs: [], review: false },
     permissionMode: 'ask',
+    security: { staticCheck: false, lightScan: false },
     checkpointDir: join(dataDir, 'checkpoints'),
   }
 }
@@ -204,5 +206,61 @@ describe('错误提示', () => {
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
     await expect(rewindSession(core, sessionId, 'no-such-turn')).rejects.toThrow('这一轮不能重新生成')
     await expect(checkpointDiff(core, sessionId, 'no-such-turn')).rejects.toThrow('这一轮没有检查点，看不了改动')
+  })
+})
+
+describe('深度安全扫描', () => {
+  test('只读审计：改文件被拒，报告里只留有效的问题；这一轮记成深度扫描，不进编码模型的对话', async () => {
+    writeFileSync(join(project, 'files.ts'), 'export const read = (req) => fs.readFileSync(path.join(UPLOAD, req.query.name))\n')
+    server = await startScriptedServer([
+      // 第一轮：普通任务
+      { toolCalls: [{ name: 'edit_file', input: { path: 'route.ts', old_string: '', new_string: 'app.get("/file", read)\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了路由' } }] },
+      // 深度扫描：搜索、读文件、试图改文件、交报告
+      { toolCalls: [{ name: 'search', input: { pattern: 'req.query' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'files.ts' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: 'req.query.name', new_string: 'x' } }] },
+      {
+        toolCalls: [
+          {
+            name: 'report',
+            input: {
+              summary: '检查了新加的路由和读文件函数',
+              findings: [
+                { severity: 'high', ruleId: 'SEC-INJ-4', path: 'files.ts', line: 1, problem: '文件名来自请求参数', flow: 'route.ts:1 /file → files.ts:1 readFileSync', fix: '用 path.basename 去掉目录' },
+                { severity: 'high', ruleId: 'SEC-FAKE-9', path: 'files.ts', line: 1, problem: '不存在的规则', flow: '', fix: '' },
+                { severity: 'medium', ruleId: 'SEC-INJ-1', path: 'missing.ts', line: 3, problem: '不存在的文件', flow: '', fix: '' },
+              ],
+            },
+          },
+        ],
+      },
+      // 下一轮普通提问
+      { text: '好' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '加一个读文件的路由')
+    expect(await deepScan(core, sessionId, 'scan-1', 'task')).toEqual({ stopReason: 'end_turn' })
+
+    expect(readFileSync(join(project, 'files.ts'), 'utf8')).toContain('req.query.name')
+    expect(server.bodies[2]).toContain('Audit the code changed in this task')
+    expect(server.bodies[2]).toContain('route.ts')
+    expect(server.bodies[5]).toContain("unavailable tool 'edit_file'")
+
+    const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
+    const scan = loaded.turns[1]
+    expect(scan).toMatchObject({ id: 'scan-1', kind: 'deep-scan', prompt: '深度安全扫描 · 本任务改动', stopReason: 'end_turn' })
+    const report = scan?.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '深度扫描报告')
+    const text = JSON.stringify(report)
+    expect(text).toContain('高危  SEC-INJ-4  files.ts:1  文件名来自请求参数')
+    expect(text).toContain('链路：route.ts:1 /file')
+    expect(text).not.toContain('SEC-FAKE-9')
+    expect(text).not.toContain('missing.ts')
+
+    // 编码模型的下一轮看不到审计过程
+    await sendPrompt(core, sessionId, 'turn-2', '继续')
+    expect(server.bodies[6]).not.toContain('security auditor')
+    expect(server.bodies[6]).not.toContain('req.query')
   })
 })

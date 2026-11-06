@@ -5,3 +5,5 @@ allowBuilds:
   electron-winstaller: false
   # 底部终端用的伪终端；安装脚本优先用包里自带的预编译文件（N-API，Electron 也能直接用）
   node-pty: true
+  # 静态检查用的 Python 语法；包里带了各平台的预编译解析器，运行时直接加载，不需要安装脚本去本机编译
+  '@ast-grep/lang-python': false

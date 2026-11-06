@@ -45,6 +45,8 @@
     "zod": "^4.6.7"
   },
   "dependencies": {
+    "@ast-grep/lang-python": "^0.0.6",
+    "@ast-grep/napi": "^0.51.1",
     "node-pty": "^1.1.0"
   }
 }

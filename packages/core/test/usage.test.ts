@@ -137,6 +137,7 @@ describe('经过 agent 记录和汇总', () => {
         readOnlyPaths: [],
         rules: { packs: [], review: false },
         permissionMode: 'ask',
+        security: { staticCheck: false, lightScan: false },
         checkpointDir: null,
       })
       await sendPrompt(connection, sessionId, 'turn-1', '看看 a.txt')

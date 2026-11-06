@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Folder, FolderOpen, GitBranch, PanelLeft, Settings2 } from 'lucide-react'
+import type { ProjectState } from '../../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import {
@@ -33,7 +34,8 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [editingProject, setEditingProject] = useState(false)
+  const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
+  const detectedCount = useDetectedChecks(project)
   const rulePacks = useEnabledRulePacks(project?.rules.disabledPacks ?? null)
 
   useEffect(() => setError(null), [projectPath])
@@ -138,9 +140,13 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             </span>
           )}
           {project && (
-            <button type="button" className="flex items-center gap-1.5 hover:text-foreground" onClick={() => setEditingProject(true)}>
+            <button
+              type="button"
+              className={cn('flex items-center gap-1.5 hover:text-foreground', detectedCount ? 'text-primary' : '')}
+              onClick={() => setEditingProject({ detect: detectedCount !== null && detectedCount > 0 })}
+            >
               <Settings2 className="size-3.5" />
-              {checksSummary(project)}
+              {detectedCount ? `检测到 ${detectedCount} 个检查命令` : checksSummary(project)}
             </button>
           )}
           {project && rulePacks && rulePacks.length > 0 && (
@@ -170,9 +176,33 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
         </div>
       )}
 
-      <ProjectSettingsDialog project={project} open={editingProject} onClose={() => setEditingProject(false)} onSaved={setProject} />
+      <ProjectSettingsDialog
+        project={project}
+        open={editingProject !== null}
+        detectOnOpen={editingProject?.detect}
+        onClose={() => setEditingProject(null)}
+        onSaved={setProject}
+      />
     </div>
   )
+}
+
+// 项目还没配检查命令时，看看能识别出几个，在首页提示
+function useDetectedChecks(project: ProjectState | null): number | null {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    setCount(null)
+    if (!project || project.checks.afterEdit || project.checks.beforeFinish) return
+    let stale = false
+    window.diffra.detectChecks(project.path).then(
+      (result) => !stale && setCount(result.checks.length),
+      (error: unknown) => console.error('识别检查命令失败', error),
+    )
+    return () => {
+      stale = true
+    }
+  }, [project])
+  return count
 }
 
 // 这个项目启用的规则包名称；实际写进提示词的由 core 按项目语言再筛一遍

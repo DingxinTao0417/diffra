@@ -9,12 +9,15 @@ import {
   configureSession,
   type CoreClientHandlers,
   createSession,
+  deepScan,
   deleteSession,
+  detectProjectChecks,
   listSessions,
   loadSession,
   previewCheckpoint,
   restoreCheckpoint,
   rewindSession,
+  runProjectCheck,
   searchSessions,
   type SessionChecks,
   type SessionConfig,
@@ -162,6 +165,15 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.projectGet, (_event, rawPath: unknown) => projectState(parse(z.string().min(1), rawPath)))
 
+  ipcMain.handle(IPC_CHANNELS.projectDetectChecks, async (_event, rawPath: unknown) =>
+    detectProjectChecks(await coreConnection(), parse(z.string().min(1), rawPath)),
+  )
+
+  // 只在用户点「试运行」时调用；命令就是界面上显示给用户的那条
+  ipcMain.handle(IPC_CHANNELS.projectRunCheck, async (_event, rawPath: unknown, rawCommand: unknown) =>
+    runProjectCheck(await coreConnection(), parse(z.string().min(1), rawPath), parse(z.string().trim().min(1).max(2000), rawCommand)),
+  )
+
   ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
     const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }), rawSettings)
@@ -191,6 +203,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         readOnlyPaths: project.readOnlyPaths,
         rules,
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
+        security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan },
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
@@ -299,6 +312,16 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const turnId = parse(z.string().min(1), rawTurnId)
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
     const response = await sendPrompt(await coreConnection(), sessionId, turnId, text)
+    return response.stopReason
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionDeepScan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawScope: unknown) => {
+    const response = await deepScan(
+      await coreConnection(),
+      parse(z.string().min(1), rawSessionId),
+      parse(z.string().min(1), rawTurnId),
+      parse(z.enum(['task', 'project']), rawScope),
+    )
     return response.stopReason
   })
 

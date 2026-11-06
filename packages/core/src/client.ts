@@ -2,7 +2,9 @@ import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
+  type CheckDetection,
   type CheckpointChange,
+  type CheckRunResult,
   type LoadedSession,
   type PermissionMode,
   SESSION_EXT_METHODS,
@@ -26,6 +28,7 @@ export interface CoreClientHandlers {
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
 const EXT_REQUEST_TIMEOUT_MS = 60_000
+const CHECK_RUN_TIMEOUT_MS = 310_000
 
 export interface CoreHandshake {
   agentName: string
@@ -68,6 +71,19 @@ export function sendPrompt(
     prompt: [{ type: 'text', text }],
     _meta: { diffra: { turnId } },
   })
+}
+
+// 深度安全扫描和一轮任务一样可能跑很久，不设超时；用 cancelSession 停止
+export function deepScan(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  turnId: string,
+  scope: 'task' | 'project',
+): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string; scope: 'task' | 'project' }>(
+    SESSION_EXT_METHODS.deepScan,
+    { sessionId, turnId, scope },
+  )
 }
 
 export function cancelSession(connection: acp.ClientConnection, sessionId: string): Promise<void> {
@@ -168,13 +184,35 @@ export function usageSummary(connection: acp.ClientConnection, query: UsageQuery
   return requestOf(connection)<UsageSummary, UsageQuery>(SESSION_EXT_METHODS.usageSummary, query, extRequestOptions())
 }
 
+export function detectProjectChecks(connection: acp.ClientConnection, cwd: string): Promise<CheckDetection> {
+  return requestOf(connection)<CheckDetection, { cwd: string }>(SESSION_EXT_METHODS.projectDetectChecks, { cwd }, extRequestOptions())
+}
+
+// 检查最长跑 300 秒，等待时间比其他扩展请求长
+export function runProjectCheck(connection: acp.ClientConnection, cwd: string, command: string): Promise<CheckRunResult> {
+  return requestOf(connection)<CheckRunResult, { cwd: string; command: string }>(
+    SESSION_EXT_METHODS.projectRunCheck,
+    { cwd, command },
+    { cancellationSignal: AbortSignal.timeout(CHECK_RUN_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
 function readSessionInfo(meta: unknown): SessionInfo {
   const diffra = typeof meta === 'object' && meta !== null && 'diffra' in meta ? meta.diffra : null
   if (typeof diffra !== 'object' || diffra === null) throw new Error('core 的 session/new 响应缺少 _meta.diffra')
   const bashPath = 'bashPath' in diffra && typeof diffra.bashPath === 'string' ? diffra.bashPath : null
   const checkpoints = 'checkpoints' in diffra && diffra.checkpoints === true
   const packs = 'rulePacks' in diffra && Array.isArray(diffra.rulePacks) ? diffra.rulePacks : []
-  return { bashPath, checkpoints, rulePacks: packs.filter((name): name is string => typeof name === 'string') }
+  const security = 'security' in diffra && typeof diffra.security === 'object' && diffra.security !== null ? diffra.security : {}
+  return {
+    bashPath,
+    checkpoints,
+    rulePacks: packs.filter((name): name is string => typeof name === 'string'),
+    security: {
+      staticCheck: 'staticCheck' in security && security.staticCheck === true,
+      lightScan: 'lightScan' in security && security.lightScan === true,
+    },
+  }
 }
 
 export async function handshake(connection: acp.ClientConnection, timeoutMs: number): Promise<CoreHandshake> {

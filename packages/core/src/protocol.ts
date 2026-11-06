@@ -59,6 +59,12 @@ export interface ModelProvider {
   name: string
 }
 
+// 完成前的安全检查：静态检查按规则匹配本轮新增的代码，轻量扫描用评审模型审查本轮改动
+export interface SessionSecurity {
+  staticCheck: boolean
+  lightScan: boolean
+}
+
 // session/new 的 _meta.diffra
 export interface SessionConfig {
   model: { endpoint: ModelEndpoint; modelId: string; contextWindow: number | null; provider: ModelProvider | null }
@@ -69,6 +75,7 @@ export interface SessionConfig {
   readOnlyPaths: string[]
   rules: SessionRules
   permissionMode: PermissionMode
+  security: SessionSecurity
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -79,6 +86,8 @@ export interface SessionInfo {
   checkpoints: boolean
   // 按项目语言选中、写进提示词的规则包名称
   rulePacks: string[]
+  // 这个会话实际生效的安全检查开关（建会话时的设置）
+  security: SessionSecurity
 }
 
 export interface CheckpointChange {
@@ -96,8 +105,12 @@ export interface UsageBreakdown {
 }
 
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
+// 普通的一轮提问，或者用户发起的深度安全扫描
+export type TurnKind = 'prompt' | 'deep-scan'
+
 export interface StoredTurn {
   id: string
+  kind: TurnKind
   prompt: string
   startedAt: string
   endedAt: string | null
@@ -135,6 +148,30 @@ export interface SessionSearchResult {
   updatedAt: string
   // 命中位置附近的一小段文字
   snippet: string
+}
+
+// 从项目文件里识别出的一条检查命令
+export interface DetectedCheck {
+  kind: 'typecheck' | 'lint' | 'test'
+  command: string
+  // 为什么选它，确认时给用户看
+  source: string
+  // 来自 package.json 脚本时是脚本的内容：检查命令运行时不再确认，保存前要让用户看到实际会跑什么
+  script: string | null
+}
+
+export interface CheckDetection {
+  checks: DetectedCheck[]
+  // 建议的快速检查（类型检查、lint）和完成检查（再加测试）
+  afterEdit: string | null
+  beforeFinish: string | null
+  // 跳过了什么、为什么
+  notes: string[]
+}
+
+export interface CheckRunResult {
+  passed: boolean
+  summary: string
 }
 
 export type ModelRole = 'coder' | 'reviewer'
@@ -199,6 +236,9 @@ export const SESSION_EXT_METHODS = {
   sessionRewind: '_diffra/session/rewind',
   checkpointDiff: '_diffra/checkpoint/diff',
   usageSummary: '_diffra/usage/summary',
+  projectDetectChecks: '_diffra/project/detect-checks',
+  projectRunCheck: '_diffra/project/run-check',
+  deepScan: '_diffra/security/deep-scan',
 } as const
 
 export const PERMISSION_OPTIONS = {

@@ -8,23 +8,38 @@ export type ScriptStep =
 
 export interface ScriptedModel {
   baseUrl: string
-  // 已经收到的对话请求数
+  // 已经收到的对话请求数（不含轻量安全扫描）
   requests(): number
+  // 收到的轻量安全扫描请求数
+  securityReviews(): number
   close(): Promise<void>
 }
 
+// 轻量安全扫描的请求按系统提示词认出来，单独按 securityReplies 回复，不占剧本的步骤；用完后回「没有问题」
+const SECURITY_REVIEW_MARKER = 'You are a security reviewer'
+
 // OpenAI 兼容的流式接口：每收到一次 chat/completions 请求，按顺序返回剧本里的下一步
-export async function startScriptedModel(steps: ScriptStep[]): Promise<ScriptedModel> {
+export async function startScriptedModel(steps: ScriptStep[], options: { securityReplies?: string[] } = {}): Promise<ScriptedModel> {
   let served = 0
+  let reviews = 0
   const server = createServer((req, res) => {
-    req.resume()
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
       if (req.method !== 'POST' || !req.url?.endsWith('/chat/completions')) {
         res.writeHead(404).end()
         return
       }
-      const step = steps[served] ?? { text: '（剧本已结束）' }
-      const index = served++
+      const body = Buffer.concat(chunks).toString('utf8')
+      let step: ScriptStep
+      let index: number
+      if (body.includes(SECURITY_REVIEW_MARKER)) {
+        step = { text: options.securityReplies?.[reviews] ?? 'NO_FINDINGS' }
+        index = 1000 + reviews++
+      } else {
+        step = steps[served] ?? { text: '（剧本已结束）' }
+        index = served++
+      }
       setTimeout(() => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
         for (const chunk of chunksFor(step, index)) res.write(`data: ${JSON.stringify(chunk)}\n\n`)
@@ -37,6 +52,7 @@ export async function startScriptedModel(steps: ScriptStep[]): Promise<ScriptedM
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests: () => served,
+    securityReviews: () => reviews,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()

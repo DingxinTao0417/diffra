@@ -3,7 +3,7 @@ import type { SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
 import type { LanguageModel, ModelMessage } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, UsageBreakdown } from '../protocol.js'
+import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import type { SessionRecord } from './store.js'
 import { TOOL_DEFINITION_CHARS } from './tools.js'
@@ -105,13 +105,13 @@ export class Session {
     this.activeTurn?.abort()
   }
 
-  startTurn(id: string, prompt: string): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt'): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
-    this.turns.push({ id, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [] })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [] })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
