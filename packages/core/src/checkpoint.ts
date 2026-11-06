@@ -22,6 +22,24 @@ const REPO_CONFIG: Array<[string, string]> = [
 ]
 const DEFAULT_EXCLUDES = ['node_modules/']
 
+// 快照、列变化、取 diff、还原都要写仓库的索引文件，同时跑会撞上 index.lock。
+// 同一个项目的多个会话共用一个仓库，所以按仓库目录排队，不按实例；排空后从表里删掉
+const repoQueues = new Map<string, Promise<void>>()
+
+function exclusive<T>(gitDir: string, task: () => Promise<T>): Promise<T> {
+  const key = process.platform === 'win32' ? resolve(gitDir).toLowerCase() : resolve(gitDir)
+  const run = (repoQueues.get(key) ?? Promise.resolve()).then(task)
+  const tail = run.then(
+    () => {},
+    () => {},
+  )
+  repoQueues.set(key, tail)
+  void tail.then(() => {
+    if (repoQueues.get(key) === tail) repoQueues.delete(key)
+  })
+  return run
+}
+
 // 检查点存在应用数据目录下的独立裸仓库里，用 --work-tree 指向项目，不碰项目自己的 .git。
 // 受保护文件和禁写目录不进快照：密钥不会被复制到快照仓库，撤销时也不会还原用户在这些地方的改动。
 export class Checkpoints {
@@ -40,58 +58,67 @@ export class Checkpoints {
 
   static async open(gitDir: string, workTree: string, readOnlyPaths: string[] = []): Promise<Checkpoints> {
     const store = new Checkpoints(gitDir, workTree, readOnlyPaths)
-    const initialized = await access(join(gitDir, 'HEAD')).then(
-      () => true,
-      () => false,
-    )
-    if (!initialized) {
+    await exclusive(gitDir, async () => {
+      const initialized = await access(join(gitDir, 'HEAD')).then(
+        () => true,
+        () => false,
+      )
+      if (initialized) return
       await mkdir(gitDir, { recursive: true })
       await runGit(['init', '--bare', '--quiet', gitDir], workTree)
       for (const [key, value] of REPO_CONFIG) await runGit(['--git-dir', gitDir, 'config', key, value], workTree)
       await mkdir(join(gitDir, 'info'), { recursive: true })
       await writeFile(join(gitDir, 'info', 'exclude'), `${DEFAULT_EXCLUDES.join('\n')}\n`, 'utf8')
-    }
+    })
     return store
   }
 
-  async snapshot(): Promise<string> {
-    const tree = await this.writeTree()
-    const commit = (await this.git(['commit-tree', tree, '-m', 'diffra checkpoint'])).trim()
-    await this.git(['update-ref', `refs/diffra/${commit}`, commit])
-    return commit
+  snapshot(): Promise<string> {
+    return exclusive(this.gitDir, async () => {
+      const tree = await this.writeTree()
+      const commit = (await this.git(['commit-tree', tree, '-m', 'diffra checkpoint'])).trim()
+      await this.git(['update-ref', `refs/diffra/${commit}`, commit])
+      return commit
+    })
   }
 
-  async changesSince(commit: string): Promise<CheckpointChange[]> {
-    const current = await this.writeTree()
-    const output = await this.git(['diff-tree', '-r', '--no-renames', '--name-status', '-z', commit, current])
-    const parts = output.split('\0').filter(Boolean)
-    const changes: CheckpointChange[] = []
-    for (let i = 0; i + 1 < parts.length; i += 2) {
-      const status = parts[i] ?? ''
-      const path = parts[i + 1] ?? ''
-      changes.push({ path, change: status === 'A' ? 'added' : status === 'D' ? 'deleted' : 'modified' })
-    }
-    return changes
+  changesSince(commit: string): Promise<CheckpointChange[]> {
+    return exclusive(this.gitDir, async () => {
+      const current = await this.writeTree()
+      const output = await this.git(['diff-tree', '-r', '--no-renames', '--name-status', '-z', commit, current])
+      const parts = output.split('\0').filter(Boolean)
+      const changes: CheckpointChange[] = []
+      for (let i = 0; i + 1 < parts.length; i += 2) {
+        const status = parts[i] ?? ''
+        const path = parts[i + 1] ?? ''
+        changes.push({ path, change: status === 'A' ? 'added' : status === 'D' ? 'deleted' : 'modified' })
+      }
+      return changes
+    })
   }
 
   // 快照之后的改动，unified diff 格式；受保护文件和禁写目录同样不在里面
-  async diffSince(commit: string): Promise<string> {
-    const current = await this.writeTree()
-    return this.git(['diff-tree', '-p', '-r', '--no-renames', '--no-color', '-U3', commit, current])
+  diffSince(commit: string): Promise<string> {
+    return exclusive(this.gitDir, async () => {
+      const current = await this.writeTree()
+      return this.git(['diff-tree', '-p', '-r', '--no-renames', '--no-color', '-U3', commit, current])
+    })
   }
 
   // 只动 changesSince 列出的文件：改过和删掉的恢复成快照里的内容，快照之后新建的删掉
-  async restore(commit: string, changes: CheckpointChange[]): Promise<void> {
-    const restorable = changes.filter((item) => item.change !== 'added').map((item) => item.path)
-    if (restorable.length > 0) {
-      await this.git(['checkout', commit, '--pathspec-from-file=-', '--pathspec-file-nul'], restorable.join('\0'))
-    }
-    for (const item of changes.filter((change) => change.change === 'added')) {
-      const target = resolve(this.workTree, item.path)
-      const inside = relative(this.workTree, target)
-      if (inside.startsWith('..') || isAbsolute(inside)) throw new Error(`检查点路径不在项目内：${item.path}`)
-      await rm(target, { force: true })
-    }
+  restore(commit: string, changes: CheckpointChange[]): Promise<void> {
+    return exclusive(this.gitDir, async () => {
+      const restorable = changes.filter((item) => item.change !== 'added').map((item) => item.path)
+      if (restorable.length > 0) {
+        await this.git(['checkout', commit, '--pathspec-from-file=-', '--pathspec-file-nul'], restorable.join('\0'))
+      }
+      for (const item of changes.filter((change) => change.change === 'added')) {
+        const target = resolve(this.workTree, item.path)
+        const inside = relative(this.workTree, target)
+        if (inside.startsWith('..') || isAbsolute(inside)) throw new Error(`检查点路径不在项目内：${item.path}`)
+        await rm(target, { force: true })
+      }
+    })
   }
 
   private async writeTree(): Promise<string> {

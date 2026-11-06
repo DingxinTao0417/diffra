@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { PROTOCOLS } from '@diffra/core/types'
 import { z } from 'zod'
-import type { Settings } from '../shared/settings'
+import { CONTENT_WIDTHS, DEFAULT_APPEARANCE, FONT_SIZES, PALETTES, type Settings, THEME_MODES } from '../shared/settings'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
 export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1) })
@@ -49,6 +49,15 @@ export const projectSettingsSchema = z.object({
   rules: projectRuleSettingsSchema.default(() => ({ disabledPacks: [], disabledRules: [], includeRecommended: false, review: false })),
 })
 
+export const appearanceSchema = z.object({
+  theme: z.enum(THEME_MODES),
+  palette: z.enum(PALETTES),
+  fontSize: z.enum(FONT_SIZES),
+  contentWidth: z.enum(CONTENT_WIDTHS),
+})
+
+export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
+
 // projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
   version: z.literal(1),
@@ -61,6 +70,9 @@ const settingsSchema = z.object({
   }),
   projects: z.record(z.string(), projectSettingsSchema).default({}),
   lastProject: z.string().nullable().default(null),
+  // 第 11 步加的
+  appearance: appearanceSchema.default(() => ({ ...DEFAULT_APPEARANCE })),
+  defaultPermissionMode: permissionModeSchema.default('ask'),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -69,6 +81,8 @@ const EMPTY_SETTINGS: Settings = {
   roles: { coder: null, planner: null, reviewer: null, fallback: null },
   projects: {},
   lastProject: null,
+  appearance: DEFAULT_APPEARANCE,
+  defaultPermissionMode: 'ask',
 }
 
 export class SettingsStore {

@@ -26,16 +26,22 @@ const rulePackSchema = z.object({
   rules: z.array(ruleSchema),
 })
 
+const providerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) }).nullable()
+
+export const modelConfigSchema = z.object({
+  endpoint: endpointSchema,
+  modelId: z.string().min(1),
+  contextWindow: z.number().int().positive().nullable(),
+  provider: providerSchema,
+})
+
 export const sessionConfigSchema = z.object({
-  model: z.object({
-    endpoint: endpointSchema,
-    modelId: z.string().min(1),
-    contextWindow: z.number().int().positive().nullable(),
-  }),
-  reviewModel: z.object({ endpoint: endpointSchema, modelId: z.string().min(1) }).nullable(),
+  model: modelConfigSchema,
+  reviewModel: z.object({ endpoint: endpointSchema, modelId: z.string().min(1), provider: providerSchema }).nullable(),
   checks: z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema }),
   readOnlyPaths: z.array(z.string().trim().min(1)),
   rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),
+  permissionMode: z.enum(['ask', 'auto', 'full']),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 

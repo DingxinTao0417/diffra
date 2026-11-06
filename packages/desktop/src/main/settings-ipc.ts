@@ -7,7 +7,7 @@ import { type ModelRef, ROLES, type Settings, type SettingsView } from '../share
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import type { SecretStore } from './secret-store'
-import { modelRefSchema, providerFieldsSchema, type SettingsStore } from './settings-store'
+import { appearanceSchema, modelRefSchema, permissionModeSchema, providerFieldsSchema, type SettingsStore } from './settings-store'
 
 const providerInputSchema = providerFieldsSchema.extend({
   id: z.string().min(1).optional(),
@@ -28,12 +28,14 @@ export async function providerEndpoint(
 
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
-    const { providers, roles } = settings.get()
+    const { providers, roles, appearance, defaultPermissionMode } = settings.get()
     return {
       providers: await Promise.all(
         providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
       ),
       roles,
+      appearance,
+      defaultPermissionMode,
       loadError: settings.loadError ?? secrets.loadError,
     }
   }
@@ -41,6 +43,12 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
   const endpointFor = (providerId: string) => providerEndpoint(settings, secrets, providerId)
 
   ipcMain.handle(IPC_CHANNELS.settingsGet, () => view())
+
+  ipcMain.handle(IPC_CHANNELS.preferencesSave, async (_event, raw: unknown) => {
+    const change = parse(z.object({ appearance: appearanceSchema.optional(), defaultPermissionMode: permissionModeSchema.optional() }), raw)
+    await settings.update((current) => ({ ...current, ...change }))
+    return view()
+  })
 
   ipcMain.handle(IPC_CHANNELS.providerSave, async (_event, raw: unknown) => {
     const { id: inputId, apiKey, ...fields } = parse(providerInputSchema, raw)

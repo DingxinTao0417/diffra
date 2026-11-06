@@ -1,16 +1,22 @@
 import type {
   CheckpointChange,
   ListModelsResult,
+  PermissionMode,
   PermissionOption,
   RequestPermissionRequest,
   RulePack,
   SessionChecks,
+  SessionSearchResult,
+  StoredSessionSummary,
+  StoredTurn,
   SessionInfo,
   SessionNotification,
   StopReason,
   TestModelResult,
+  UsageQuery,
+  UsageSummary,
 } from '@diffra/core/types'
-import type { ModelRef, ProjectRuleSettings, ProviderInput, Role, SettingsView } from './settings'
+import type { Appearance, ModelRef, ProjectRuleSettings, ProviderInput, Role, SettingsView } from './settings'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -27,12 +33,33 @@ export const IPC_CHANNELS = {
   modelsTest: 'models:test',
   projectPick: 'project:pick',
   projectLast: 'project:last',
+  projectGet: 'project:get',
   projectSave: 'project:save',
   projectSaveRules: 'project:save-rules',
   rulesList: 'rules:list',
   rulesImport: 'rules:import',
   rulesDelete: 'rules:delete',
+  sessionsList: 'sessions:list',
+  sessionsSearch: 'sessions:search',
+  sessionLoad: 'session:load',
+  sessionMetaUpdate: 'session:update-meta',
+  sessionDelete: 'session:delete',
   sessionCreate: 'session:create',
+  sessionConfigure: 'session:configure',
+  sessionRewind: 'session:rewind',
+  checkpointDiff: 'session:checkpoint-diff',
+  projectBranch: 'project:branch',
+  projectOpenFolder: 'project:open-folder',
+  sessionsStorage: 'sessions:storage',
+  usageSummary: 'usage:summary',
+  terminalCreate: 'terminal:create',
+  terminalWrite: 'terminal:write',
+  terminalResize: 'terminal:resize',
+  terminalKill: 'terminal:kill',
+  terminalData: 'terminal:data',
+  terminalExit: 'terminal:exit',
+  preferencesSave: 'settings:preferences-save',
+  openExternal: 'shell:open-external',
   sessionPrompt: 'session:prompt',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
@@ -78,8 +105,20 @@ export interface RulePacksView {
 export interface SessionHandle {
   sessionId: string
   info: SessionInfo
-  // 编码角色用的模型，显示在会话页上
+  // 这个会话用的模型，显示在输入框上
   modelLabel: string
+  permissionMode: PermissionMode
+}
+
+export interface SessionOptions {
+  permissionMode?: PermissionMode
+  model?: ModelRef
+}
+
+// 打开历史任务时多带标题和每轮的记录
+export interface LoadedSessionHandle extends SessionHandle {
+  title: string
+  turns: StoredTurn[]
 }
 
 export interface PermissionRequestEvent {
@@ -87,6 +126,11 @@ export interface PermissionRequestEvent {
   sessionId: string
   toolCall: RequestPermissionRequest['toolCall']
   options: PermissionOption[]
+}
+
+export interface TerminalSize {
+  cols: number
+  rows: number
 }
 
 export interface DiffraApi {
@@ -104,13 +148,38 @@ export interface DiffraApi {
   testProviderModel(providerId: string, modelId: string): Promise<TestModelResult>
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
+  getProject(path: string): Promise<ProjectState>
   saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
   saveProjectRules(path: string, rules: ProjectRuleSettings): Promise<ProjectState>
   listRulePacks(): Promise<RulePacksView>
   // 弹出文件选择框导入 markdown 规则包；取消时 imported 为 null
   importRulePack(): Promise<{ view: RulePacksView; imported: string | null }>
   deleteRulePack(packId: string): Promise<RulePacksView>
-  createSession(projectPath: string): Promise<SessionHandle>
+  createSession(projectPath: string, options?: SessionOptions): Promise<SessionHandle>
+  // 返回新的模型名（换了模型时）
+  configureSession(sessionId: string, options: SessionOptions): Promise<{ modelLabel: string | null }>
+  rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean }>
+  checkpointDiff(sessionId: string, turnId: string): Promise<string>
+  projectBranch(projectPath: string): Promise<string | null>
+  openProjectFolder(projectPath: string): Promise<void>
+  sessionsStorage(): Promise<{ bytes: number; dir: string }>
+  usageSummary(query: UsageQuery): Promise<UsageSummary>
+  // 在项目目录开一个终端；返回终端 id 和 shell 名
+  createTerminal(cwd: string, size: TerminalSize): Promise<{ id: string; shell: string }>
+  writeTerminal(id: string, data: string): void
+  resizeTerminal(id: string, size: TerminalSize): void
+  killTerminal(id: string): Promise<void>
+  onTerminalData(listener: (event: { id: string; data: string }) => void): () => void
+  onTerminalExit(listener: (event: { id: string; exitCode: number }) => void): () => void
+  savePreferences(change: { appearance?: Appearance; defaultPermissionMode?: PermissionMode }): Promise<SettingsView>
+  // 只打开 http(s) 链接
+  openExternal(url: string): Promise<void>
+  // 不给项目就列出所有项目的任务
+  listSessions(projectPath: string | null): Promise<StoredSessionSummary[]>
+  searchSessions(query: string): Promise<SessionSearchResult[]>
+  loadSession(sessionId: string, projectPath: string): Promise<LoadedSessionHandle>
+  updateSession(sessionId: string, change: { title?: string; archived?: boolean }): Promise<void>
+  deleteSession(sessionId: string): Promise<void>
   sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void

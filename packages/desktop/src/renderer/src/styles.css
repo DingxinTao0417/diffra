@@ -6,6 +6,7 @@
 
 @theme inline {
   --font-sans: system-ui, "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -24,61 +25,211 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-soft: var(--soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* shadcn neutral 配色 */
+/*
+ * 配色：<html> 上的 data-palette 选强调色和侧栏底色，.dark 切深色。
+ * soft 是选中项、高亮的浅底色；success / warning 用于状态。
+ */
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --content-max: 48rem;
+  --background: #ffffff;
+  --foreground: #1c1c1a;
+  --card: #ffffff;
+  --card-foreground: #1c1c1a;
+  --popover: #ffffff;
+  --popover-foreground: #1c1c1a;
+  --secondary: #f2f2ee;
+  --secondary-foreground: #1c1c1a;
+  --muted: #f3f3f0;
+  --muted-foreground: #5f5e58;
+  --accent: #eaeae5;
+  --accent-foreground: #1c1c1a;
+  --destructive: #b42318;
+  --border: #e7e6e1;
+  --input: #dcdbd5;
+  --sidebar: #f5f5f2;
+  --sidebar-border: #e7e6e1;
+  --success: #2e6b57;
+  --warning: #b54708;
+  --primary: #2e6b57;
+  --primary-foreground: #ffffff;
+  --soft: #e6efea;
+  --ring: #2e6b57;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+:root[data-palette="indigo"] {
+  --primary: #3b4ba8;
+  --soft: #e7e9f6;
+  --ring: #3b4ba8;
+  --sidebar: #f3f4f8;
+}
+
+:root[data-palette="amber"] {
+  --primary: #9a5b13;
+  --soft: #f4ebdd;
+  --ring: #9a5b13;
+  --sidebar: #f8f5ee;
+}
+
+:root[data-palette="graphite"] {
+  --primary: #3a3a3a;
+  --soft: #e9e9e9;
+  --ring: #3a3a3a;
+  --sidebar: #f3f3f3;
+}
+
+/* :root.dark 比 :root[data-palette] 晚出现、优先级相同，深色时盖掉配色里的浅色侧栏 */
+:root.dark {
+  --background: #161615;
+  --foreground: #ecece8;
+  --card: #1d1d1b;
+  --card-foreground: #ecece8;
+  --popover: #1f1f1d;
+  --popover-foreground: #ecece8;
+  --secondary: #262624;
+  --secondary-foreground: #ecece8;
+  --muted: #232321;
+  --muted-foreground: #a3a29c;
+  --accent: #2a2a27;
+  --accent-foreground: #ecece8;
+  --destructive: #f2786d;
+  --border: #2e2e2b;
+  --input: #3a3a36;
+  --sidebar: #1b1b19;
+  --sidebar-border: #2a2a27;
+  --success: #6dbb9c;
+  --warning: #e3a35c;
+  --primary: #5fa88c;
+  --primary-foreground: #10110f;
+  --soft: #20332b;
+  --ring: #5fa88c;
+}
+
+.dark[data-palette="indigo"] {
+  --primary: #8c98e6;
+  --soft: #252a45;
+  --ring: #8c98e6;
+}
+
+.dark[data-palette="amber"] {
+  --primary: #d49a52;
+  --soft: #3a2c1a;
+  --ring: #d49a52;
+}
+
+.dark[data-palette="graphite"] {
+  --primary: #d0d0d0;
+  --soft: #2c2c2c;
+  --ring: #d0d0d0;
+}
+
+/* 文字大小：Tailwind 的尺寸都按 rem 算，改根字号整体缩放 */
+:root[data-font="sm"] {
+  font-size: 13px;
+}
+:root[data-font="md"] {
+  font-size: 14px;
+}
+:root[data-font="lg"] {
+  font-size: 16px;
+}
+:root[data-width="wide"] {
+  --content-max: 64rem;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
   }
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Markdown 回复的排版 */
+.markdown {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.markdown > * + * {
+  margin-top: 0.6em;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-weight: 600;
+  margin-top: 1em;
+}
+.markdown h1 {
+  font-size: 1.25em;
+}
+.markdown h2 {
+  font-size: 1.15em;
+}
+.markdown h3,
+.markdown h4 {
+  font-size: 1.05em;
+}
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.markdown li + li {
+  margin-top: 0.2em;
+}
+.markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--muted);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.markdown pre {
+  background: var(--muted);
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.85em;
+}
+.markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.8em;
+  color: var(--muted-foreground);
+}
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
 }

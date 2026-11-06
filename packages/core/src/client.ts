@@ -1,7 +1,19 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
-import { type CheckpointChange, SESSION_EXT_METHODS, type SessionConfig, type SessionInfo } from './protocol.js'
+import {
+  type CheckpointChange,
+  type LoadedSession,
+  type PermissionMode,
+  SESSION_EXT_METHODS,
+  type SessionConfig,
+  type SessionInfo,
+  type SessionSearchResult,
+  type StoredSessionMeta,
+  type StoredSessionSummary,
+  type UsageQuery,
+  type UsageSummary,
+} from './protocol.js'
 
 export * from './protocol.js'
 export { parseRulePack, RulePackError } from './rules/pack.js'
@@ -36,7 +48,7 @@ export async function createSession(
   cwd: string,
   config: SessionConfig,
 ): Promise<{ sessionId: string; info: SessionInfo }> {
-  const response = await connection.agent.request(
+  const response = await requestOf(connection)(
     acp.methods.agent.session.new,
     { cwd, mcpServers: [], _meta: { diffra: config } },
     extRequestOptions(),
@@ -51,7 +63,7 @@ export function sendPrompt(
   turnId: string,
   text: string,
 ): Promise<acp.PromptResponse> {
-  return connection.agent.request(acp.methods.agent.session.prompt, {
+  return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
     prompt: [{ type: 'text', text }],
     _meta: { diffra: { turnId } },
@@ -63,7 +75,7 @@ export function cancelSession(connection: acp.ClientConnection, sessionId: strin
 }
 
 export function previewCheckpoint(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<CheckpointChange[]> {
-  return connection.agent.request<CheckpointChange[], { sessionId: string; turnId: string }>(
+  return requestOf(connection)<CheckpointChange[], { sessionId: string; turnId: string }>(
     SESSION_EXT_METHODS.checkpointPreview,
     { sessionId, turnId },
     extRequestOptions(),
@@ -71,11 +83,89 @@ export function previewCheckpoint(connection: acp.ClientConnection, sessionId: s
 }
 
 export function restoreCheckpoint(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<CheckpointChange[]> {
-  return connection.agent.request<CheckpointChange[], { sessionId: string; turnId: string }>(
+  return requestOf(connection)<CheckpointChange[], { sessionId: string; turnId: string }>(
     SESSION_EXT_METHODS.checkpointRestore,
     { sessionId, turnId },
     extRequestOptions(),
   )
+}
+
+// 加载会读项目语言、初始化检查点，和新建一样不设短超时
+export async function loadSession(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  cwd: string,
+  config: SessionConfig,
+): Promise<LoadedSession> {
+  const response = await requestOf(connection)(acp.methods.agent.session.load, {
+    sessionId,
+    cwd,
+    mcpServers: [],
+    _meta: { diffra: config },
+  })
+  const diffra = response && typeof response._meta?.diffra === 'object' ? (response._meta.diffra as Partial<LoadedSession>) : null
+  if (!diffra || !Array.isArray(diffra.turns)) throw new Error('core 的 session/load 响应缺少会话历史')
+  return { info: readSessionInfo({ diffra: diffra.info }), title: String(diffra.title ?? ''), turns: diffra.turns }
+}
+
+export async function listSessions(connection: acp.ClientConnection, cwd?: string): Promise<StoredSessionSummary[]> {
+  const response = await requestOf(connection)(acp.methods.agent.session.list, { cwd: cwd ?? null }, extRequestOptions())
+  return response.sessions.map((session) => {
+    const meta = (session._meta?.diffra ?? {}) as Partial<StoredSessionMeta>
+    return {
+      sessionId: session.sessionId,
+      cwd: session.cwd,
+      title: session.title ?? '',
+      updatedAt: session.updatedAt ?? '',
+      createdAt: meta.createdAt ?? '',
+      archived: meta.archived === true,
+      turnCount: meta.turnCount ?? 0,
+    }
+  })
+}
+
+export async function deleteSession(connection: acp.ClientConnection, sessionId: string): Promise<void> {
+  await requestOf(connection)(acp.methods.agent.session.delete, { sessionId }, extRequestOptions())
+}
+
+export function updateSession(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  change: { title?: string; archived?: boolean },
+): Promise<unknown> {
+  return requestOf(connection)(SESSION_EXT_METHODS.sessionUpdate, { sessionId, ...change }, extRequestOptions())
+}
+
+export async function configureSession(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  change: { permissionMode?: PermissionMode; model?: SessionConfig['model'] },
+): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.sessionConfigure, { sessionId, ...change }, extRequestOptions())
+}
+
+export function rewindSession(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<{ filesRestored: boolean }> {
+  return requestOf(connection)<{ filesRestored: boolean }, { sessionId: string; turnId: string }>(
+    SESSION_EXT_METHODS.sessionRewind,
+    { sessionId, turnId },
+    extRequestOptions(),
+  )
+}
+
+export function checkpointDiff(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<string> {
+  return requestOf(connection)<string, { sessionId: string; turnId: string }>(
+    SESSION_EXT_METHODS.checkpointDiff,
+    { sessionId, turnId },
+    extRequestOptions(),
+  )
+}
+
+export function searchSessions(connection: acp.ClientConnection, query: string): Promise<SessionSearchResult[]> {
+  return requestOf(connection)<SessionSearchResult[], { query: string }>(SESSION_EXT_METHODS.sessionSearch, { query }, extRequestOptions())
+}
+
+export function usageSummary(connection: acp.ClientConnection, query: UsageQuery): Promise<UsageSummary> {
+  return requestOf(connection)<UsageSummary, UsageQuery>(SESSION_EXT_METHODS.usageSummary, query, extRequestOptions())
 }
 
 function readSessionInfo(meta: unknown): SessionInfo {
@@ -91,7 +181,7 @@ export async function handshake(connection: acp.ClientConnection, timeoutMs: num
   const timeout = AbortSignal.timeout(timeoutMs)
   let response: acp.InitializeResponse
   try {
-    response = await connection.agent.request(
+    response = await requestOf(connection)(
       acp.methods.agent.initialize,
       { protocolVersion: acp.PROTOCOL_VERSION },
       { cancellationSignal: timeout, stopWaitingOnCancel: true },
@@ -112,7 +202,7 @@ export async function handshake(connection: acp.ClientConnection, timeoutMs: num
 }
 
 export function requestListModels(connection: acp.ClientConnection, endpoint: ModelEndpoint): Promise<ListModelsResult> {
-  return connection.agent.request<ListModelsResult, { endpoint: ModelEndpoint }>(
+  return requestOf(connection)<ListModelsResult, { endpoint: ModelEndpoint }>(
     EXT_METHODS.listModels,
     { endpoint },
     extRequestOptions(),
@@ -124,11 +214,28 @@ export function requestTestModel(
   endpoint: ModelEndpoint,
   modelId: string,
 ): Promise<TestModelResult> {
-  return connection.agent.request<TestModelResult, { endpoint: ModelEndpoint; modelId: string }>(
+  return requestOf(connection)<TestModelResult, { endpoint: ModelEndpoint; modelId: string }>(
     EXT_METHODS.testModel,
     { endpoint, modelId },
     extRequestOptions(),
   )
+}
+
+// core 的处理函数抛出的普通错误，ACP 会包成 Internal error，原文放在 data.details 里；
+// 所有请求都从这里发，把原文取出来再抛，界面上才看得到具体原因
+function requestOf(connection: acp.ClientConnection): acp.ClientConnection['agent']['request'] {
+  const request = connection.agent.request.bind(connection.agent)
+  return ((...args: Parameters<typeof request>) =>
+    request(...args).catch((error: unknown) => {
+      throw withCoreMessage(error)
+    })) as typeof request
+}
+
+function withCoreMessage(error: unknown): unknown {
+  if (!(error instanceof acp.RequestError)) return error
+  const data: unknown = error.data
+  const details = typeof data === 'object' && data !== null && 'details' in data ? data.details : null
+  return typeof details === 'string' && details ? new Error(details, { cause: error }) : error
 }
 
 function extRequestOptions(): acp.SendRequestOptions {

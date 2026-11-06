@@ -11,6 +11,7 @@ import type { RulePack, SessionChecks } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
+import type { ModelCallUsage } from '../src/usage/log.js'
 
 type Step = { toolCalls: Array<{ name: string; input: unknown }> } | { text: string }
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
@@ -53,16 +54,21 @@ function scriptedModel(steps: Step[]): MockLanguageModelV4 {
 function recordingIO(permissionChoice: string | null = 'allow_once'): TurnIO & {
   updates: SessionUpdate[]
   permissionRequests: number
+  usage: ModelCallUsage[]
 } {
   const io = {
     updates: [] as SessionUpdate[],
     permissionRequests: 0,
+    usage: [] as ModelCallUsage[],
     update: async (update: SessionUpdate) => {
       io.updates.push(update)
     },
     requestPermission: async () => {
       io.permissionRequests++
       return permissionChoice
+    },
+    recordUsage: async (call: ModelCallUsage) => {
+      io.usage.push(call)
     },
   }
   return io
@@ -94,11 +100,12 @@ async function makeSession(
   return new Session({
     cwd: project,
     config: {
-      model: { endpoint: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }, modelId: 'mock', contextWindow: 100_000 },
+      model: { endpoint: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }, modelId: 'mock', contextWindow: 100_000, provider: null },
       reviewModel: null,
       checks,
       readOnlyPaths,
       rules,
+      permissionMode: 'ask',
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
@@ -334,6 +341,9 @@ describe('完成前的规范审查', () => {
 
     await expect(runTurn(session, { id: 't', text: '调用 run' }, io)).resolves.toBe('end_turn')
     expect(reviewer.doStreamCalls).toHaveLength(2)
+    // 每次模型调用都记了用量，审查调用记成 reviewer
+    expect(io.usage.map((call) => call.role)).toEqual(['coder', 'coder', 'reviewer', 'coder', 'coder', 'coder', 'reviewer'])
+    expect(io.usage[2]).toMatchObject({ modelId: 'mock', provider: null, usage: { inputTokens: 1000, outputTokens: 10 } })
     const [first, second] = finishResults(session).map((part) => JSON.stringify(part))
     expect(first).toContain('GEN-ERR-1 at app.ts:3')
     expect(first).not.toContain('GEN-NAME-4')
@@ -382,5 +392,32 @@ describe('完成前的规范审查', () => {
     await expect(runTurn(session, { id: 't', text: '写说明' }, io)).resolves.toBe('end_turn')
     expect(reviewer.doStreamCalls).toHaveLength(0)
     expect(io.updates.some((update) => update.sessionUpdate === 'tool_call' && update.title === '规范审查')).toBe(false)
+  })
+})
+
+describe('上下文分项', () => {
+  test('usage_update 带各部分的估算，合计等于模型返回的输入 token 数', async () => {
+    const session = await makeSession(scriptedModel([{ text: '好的' }]))
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '介绍一下项目' }, io)
+    const usage = io.updates.find((update) => update.sessionUpdate === 'usage_update')
+    const breakdown = (usage as { _meta?: { diffra?: Record<string, number> } } | undefined)?._meta?.diffra
+    expect(breakdown).toBeDefined()
+    const sum = Object.values(breakdown ?? {}).reduce((total, value) => total + value, 0)
+    expect(Math.abs(sum - 1000)).toBeLessThanOrEqual(2)
+    expect(breakdown?.tools).toBeGreaterThan(0)
+    expect(breakdown?.system).toBeGreaterThan(0)
+  })
+})
+
+describe('任务进行中读改动', () => {
+  // 界面在一轮刚开始时就会来要 diff，这时快照可能还没打好
+  test('这一轮的快照还没打好时返回空 diff；不在进行中的轮次没有快照照样报错', async () => {
+    const session = await makeSession(scriptedModel([]))
+    session.startTurn('t1', '改点东西')
+    session.activeTurn = new AbortController()
+    await expect(session.checkpointDiff('t1')).resolves.toBe('')
+    session.activeTurn = null
+    await expect(session.checkpointDiff('t1')).rejects.toThrow('没有检查点')
   })
 })

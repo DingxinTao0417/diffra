@@ -1,4 +1,4 @@
-import type { Protocol, SessionChecks } from '@diffra/core/types'
+import type { PermissionMode, Protocol, SessionChecks } from '@diffra/core/types'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
@@ -39,14 +39,30 @@ export interface ProjectSettings {
   rules: ProjectRuleSettings
 }
 
+export const THEME_MODES = ['light', 'dark', 'system'] as const
+export const PALETTES = ['forest', 'indigo', 'amber', 'graphite'] as const
+export const FONT_SIZES = ['sm', 'md', 'lg'] as const
+export const CONTENT_WIDTHS = ['standard', 'wide'] as const
+
+export interface Appearance {
+  theme: (typeof THEME_MODES)[number]
+  palette: (typeof PALETTES)[number]
+  fontSize: (typeof FONT_SIZES)[number]
+  contentWidth: (typeof CONTENT_WIDTHS)[number]
+}
+
+export const DEFAULT_APPEARANCE: Appearance = { theme: 'system', palette: 'forest', fontSize: 'md', contentWidth: 'standard' }
+
 export interface Settings {
   version: 1
   providers: ProviderConfig[]
   roles: Record<Role, ModelRef | null>
   // 按项目目录保存的检查命令，不往用户仓库里写文件
   projects: Record<string, ProjectSettings>
-  // 会话不持久化，至少记住上次打开的项目
   lastProject: string | null
+  appearance: Appearance
+  // 新任务默认的命令权限模式；在输入框里改了会记住
+  defaultPermissionMode: PermissionMode
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
@@ -57,6 +73,8 @@ export interface ProviderView extends ProviderConfig {
 export interface SettingsView {
   providers: ProviderView[]
   roles: Settings['roles']
+  appearance: Appearance
+  defaultPermissionMode: PermissionMode
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

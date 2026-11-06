@@ -108,6 +108,29 @@ describe('检查点', () => {
       rmSync(gitDir, { recursive: true, force: true })
     }
   })
+
+  // 同一个项目的多个任务共用一个检查点仓库；界面上任务监控、审阅面板、撤销确认框会同时读改动
+  test('同一个仓库上同时快照、列变化、取 diff 不会撞上 git 的索引锁', async () => {
+    const gitDir = mkdtempSync(join(tmpdir(), 'diffra-cp-'))
+    try {
+      for (let index = 0; index < 20; index++) writeFileSync(join(project, `f${index}.txt`), `v${index}\n`)
+      const first = await Checkpoints.open(gitDir, project)
+      const second = await Checkpoints.open(gitDir, project)
+      const commit = await first.snapshot()
+      for (let index = 0; index < 20; index++) writeFileSync(join(project, `f${index}.txt`), `changed ${index}\n`)
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 6 }, (_, index) => {
+          const store = index % 2 === 0 ? first : second
+          return [store.changesSince(commit), store.diffSince(commit), store.snapshot()][index % 3]
+        }),
+      )
+      expect(results.filter((result) => result.status === 'rejected')).toEqual([])
+      expect(await second.changesSince(commit)).toHaveLength(20)
+    } finally {
+      rmSync(gitDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('受保护文件和禁写目录', () => {

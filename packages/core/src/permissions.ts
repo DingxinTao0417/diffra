@@ -1,8 +1,10 @@
 import { basename } from 'node:path'
 import { parse } from 'shell-quote'
+import type { PermissionMode } from './protocol.js'
 import { isUnderReadOnly } from './tools/protected.js'
 
 export type CommandDecision = { level: 'allow' } | { level: 'ask' } | { level: 'deny'; reason: string }
+
 
 export interface CommandPolicy {
   cwd: string
@@ -11,6 +13,7 @@ export interface CommandPolicy {
   // 「本会话内允许同类命令」记下的命令键
   alwaysAllowed: ReadonlySet<string>
   readOnlyPaths: string[]
+  mode: PermissionMode
 }
 
 // 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）
@@ -42,20 +45,46 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   }
   if (policy.trusted.some((item) => item.trim() === trimmed)) return { level: 'allow' }
   if (MENTIONS_SECRET.test(trimmed)) return { level: 'ask' }
-  // 命令替换、反引号里可以藏任何命令，交给用户确认
-  if (/\$\(|`|<\(|>\(/.test(trimmed)) return { level: 'ask' }
+  // 涉及禁写目录的非只读命令，哪种模式、之前选没选过「同类命令始终允许」都要再问；
+  // 重定向也按分隔符拆开，echo x > data/db.json 的目标路径同样算在内
+  const touchesReadOnly = (argv: string[]) =>
+    !isReadOnly(argv) && argv.some((arg) => argumentPaths(arg).some((path) => isUnderReadOnly(policy.cwd, path, policy.readOnlyPaths)))
+  const loose = splitSegments(trimmed, true) ?? []
+  if (loose.some(touchesReadOnly)) return { level: 'ask' }
+  // 命令替换、反引号里可以藏任何命令
+  const substitution = /\$\(|`|<\(|>\(/.test(trimmed)
 
+  if (policy.mode === 'full') return { level: 'allow' }
+  if (policy.mode === 'auto') return substitution || loose.some(isRisky) ? { level: 'ask' } : { level: 'allow' }
+
+  if (substitution) return { level: 'ask' }
   const segments = splitSegments(trimmed)
   if (segments === null) return { level: 'ask' }
-  const allowed = segments.every((argv) => {
-    if (isReadOnly(argv)) return true
-    // 涉及禁写目录的非只读命令，即使之前选过「同类命令始终允许」也要再问
-    if (argv.some((arg) => argumentPaths(arg).some((path) => isUnderReadOnly(policy.cwd, path, policy.readOnlyPaths)))) {
-      return false
-    }
-    return policy.alwaysAllowed.has(commandKey(argv)) || policy.trusted.some((item) => item.trim() === argv.join(' '))
-  })
+  const allowed = segments.every(
+    (argv) =>
+      isReadOnly(argv) ||
+      policy.alwaysAllowed.has(commandKey(argv)) ||
+      policy.trusted.some((item) => item.trim() === argv.join(' ')),
+  )
   return allowed ? { level: 'allow' } : { level: 'ask' }
+}
+
+const RISKY_GIT = new Set(['push', 'reset', 'clean', 'rebase', 'restore', 'checkout'])
+const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3', 'uv', 'poetry', 'cargo', 'go', 'gem', 'composer'])
+const PACKAGE_CHANGES = new Set(['install', 'i', 'add', 'remove', 'rm', 'uninstall', 'un', 'update', 'upgrade', 'up', 'ci', 'get', 'dlx'])
+const NETWORK = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'scp', 'ssh', 'rsync', 'ftp'])
+
+// 自动审批模式下仍要询问的命令：改 git 历史或远端、装卸依赖、下载即执行、联网传输、递归删除、提权
+function isRisky(argv: string[]): boolean {
+  const program = programName(argv[0] ?? '')
+  const sub = (argv[1] ?? '').toLowerCase()
+  if (program === 'git') return RISKY_GIT.has(sub)
+  if (PACKAGE_MANAGERS.has(program)) return PACKAGE_CHANGES.has(sub)
+  if (program === 'npx' || program === 'bunx' || program === 'sudo') return true
+  if (NETWORK.has(program)) return true
+  if (program === 'rm') return argv.slice(1).some((arg) => arg === '--recursive' || /^-[a-zA-Z]*[rR]/.test(arg))
+  if (program === 'rmdir') return true
+  return false
 }
 
 // 参数本身和 --flag=value 里的 value 都可能是路径

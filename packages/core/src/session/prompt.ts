@@ -6,6 +6,8 @@ import { renderRules } from '../rules/select.js'
 // 项目里的规则文件，按顺序都读，合计最多 8000 字
 const RULE_FILES = ['AGENTS.md', 'CLAUDE.md']
 const MAX_RULES_CHARS = 8000
+const PROJECT_RULES_HEADING = 'Project rules from the repository (follow them):'
+const CODING_RULES_HEADING = 'Coding rules (written in Chinese; each starts with its rule ID).'
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
 export async function buildSystemPrompt(
@@ -36,7 +38,7 @@ export async function buildSystemPrompt(
     '- Reply in the same language the user writes in.',
   ]
   const projectRules = await readProjectRules(cwd)
-  if (projectRules) lines.push('', 'Project rules from the repository (follow them):', projectRules)
+  if (projectRules) lines.push('', PROJECT_RULES_HEADING, projectRules)
   lines.push(...codingRuleLines(rulePacks, rules.review))
   return lines.join('\n')
 }
@@ -47,7 +49,7 @@ function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
   if (!text) return []
   return [
     '',
-    "Coding rules (written in Chinese; each starts with its rule ID). They rank below the user's instructions and the project rules: when they conflict, follow those. " +
+    `${CODING_RULES_HEADING} They rank below the user's instructions and the project rules: when they conflict, follow those. ` +
       'Apply them to the code you write or change; do not rewrite unrelated existing code just to satisfy them.',
     ...(review ? ['When you call finish, a reviewer checks your changes against these rules and reports violations by rule ID.'] : []),
     text,
@@ -84,4 +86,11 @@ async function readProjectRules(cwd: string): Promise<string> {
   }
   const joined = parts.join('\n\n')
   return joined.length > MAX_RULES_CHARS ? `${joined.slice(0, MAX_RULES_CHARS)}\n... (truncated)` : joined
+}
+
+// 系统提示词里通用说明和规则（项目规则、编码规范）各占多少字，用来估算上下文分项
+export function promptSections(prompt: string): { base: number; rules: number } {
+  const starts = [prompt.indexOf(PROJECT_RULES_HEADING), prompt.indexOf(CODING_RULES_HEADING)].filter((index) => index >= 0)
+  const base = starts.length > 0 ? Math.min(...starts) : prompt.length
+  return { base, rules: prompt.length - base }
 }

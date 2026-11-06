@@ -3,3 +3,5 @@ packages:
 allowBuilds:
   # Squirrel.Windows 安装器的依赖；Diffra 只打 NSIS 包，不需要它的安装脚本。
   electron-winstaller: false
+  # 底部终端用的伪终端；安装脚本优先用包里自带的预编译文件（N-API，Electron 也能直接用）
+  node-pty: true

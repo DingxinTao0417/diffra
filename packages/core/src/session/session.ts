@@ -1,8 +1,15 @@
 import { randomUUID } from 'node:crypto'
+import type { SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
 import type { LanguageModel, ModelMessage } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, RulePack, SessionConfig } from '../protocol.js'
+import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, UsageBreakdown } from '../protocol.js'
+import { promptSections } from './prompt.js'
+import type { SessionRecord } from './store.js'
+import { TOOL_DEFINITION_CHARS } from './tools.js'
+
+// 会话标题默认取第一条提问的开头
+const TITLE_CHARS = 40
 
 export interface SessionEnvironment {
   bashPath: string | null
@@ -20,30 +27,54 @@ export interface SessionOptions {
   // 测试时注入模拟模型；正常运行按 config 创建
   model?: LanguageModel
   reviewModel?: LanguageModel
+  // 从存储恢复时传入
+  record?: SessionRecord
 }
 
 export class Session {
-  readonly id = randomUUID()
+  readonly id: string
   readonly cwd: string
-  readonly config: SessionConfig
+  readonly createdAt: string
+  title: string
+  archived: boolean
+  readonly turns: StoredTurn[] = []
+  // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
+  config: SessionConfig
+  permissionMode: PermissionMode
   readonly environment: SessionEnvironment
   readonly checkpoints: Checkpoints | null
   readonly rulePacks: RulePack[]
   readonly systemPrompt: string
-  readonly model: LanguageModel
+  model: LanguageModel
   // 没有单独配置评审模型时用编码模型
-  readonly reviewModel: LanguageModel
+  reviewModel: LanguageModel
   readonly messages: ModelMessage[] = []
   readonly readHashes = new Map<string, string>()
   // 「本会话内允许同类命令」记下的命令键，见 permissions.commandKey
   readonly alwaysAllowed = new Set<string>()
   // turnId → 这一轮开始前的快照
   readonly turnCheckpoints = new Map<string, string>()
+  // turnId → 这一轮的提问在 messages 里的位置，重新生成时从这里截断对话
+  readonly messageStarts = new Map<string, number>()
   activeTurn: AbortController | null = null
 
   constructor(options: SessionOptions) {
+    const record = options.record
+    this.id = record?.id ?? randomUUID()
+    this.createdAt = record?.createdAt ?? new Date().toISOString()
+    this.title = record?.title ?? ''
+    this.archived = record?.archived ?? false
+    if (record) {
+      this.messages.push(...record.messages)
+      for (const { checkpoint, messageStart, ...turn } of record.turns) {
+        this.turns.push(turn)
+        if (checkpoint) this.turnCheckpoints.set(turn.id, checkpoint)
+        if (messageStart !== null) this.messageStarts.set(turn.id, messageStart)
+      }
+    }
     this.cwd = options.cwd
     this.config = options.config
+    this.permissionMode = options.config.permissionMode
     this.environment = options.environment
     this.checkpoints = options.checkpoints
     this.rulePacks = options.rulePacks
@@ -51,6 +82,15 @@ export class Session {
     this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId)
     const review = options.config.reviewModel
     this.reviewModel = options.reviewModel ?? (review ? createLanguageModel(review.endpoint, review.modelId) : this.model)
+  }
+
+  // 从下一轮开始用新模型；评审没有单独配置时跟着换
+  setModel(model: SessionConfig['model'], languageModel?: LanguageModel): void {
+    if (this.running) throw new Error('任务还在进行中，结束后再切换模型')
+    const followsCoder = this.config.reviewModel === null
+    this.config = { ...this.config, model }
+    this.model = languageModel ?? createLanguageModel(model.endpoint, model.modelId)
+    if (followsCoder) this.reviewModel = this.model
   }
 
   get running(): boolean {
@@ -63,6 +103,105 @@ export class Session {
 
   cancel(): void {
     this.activeTurn?.abort()
+  }
+
+  startTurn(id: string, prompt: string): void {
+    if (!this.title) {
+      const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
+      this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
+    }
+    this.messageStarts.set(id, this.messages.length)
+    this.turns.push({ id, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [] })
+  }
+
+  // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
+  recordUpdate(update: SessionUpdate): void {
+    const turn = this.turns.at(-1)
+    if (!turn || turn.endedAt) return
+    const last = turn.updates.at(-1)
+    if (
+      (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') &&
+      last?.sessionUpdate === update.sessionUpdate &&
+      last.content.type === 'text' &&
+      update.content.type === 'text'
+    ) {
+      turn.updates[turn.updates.length - 1] = { ...last, content: { ...last.content, text: last.content.text + update.content.text } }
+      return
+    }
+    if (update.sessionUpdate === 'usage_update') {
+      const previous = turn.updates.findIndex((item) => item.sessionUpdate === 'usage_update')
+      if (previous >= 0) turn.updates.splice(previous, 1)
+    }
+    turn.updates.push(update)
+  }
+
+  endTurn(stopReason: StopReason): void {
+    const turn = this.turns.at(-1)
+    if (!turn || turn.endedAt) return
+    turn.endedAt = new Date().toISOString()
+    turn.stopReason = stopReason
+  }
+
+  toRecord(): SessionRecord {
+    return {
+      version: 1,
+      id: this.id,
+      cwd: this.cwd,
+      title: this.title,
+      createdAt: this.createdAt,
+      updatedAt: new Date().toISOString(),
+      archived: this.archived,
+      turns: this.turns.map((turn) => ({
+        ...turn,
+        checkpoint: this.turnCheckpoints.get(turn.id) ?? null,
+        messageStart: this.messageStarts.get(turn.id) ?? null,
+      })),
+      messages: this.messages,
+    }
+  }
+
+  // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
+  usageBreakdown(used: number): UsageBreakdown {
+    const prompt = promptSections(this.systemPrompt)
+    const chars = {
+      system: prompt.base,
+      rules: prompt.rules,
+      tools: TOOL_DEFINITION_CHARS,
+      messages: JSON.stringify(this.messages).length,
+    }
+    const total = chars.system + chars.rules + chars.tools + chars.messages
+    const share = (value: number) => (total > 0 ? Math.round((value / total) * used) : 0)
+    return { system: share(chars.system), rules: share(chars.rules), tools: share(chars.tools), messages: share(chars.messages) }
+  }
+
+  // 某一轮开始之后的改动，unified diff
+  async checkpointDiff(turnId: string): Promise<string> {
+    const commit = this.turnCheckpoints.get(turnId)
+    if (this.checkpoints && commit) return this.checkpoints.diffSince(commit)
+    // 进行中的这一轮快照还没打好：快照在任何工具运行之前打，这时还没有改动
+    if (this.checkpoints && this.running && this.turns.at(-1)?.id === turnId) return ''
+    throw new Error('这一轮没有检查点，看不了改动')
+  }
+
+  // 重新生成：把这一轮及之后的文件改动和对话一起撤掉，调用方再用同样的提问发一轮
+  async rewind(turnId: string): Promise<{ filesRestored: boolean }> {
+    if (this.running) throw new Error('任务还在进行中，先停止再重新生成')
+    const index = this.turns.findIndex((turn) => turn.id === turnId)
+    const start = this.messageStarts.get(turnId)
+    if (index < 0 || start === undefined) throw new Error('这一轮不能重新生成')
+    const commit = this.turnCheckpoints.get(turnId)
+    let filesRestored = false
+    if (this.checkpoints && commit) {
+      await this.checkpoints.restore(commit, await this.checkpoints.changesSince(commit))
+      filesRestored = true
+    }
+    this.messages.splice(start)
+    for (const turn of this.turns.splice(index)) {
+      this.turnCheckpoints.delete(turn.id)
+      this.messageStarts.delete(turn.id)
+    }
+    this.readHashes.clear()
+    return { filesRestored }
   }
 
   async checkpointChanges(turnId: string): Promise<CheckpointChange[]> {

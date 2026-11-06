@@ -16,6 +16,7 @@ import {
 } from '../rules/review.js'
 import { runShell } from '../tools/command.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
+import type { ModelCallUsage } from '../usage/log.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, parseFinishInput, TOOL_KINDS, TOOLS } from './tools.js'
 
@@ -32,6 +33,8 @@ export interface TurnIO {
   update(update: SessionUpdate): Promise<void>
   // 返回用户选中的 optionId；取消或出错返回 null
   requestPermission(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<string | null>
+  // 每次模型调用结束后记一次用量；记录失败由实现方处理，不影响任务
+  recordUsage(call: ModelCallUsage): Promise<void>
 }
 
 interface StepToolCall {
@@ -64,7 +67,14 @@ export async function runTurn(session: Session, turn: { id: string; text: string
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const { toolCalls, inputTokens, answered } = await streamStep(session, signal, io)
-      if (inputTokens > 0) await io.update({ sessionUpdate: 'usage_update', used: inputTokens, size: contextWindow })
+      if (inputTokens > 0) {
+        await io.update({
+          sessionUpdate: 'usage_update',
+          used: inputTokens,
+          size: contextWindow,
+          _meta: { diffra: session.usageBreakdown(inputTokens) },
+        })
+      }
 
       if (toolCalls.length === 0) {
         // 改了文件却没调 finish：拉回来走完成门禁
@@ -195,6 +205,12 @@ async function streamStep(
         break
       case 'finish-step':
         inputTokens = part.usage.inputTokens ?? inputTokens
+        await io.recordUsage({
+          role: 'coder',
+          provider: session.config.model.provider,
+          modelId: session.config.model.modelId,
+          usage: part.usage,
+        })
         break
       case 'error':
         throw part.error
@@ -283,6 +299,7 @@ async function askCommandPermission(
     trusted: session.trustedCommands,
     alwaysAllowed: session.alwaysAllowed,
     readOnlyPaths: session.config.readOnlyPaths,
+    mode: session.permissionMode,
   })
   if (decision.level === 'allow') return { allowed: true }
   if (decision.level === 'deny') {
@@ -386,7 +403,11 @@ async function runReview(session: Session, turnId: string, summary: string, sign
     const packs = reviewRulePacks(session.rulePacks, [...diff.addedLines.keys()])
     if (diff.addedLines.size === 0 || packs.length === 0) return []
     await showCard()
-    const output = await callReviewer(session.reviewModel, buildReviewRequest(packs, diff, summary), signal)
+    const { text: output, usage } = await callReviewer(session.reviewModel, buildReviewRequest(packs, diff, summary), signal)
+    if (usage) {
+      const reviewer = session.config.reviewModel ?? session.config.model
+      await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
+    }
     const ruleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => rule.id)))
     const findings = parseReviewOutput(output, ruleIds, diff.addedLines)
     const partial = diff.truncated ? '\n（改动太多，只审查了前面一部分）' : ''

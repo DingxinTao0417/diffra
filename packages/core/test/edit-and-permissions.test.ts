@@ -44,6 +44,7 @@ describe('classifyCommand', () => {
     trusted: [],
     alwaysAllowed: new Set(),
     readOnlyPaths: [],
+    mode: 'ask',
     ...overrides,
   })
 
@@ -113,5 +114,45 @@ describe('受保护文件和禁写目录的判断', () => {
     expect(isUnderReadOnly(cwd, 'data\\nested\\b', ['data'])).toBe(true)
     expect(isUnderReadOnly(cwd, 'database/a.json', ['data'])).toBe(false)
     expect(isUnderReadOnly(cwd, 'src/data/a.json', ['data'])).toBe(false)
+  })
+})
+
+describe('权限模式', () => {
+  const policy = (mode: CommandPolicy['mode'], readOnlyPaths: string[] = []): CommandPolicy => ({
+    cwd: process.cwd(),
+    trusted: [],
+    alwaysAllowed: new Set(),
+    readOnlyPaths,
+    mode,
+  })
+
+  test('自动审批：普通命令放行，有风险的命令仍然询问', () => {
+    for (const command of ['node scripts/build.js', 'mkdir dist && cp a.txt dist/', 'npm test', 'pnpm run lint', 'echo hi > out.txt', 'rm old.txt']) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'allow' })
+    }
+    for (const command of [
+      'git push origin main',
+      'git reset --hard HEAD~1',
+      'npm install left-pad',
+      'pnpm add zod',
+      'pip install requests',
+      'npx create-thing',
+      'curl https://example.com -o a.zip',
+      'rm -rf build',
+      'sudo make install',
+      'echo $(whoami)',
+    ]) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'ask' })
+    }
+  })
+
+  test('完全访问：不再询问，但危险命令、密钥文件和禁写目录照旧', () => {
+    expect(classifyCommand('git push origin main', policy('full'))).toEqual({ level: 'allow' })
+    expect(classifyCommand('npm install left-pad', policy('full'))).toEqual({ level: 'allow' })
+    expect(classifyCommand('git push --force origin main', policy('full'))).toMatchObject({ level: 'deny' })
+    expect(classifyCommand('cat .env', policy('full'))).toEqual({ level: 'ask' })
+    expect(classifyCommand('node reset.js data/db.json', policy('full', ['data']))).toEqual({ level: 'ask' })
+    expect(classifyCommand('echo x > data/db.json', policy('full', ['data']))).toEqual({ level: 'ask' })
+    expect(classifyCommand('cat data/db.json', policy('full', ['data']))).toEqual({ level: 'allow' })
   })
 })

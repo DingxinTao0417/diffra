@@ -102,3 +102,10 @@ function parseInput<T>(schema: z.ZodType<T>, input: unknown): T {
   if (result.success) return result.data
   throw new ToolError(`Invalid arguments: ${result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`)
 }
+
+// 工具定义发给模型时的大致篇幅，用来估算上下文分项
+export const TOOL_DEFINITION_CHARS = Object.entries(TOOLS).reduce(
+  (sum, [name, definition]) =>
+    sum + name.length + (definition.description?.length ?? 0) + JSON.stringify(z.toJSONSchema(definition.inputSchema as z.ZodType)).length,
+  0,
+)

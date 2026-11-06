@@ -27,13 +27,15 @@ v2：
 - Electron 45 + electron-vite 6 + Vite 8 + React 19 + TypeScript 7。
 - 运行时代码面向 Electron 内置的 Node（Electron 45 对应 Node 24），所以 `@types/node` 用 24，不跟本机的 Node 版本走。
 - 测试：core 用 vitest；界面用 Playwright 直接驱动 Electron 窗口。
-- 打包和更新：electron-builder + electron-updater。electron-updater 打进主进程的 bundle，安装包里不带 node_modules。
+- 打包和更新：electron-builder + electron-updater。electron-updater 打进主进程的 bundle。安装包里的 node_modules 只有 node-pty：原生模块打不进 bundle，所以它是桌面端唯一放在 `dependencies` 里的包。
 - 界面：Tailwind 4 + shadcn/ui（radix-nova 样式，底层是 Radix）。
   - shadcn CLI 识别不了 electron-vite 项目，`components.json` 和主题变量是手写的；之后加组件用 `pnpm exec shadcn add <名字>`。
   - 合并 class 用 shadcn 作者发布的 `cn` 包，代替 clsx + tailwind-merge。
   - CLI 加依赖时会写进 `dependencies`，要挪到 `devDependencies`：界面代码打进 bundle，安装包里不需要它们。
 - 模型调用：AI SDK 7（`ai` 和 `@ai-sdk/*`），只在 core 里用。
-- 其他运行时依赖：core 用 `@vscode/ripgrep`（搜索）、`shell-quote`（拆分命令做权限分级）；桌面端用 `diff`（渲染 diff）。
+- 其他运行时依赖：
+  - core：`@vscode/ripgrep`（搜索）、`shell-quote`（拆分命令做权限分级）。
+  - 桌面端：`diff`（渲染 diff）、`react-markdown` + `remark-gfm`（回复按 Markdown 显示，不渲染原始 HTML）、`@xterm/xterm` + `@xterm/addon-fit`（终端界面）、`node-pty`（终端进程）。
 - 运行前提：Windows 上需要 Git for Windows，检查点要用 git，命令执行要用它自带的 bash。
 
 ## 进程结构
@@ -75,6 +77,8 @@ v2：
 
 - 打包：electron-builder 打 NSIS 一键安装包（每用户安装，x64），配置在 `packages/desktop/electron-builder.config.ts`。
   - electron-builder 只会自动找 `electron-builder.yml/json/ts` 这类文件名，所以 `package` 脚本里用 `--config` 显式指定配置文件。
+  - `npmRebuild: false`：唯一的原生依赖 node-pty 自带 N-API 预编译文件，Electron 能直接用。打包时默认会用 node-gyp 重新编译，本机没装 VS 编译工具就会失败。
+  - node-pty 的原生文件由 electron-builder 自动解到 `app.asar.unpacked`（约 8.5MB）。
 - 更新源：electron-updater 走 generic，默认地址 `https://update.diffra.net/win/`，构建时写进客户端的 `resources/app-update.yml`。
   - 备案前先解析到海外存储（比如 Cloudflare R2），备案后改 DNS 指向国内 CDN，地址本身不变。
   - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置。
@@ -92,8 +96,16 @@ v2：
 ## Agent 核心（v0）
 
 - 结构：core 实现 ACP 的 `session/new`、`session/prompt`、`session/cancel`，过程通过 `session/update` 推给界面，需要确认的命令通过 `session/request_permission` 询问。
-  - 桌面端在 `session/new` 的 `_meta.diffra` 里传入编码模型、评审模型、检查命令、禁写目录、规则包和检查点目录（类型见 `packages/core/src/protocol.ts`）。
-  - 会话只存在 core 的内存里，应用重启就没了；只记住上次打开的项目。
+  - 桌面端在 `session/new` 的 `_meta.diffra` 里传入编码模型、评审模型、检查命令、禁写目录、规则包、权限模式和检查点目录（类型见 `packages/core/src/protocol.ts`）。
+- 会话持久化（推翻了原来「会话只存在内存里」的做法）：
+  - core 把会话存到应用数据目录的 `sessions/<id>.json`，另有 `index.json` 做列表；目录由桌面端通过 `DIFFRA_SESSIONS_DIR` 告诉 core。
+  - 每轮开始和结束时保存；还没开始过任务的会话不保存，免得每次打开项目都留下空记录。
+  - 存的是：标题、项目、每轮的提问和界面要重放的会话更新、发给模型的对话消息、每轮的检查点和对话起点（撤销、重新生成要用）。不存模型地址和 API Key。
+  - 用 ACP 标准的 `session/load`、`session/list`、`session/delete`；改名、归档、搜索、重新生成、取 diff 走 `_diffra/session/*` 扩展方法。历史放在 `session/load` 响应的 `_meta.diffra` 里一次给界面，不逐条回放 `session/update`。
+  - 打开旧任务时，模型、检查命令、禁写目录、规范都按当前设置重新组装，只有对话历史来自记录。
+  - 写文件先写临时文件再改名、按会话排队；`index.json` 丢失或损坏时从各个会话文件重建。
+  - 应用退出时没跑完的一轮，重新打开后显示为「已停止」。
+- 任务标题取第一次提问的第一行，最长 40 字，可以重命名。
 - 主循环自己写，不用 AI SDK 的 agent 循环：每一步调一次 `streamText`，工具由我们执行，这样权限、检查点、检查和门禁都在我们手里。
   - 上限：每轮最多 50 步；上下文用到 80% 就停下（压缩在第 7 步）；模型请求失败重试 2 次。
   - 参数不合法的工具调用，AI SDK 会自己在返回消息里补错误结果，主循环不再重复补，否则同一调用会有两个结果。
@@ -108,11 +120,18 @@ v2：
   - 询问：其他命令，以及带重定向、命令替换、后台执行的命令。选「本会话内允许同类命令」后，按「程序名 + 子命令」（如 `pnpm test`）记住。
   - 直接拒绝：递归删除根目录、用户目录、上级目录或整个项目，强制推送，`curl | sh`，系统级危险命令。
   - Windows 上没有轻量沙箱，防线是「审批 + 检查点」：防误操作，不防提示注入。
+- 权限模式（输入框左下角切换，任务中途可改；改了同时记成新任务的默认值）：
+  - 每次询问（默认）：就是上面的规则。
+  - 自动审批：普通命令直接执行；git 推送、重置、清理、变基、恢复、切换，安装和卸载依赖，npx 这类临时下载执行，联网下载和远程连接，递归删除，命令替换，仍然问。
+  - 完全访问：不再询问。
+  - 三种模式下，直接拒绝的命令清单都照旧；命令里提到受保护文件、改动禁写目录时总要问。
 - 检查点：每轮开始前打快照，存在应用数据目录 `checkpoints/<项目路径哈希>` 下的裸仓库里，用 `--work-tree` 指向项目，不碰项目自己的 `.git`。
   - 仓库配置关掉 autocrlf，按原样保存字节；遵守项目的 `.gitignore`，并总是排除 `node_modules/`。
   - 「撤销到这一轮之前」只动这一轮之后有变化的文件：改过和删掉的恢复，新建的删掉；执行前先列出文件让用户确认。这段时间里用户手动改过的文件也在列表里。
   - 需要系统装有 git；没有时会话照常运行，界面提示改动无法撤销。
-- 检查命令按项目路径存在应用设置里（`settings.json` 的 `projects`），不往用户仓库写文件。会话创建时传给 core，改了要新开会话才生效。
+  - 同一个仓库上的 git 操作（快照、列变化、取 diff、还原）在 core 里按仓库目录排队执行。它们都要写仓库的索引文件，同时跑会撞上 `index.lock`；同一项目的多个任务共用一个仓库，界面上任务监控、审阅面板、撤销确认框也会同时来读。
+  - 一轮刚开始、快照还没打好时来要这一轮起的 diff，返回空：快照在任何工具运行之前打，这时还没有改动。
+- 检查命令按项目路径存在应用设置里（`settings.json` 的 `projects`），不往用户仓库写文件。新建或重新打开任务时传给 core，改了对已经打开的任务不生效。
   - 快速检查：某一步改了文件后自动跑，失败输出交给模型修；连续 3 次失败就停下。
   - 完成检查：finish 时跑，不填就用快速检查；不过就打回，连续 3 次不过就停下。改了文件却没调 finish 的，会被拉回来要求调用。
   - 都没配时 finish 照样通过，但界面标注「改动未经自动验证」。
@@ -126,7 +145,7 @@ v2：
 - 禁写目录：按项目在应用设置里配置（`settings.json` 的 `projects[路径].readOnlyPaths`，相对项目根目录），用来保护项目里的数据目录。
   - edit_file 不能改、也不能在里面新建文件。
   - 非只读命令的参数提到禁写目录里的路径时，即使之前选过「同类命令始终允许」也要再问；读取不受限制。
-  - 改了要新开会话才生效，和检查命令一样。
+  - 和检查命令一样，新建或重新打开任务时生效。
 - 检查点不包含受保护文件和禁写目录：密钥不会被复制进快照仓库；撤销时也不会把用户在这些地方的改动还原掉。代价是 `.env.example` 这类示例文件、`.pub` 公钥同样不进快照，agent 改了它们没法撤销。
 - 系统提示词会写明受保护文件和禁写目录，减少模型反复尝试。
 
@@ -156,7 +175,7 @@ v2：
   - 默认只放强制级。合计上限 4000 字，预算不够时先保证强制级；放不下的条数写进提示词。
   - 实测强制级篇幅：通用约 1200 字，安全约 900 字，Java 约 1500 字，TS/JS 约 800 字，Python 约 600 字。单语言项目都放得下；Java + TS 的全栈项目会超出，TS 包排在后面，部分条目会被省略。
 - 项目设置存在 `settings.json` 的 `projects[路径].rules`：关掉的包（disabledPacks）、关掉的单条规则（disabledRules）、推荐级是否也写进提示词（includeRecommended）、是否审查（review）。
-  - 新加的包默认启用。改了要新开会话才生效。
+  - 新加的包默认启用。改了对新建或重新打开的任务生效。
 - 完成前审查：项目级开关，默认关。误报率还没在评估集上测过，第 6 步测完再决定默认值。
   - 时机：完成检查通过（或没配检查）之后再审，免得对跑不通的代码提风格意见。
   - 范围：取这一轮的 diff，只看代码文件（能按扩展名认出语言的），只按和这些文件相关的包里的强制级规则审。
@@ -166,9 +185,57 @@ v2：
   - 评审模型用「评审」角色，没分配时用编码模型。审查调用本身失败时不拦截完成，只在卡片上说明，避免评审模型出问题时任务永远完不成。
   - 需要检查点（Git）来取 diff；没有检查点时跳过审查并提示。
 
+## 界面
+
+- 布局参照 Qoder，取舍时按 Diffra 的功能来，不照搬。
+  - 左侧栏：新任务、搜索、按项目分组的任务列表（有任务的项目按最近更新排）、设置。归档的任务不在侧栏，在「设置 → 会话与存储」里。
+  - 首页：居中的输入框，下面是项目、分支、检查命令、规范和最近的任务。发出第一条消息时才建会话。
+  - 任务页：对话，输入框，右侧任务监控或审阅面板（二选一，可以都关），底部终端。
+  - 设置是独立的整页，按分区组织。
+- 对话流：
+  - 连续的读文件、搜索、命令收成「执行工具 N 次」；改动、检查、规范审查、完成单独显示。
+  - 思考默认折叠；回复按 Markdown 显示，链接用系统浏览器打开。
+  - 每轮下面有复制、撤销到这一轮之前、重新生成。重新生成只放在最后一轮：它会撤掉这一轮的文件改动和对话再重发同一个提问，放在中间的轮次会连带丢掉后面的所有轮次。
+- 运行中发的消息在界面里排队，这一轮结束后依次发出，可以撤回。队列不存盘，应用退出就没了。
+- 模型可以在任务中途换（从下一轮生效），运行中不能换。
+- 审阅面板看的是「从第 N 轮开始到现在」的改动，和撤销的含义一致：「撤销这些改动」就是撤销到第 N 轮之前。
+- 上下文占用的分项（系统提示词、工具定义、规范和项目规则、对话）按字数比例估算，合计等于模型返回的输入 token 数。
+- 外观：主题（浅色 / 深色 / 跟随系统）、配色、文字大小、内容宽度，存在 `settings.json` 的 `appearance`，写在 `<html>` 的 class 和 data 属性上。深色的 CSS 规则用 `:root.dark`，否则会被 `:root[data-palette]` 里的浅色侧栏盖掉。
+- 快捷键：Ctrl+K 搜索任务（标题和对话内容）、Ctrl+B 侧栏、Ctrl+, 设置、Ctrl+Enter 发送、Ctrl+` 终端。焦点在终端里时只保留 Ctrl+`，其余交给 shell（Ctrl+K、Ctrl+B 在 shell 里有自己的用途）。
+- 底部终端：
+  - 主进程用 node-pty 开进程，xterm 显示；Windows 上用 PowerShell（系统自带，和 VS Code 默认一致）。终端在当前任务的项目目录打开。
+  - 最多同时 8 个；只有开它的窗口能写入和关闭。页面刷新、窗口关闭、应用退出时一起结束。
+  - 切换任务、收起面板时终端内容和进程都保留；关掉标签才结束进程。
+  - 浅色主题下换用 VS Code 浅色终端的 16 色，xterm 默认的配色按深色背景配，浅色背景上「白色」字看不见。
+- 状态：渲染进程用一个很小的 store（`useSyncExternalStore`），不引入状态管理库。
+
+## 用量统计
+
+- 统计对象：每次模型调用记一条，编码循环和规范审查都算。「测试模型」按钮的调用不算。
+  - 数字取供应商返回的用量，不自己估算。供应商没返回时只计次数，用量页注明有几次。
+  - 只记完成了的调用。被停止或出错的调用拿不到用量，不记。
+  - 从加入这个功能的版本开始记。旧的会话记录每轮只存了最后一次的输入用量，补算不了。
+- 口径：
+  - 「总 token」是输入加输出。
+  - 输入包含缓存命中的部分，缓存命中率 = 缓存读 / 输入。
+  - 输出包含推理的部分。
+- 存储：应用数据目录的 `usage/YYYY-MM.jsonl`，按 UTC 月份分文件，一行一次调用。
+  - 字段：时刻（UTC）、会话 id、项目路径、供应商 id 和名称、模型 id、角色（编码 / 审查），以及输入、缓存读、缓存写、输出、推理的 token 数。不存 API Key 和对话内容。
+  - 只有 core 进程追加写，同一进程里的写入排队执行。
+  - 文件末尾是上次崩溃留下的半行时，先补换行再追加。读取时跳过格式不对的行，并在用量页提示。
+  - 估算每行约 250 字节，一天 2000 次调用约 0.5 MB。记录永久保留，不自动删；清理功能放到 v2。
+  - 供应商名由桌面端在会话配置里传给 core（`model.provider`、`reviewModel.provider`），只用于记用量。
+- 汇总：在 core 里边读边算（`_diffra/usage/summary`），不把记录全部读进内存。
+  - 界面按本机时区算起止时刻，连同 IANA 时区名一起传给 core，core 按这个时区划分每天。
+  - 一次最多统计 400 天。
+  - 分组：按天（没有调用的天也列出）、按模型（供应商 + 模型 id，名称取最近一次的）、按项目（Windows 上路径不分大小写），以及用量最多的 10 个任务。
+- 用量页在「设置 → 数据 → 用量」，范围有今天、近 7 天、近 30 天、本月。「今天」只显示数字，不画只有一根柱子的图。
+- 不做（v2 再说）：费用和单价、预算提醒、导出。
+
 ## 工具链注意事项
 
 - pnpm 11 对刚发布的包有冷却期。被拦时换稍旧的版本（比如 Playwright 用 1.64.x），不要写 `minimumReleaseAgeExclude` 绕过。
 - Electron 45 不在安装时下载二进制，改为首次运行时下载。新环境可以先执行 `pnpm --filter @diffra/desktop exec install-electron`。
-- pnpm 11 用 `pnpm-workspace.yaml` 的 `allowBuilds` 管理依赖的安装脚本。electron-winstaller（Squirrel 安装器用的）设为 false，Diffra 只打 NSIS 包。
+- pnpm 11 用 `pnpm-workspace.yaml` 的 `allowBuilds` 管理依赖的安装脚本。electron-winstaller（Squirrel 安装器用的）设为 false，Diffra 只打 NSIS 包；node-pty 设为 true，它的安装脚本会选用自带的预编译文件。
+- e2e 按卡片种类定位对话内容（`data-testid="tool-call"` 加 `data-kind`），不靠匹配文字；默认 9 个用例并行，每个都开一个 Electron。
 - core 和 desktop 的 Node 侧 tsconfig 把 `lib` 限定为 `es2023`（不含 DOM），否则 Node 的 web stream 类型会和 DOM 版冲突。

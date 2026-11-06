@@ -1,25 +1,57 @@
+import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import {
   cancelSession,
+  checkpointDiff,
+  configureSession,
   type CoreClientHandlers,
   createSession,
+  deleteSession,
+  listSessions,
+  loadSession,
   previewCheckpoint,
   restoreCheckpoint,
+  rewindSession,
+  searchSessions,
   type SessionChecks,
+  type SessionConfig,
   sendPrompt,
+  updateSession,
+  usageSummary,
 } from '@diffra/core'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
-import { IPC_CHANNELS, type PermissionRequestEvent, type ProjectState, type SessionHandle } from '../shared/ipc'
-import type { ProjectRuleSettings } from '../shared/settings'
+import {
+  IPC_CHANNELS,
+  type LoadedSessionHandle,
+  type PermissionRequestEvent,
+  type ProjectState,
+  type SessionHandle,
+} from '../shared/ipc'
+import type { ModelRef, ProjectRuleSettings } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { type RulePackStore, sessionRules } from './rule-packs'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint } from './settings-ipc'
-import { projectRuleSettingsSchema, projectSettingsSchema, type SettingsStore } from './settings-store'
+import {
+  modelRefSchema,
+  permissionModeSchema,
+  projectRuleSettingsSchema,
+  projectSettingsSchema,
+  type SettingsStore,
+} from './settings-store'
+
+const execFileAsync = promisify(execFile)
+
+const sessionOptionsSchema = z.object({
+  permissionMode: permissionModeSchema.optional(),
+  model: modelRefSchema.optional(),
+})
+type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 const DEFAULT_RULE_SETTINGS: ProjectRuleSettings = { disabledPacks: [], disabledRules: [], includeRecommended: false, review: false }
@@ -85,17 +117,27 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return projectState(path)
   }
 
-  // 角色指向的模型和它的接入点；配置不完整时报错说明去哪里改
-  const resolveRole = async (role: 'coder' | 'reviewer', label: string) => {
-    const { roles, providers } = settings.get()
-    const ref = roles[role]
-    if (!ref) return null
-    const provider = providers.find((item) => item.id === ref.providerId)
+  // 模型和它的接入点；配置不完整时报错说明去哪里改
+  const resolveModel = async (ref: ModelRef, label: string) => {
+    const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
-    if (!provider || !model) throw new Error(`「${label}」角色指向的模型不存在，请到「模型」页重新分配`)
+    if (!provider || !model) throw new Error(`${label}指向的模型不存在，请到「模型」页重新选择`)
     const target = await providerEndpoint(settings, secrets, provider.id)
     if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
-    return { provider, model, endpoint: target.endpoint }
+    return {
+      label: `${provider.name} / ${model.id}`,
+      model: {
+        endpoint: target.endpoint,
+        modelId: model.id,
+        contextWindow: model.contextWindow,
+        provider: { id: provider.id, name: provider.name },
+      },
+    }
+  }
+
+  const resolveRole = async (role: 'coder' | 'reviewer', label: string) => {
+    const ref = settings.get().roles[role]
+    return ref ? resolveModel(ref, `「${label}」角色`) : null
   }
 
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
@@ -118,6 +160,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return info?.isDirectory() ? projectState(path) : null
   })
 
+  ipcMain.handle(IPC_CHANNELS.projectGet, (_event, rawPath: unknown) => projectState(parse(z.string().min(1), rawPath)))
+
   ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
     const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }), rawSettings)
@@ -130,25 +174,124 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return saveProjectState(path, (current) => ({ ...current, rules }))
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown): Promise<SessionHandle> => {
-    const path = parse(z.string().min(1), rawPath)
-    const coder = await resolveRole('coder', '编码')
+  // 新建和加载都按当前设置组装会话配置：模型、检查、规范改过的话，打开旧任务也用新的。
+  // 输入框里选的模型和权限模式优先，没选就用「编码」角色和默认权限模式
+  const sessionConfig = async (path: string, options: SessionOptions = {}): Promise<{ config: SessionConfig; modelLabel: string }> => {
+    const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
     if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
-
     const project = projectState(path)
     const rules = sessionRules((await rulePacks.list()).packs.map((entry) => entry.pack), project.rules)
     // 只有开了审查才用到评审模型；没分配评审角色时 core 用编码模型审查
     const reviewer = rules.review ? await resolveRole('reviewer', '评审') : null
-    const { sessionId, info } = await createSession(await coreConnection(), path, {
-      model: { endpoint: coder.endpoint, modelId: coder.model.id, contextWindow: coder.model.contextWindow },
-      reviewModel: reviewer ? { endpoint: reviewer.endpoint, modelId: reviewer.model.id } : null,
-      checks: project.checks,
-      readOnlyPaths: project.readOnlyPaths,
-      rules,
-      checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
-    })
+    return {
+      config: {
+        model: coder.model,
+        reviewModel: reviewer ? { endpoint: reviewer.model.endpoint, modelId: reviewer.model.modelId, provider: reviewer.model.provider } : null,
+        checks: project.checks,
+        readOnlyPaths: project.readOnlyPaths,
+        rules,
+        permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
+        checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
+      },
+      modelLabel: coder.label,
+    }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
+    const path = parse(z.string().min(1), rawPath)
+    const options = parse(sessionOptionsSchema, rawOptions ?? {})
+    const { config, modelLabel } = await sessionConfig(path, options)
+    const { sessionId, info } = await createSession(await coreConnection(), path, config)
     await rememberProject(path)
-    return { sessionId, info, modelLabel: `${coder.provider.name} / ${coder.model.id}` }
+    return { sessionId, info, modelLabel, permissionMode: config.permissionMode }
+  })
+
+  // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
+  ipcMain.handle(IPC_CHANNELS.sessionConfigure, async (_event, rawSessionId: unknown, rawOptions: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const options = parse(sessionOptionsSchema, rawOptions)
+    const model = options.model ? await resolveModel(options.model, '所选模型') : null
+    await configureSession(await coreConnection(), sessionId, { permissionMode: options.permissionMode, model: model?.model })
+    if (options.permissionMode) {
+      const mode = options.permissionMode
+      await settings.update((current) => ({ ...current, defaultPermissionMode: mode }))
+    }
+    return { modelLabel: model?.label ?? null }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionRewind, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
+    rewindSession(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.checkpointDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
+    checkpointDiff(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
+  )
+
+  // 当前分支名，分离头指针时是提交号；不是 git 仓库或没装 git 时为 null。
+  // symbolic-ref 在还没有提交的新仓库里也能拿到分支名
+  ipcMain.handle(IPC_CHANNELS.projectBranch, async (_event, rawPath: unknown) => {
+    const path = parse(z.string().min(1), rawPath)
+    const git = async (args: string[]) => {
+      try {
+        const { stdout } = await execFileAsync('git', args, { cwd: path, timeout: 5000, windowsHide: true })
+        return stdout.trim() || null
+      } catch {
+        return null
+      }
+    }
+    return (await git(['symbolic-ref', '--short', '-q', 'HEAD'])) ?? (await git(['rev-parse', '--short', 'HEAD']))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.projectOpenFolder, async (_event, rawPath: unknown) => {
+    const message = await shell.openPath(parse(z.string().min(1), rawPath))
+    if (message) throw new Error(`打不开文件夹：${message}`)
+  })
+
+  // 会话记录占用的磁盘空间
+  ipcMain.handle(IPC_CHANNELS.sessionsStorage, async () => {
+    const dir = join(userDataDir, 'sessions')
+    const names = await readdir(dir).catch(() => [] as string[])
+    let bytes = 0
+    for (const name of names) bytes += (await stat(join(dir, name)).catch(() => null))?.size ?? 0
+    return { bytes, dir }
+  })
+
+  // 时间范围和时区由界面给，core 校验
+  ipcMain.handle(IPC_CHANNELS.usageSummary, async (_event, rawQuery: unknown) =>
+    usageSummary(await coreConnection(), parse(z.object({ from: z.string(), to: z.string(), timeZone: z.string() }), rawQuery)),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.sessionLoad, async (_event, rawSessionId: unknown, rawPath: unknown): Promise<LoadedSessionHandle> => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const path = parse(z.string().min(1), rawPath)
+    const { config, modelLabel } = await sessionConfig(path)
+    const loaded = await loadSession(await coreConnection(), sessionId, path, config)
+    await rememberProject(path)
+    return { sessionId, info: loaded.info, modelLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>
+    listSessions(await coreConnection(), parse(z.string().min(1).nullable(), rawPath) ?? undefined),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.sessionsSearch, async (_event, rawQuery: unknown) =>
+    searchSessions(await coreConnection(), parse(z.string().max(200), rawQuery)),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.sessionMetaUpdate, async (_event, rawSessionId: unknown, rawChange: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const change = parse(
+      z.object({
+        title: z.string().trim().min(1, '任务名称不能为空').max(100, '任务名称太长').optional(),
+        archived: z.boolean().optional(),
+      }),
+      rawChange,
+    )
+    await updateSession(await coreConnection(), sessionId, change)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionDelete, async (_event, rawSessionId: unknown) => {
+    await deleteSession(await coreConnection(), parse(z.string().min(1), rawSessionId))
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown) => {

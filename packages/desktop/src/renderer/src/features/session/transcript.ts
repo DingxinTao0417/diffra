@@ -1,4 +1,4 @@
-import type { SessionUpdate, StopReason, ToolCallContent, ToolCallStatus, ToolKind } from '@diffra/core/types'
+import type { SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -16,9 +16,53 @@ export type TranscriptItem =
 
 export interface Turn {
   id: string
+  prompt: string
   items: TranscriptItem[]
   stopReason: StopReason | null
   error: string | null
+  startedAt: number | null
+  endedAt: number | null
+}
+
+export interface Usage {
+  used: number
+  size: number
+  breakdown: UsageBreakdown | null
+}
+
+export function newTurn(id: string, prompt: string): Turn {
+  return { id, prompt, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
+}
+
+// 打开历史任务：按存下来的更新重放出这一轮的记录
+export function turnFromStored(turn: StoredTurn): Turn {
+  const items = turn.updates.reduce(applyUpdate, [{ kind: 'user', id: `${turn.id}-user`, text: turn.prompt }] as TranscriptItem[])
+  return {
+    id: turn.id,
+    prompt: turn.prompt,
+    items,
+    // 应用退出时没跑完的一轮记为已停止
+    stopReason: turn.stopReason ?? 'cancelled',
+    error: null,
+    startedAt: Date.parse(turn.startedAt) || null,
+    endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
+  }
+}
+
+export function usageOf(update: SessionUpdate): Usage | null {
+  if (update.sessionUpdate !== 'usage_update') return null
+  const meta = update._meta as { diffra?: UsageBreakdown } | null | undefined
+  return { used: update.used, size: update.size, breakdown: meta?.diffra ?? null }
+}
+
+export function lastUsage(turns: StoredTurn[]): Usage | null {
+  for (const turn of [...turns].reverse()) {
+    for (const update of [...turn.updates].reverse()) {
+      const usage = usageOf(update)
+      if (usage) return usage
+    }
+  }
+  return null
 }
 
 // 把 core 推来的一条会话更新合进这一轮的记录：连续的文字片段拼在一起，工具调用按 id 更新

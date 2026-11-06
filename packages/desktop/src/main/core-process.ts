@@ -24,7 +24,15 @@ export function startCore(handlers: CoreClientHandlers): Promise<CoreStatus> {
     console.error('[core] 找不到 ripgrep', error)
   }
   child = spawn(process.execPath, [join(import.meta.dirname, 'core.js')], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...(rgPath ? { DIFFRA_RG_PATH: rgPath } : {}) },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      // 会话记录放在应用数据目录下；core 每轮开始和结束时保存
+      DIFFRA_SESSIONS_DIR: join(app.getPath('userData'), 'sessions'),
+      // 每次模型调用的用量，按月追加
+      DIFFRA_USAGE_DIR: join(app.getPath('userData'), 'usage'),
+      ...(rgPath ? { DIFFRA_RG_PATH: rgPath } : {}),
+    },
     stdio: ['pipe', 'pipe', 'inherit'],
   })
   child.on('error', (error) => console.error('[core] 进程启动失败', error))

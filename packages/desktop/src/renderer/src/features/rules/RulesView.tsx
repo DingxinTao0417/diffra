@@ -10,11 +10,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { errorMessage } from '@/lib/errors'
 
 interface RulesViewProps {
-  // 页面切到前台时重新读取：项目可能在「会话」页换过
-  active: boolean
+  projectPath: string | null
+  projects: string[]
+  onProjectChange(path: string): void
 }
 
-export function RulesView({ active }: RulesViewProps) {
+export function RulesView({ projectPath, projects, onProjectChange }: RulesViewProps) {
   const [packs, setPacks] = useState<RulePacksView | null>(null)
   const [project, setProject] = useState<ProjectState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -23,17 +24,17 @@ export function RulesView({ active }: RulesViewProps) {
 
   const reload = useCallback(async () => {
     try {
-      const [view, last] = await Promise.all([window.diffra.listRulePacks(), window.diffra.getLastProject()])
+      const [view, current] = await Promise.all([window.diffra.listRulePacks(), projectPath ? window.diffra.getProject(projectPath) : null])
       setPacks(view)
-      setProject(last)
+      setProject(current)
     } catch (caught) {
       setError(errorMessage(caught))
     }
-  }, [])
+  }, [projectPath])
 
   useEffect(() => {
-    if (active) void reload()
-  }, [active, reload])
+    void reload()
+  }, [reload])
 
   // 先更新界面再保存：勾选框是受控的，等保存回来再变会让连续点击基于旧状态
   const saveRules = async (change: (rules: ProjectRuleSettings) => ProjectRuleSettings) => {
@@ -43,7 +44,7 @@ export function RulesView({ active }: RulesViewProps) {
     setProject({ ...project, rules: next })
     try {
       setProject(await window.diffra.saveProjectRules(project.path, next))
-      setNotice('已保存，从下一个新会话开始生效')
+      setNotice('已保存，新建或重新打开的任务按新设置运行')
     } catch (caught) {
       setError(errorMessage(caught))
       setProject(project)
@@ -105,10 +106,24 @@ export function RulesView({ active }: RulesViewProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle>当前项目</CardTitle>
-          <CardDescription className="font-mono text-xs" data-testid="rules-project">
-            {project ? project.path : '还没有打开项目，先在「会话」页选择项目文件夹'}
-          </CardDescription>
+          <CardTitle>项目</CardTitle>
+          {projects.length > 0 ? (
+            <select
+              aria-label="项目"
+              data-testid="rules-project"
+              className="h-8 max-w-full rounded-md border bg-background px-2 font-mono text-xs"
+              value={projectPath ?? ''}
+              onChange={(event) => onProjectChange(event.target.value)}
+            >
+              {projects.map((path) => (
+                <option key={path} value={path}>
+                  {path}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <CardDescription data-testid="rules-project">还没有项目，先新建任务选择项目文件夹</CardDescription>
+          )}
         </CardHeader>
         {rules && (
           <CardContent className="space-y-2 text-sm">

@@ -1,0 +1,300 @@
+import type { PermissionMode, StoredSessionSummary } from '@diffra/core/types'
+import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
+import type { ModelRef } from '../../../shared/settings'
+import { applyUpdate, lastUsage, newTurn, turnFromStored, usageOf } from '../features/session/transcript'
+import { applyAppearance } from '../lib/appearance'
+import { errorMessage } from '../lib/errors'
+import { type LiveTask, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+
+const TITLE_CHARS = 40
+
+function addProject(projects: string[], path: string): string[] {
+  const exists = projects.some((item) => item.toLowerCase() === path.toLowerCase())
+  return exists ? projects : [path, ...projects]
+}
+
+function titleOf(text: string): string {
+  const firstLine = text.trim().split(/\r?\n/)[0] ?? ''
+  return firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
+}
+
+export function navigate(route: Route): void {
+  // 离开设置页时重新读设置：模型、角色可能改过，输入框要用新的
+  if (store.get().route.name === 'settings' && route.name !== 'settings') {
+    refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))
+  }
+  store.set((state) => ({ ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route }))
+}
+
+export function openSettings(section: SettingsSection = 'general'): void {
+  navigate({ name: 'settings', section })
+}
+
+export function leaveSettings(): void {
+  navigate(store.get().lastWorkRoute)
+}
+
+export function openHome(project?: string | null): void {
+  const current = store.get().route
+  const fallback = current.name === 'task' ? (store.get().live[current.sessionId]?.project ?? null) : current.name === 'home' ? current.project : null
+  navigate({ name: 'home', project: project === undefined ? fallback : project })
+}
+
+export async function refreshTasks(): Promise<void> {
+  try {
+    const tasks = await window.diffra.listSessions(null)
+    store.set((state) => ({ ...state, tasks, projects: tasks.reduce((projects, task) => addProject(projects, task.cwd), state.projects) }))
+  } catch (error) {
+    console.error('读取任务列表失败', error)
+  }
+}
+
+export async function refreshSettings(): Promise<void> {
+  const settings = await window.diffra.getSettings()
+  applyAppearance(settings.appearance)
+  store.set((state) => ({ ...state, settings }))
+}
+
+export async function initialize(): Promise<void> {
+  await refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))
+  const last = await window.diffra.getLastProject().catch(() => null)
+  if (last) {
+    store.set((state) => ({ ...state, projects: addProject(state.projects, last.path) }))
+    navigate({ name: 'home', project: last.path })
+  }
+  await refreshTasks()
+}
+
+// 会话更新和权限请求只注册一次，按会话 id 分给对应的任务
+export function wireCoreEvents(): () => void {
+  const offUpdate = window.diffra.onSessionUpdate(({ sessionId, update }) => {
+    const usage = usageOf(update)
+    updateLive(sessionId, (task) => {
+      if (usage) return { ...task, usage }
+      const last = task.turns.at(-1)
+      if (!last) return task
+      const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed'
+      return {
+        ...task,
+        turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update) }],
+        changeVersion: filesMayChange ? task.changeVersion + 1 : task.changeVersion,
+      }
+    })
+  })
+  const offPermission = window.diffra.onPermissionRequest((request) => {
+    if (!store.get().live[request.sessionId]) {
+      // 界面不认识的会话（比如页面重新加载过）没法让用户确认，按取消答复，免得 core 一直等
+      window.diffra.respondPermission(request.requestId, null).catch((error: unknown) => console.error(error))
+      return
+    }
+    updateLive(request.sessionId, (task) => ({ ...task, permission: request }))
+  })
+  return () => {
+    offUpdate()
+    offPermission()
+  }
+}
+
+function liveFrom(handle: SessionHandle, project: string, title: string): LiveTask {
+  return {
+    sessionId: handle.sessionId,
+    project,
+    title,
+    modelLabel: handle.modelLabel,
+    permissionMode: handle.permissionMode,
+    info: handle.info,
+    turns: [],
+    running: false,
+    usage: null,
+    permission: null,
+    queue: [],
+    changeVersion: 0,
+  }
+}
+
+export async function startTask(project: string, text: string, options: SessionOptions): Promise<void> {
+  const handle = await window.diffra.createSession(project, options)
+  store.set((state) => ({
+    ...state,
+    projects: addProject(state.projects, project),
+    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text)) },
+  }))
+  navigate({ name: 'task', sessionId: handle.sessionId })
+  void sendMessage(handle.sessionId, text)
+}
+
+export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): Promise<void> {
+  if (store.get().live[task.sessionId]) {
+    navigate({ name: 'task', sessionId: task.sessionId })
+    return
+  }
+  try {
+    const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
+    const live: LiveTask = {
+      ...liveFrom(loaded, task.cwd, loaded.title),
+      turns: loaded.turns.map(turnFromStored),
+      usage: lastUsage(loaded.turns),
+    }
+    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live } }))
+    navigate({ name: 'task', sessionId: task.sessionId })
+  } catch (error) {
+    showToast(`打不开这个任务：${errorMessage(error)}`)
+  }
+}
+
+// 运行中发的消息先排队，这一轮结束后再发
+export async function sendMessage(sessionId: string, text: string): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task) return
+  if (task.running) {
+    updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text }] }))
+    return
+  }
+  const turnId = crypto.randomUUID()
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text)] }))
+  const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
+    updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
+  // 第一轮开始后 core 才保存会话，这时再刷新侧栏
+  const refresh = setTimeout(() => void refreshTasks(), 800)
+  try {
+    const stopReason = await window.diffra.sendPrompt(sessionId, turnId, text)
+    patchTurn((turn) => ({ ...turn, stopReason, endedAt: Date.now() }))
+  } catch (error) {
+    patchTurn((turn) => ({ ...turn, error: errorMessage(error), endedAt: Date.now() }))
+  } finally {
+    clearTimeout(refresh)
+    let next: { id: string; text: string } | undefined
+    updateLive(sessionId, (current) => {
+      next = current.queue[0]
+      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1 }
+    })
+    await refreshTasks()
+    if (next) void sendMessage(sessionId, next.text)
+  }
+}
+
+export function dequeue(sessionId: string, id: string): void {
+  updateLive(sessionId, (task) => ({ ...task, queue: task.queue.filter((item) => item.id !== id) }))
+}
+
+export function cancelTask(sessionId: string): void {
+  window.diffra.cancelSession(sessionId).catch((error: unknown) => showToast(errorMessage(error)))
+}
+
+export function respondPermission(sessionId: string, optionId: string | null): void {
+  const request = store.get().live[sessionId]?.permission
+  if (!request) return
+  updateLive(sessionId, (task) => ({ ...task, permission: null }))
+  window.diffra.respondPermission(request.requestId, optionId).catch((error: unknown) => showToast(errorMessage(error)))
+}
+
+export async function restoreTurn(sessionId: string, turnId: string): Promise<void> {
+  const restored = await window.diffra.restoreCheckpoint(sessionId, turnId)
+  updateLive(sessionId, (task) => ({
+    ...task,
+    changeVersion: task.changeVersion + 1,
+    turns: task.turns.map((turn) =>
+      turn.id === turnId
+        ? {
+            ...turn,
+            items: [
+              ...turn.items,
+              {
+                kind: 'notice',
+                id: crypto.randomUUID(),
+                severity: 'info',
+                title: `已撤销 ${restored.length} 个文件的改动`,
+                description: restored.map((change) => change.path).join('\n') || null,
+              },
+            ],
+          }
+        : turn,
+    ),
+  }))
+}
+
+// 重新生成：撤掉这一轮及之后的文件改动和对话，再用同样的提问发一轮
+export async function regenerate(sessionId: string, turnId: string): Promise<void> {
+  const task = store.get().live[sessionId]
+  const turn = task?.turns.find((item) => item.id === turnId)
+  if (!task || !turn || task.running) return
+  try {
+    const { filesRestored } = await window.diffra.rewindSession(sessionId, turnId)
+    if (!filesRestored) showToast('这一轮没有检查点，文件改动没有撤销，只重新生成了回答')
+    updateLive(sessionId, (current) => ({
+      ...current,
+      changeVersion: current.changeVersion + 1,
+      turns: current.turns.slice(0, current.turns.findIndex((item) => item.id === turnId)),
+    }))
+    await sendMessage(sessionId, turn.prompt)
+  } catch (error) {
+    showToast(`重新生成失败：${errorMessage(error)}`)
+  }
+}
+
+export async function setPermissionMode(sessionId: string | null, mode: PermissionMode): Promise<void> {
+  try {
+    if (sessionId) {
+      await window.diffra.configureSession(sessionId, { permissionMode: mode })
+      updateLive(sessionId, (task) => ({ ...task, permissionMode: mode }))
+      store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, defaultPermissionMode: mode } } : state))
+    } else {
+      const settings = await window.diffra.savePreferences({ defaultPermissionMode: mode })
+      store.set((state) => ({ ...state, settings }))
+    }
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+export async function setTaskModel(sessionId: string, model: ModelRef): Promise<void> {
+  try {
+    const { modelLabel } = await window.diffra.configureSession(sessionId, { model })
+    if (modelLabel) updateLive(sessionId, (task) => ({ ...task, modelLabel }))
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+export async function renameTask(sessionId: string, title: string): Promise<void> {
+  try {
+    await window.diffra.updateSession(sessionId, { title })
+    updateLive(sessionId, (task) => ({ ...task, title }))
+    await refreshTasks()
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+export async function setArchived(sessionId: string, archived: boolean): Promise<void> {
+  try {
+    await window.diffra.updateSession(sessionId, { archived })
+    await refreshTasks()
+    const route = store.get().route
+    if (archived && route.name === 'task' && route.sessionId === sessionId) openHome()
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+export async function deleteTask(sessionId: string): Promise<void> {
+  try {
+    const route = store.get().route
+    if (route.name === 'task' && route.sessionId === sessionId) openHome()
+    await window.diffra.deleteSession(sessionId)
+    store.set((state) => {
+      const { [sessionId]: _removed, ...live } = state.live
+      return { ...state, live }
+    })
+    await refreshTasks()
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+export async function pickProject(): Promise<string | null> {
+  const picked = await window.diffra.pickProject()
+  if (!picked) return null
+  store.set((state) => ({ ...state, projects: addProject(state.projects, picked.path) }))
+  return picked.path
+}

@@ -1,13 +1,12 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { DEFAULT_APPEARANCE } from '../../shared/settings'
 import { App } from './App'
+import { applyAppearance } from './lib/appearance'
 import './styles.css'
 
-// 跟随系统的浅色/深色设置
-const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
-const applyTheme = () => document.documentElement.classList.toggle('dark', darkQuery.matches)
-applyTheme()
-darkQuery.addEventListener('change', applyTheme)
+// 读到设置之前先按默认外观（跟随系统深浅色）显示
+applyAppearance(DEFAULT_APPEARANCE)
 
 const container = document.getElementById('root')
 if (!container) throw new Error('index.html 缺少 #root 节点')
