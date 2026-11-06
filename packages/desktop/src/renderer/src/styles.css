@@ -7,3 +7,19 @@ body {
   margin: 0;
   padding: 32px;
 }
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+header span {
+  opacity: 0.6;
+}
+
+.update {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

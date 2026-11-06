@@ -4,6 +4,7 @@ import type { Readable, Writable } from 'node:stream'
 import { connectToCore, handshake } from '@diffra/core'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { type CoreStatus, IPC_CHANNELS } from '../shared/ipc'
+import { setupUpdater } from './updater'
 
 const HANDSHAKE_TIMEOUT_MS = 10_000
 
@@ -59,6 +60,8 @@ app
   .then(() => {
     const coreStatus = connectCore()
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
+    ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
+    setupUpdater()
     createWindow()
   })
   .catch((error: unknown) => {

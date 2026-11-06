@@ -10,5 +10,13 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["electron.vite.config.ts", "playwright.config.ts", "e2e", "src/main", "src/preload", "src/shared"]
+  "include": [
+    "electron.vite.config.ts",
+    "electron-builder.config.ts",
+    "playwright.config.ts",
+    "e2e",
+    "src/main",
+    "src/preload",
+    "src/shared"
+  ]
 }

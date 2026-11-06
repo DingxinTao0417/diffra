@@ -1,2 +1,5 @@
 packages:
   - packages/*
+allowBuilds:
+  # Squirrel.Windows 安装器的依赖；Diffra 只打 NSIS 包，不需要它的安装脚本。
+  electron-winstaller: false
