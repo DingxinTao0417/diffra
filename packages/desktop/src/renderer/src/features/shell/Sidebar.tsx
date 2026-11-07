@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronDown, ChevronRight, Ellipsis, Folder, LoaderCircle, PanelLeft, Plus, Search, Settings } from 'lucide-react'
+import { ChevronDown, ChevronRight, Ellipsis, Folder, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { folderName, formatTime } from '@/lib/format'
@@ -62,15 +62,6 @@ export function Sidebar() {
         <div className="flex size-5.5 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">D</div>
         <span className="font-semibold">Diffra</span>
         <AppVersion />
-        <button
-          type="button"
-          aria-label="收起侧栏"
-          title="收起侧栏 Ctrl+B"
-          className="ml-auto flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-          onClick={() => store.set((state) => ({ ...state, sidebarOpen: false }))}
-        >
-          <PanelLeft className="size-4" />
-        </button>
       </div>
 
       <div className="space-y-0.5 px-2.5">

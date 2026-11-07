@@ -12,6 +12,11 @@ export function applyAppearance(appearance: Appearance): void {
   root.dataset.width = appearance.contentWidth
   const dark = appearance.theme === 'dark' || (appearance.theme === 'system' && darkQuery.matches)
   root.classList.toggle('dark', dark)
+  // 系统的窗口按钮用顶栏（侧栏）的底色和正文的颜色
+  const style = getComputedStyle(root)
+  window.diffra
+    .setWindowChrome({ color: style.getPropertyValue('--sidebar').trim(), symbolColor: style.getPropertyValue('--foreground').trim(), theme: appearance.theme })
+    .catch((error: unknown) => console.error('同步窗口颜色失败', error))
 }
 
 // 「跟随系统」时，系统切换深浅色要跟着变

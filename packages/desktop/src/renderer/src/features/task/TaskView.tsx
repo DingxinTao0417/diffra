@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Ellipsis, FileDiff, GitBranch, PanelLeft, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Ellipsis, FileDiff, GitBranch, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -29,7 +29,6 @@ export function TaskView({ sessionId }: { sessionId: string }) {
 function TaskPage({ task }: { task: LiveTask }) {
   const panel = useAppState((state) => state.panel)
   const terminalOpen = useAppState((state) => state.terminalOpen)
-  const sidebarOpen = useAppState((state) => state.sidebarOpen)
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
   const { project, setProject, branch } = useProject(task.project)
   const [confirm, setConfirm] = useState<{ mode: 'restore' | 'regenerate'; turnId: string; changes: CheckpointChange[] | null } | null>(null)
@@ -84,11 +83,6 @@ function TaskPage({ task }: { task: LiveTask }) {
   return (
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
-        {!sidebarOpen && (
-          <IconButton label="展开侧栏 Ctrl+B" onClick={() => store.set((state) => ({ ...state, sidebarOpen: true }))}>
-            <PanelLeft className="size-4" />
-          </IconButton>
-        )}
         <span className="min-w-0 truncate font-medium" data-testid="task-title">
           {task.title}
         </span>

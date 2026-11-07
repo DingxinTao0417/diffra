@@ -178,11 +178,13 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 }
 
 const SHORTCUTS = [
+  ['Ctrl+N', '新任务'],
   ['Ctrl+K', '搜索任务'],
   ['Ctrl+B', '收起或展开侧栏'],
   ['Ctrl+,', '打开设置'],
   ['Ctrl+`', '打开或收起终端（任务页）'],
   ['Ctrl+Enter', '发送消息'],
+  ['Alt+← / Alt+→', '后退 / 前进'],
   ['Esc', '关闭对话框和菜单'],
 ] as const
 

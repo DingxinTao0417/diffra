@@ -1,6 +1,6 @@
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
-import { type DiffraApi, IPC_CHANNELS, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
+import { type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -62,6 +62,9 @@ const api: DiffraApi = {
   mcpPrompt: (target, server, prompt, args) => ipcRenderer.invoke(IPC_CHANNELS.mcpPrompt, target, server, prompt, args),
   listCommands: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.commandsList, projectPath),
   listPlugins: () => ipcRenderer.invoke(IPC_CHANNELS.pluginsList),
+  setWindowChrome: (chrome) => ipcRenderer.invoke(IPC_CHANNELS.windowChrome, chrome),
+  popupMenu: (position) => ipcRenderer.invoke(IPC_CHANNELS.menuPopup, position),
+  onMenuCommand: (listener) => subscribe<MenuCommand>(IPC_CHANNELS.menuCommand, listener),
   installPluginFromFolder: () => ipcRenderer.invoke(IPC_CHANNELS.pluginInstallFolder),
   installPluginFromGit: (url) => ipcRenderer.invoke(IPC_CHANNELS.pluginInstallGit, url),
   setPluginEnabled: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.pluginSetEnabled, pluginId, enabled),

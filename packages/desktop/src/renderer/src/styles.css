@@ -148,6 +148,17 @@
   --content-max: 64rem;
 }
 
+/* 顶栏可以拖动窗口，按钮不行；右边按系统窗口按钮占的宽度留空（没有窗口按钮覆盖层时为 0）。
+ * 拖动区域会盖过页面上的任何东西，弹窗、下拉菜单打开时（Radix 给 body 加 data-scroll-locked）顶栏先不拖动，免得点不到 */
+.title-bar {
+  -webkit-app-region: drag;
+  padding-right: calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%));
+}
+.title-bar button,
+body[data-scroll-locked] .title-bar {
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

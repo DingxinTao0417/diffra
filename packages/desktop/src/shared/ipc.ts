@@ -92,6 +92,9 @@ export const IPC_CHANNELS = {
   pluginInstallGit: 'plugins:install-git',
   pluginSetEnabled: 'plugins:set-enabled',
   pluginDelete: 'plugins:delete',
+  windowChrome: 'window:chrome',
+  menuPopup: 'menu:popup',
+  menuCommand: 'menu:command',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -99,6 +102,19 @@ export const IPC_CHANNELS = {
   checkpointPreview: 'session:checkpoint-preview',
   checkpointRestore: 'session:checkpoint-restore',
 } as const
+
+// 中文菜单里交给页面处理的命令
+export type MenuCommand =
+  | 'new-task'
+  | 'open-project'
+  | 'settings'
+  | 'toggle-sidebar'
+  | 'search'
+  | 'terminal'
+  | 'back'
+  | 'forward'
+  | 'check-updates'
+  | 'about'
 
 export type CoreStatus =
   | { state: 'connected'; agentName: string; agentVersion: string; protocolVersion: number }
@@ -248,6 +264,11 @@ export interface DiffraApi {
   // 项目、用户目录、开着的插件和兼容目录里的自定义命令
   listCommands(projectPath: string): Promise<CommandInfo[]>
   listPlugins(): Promise<PluginView[]>
+  // 页面套用外观后告诉主进程顶栏颜色和深浅色：Windows 的窗口按钮和原生菜单跟着变
+  setWindowChrome(chrome: { color: string; symbolColor: string; theme: Appearance['theme'] }): Promise<void>
+  // 在窗口坐标 (x, y) 弹出主菜单
+  popupMenu(position: { x: number; y: number }): Promise<void>
+  onMenuCommand(listener: (command: MenuCommand) => void): () => void
   // 弹出文件夹选择框；取消时返回 null
   installPluginFromFolder(): Promise<PluginView[] | null>
   installPluginFromGit(url: string): Promise<PluginView[]>

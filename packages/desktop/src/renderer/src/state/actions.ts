@@ -18,12 +18,46 @@ function titleOf(text: string): string {
   return firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
 }
 
-export function navigate(route: Route): void {
+const MAX_HISTORY = 50
+
+const sameRoute = (a: Route | undefined, b: Route) => JSON.stringify(a) === JSON.stringify(b)
+
+// record 为 false 时不记进后退历史（后退、前进本身）。连着换首页的项目只改当前这一条，不算新的一页
+export function navigate(route: Route, record = true): void {
   // 离开设置页时重新读设置：模型、角色可能改过，输入框要用新的
   if (store.get().route.name === 'settings' && route.name !== 'settings') {
     refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))
   }
-  store.set((state) => ({ ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route }))
+  store.set((state) => {
+    let { history, historyIndex } = state
+    const current = history[historyIndex]
+    if (record && route.name !== 'settings' && !sameRoute(current, route)) {
+      if (route.name === 'home' && current?.name === 'home') history = history.map((item, index) => (index === historyIndex ? route : item))
+      else {
+        history = [...history.slice(0, historyIndex + 1), route].slice(-MAX_HISTORY)
+        historyIndex = history.length - 1
+      }
+    }
+    return { ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route, history, historyIndex }
+  })
+}
+
+// 后退、前进；在设置页里后退就是回到进设置前的那页。删掉了的任务跳过
+export async function moveHistory(step: -1 | 1): Promise<void> {
+  const state = store.get()
+  if (state.route.name === 'settings') {
+    if (step === -1) leaveSettings()
+    return
+  }
+  const exists = (route: Route) => route.name !== 'task' || state.live[route.sessionId] !== undefined || state.tasks.some((task) => task.sessionId === route.sessionId)
+  let index = state.historyIndex + step
+  while (index >= 0 && index < state.history.length && !exists(state.history[index]!)) index += step
+  const target = state.history[index]
+  if (!target) return
+  store.set((current) => ({ ...current, historyIndex: index }))
+  const stored = target.name === 'task' && !state.live[target.sessionId] ? state.tasks.find((task) => task.sessionId === target.sessionId) : undefined
+  if (stored) await openTask(stored, false)
+  else navigate(target, false)
 }
 
 export function openSettings(section: SettingsSection = 'general'): void {
@@ -127,9 +161,9 @@ export async function startTask(project: string, text: string, options: SessionO
   void sendMessage(handle.sessionId, text, message)
 }
 
-export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): Promise<void> {
+export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>, record = true): Promise<void> {
   if (store.get().live[task.sessionId]) {
-    navigate({ name: 'task', sessionId: task.sessionId })
+    navigate({ name: 'task', sessionId: task.sessionId }, record)
     return
   }
   try {
@@ -140,7 +174,7 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
       usage: lastUsage(loaded.turns),
     }
     store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live } }))
-    navigate({ name: 'task', sessionId: task.sessionId })
+    navigate({ name: 'task', sessionId: task.sessionId }, record)
   } catch (error) {
     showToast(`打不开这个任务：${errorMessage(error)}`)
   }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, Folder, FolderOpen, GitBranch, PanelLeft, Settings2 } from 'lucide-react'
+import { ChevronDown, Folder, FolderOpen, GitBranch, Settings2 } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -16,7 +16,7 @@ import { Composer } from '@/features/task/Composer'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { openHome, openSettings, openTask, pickProject, setPermissionMode, startTask } from '@/state/actions'
-import { showToast, store, useAppState } from '@/state/store'
+import { showToast, useAppState } from '@/state/store'
 
 const RECENT_LIMIT = 5
 
@@ -30,7 +30,6 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const settings = useAppState((state) => state.settings)
   const projects = useAppState((state) => state.projects)
   const tasks = useAppState((state) => state.tasks)
-  const sidebarOpen = useAppState((state) => state.sidebarOpen)
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
@@ -71,17 +70,6 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
 
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-7 overflow-y-auto px-6 py-12">
-      {!sidebarOpen && (
-        <button
-          type="button"
-          aria-label="展开侧栏"
-          title="展开侧栏 Ctrl+B"
-          className="absolute top-3 left-3 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-          onClick={() => store.set((state) => ({ ...state, sidebarOpen: true }))}
-        >
-          <PanelLeft className="size-4" />
-        </button>
-      )}
       <div className="space-y-2 text-center">
         <h1 className="text-[2rem] font-semibold tracking-tight">要做什么？</h1>
         <p className="text-muted-foreground">描述任务，Diffra 会在项目里读代码、改代码、跑检查，做完给你看改动。</p>

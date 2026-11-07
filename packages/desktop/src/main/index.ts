@@ -13,6 +13,7 @@ import { registerSettingsIpc } from './settings-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { setupUpdater } from './updater'
+import { setupWindowChrome, titleBarOptions, watchAppCommands } from './window-chrome'
 
 // 开发模式和 e2e 不碰正式安装版的数据目录（%APPDATA%\Diffra），必须在 ready 之前设置
 if (!app.isPackaged) {
@@ -25,12 +26,19 @@ function createWindow(): void {
     height: 820,
     show: false,
     title: 'Diffra',
+    ...titleBarOptions(),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
     },
   })
-  window.once('ready-to-show', () => window.show())
+  // 页面第一次套用外观时显示（见 window-chrome）；页面没来得及发就按时显示，免得窗口一直不出来
+  window.once('ready-to-show', () =>
+    setTimeout(() => {
+      if (!window.isDestroyed() && !window.isVisible()) window.show()
+    }, 1500),
+  )
+  watchAppCommands(window)
   // 回复里的链接等不在应用窗口里打开，需要时走 openExternal 用系统浏览器
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => {
@@ -65,6 +73,7 @@ app
     registerPluginsIpc(settings, userDataDir)
     registerTerminalIpc()
     setupUpdater()
+    setupWindowChrome()
     createWindow()
   })
   .catch((error: unknown) => {

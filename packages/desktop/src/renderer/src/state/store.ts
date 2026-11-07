@@ -54,6 +54,9 @@ export interface AppState {
   route: Route
   // 从设置页返回时回到哪里
   lastWorkRoute: Route
+  // 后退、前进用：去过的首页和任务页（设置页不记）
+  history: Route[]
+  historyIndex: number
   tasks: StoredSessionSummary[]
   // 侧栏显示的项目：有任务的项目和最近选过的项目
   projects: string[]
@@ -71,6 +74,8 @@ export interface AppState {
 const initialState: AppState = {
   route: { name: 'home', project: null },
   lastWorkRoute: { name: 'home', project: null },
+  history: [{ name: 'home', project: null }],
+  historyIndex: 0,
   tasks: [],
   projects: [],
   live: {},
