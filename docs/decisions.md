@@ -8,7 +8,7 @@
 - appId：`dev.diffra.desktop`；`productName`：`Diffra`，它决定用户数据目录（`%APPDATA%\Diffra`）。
 - 打包后的包名：`diffra`（`electron-builder.config.ts` 里的 `extraMetadata.name`）。它决定每用户安装目录（`%LOCALAPPDATA%\Programs\diffra`）和更新缓存目录（`%LOCALAPPDATA%\diffra-updater`）。不覆盖的话，会用 workspace 包名 `@diffra/desktop`，变成 `@diffradesktop`。
 - 以上三项发布后都不能改：NSIS 安装包靠 appId 识别同一个应用，改了会断掉自动更新；改 productName 或包名，用户数据目录、安装目录会换位置。
-- 域名：`diffra.dev` 做官网（.dev 不能备案，部署在海外）；`diffra.net` 做更新和下载（需要备案）。两个都还没买。
+- 域名：`diffra.dev`（2026-11 买下，DNS 在 Cloudflare），兼做更新源 `update.diffra.dev`。现阶段只给自己和朋友用，不做备案，原定做更新下载的 `diffra.net` 不买了。
 
 ## v1 / v2 范围
 
@@ -81,17 +81,19 @@ v2：
   - node-pty 的原生文件由 electron-builder 自动解到 `app.asar.unpacked`（约 8.5MB）。
   - 静态检查用的 `@ast-grep/napi`、`@ast-grep/lang-python` 也是原生依赖，和 node-pty 一样列在桌面端的 `dependencies` 里，electron-builder 会自动把原生文件解到 asar 外面。
   - Python 语法的解析器（`parser.so`）由 ast-grep 的原生代码加载，不认 asar 路径，路径不对时会直接让进程崩溃（Rust panic，try/catch 接不住）。core 加载前先把路径换成 `app.asar.unpacked`，并确认文件存在。打包后用 Diffra.exe 启动包里的 core 实测过。
-- 更新源：electron-updater 走 generic，默认地址 `https://update.diffra.net/win/`，构建时写进客户端的 `resources/app-update.yml`。
-  - 备案前先解析到海外存储（比如 Cloudflare R2），备案后改 DNS 指向国内 CDN，地址本身不变。
-  - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置。
-  - 域名没到位之前，不要把安装包发给别人：装上的客户端会一直显示「检查更新失败」，以后也收不到更新。
+- 更新源：electron-updater 走 generic，地址 `https://update.diffra.dev/win/`，构建时写进客户端的 `resources/app-update.yml`，发布后不能再改。
+  - 服务器：黑果云美国洛杉矶轻量云（Ubuntu 24.04，30Mbps），nginx 只提供 `/var/www/diffra-update/win/` 下的文件，其他路径 404、不列目录；`.yml` 不缓存，安装包和 `.blockmap` 长期缓存（文件名带版本号）；传到一半的 `.partial` 不对外。
+  - HTTPS 证书来自 Let's Encrypt（没留邮箱），certbot 的定时任务自动续期；HTTP 跳转到 HTTPS。`.dev` 域名浏览器只允许 HTTPS。
+  - Cloudflare 上是「仅 DNS」，不走它的代理：要保证多段 Range 能直接到 nginx，差分下载才不退回整包。
+  - 上传用 root 和专用密钥（`~/.ssh/diffra_server_ed25519`）；服务器原本只允许密码登录，密钥是用户自己加的。没有建单独的部署账号。
+  - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置；发布脚本发现它设了就拒绝发布。
 - 客户端行为：启动时检查一次，之后每 4 小时检查一次，有新版本就后台下载。下载完后界面出现「重启并更新」，点击后静默安装并自动重启；不点的话，下次正常退出时也会安装。未打包运行（开发模式、e2e）时不检查更新。
 - 发布流程（现阶段手动）：
   1. 改 `packages/desktop/package.json` 的 version；
   2. 提交后打 `vX.Y.Z` tag 并推送；
   3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致，跑类型检查、测试并打包，产物传到 `v<版本号>` 的草稿 Release（已有就覆盖里面的文件）；
      - 不用 Actions 的产物存储：账号的存储配额按月累计，满了以后上传直接失败（2026-11 的一次构建就卡在这一步）。仓库私有，草稿 Release 只有有权限的人能下载。
-  4. 把 `Diffra-Setup-X.Y.Z.exe`、`.blockmap` 和 `latest.yml` 传到更新源。
+  4. 本机运行 `pnpm --filter @diffra/desktop publish:release`（`scripts/publish-release.ts`，服务器连接方式写在不提交的 `publish.config.json`，样例 `publish.config.example.json`）：从 Release 下载三个文件，核对 `latest.yml` 的版本、文件名、sha512 和大小，先传安装包和 `.blockmap`、最后传 `latest.yml`，每个先传成 `.partial` 再改名，传完从公网取回核对。
   - 旧版本的 `.blockmap` 要留在更新源上，客户端靠它做差分下载；找不到时会退回整包下载（约 116MB）。
 - 打包版验收：`pnpm --filter @diffra/desktop test:packaged` 先打包，再把全部 e2e 跑在打包出来的 `release/win-unpacked/Diffra.exe` 上（Playwright 的 `packaged` 项目；`pnpm test` 只跑开发版）。
   - 打包版只认正式数据目录，不看 `DIFFRA_USER_DATA_DIR`；测试用 Chromium 的 `--user-data-dir` 启动参数换成临时目录，实测生效，正式目录不受影响。

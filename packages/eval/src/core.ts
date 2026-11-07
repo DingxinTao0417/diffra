@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import type * as Core from '@diffra/core'
 import type { ModelEndpoint, RulePack, SessionConfig } from '@diffra/core/types'
 import { apiKeyOf, type EvalModel } from './config.ts'
-import { CORE_DIST } from './proc.ts'
+import { CORE_DIST, EVAL_ENV } from './proc.ts'
 
 // 用 core 构建好的 dist，和 node packages/core/dist/index.js 跑的是同一份代码；类型来自源码
 export const core = (await import(pathToFileURL(join(CORE_DIST, 'client.js')).href)) as typeof Core
@@ -22,7 +22,7 @@ export interface CoreProcess {
 // 每道题起一个独立的 core 进程，会话记录和用量记录写到这道题的临时目录
 export async function startCore(dataDir: string, handlers: Core.CoreClientHandlers): Promise<CoreProcess> {
   const child = spawn(process.execPath, [join(CORE_DIST, 'index.js')], {
-    env: { ...process.env, DIFFRA_SESSIONS_DIR: join(dataDir, 'sessions'), DIFFRA_USAGE_DIR: join(dataDir, 'usage') },
+    env: { ...EVAL_ENV, DIFFRA_SESSIONS_DIR: join(dataDir, 'sessions'), DIFFRA_USAGE_DIR: join(dataDir, 'usage') },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   })

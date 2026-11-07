@@ -9,3 +9,6 @@ playwright-report/
 # 评测：本机的模型配置和每次运行的结果
 packages/eval/eval.config.json
 packages/eval/results/
+
+# 发布脚本的服务器连接方式（本机）
+packages/desktop/publish.config.json

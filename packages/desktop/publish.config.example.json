@@ -1,0 +1,8 @@
+{
+  "ssh": {
+    "target": "root@203.0.113.10",
+    "port": 55488,
+    "identityFile": "~/.ssh/diffra_server_ed25519"
+  },
+  "remoteDir": "/var/www/diffra-update/win"
+}

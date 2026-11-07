@@ -8,13 +8,16 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    // scripts/ 用 node 直接跑 TS，导入要写 .ts 后缀
+    "allowImportingTsExtensions": true
   },
   "include": [
     "electron.vite.config.ts",
     "electron-builder.config.ts",
     "playwright.config.ts",
     "e2e",
+    "scripts",
     "src/main",
     "src/preload",
     "src/shared"

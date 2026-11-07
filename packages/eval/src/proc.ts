@@ -7,6 +7,10 @@ export const CORE_DIST = resolve(EVAL_DIR, '../core/dist')
 // 输出只留最后这么多字，报告里够看出错在哪
 const MAX_OUTPUT_CHARS = 8000
 
+// 题目里的 Python 会打印中文：Windows 英文系统（比如 CI）往管道输出默认用 cp1252，打印中文直接报错。
+// 评测跑的所有命令（检查、隐藏测试、智能体所在的 core 进程）统一用 UTF-8，结果不随机器的语言变
+export const EVAL_ENV: NodeJS.ProcessEnv = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+
 export interface RunResult {
   exitCode: number | null
   timedOut: boolean
@@ -16,7 +20,7 @@ export interface RunResult {
 // 跑一个命令，合并 stdout 和 stderr，超时就结束它
 export function run(file: string, args: string[], options: { cwd: string; timeoutSeconds: number; env?: NodeJS.ProcessEnv }): Promise<RunResult> {
   return new Promise((resolvePromise) => {
-    const child = spawn(file, args, { cwd: options.cwd, env: options.env ?? process.env, windowsHide: true })
+    const child = spawn(file, args, { cwd: options.cwd, env: options.env ?? EVAL_ENV, windowsHide: true })
     let output = ''
     const append = (chunk: Buffer) => {
       output = (output + chunk.toString('utf8')).slice(-MAX_OUTPUT_CHARS * 2)
