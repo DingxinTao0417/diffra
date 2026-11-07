@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "name": "deepseek",
+      "protocol": "openai-compatible",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "modelId": "deepseek-chat",
+      "contextWindow": 128000,
+      "apiKeyEnv": "DIFFRA_EVAL_DEEPSEEK_KEY"
+    }
+  ],
+  "reviewer": null
+}

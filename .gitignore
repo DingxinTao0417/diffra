@@ -5,3 +5,7 @@ release/
 test-results/
 playwright-report/
 *.log
+
+# 评测：本机的模型配置和每次运行的结果
+packages/eval/eval.config.json
+packages/eval/results/

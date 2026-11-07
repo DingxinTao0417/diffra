@@ -1,0 +1,14 @@
+[
+  { "path": "app/auth.py", "line": 12, "ruleId": "SEC-KEY-2", "note": "密码用不加盐的 MD5 存储" },
+  { "path": "app/admin.py", "line": 16, "ruleId": "SEC-KEY-3", "note": "邀请码用 random 生成，可预测" },
+  {
+    "path": "app/notes.py",
+    "line": 24,
+    "ruleId": "SEC-AUTH-1",
+    "note": "笔记详情没校验笔记属于当前用户",
+    "alternatives": [{ "path": "app/repository.py", "line": 12 }]
+  },
+  { "path": "app/repository.py", "line": 17, "ruleId": "SEC-INJ-1", "note": "搜索关键词拼进 SQL" },
+  { "path": "app/notes.py", "line": 40, "ruleId": "SEC-INJ-4", "note": "附件名来自查询参数，没限制在附件目录里" },
+  { "path": "app/notes.py", "line": 46, "ruleId": "SEC-INJ-6", "note": "用 pickle 反序列化请求体" }
+]

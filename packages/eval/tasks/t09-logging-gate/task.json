@@ -1,0 +1,10 @@
+{
+  "id": "t09-logging-gate",
+  "title": "print 换成 logging（检查命令禁止 print）",
+  "category": "gate",
+  "language": "python",
+  "prompt": "app/importer.py 里全是 print 调试输出，改成用 logging：logger 用 logging.getLogger(__name__)，每行的处理过程记 debug，导入失败的行记 error 并带上行号和原始异常，最后记一条 info 汇总。",
+  "checks": { "afterEdit": null, "beforeFinish": "python scripts/check_no_print.py && python -m unittest discover -s tests -t ." },
+  "hidden": { "command": ["python", "-m", "unittest", "discover", "-s", "hidden", "-t", "."] },
+  "unchanged": ["scripts/check_no_print.py"]
+}

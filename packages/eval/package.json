@@ -1,0 +1,19 @@
+{
+  "name": "@diffra/eval",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Diffra 的评测集：自写的小项目题目，隐藏测试判分，命令行批量跑",
+  "type": "module",
+  "scripts": {
+    "eval": "pnpm --filter @diffra/core build && node src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --filter @diffra/core build && vitest run"
+  },
+  "devDependencies": {
+    "@diffra/core": "workspace:*",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0",
+    "zod": "^4.6.7"
+  }
+}

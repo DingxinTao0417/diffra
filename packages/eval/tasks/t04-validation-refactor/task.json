@@ -1,0 +1,9 @@
+{
+  "id": "t04-validation-refactor",
+  "title": "抽出重复的表单校验",
+  "category": "refactor",
+  "language": "python",
+  "prompt": "app/signup.py 和 app/profile.py 里邮箱、手机号、昵称的校验是复制粘贴的。把它们抽到 app/validators.py，提供 validate_email(value)、validate_phone(value)、validate_nickname(value)，有问题返回错误提示，没问题返回 None。两边都改成调用它们，行为（包括错误提示的文字）保持不变。",
+  "checks": { "afterEdit": null, "beforeFinish": "python -m unittest discover -s tests -t ." },
+  "hidden": { "command": ["python", "-m", "unittest", "discover", "-s", "hidden", "-t", "."] }
+}
