@@ -57,7 +57,7 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
           const info = ROLE_INFO[role]
           const ref = view.roles[role]
           return (
-            <div key={role} className="grid grid-cols-[14rem_1fr] items-center gap-4">
+            <div key={role} className="grid grid-cols-[17rem_1fr] items-center gap-4">
               <div>
                 <Label htmlFor={`role-${role}`}>{info.label}</Label>
                 <p className="text-xs text-muted-foreground">{info.description}</p>

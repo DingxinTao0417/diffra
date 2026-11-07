@@ -117,7 +117,7 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
               type="button"
               role="radio"
               aria-checked={transport === value}
-              className={cn('h-7 rounded-md px-3 text-[0.93rem]', transport === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+              className={cn('h-7 rounded-md px-3 text-sm', transport === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
               onClick={() => setTransport(value)}
             >
               {label}

@@ -450,8 +450,8 @@ export function Composer(props: ComposerProps) {
               >
                 <item.icon className="size-4 shrink-0 text-muted-foreground" />
                 <span className="shrink-0 font-medium">{item.label}</span>
-                <span className="min-w-0 flex-1 truncate text-[0.86rem] text-muted-foreground">{item.description}</span>
-                {item.badge && <span className="shrink-0 rounded border px-1 text-[0.72rem] text-muted-foreground">{item.badge}</span>}
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{item.description}</span>
+                {item.badge && <span className="shrink-0 rounded border px-1 text-xs text-muted-foreground">{item.badge}</span>}
               </div>
             </div>
           ))}
@@ -564,7 +564,7 @@ export function Composer(props: ComposerProps) {
 
 function Chip({ icon: Icon, label, removeLabel, onRemove }: { icon: LucideIcon; label: string; removeLabel: string; onRemove(): void }) {
   return (
-    <span className="flex h-6.5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 pr-0.5 pl-1.5 text-[0.86rem] text-primary" data-testid="composer-chip">
+    <span className="flex h-6.5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 pr-0.5 pl-1.5 text-xs text-primary" data-testid="composer-chip">
       <Icon className="size-3.5" />
       {label}
       <button type="button" aria-label={removeLabel} className="flex size-5 items-center justify-center rounded hover:bg-primary/15" onClick={onRemove}>
@@ -602,7 +602,7 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
           aria-label="命令权限模式"
           data-testid="permission-mode"
           className={cn(
-            'flex h-7.5 items-center gap-1.5 rounded-full border px-2.5 text-[0.93rem] hover:bg-muted',
+            'flex h-7.5 items-center gap-1.5 rounded-full border px-2.5 text-sm hover:bg-muted',
             mode === 'full' ? 'border-destructive/40 text-destructive' : 'text-foreground/80',
           )}
         >
@@ -611,7 +611,7 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
           <ChevronDown className="size-3" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-80">
+      <DropdownMenuContent align="start" className="w-[22rem]">
         {PERMISSION_MODES.map((item) => (
           <DropdownMenuItem key={item.mode} className="items-start gap-2 py-2" onSelect={() => onChange(item.mode)}>
             <div className="min-w-0 flex-1">
@@ -645,7 +645,7 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
           data-testid="model-menu"
           disabled={locked}
           title={locked ? '运行中不能切换模型' : '切换模型'}
-          className="flex h-7.5 max-w-72 items-center gap-1.5 rounded-full px-2.5 text-[0.93rem] text-foreground/80 hover:bg-muted disabled:opacity-60"
+          className="flex h-7.5 max-w-72 items-center gap-1.5 rounded-full px-2.5 text-sm text-foreground/80 hover:bg-muted disabled:opacity-60"
         >
           <Cpu className="size-3.5 shrink-0" />
           <span className="truncate">{label ?? '未选择模型'}</span>

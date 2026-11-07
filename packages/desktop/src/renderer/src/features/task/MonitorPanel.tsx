@@ -33,7 +33,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const checks = project?.checks
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col gap-4.5 overflow-y-auto border-l bg-sidebar/50 p-4 text-[0.93rem]" data-testid="monitor-panel">
+    <aside className="flex w-80 shrink-0 flex-col gap-4.5 overflow-y-auto border-l bg-sidebar/50 p-4 text-sm" data-testid="monitor-panel">
       <div className="flex items-center justify-between">
         <span className="font-semibold">任务监控</span>
         <span className="text-xs text-muted-foreground">

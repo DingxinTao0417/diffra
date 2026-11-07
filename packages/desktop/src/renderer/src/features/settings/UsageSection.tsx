@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { UsageSummary, UsageTotals } from '@diffra/core/types'
 import { cn } from 'cn'
+import { Segmented } from '@/components/ui/segmented'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
 import { openTask } from '@/state/actions'
@@ -8,11 +9,11 @@ import { useAppState } from '@/state/store'
 
 type Range = 'today' | 'week' | 'month30' | 'thisMonth'
 
-const RANGES: Array<{ id: Range; label: string }> = [
-  { id: 'today', label: '今天' },
-  { id: 'week', label: '近 7 天' },
-  { id: 'month30', label: '近 30 天' },
-  { id: 'thisMonth', label: '本月' },
+const RANGES: Array<{ value: Range; label: string }> = [
+  { value: 'today', label: '今天' },
+  { value: 'week', label: '近 7 天' },
+  { value: 'month30', label: '近 30 天' },
+  { value: 'thisMonth', label: '本月' },
 ]
 
 // 按本机时区算起点；终点是现在。core 按同一个时区划分每天
@@ -65,20 +66,7 @@ export function UsageSection() {
           <h1 className="text-xl font-semibold">用量</h1>
           <p className="text-sm text-muted-foreground">每次模型调用（编码和规范审查）的 token 数，按供应商返回的用量统计；从这个版本开始记录。</p>
         </div>
-        <div role="radiogroup" aria-label="统计范围" className="flex rounded-lg bg-muted p-0.5">
-          {RANGES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="radio"
-              aria-checked={item.id === range}
-              className={cn('h-7 rounded-md px-3 text-[0.93rem]', item.id === range ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-              onClick={() => setRange(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <Segmented label="统计范围" value={range} options={RANGES} onChange={(value) => setRange(value)} />
       </div>
 
       {error && (
@@ -199,7 +187,7 @@ function DailyChart({ days }: { days: UsageSummary['days'] }) {
             <TooltipRow label="调用" value={`${active.calls} 次`} />
           </div>
         )}
-        <div className="mt-1 flex gap-0.5 text-[0.7rem] text-muted-foreground" aria-hidden="true">
+        <div className="mt-1 flex gap-0.5 text-xs text-muted-foreground" aria-hidden="true">
           {days.map((day, index) => (
             <span key={day.date} className="min-w-0 flex-1 text-center whitespace-nowrap">
               {index % labelEvery === 0 || index === days.length - 1 ? day.date.slice(5).replace('-', '/') : ''}
@@ -254,7 +242,7 @@ function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
     <section>
       <div className="mb-2 font-medium">{title}</div>
       <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full text-[0.93rem]">
+        <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-normal">名称</th>

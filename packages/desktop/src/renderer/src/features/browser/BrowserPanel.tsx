@@ -86,7 +86,7 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
             }}
             onBlur={() => setEditing(false)}
             onChange={(event) => setAddress(event.target.value)}
-            className="h-7.5 w-full rounded-md bg-muted px-2.5 text-[0.86rem] outline-none focus:bg-background focus:ring-1 focus:ring-ring/60"
+            className="h-7.5 w-full rounded-md bg-muted px-2.5 text-sm outline-none focus:bg-background focus:ring-1 focus:ring-ring/60"
           />
         </form>
         <ToolButton label="在系统浏览器里打开" disabled={!state?.url} onClick={() => window.diffra.browserCommand(sessionId, 'external')}>

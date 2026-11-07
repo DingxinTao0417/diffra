@@ -36,7 +36,7 @@ export function TaskMenu({ sessionId, title, project, archived, open, onOpenChan
       {/* 非模态：菜单关闭和对话框打开同时发生时，模态菜单会把页面留在不可点击的状态 */}
       <DropdownMenu modal={false} open={open} onOpenChange={onOpenChange}>
         <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-        <DropdownMenuContent align={align} className="w-52">
+        <DropdownMenuContent align={align} className="w-auto min-w-52">
           <DropdownMenuItem onSelect={() => setRenaming(true)}>
             <Pencil />
             重命名

@@ -72,7 +72,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-7 overflow-y-auto px-6 py-12">
       <div className="space-y-2 text-center">
-        <h1 className="text-[2rem] font-semibold tracking-tight">要做什么？</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">要做什么？</h1>
         <p className="text-muted-foreground">描述任务，Diffra 会在项目里读代码、改代码、跑检查，做完给你看改动。</p>
       </div>
 
@@ -99,7 +99,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             </button>
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-3.5 px-1.5 text-[0.93rem] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-3.5 px-1.5 text-sm text-muted-foreground">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button

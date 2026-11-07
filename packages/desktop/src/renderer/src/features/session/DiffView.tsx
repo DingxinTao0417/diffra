@@ -29,7 +29,7 @@ export function DiffView({ path, oldText, newText, projectPath, status }: DiffVi
   const [open, setOpen] = useState(true)
 
   return (
-    <div className="overflow-hidden rounded-[10px] border text-[0.93rem]" data-testid="diff-view">
+    <div className="overflow-hidden rounded-[10px] border text-sm" data-testid="diff-view">
       <button type="button" className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left" onClick={() => setOpen(!open)}>
         {status}
         <span>{oldText === null ? '新建' : '编辑'}</span>

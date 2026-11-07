@@ -23,11 +23,11 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
 
   return (
     <aside className="flex w-[min(52%,760px)] min-w-96 shrink-0 flex-col border-l" data-testid="review-panel">
-      <div className="flex flex-wrap items-center gap-2.5 border-b px-4 py-2.5 text-[0.93rem]">
+      <div className="flex flex-wrap items-center gap-2.5 border-b px-4 py-2.5 text-sm">
         <span className="font-semibold">审阅</span>
         <select
           aria-label="审阅范围"
-          className="h-7 rounded-md border bg-background px-2 text-[0.93rem]"
+          className="h-7 rounded-md border bg-background px-2 text-sm"
           value={sinceTurnId ?? ''}
           onChange={(event) => setSince(event.target.value)}
         >
@@ -77,7 +77,7 @@ function FileCard({ file }: { file: FileDiff }) {
   const [open, setOpen] = useState(true)
   return (
     <div className="overflow-hidden rounded-[10px] border" data-testid="review-file">
-      <button type="button" className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left text-[0.93rem]" onClick={() => setOpen(!open)}>
+      <button type="button" className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left text-sm" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         <span className="min-w-0 truncate font-mono text-xs">{file.path}</span>
         {STATUS_LABELS[file.status] && <span className="shrink-0 text-xs text-muted-foreground">{STATUS_LABELS[file.status]}</span>}

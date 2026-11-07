@@ -210,7 +210,7 @@ function UsageMeter({ usage }: { usage: Usage }) {
           上下文 {percent}%
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-3 text-[0.93rem]">
+      <PopoverContent align="end" className="w-80 space-y-3 text-sm">
         <div className="flex items-center">
           <span className="font-medium">上下文</span>
           <span className="ml-auto text-muted-foreground">

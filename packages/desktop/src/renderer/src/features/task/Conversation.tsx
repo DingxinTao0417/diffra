@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PromptImage, StopReason, TaskProgressView } from '@diffra/core/types'
 import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
@@ -378,7 +379,7 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
           data-testid="notice"
           role={item.severity === 'error' ? 'alert' : undefined}
           className={cn(
-            'rounded-[10px] border px-3 py-2 text-[0.93rem]',
+            'rounded-[10px] border px-3 py-2 text-sm',
             item.severity === 'error' && 'border-destructive/30 bg-destructive/5 text-destructive',
             item.severity === 'warning' && 'border-warning/30 bg-warning/5',
           )}
@@ -394,7 +395,7 @@ function Thought({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const preview = text.trim().split(/\r?\n/)[0] ?? ''
   return (
-    <div className="text-[0.93rem] text-muted-foreground">
+    <div className="text-sm text-muted-foreground">
       <button type="button" className="flex max-w-full items-center gap-1.5 hover:text-foreground" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
         <span className="truncate">思考{preview && !open ? ` · ${preview}` : ''}</span>
@@ -418,7 +419,7 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
   const expanded = open ?? busy
   return (
     <div className="flex flex-col gap-1.5">
-      <button type="button" className="flex items-center gap-1.5 self-start text-[0.93rem] text-muted-foreground hover:text-foreground" onClick={() => setOpen(!expanded)}>
+      <button type="button" className="flex items-center gap-1.5 self-start text-sm text-muted-foreground hover:text-foreground" onClick={() => setOpen(!expanded)}>
         {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}
         {busy && <LoaderCircle className="size-3 animate-spin" />}
@@ -439,7 +440,7 @@ function ToolStep({ item }: { item: ToolItem }) {
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
   return (
-    <div className="text-[0.93rem]" data-testid="tool-call" data-kind="tool" data-status={item.status}>
+    <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status}>
       <button type="button" className="flex max-w-full items-center gap-2 text-left text-foreground/85" onClick={() => setOpen(!open)} disabled={!output}>
         <StatusIcon status={item.status} />
         <span className="shrink-0 text-muted-foreground">{action}</span>
@@ -466,13 +467,13 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
         value={text}
         rows={Math.min(24, text.split('\n').length + 1)}
         onChange={(event) => setText(event.target.value)}
-        className="w-full resize-y rounded-md border bg-background px-3 py-2 text-[0.93rem] leading-relaxed outline-none focus:border-ring/60"
+        className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-ring/60"
       />
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           disabled={task.running || text.trim() === ''}
-          className="h-8 rounded-lg bg-primary px-3.5 text-[0.93rem] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+          className="h-8 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
           onClick={execute}
         >
           按计划执行
@@ -495,7 +496,7 @@ function CompactionRow({ item }: { item: ToolItem }) {
   const [headline = '', ...rest] = text.split('\n')
   const detail = rest.join('\n').trim()
   return (
-    <div className="text-[0.93rem]" data-testid="tool-call" data-kind="compaction" data-status={item.status}>
+    <div className="text-sm" data-testid="tool-call" data-kind="compaction" data-status={item.status}>
       <button type="button" className="flex max-w-full items-start gap-2 text-left text-foreground/85" onClick={() => setOpen(!open)} disabled={!detail}>
         <StatusIcon status={item.status} className="mt-1" />
         <span className="shrink-0 text-muted-foreground">上下文压缩</span>
@@ -557,7 +558,7 @@ function CheckRow({ item }: { item: ToolItem }) {
   const output = textOf(item)
   const result = item.status === 'completed' ? '通过' : item.status === 'failed' ? '没通过' : '运行中…'
   return (
-    <div className="text-[0.93rem]" data-testid="tool-call" data-kind="check" data-status={item.status}>
+    <div className="text-sm" data-testid="tool-call" data-kind="check" data-status={item.status}>
       <button type="button" className="flex max-w-full items-center gap-2 text-left" onClick={() => setOpen(!open)} disabled={!output}>
         <StatusIcon status={item.status} />
         <span className="shrink-0 text-muted-foreground">{label}</span>
@@ -576,7 +577,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   const common = { 'data-testid': 'tool-call', 'data-kind': 'review', 'data-status': item.status }
   if (item.status !== 'completed' && item.status !== 'failed') {
     return (
-      <div {...common} className="flex items-center gap-2 text-[0.93rem] text-muted-foreground">
+      <div {...common} className="flex items-center gap-2 text-sm text-muted-foreground">
         <StatusIcon status={item.status} />
         规范审查中…
       </div>
@@ -584,7 +585,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   }
   if (item.status === 'completed') {
     return (
-      <div {...common} className="flex items-start gap-2 text-[0.93rem]">
+      <div {...common} className="flex items-start gap-2 text-sm">
         <StatusIcon status="completed" className="mt-1" />
         <span className="shrink-0 text-muted-foreground">规范审查</span>
         <span className="whitespace-pre-wrap">{text}</span>
@@ -595,7 +596,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   const findings = lines.map((line) => FINDING_PATTERN.exec(line))
   const count = findings.filter(Boolean).length
   return (
-    <div {...common} className="flex flex-col gap-1.5 rounded-[10px] border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-[0.93rem]">
+    <div {...common} className="flex flex-col gap-1.5 rounded-[10px] border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-sm">
       <div className="flex items-center gap-2 font-medium text-destructive">
         <X className="size-3.5" strokeWidth={2.6} />
         {count > 0 ? `规范审查 · ${count} 处问题，已打回` : '规范审查'}
@@ -628,7 +629,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
   const common = { 'data-testid': 'tool-call', 'data-kind': 'security', 'data-status': item.status }
   if (item.status !== 'completed' && item.status !== 'failed') {
     return (
-      <div {...common} className="flex items-center gap-2 text-[0.93rem] text-muted-foreground">
+      <div {...common} className="flex items-center gap-2 text-sm text-muted-foreground">
         <StatusIcon status={item.status} />
         {item.title}中…
       </div>
@@ -641,7 +642,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
   const findings = rows.filter((row) => row.match)
   if (findings.length === 0) {
     return (
-      <div {...common} className={cn('flex items-start gap-2 text-[0.93rem]', item.status === 'failed' && 'text-muted-foreground')}>
+      <div {...common} className={cn('flex items-start gap-2 text-sm', item.status === 'failed' && 'text-muted-foreground')}>
         <StatusIcon status={item.status === 'failed' ? 'failed' : 'completed'} className="mt-1" />
         <span className="shrink-0 text-muted-foreground">{item.title}</span>
         <span className="whitespace-pre-wrap">{text}</span>
@@ -653,7 +654,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     <div
       {...common}
       className={cn(
-        'flex flex-col gap-1.5 rounded-[10px] border px-3 py-2.5 text-[0.93rem]',
+        'flex flex-col gap-1.5 rounded-[10px] border px-3 py-2.5 text-sm',
         high > 0 ? 'border-destructive/25 bg-destructive/5' : 'border-warning/25 bg-warning/5',
       )}
     >
@@ -729,13 +730,13 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
   }
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3 text-[0.93rem]" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
+    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3 text-sm" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
       <div className="font-medium">深度扫描报告</div>
       <p className="text-muted-foreground">{summary}</p>
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
       {findings.map((finding, index) => (
         <label key={index} className="flex cursor-pointer gap-2.5 rounded-lg border px-3 py-2" data-testid="deep-scan-finding">
-          <input type="checkbox" className="mt-1" checked={selected.has(index)} onChange={() => toggle(index)} />
+          <Checkbox className="mt-0.5" checked={selected.has(index)} onCheckedChange={() => toggle(index)} />
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className={cn('rounded px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
@@ -791,7 +792,7 @@ function FinishCard({ item, files, projectPath, onRestore, progress }: { item: T
         {passed ? '本轮交付' : '还没完成'}
         {passed && files.length > 0 && <span className="ml-auto text-xs font-normal text-muted-foreground">{files.length} 个文件 · 净改动</span>}
       </div>
-      {text && (passed ? <Markdown text={text} /> : <p className="text-[0.93rem] text-muted-foreground">{text}</p>)}
+      {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
       </div>}
@@ -805,7 +806,7 @@ function FinishCard({ item, files, projectPath, onRestore, progress }: { item: T
             <button
               key={file.path}
               type="button"
-              className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[0.93rem] hover:bg-muted"
+              className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm hover:bg-muted"
               onClick={() => store.set((state) => ({ ...state, panel: 'review' }))}
             >
               <File className="size-3.5" />

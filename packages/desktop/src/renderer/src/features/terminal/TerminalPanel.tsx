@@ -51,7 +51,7 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={() => (drag.current = null)}
       />
-      <div className="flex h-8 shrink-0 items-center gap-1 px-3 text-[0.93rem]">
+      <div className="flex h-8 shrink-0 items-center gap-1 px-3 text-sm">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="终端">
           {terminals.map((tab) => (
             <div

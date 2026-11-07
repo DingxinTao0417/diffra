@@ -5,8 +5,25 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: system-ui, "Microsoft YaHei UI", sans-serif;
+  /* 拉丁字母用 Segoe UI（静态字体只有 400 和 600，font-medium 和中文一样按 400 画，不会出现中英粗细不一），中文回落到雅黑 */
+  --font-sans: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
+  /*
+   * 字号阶梯（标准档根字号 14px 时）：12 辅助 / 13 控件 / 14 正文 / 16 卡片和弹窗标题 / 20 页标题 / 26 首页标题。
+   * 仍按 rem 跟「文字大小」设置整体缩放，但中文最小不低于 12px，小字档也一样
+   */
+  --text-xs: max(12px, 0.857rem);
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.929rem;
+  --text-sm--line-height: 1.54;
+  --text-base: 1rem;
+  --text-base--line-height: 1.57;
+  --text-lg: 1.143rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.429rem;
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.857rem;
+  --text-2xl--line-height: 1.3;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -29,19 +46,35 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-soft: var(--soft);
   --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
   --color-warning: var(--warning);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-diff-add: var(--diff-add-bg);
+  --color-diff-del: var(--diff-del-bg);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  /* 圆角用固定像素，不随文字大小缩放；按「控件 < 容器 < 浮层和输入框」分级 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 14px;
+  /* 卡片不加阴影，只用 1px 边线；只有浮层和弹窗有阴影 */
+  --shadow-overlay: var(--elevation-overlay);
+  --shadow-modal: var(--elevation-modal);
 }
 
 /*
  * 配色：<html> 上的 data-palette 选强调色和侧栏底色，.dark 切深色。
- * soft 是选中项、高亮的浅底色；success / warning 用于状态。
+ * accent 是悬停和键盘高亮的底色，soft 是「当前项」的底色。
+ * primary 只用于下一步动作（发送、允许、审阅）；success 是固定的中性绿，只给验证通过的结果，不随配色变。
+ * 文字只有 foreground 和 muted-foreground 两级。
  */
 :root {
-  --radius: 0.625rem;
+  --radius: 8px;
   --content-max: 48rem;
   --background: #ffffff;
   --foreground: #1c1c1a;
@@ -49,19 +82,30 @@
   --card-foreground: #1c1c1a;
   --popover: #ffffff;
   --popover-foreground: #1c1c1a;
-  --secondary: #f2f2ee;
+  --secondary: #efefea;
   --secondary-foreground: #1c1c1a;
-  --muted: #f3f3f0;
+  --muted: #f5f5f2;
   --muted-foreground: #5f5e58;
   --accent: #eaeae5;
   --accent-foreground: #1c1c1a;
   --destructive: #b42318;
+  --destructive-soft: #fdeceb;
   --border: #e7e6e1;
   --input: #dcdbd5;
   --sidebar: #f5f5f2;
   --sidebar-border: #e7e6e1;
-  --success: #2e6b57;
+  --success: #1f7a4c;
+  --success-soft: #e9f6ee;
   --warning: #b54708;
+  --warning-soft: #fdf3e8;
+  --diff-add-bg: #e9f6ee;
+  --diff-del-bg: #fdeeec;
+  --chart-1: var(--primary);
+  --chart-2: #4f7cac;
+  --chart-3: var(--warning);
+  --chart-4: #9a9992;
+  --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
+  --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.18);
   --primary: #2e6b57;
   --primary-foreground: #ffffff;
   --soft: #e6efea;
@@ -90,12 +134,13 @@
 }
 
 /* :root.dark 比 :root[data-palette] 晚出现、优先级相同，深色时盖掉配色里的浅色侧栏 */
+/* 深色靠表面亮度分层：主区 < 卡片 < 浮层 */
 :root.dark {
   --background: #161615;
   --foreground: #ecece8;
-  --card: #1d1d1b;
+  --card: #1f1f1d;
   --card-foreground: #ecece8;
-  --popover: #1f1f1d;
+  --popover: #262624;
   --popover-foreground: #ecece8;
   --secondary: #262624;
   --secondary-foreground: #ecece8;
@@ -104,12 +149,21 @@
   --accent: #2a2a27;
   --accent-foreground: #ecece8;
   --destructive: #f2786d;
+  --destructive-soft: #3a1d1a;
   --border: #2e2e2b;
   --input: #3a3a36;
   --sidebar: #1b1b19;
   --sidebar-border: #2a2a27;
-  --success: #6dbb9c;
+  --success: #5cc48c;
+  --success-soft: #15291f;
   --warning: #e3a35c;
+  --warning-soft: #2f2416;
+  --diff-add-bg: #15291f;
+  --diff-del-bg: #2f1a18;
+  --chart-2: #7ea6d6;
+  --chart-4: #8a8983;
+  --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.4);
+  --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.55);
   --primary: #5fa88c;
   --primary-foreground: #10110f;
   --soft: #20332b;
@@ -167,12 +221,64 @@ body[data-scroll-locked] .title-bar {
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
+    /* 中文说明不在最后一行只剩一两个字 */
+    text-wrap: pretty;
+  }
+  /* 键盘焦点统一画一圈实色描边；鼠标点击不画。原语自己写了 focus-visible:ring 的照旧用自己的 */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+  /* 图标描边比 lucide 默认的 2 细一点；代码里特意加粗的（勾、叉）不受影响 */
+  svg.lucide[stroke-width="2"] {
+    stroke-width: 1.75;
+  }
+}
+
+/*
+ * 滚动条：细的圆角滑块、透明轨道、没有上下箭头。
+ * 不能再设 scrollbar-width / scrollbar-color，设了以后 Chromium 会忽略下面这些 ::-webkit-scrollbar 规则
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 30%, transparent) padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* 系统设置了减少动态效果时去掉浮层的缩放、滑入和过渡；表示「运行中」的转圈保留 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

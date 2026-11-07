@@ -17,6 +17,7 @@ import {
 } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { Segmented } from '@/components/ui/segmented'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { McpSettings } from '@/features/mcp/McpSettings'
@@ -80,7 +81,7 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           placeholder="搜索设置"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className="mx-1 my-2 h-8 rounded-lg border bg-background px-2.5 text-[0.93rem] outline-none focus:border-ring/60"
+          className="mx-1 my-2 h-8 rounded-lg border bg-background px-2.5 text-sm outline-none focus:border-ring/60"
         />
         {groups.map((group) => (
           <div key={group.name} className="mb-2 flex flex-col gap-0.5">
@@ -156,25 +157,6 @@ function SettingRow({ label, hint, children }: { label: string; hint?: string; c
   )
 }
 
-function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string }>; onChange(value: T): void }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex rounded-lg bg-muted p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={option.value === value}
-          className={cn('h-7 rounded-md px-3 text-[0.93rem]', option.value === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 const SHORTCUTS = [
   ['Ctrl+N', '新任务'],
   ['Ctrl+K', '搜索任务'],
@@ -200,7 +182,7 @@ function GeneralSection() {
         <div className="mb-2 font-medium">快捷键</div>
         <div className="divide-y rounded-lg border">
           {SHORTCUTS.map(([keys, action]) => (
-            <div key={keys} className="flex items-center px-3 py-2 text-[0.93rem]">
+            <div key={keys} className="flex items-center px-3 py-2 text-sm">
               <span className="flex-1">{action}</span>
               <kbd className="rounded border bg-muted px-1.5 font-mono text-xs">{keys}</kbd>
             </div>
@@ -278,7 +260,7 @@ function AppearanceSection() {
             <SelectContent><SelectItem value="sans">无衬线</SelectItem><SelectItem value="serif">衬线</SelectItem></SelectContent>
           </Select>
         </SettingRow>
-        <SettingRow label="文字大小" hint="调整对话内容和输入框的字号。">
+        <SettingRow label="文字大小" hint="调整整个界面的文字和间距大小。">
           <Select value={appearance.fontSize} onValueChange={(value) => { const fontSize = FONT_SIZES.find((item) => item === value); if (fontSize) void change({ fontSize }) }}>
             <SelectTrigger aria-label="文字大小" className="w-32"><SelectValue /></SelectTrigger>
             <SelectContent>{FONT_SIZES.map((value) => <SelectItem key={value} value={value}>{FONT_LABELS[value]}</SelectItem>)}</SelectContent>
@@ -375,7 +357,9 @@ function SecuritySection() {
               </div>
               <div className="text-sm text-muted-foreground">{level.description}</div>
             </div>
-            <Switch label={level.label} checked={security[level.key]} onChange={(value) => void change(level.key, value)} />
+            <div className="flex h-lh items-center">
+              <Switch label={level.label} checked={security[level.key]} onChange={(value) => void change(level.key, value)} />
+            </div>
           </div>
         ))}
       </div>
@@ -482,7 +466,7 @@ function StorageSection() {
 
 function ArchivedRow({ task }: { task: StoredSessionSummary }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 text-[0.93rem]" data-testid="archived-task">
+    <div className="flex items-center gap-3 px-3 py-2 text-sm" data-testid="archived-task">
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
       <span className="shrink-0 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
       <span className="w-12 shrink-0 text-right text-xs text-muted-foreground">{formatTime(task.updatedAt)}</span>

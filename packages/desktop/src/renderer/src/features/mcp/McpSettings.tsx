@@ -39,7 +39,7 @@ export function McpSettings() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">MCP 服务器</h1>
           <p className="text-sm text-muted-foreground">给智能体接上外部工具和 prompt。本地命令在项目目录里启动，所有项目共用；新建或重新打开的任务生效。</p>

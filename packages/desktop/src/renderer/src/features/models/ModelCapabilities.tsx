@@ -33,8 +33,8 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0 }: { mo
       <Field id={`${prefix}-id`} label="Model ID"><Input id={`${prefix}-id`} value={model.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => onChange({ ...model, id: event.target.value })} /></Field>
       <fieldset className="space-y-2">
         <legend className="mb-2 text-sm font-medium">支持的上下文窗口</legend>
-        <div className="flex flex-wrap gap-2">
-          {windowOptions.map((size) => <label key={size} className={cn('cursor-pointer rounded-md border px-2.5 py-1 text-xs', windows.includes(size) ? 'border-primary/50 bg-soft text-primary' : 'text-muted-foreground')}>
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+          {windowOptions.map((size) => <label key={size} className={cn('cursor-pointer rounded-md border px-1 py-1.5 text-center text-xs', windows.includes(size) ? 'border-primary/50 bg-soft text-primary' : 'text-muted-foreground')}>
             <input type="checkbox" className="mr-1 size-3 accent-primary" aria-label={`支持上下文 ${size}`} checked={windows.includes(size)} onChange={(event) => {
               const contextWindows = event.target.checked ? [...windows, size] : windows.filter((value) => value !== size)
               onChange({ ...model, contextWindows, contextWindow: contextWindows.includes(model.contextWindow ?? 0) ? model.contextWindow : contextWindows[0] ?? null })
