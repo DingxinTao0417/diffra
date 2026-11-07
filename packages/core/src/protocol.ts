@@ -79,6 +79,15 @@ export interface SessionModel {
   modelId: string
   contextWindow: number | null
   provider: ModelProvider | null
+  // 用户在模型设置里打开了「图片」：提问可以带图片
+  supportsImages?: boolean
+}
+
+// 提问里带的图片，base64
+export const PROMPT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
+export interface PromptImage {
+  mimeType: (typeof PROMPT_IMAGE_TYPES)[number]
+  data: string
 }
 
 // session/new 的 _meta.diffra
@@ -99,6 +108,8 @@ export interface SessionConfig {
   limits: SessionLimits
   // 开着的插件：它们的 Skill、命令和 MCP 服务器
   plugins: PluginRef[]
+  // 客户端有内置浏览器：给模型浏览器工具，操作由客户端执行
+  browser?: boolean
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -166,6 +177,42 @@ export interface CommandInfo {
   body: string
 }
 
+// 智能体操作内置浏览器，core 通过 CLIENT_EXT_METHODS.browserAction 请求客户端执行
+export type BrowserAction =
+  | { action: 'navigate'; url: string }
+  | { action: 'snapshot' }
+  | { action: 'click'; ref: string }
+  | { action: 'type'; ref: string; text: string; submit: boolean }
+  | { action: 'press'; key: string }
+  | { action: 'console' }
+  | { action: 'screenshot' }
+
+export type BrowserActionParams = BrowserAction & { sessionId: string }
+
+// text 给模型看；截图时带 image
+export interface BrowserActionResult {
+  text: string
+  image: PromptImage | null
+}
+
+// 开发服务器在客户端的终端里跑，用户看得见、能停；一个任务最多一个
+export type DevServerParams =
+  | { sessionId: string; action: 'start'; command: string; cwd: string }
+  | { sessionId: string; action: 'logs' }
+  | { sessionId: string; action: 'stop' }
+
+export interface DevServerResult {
+  text: string
+  // 输出里看到的本地地址
+  url: string | null
+}
+
+// core 请求客户端做的事
+export const CLIENT_EXT_METHODS = {
+  browserAction: '_diffra/browser/action',
+  devServer: '_diffra/devserver',
+} as const
+
 export interface McpPromptInfo {
   name: string
   description: string
@@ -196,6 +243,8 @@ export interface StoredTurn {
   updates: SessionUpdate[]
   // 用户在输入框里给这一轮选的 Skill
   skills: string[]
+  // 这一轮提问带的图片
+  images: PromptImage[]
 }
 
 // session/load 响应的 _meta.diffra

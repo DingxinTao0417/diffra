@@ -1,6 +1,6 @@
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
-import { type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
+import { type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -44,6 +44,7 @@ const api: DiffraApi = {
   resizeTerminal: (id, size) => ipcRenderer.send(IPC_CHANNELS.terminalResize, id, size),
   killTerminal: (id) => ipcRenderer.invoke(IPC_CHANNELS.terminalKill, id),
   onTerminalData: (listener) => subscribe<{ id: string; data: string }>(IPC_CHANNELS.terminalData, listener),
+  onTerminalOpened: (listener) => subscribe<{ id: string; cwd: string; shell: string }>(IPC_CHANNELS.terminalOpened, listener),
   onTerminalExit: (listener) => subscribe<{ id: string; exitCode: number }>(IPC_CHANNELS.terminalExit, listener),
   savePreferences: (change) => ipcRenderer.invoke(IPC_CHANNELS.preferencesSave, change),
   openExternal: (url) => ipcRenderer.invoke(IPC_CHANNELS.openExternal, url),
@@ -65,6 +66,12 @@ const api: DiffraApi = {
   setWindowChrome: (chrome) => ipcRenderer.invoke(IPC_CHANNELS.windowChrome, chrome),
   popupMenu: (position) => ipcRenderer.invoke(IPC_CHANNELS.menuPopup, position),
   onMenuCommand: (listener) => subscribe<MenuCommand>(IPC_CHANNELS.menuCommand, listener),
+  setBrowserBounds: (sessionId, rect) => ipcRenderer.send(IPC_CHANNELS.browserBounds, sessionId, rect),
+  browserNavigate: (sessionId, url) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, sessionId, url),
+  browserCommand: (sessionId, command) => ipcRenderer.send(IPC_CHANNELS.browserCommand, sessionId, command),
+  getBrowserState: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.browserGetState, sessionId),
+  onBrowserState: (listener) => subscribe<BrowserState>(IPC_CHANNELS.browserState, listener),
+  onBrowserActivity: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.browserActivity, listener),
   installPluginFromFolder: () => ipcRenderer.invoke(IPC_CHANNELS.pluginInstallFolder),
   installPluginFromGit: (url) => ipcRenderer.invoke(IPC_CHANNELS.pluginInstallGit, url),
   setPluginEnabled: (pluginId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.pluginSetEnabled, pluginId, enabled),

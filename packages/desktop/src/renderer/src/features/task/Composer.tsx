@@ -1,6 +1,6 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CommandInfo, PermissionMode, SkillInfo, SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, Cpu, ListChecks, type LucideIcon, Plug, Shield, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
+import { type DragEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { CommandInfo, PermissionMode, PromptImage, SkillInfo, SkillSource } from '@diffra/core/types'
+import { ArrowUp, Check, ChevronDown, Cpu, ImagePlus, ListChecks, type LucideIcon, Plug, Shield, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -15,6 +15,7 @@ import {
 import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { errorMessage } from '@/lib/errors'
 import { formatTokens } from '@/lib/format'
+import { imageUrl, MAX_PROMPT_IMAGES, prepareImage } from '@/lib/images'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
 import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
@@ -51,7 +52,7 @@ interface ComposerProps {
   planMode: boolean
   onPlanModeChange(planMode: boolean): void
   // 返回 false 表示没发出去，输入框里的内容和选的目标、Skill 保留
-  onSend(text: string, extras: { goal: boolean; skills: string[] }): boolean | Promise<boolean>
+  onSend(text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }): boolean | Promise<boolean>
   onStop?(): void
 }
 
@@ -94,6 +95,19 @@ export function Composer(props: ComposerProps) {
   const [sending, setSending] = useState(false)
   const [goal, setGoal] = useState(false)
   const [skills, setSkills] = useState<SkillInfo[]>([])
+  // 粘贴、拖进来或点按钮加的图片，已经缩小、转成 WebP
+  const [images, setImages] = useState<Array<PromptImage & { id: string }>>([])
+  const [dragging, setDragging] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  // 当前模型打开了「图片」没有；对不上设置里的模型时为 null，交给 core 判断
+  const imagesSupported = useAppState((state) => {
+    const providers = state.settings?.providers ?? []
+    for (const provider of providers) {
+      const model = provider.models.find((item) => `${provider.name} / ${item.id}` === props.modelLabel)
+      if (model) return model.images
+    }
+    return null
+  })
   // 按了 Esc 的那个「/」，换一个再打开
   const [dismissed, setDismissed] = useState<number | null>(null)
   const [active, setActive] = useState(0)
@@ -255,15 +269,42 @@ export function Composer(props: ComposerProps) {
     pendingCaret.current = null
   }, [draft])
 
+  const addImages = async (files: File[]) => {
+    const room = MAX_PROMPT_IMAGES - images.length
+    if (room <= 0) return showToast(`一条消息最多带 ${MAX_PROMPT_IMAGES} 张图片`)
+    if (files.length > room) showToast(`一条消息最多带 ${MAX_PROMPT_IMAGES} 张图片，多出来的没有加`)
+    for (const file of files.slice(0, room)) {
+      try {
+        const image = await prepareImage(file)
+        setImages((current) => (current.length < MAX_PROMPT_IMAGES ? [...current, { ...image, id: crypto.randomUUID() }] : current))
+      } catch (error) {
+        showToast(`${file.name || '图片'}：${errorMessage(error)}`)
+      }
+    }
+  }
+
+  const imageFiles = (list: FileList | null) => [...(list ?? [])].filter((file) => file.type.startsWith('image/'))
+
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    setDragging(false)
+    const files = imageFiles(event.dataTransfer.files)
+    if (files.length === 0) return
+    event.preventDefault()
+    void addImages(files)
+  }
+
   const send = async () => {
     if (!canSend) return
+    if (props.planMode && images.length > 0) return showToast('出计划暂时不能带图片，关掉「先出计划」再发')
+    if (images.length > 0 && imagesSupported === false) return showToast('当前模型没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」')
     setSending(true)
     try {
-      if (await onSend(draft.trim(), { goal, skills: skills.map((skill) => skill.name) })) {
+      if (await onSend(draft.trim(), { goal, skills: skills.map((skill) => skill.name), images: images.map(({ id: _id, ...image }) => image) })) {
         setDraft('')
         setCaret(0)
         setGoal(false)
         setSkills([])
+        setImages([])
       }
     } finally {
       setSending(false)
@@ -311,7 +352,15 @@ export function Composer(props: ComposerProps) {
       className={cn(
         'relative flex flex-col border border-input bg-background focus-within:border-ring/60',
         large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-[14px]',
+        dragging && 'border-primary/60 bg-primary/5',
       )}
+      onDragOver={(event) => {
+        if (disabled || !event.dataTransfer.types.includes('Files')) return
+        event.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={onDrop}
     >
       {menuOpen && items.length > 0 && (
         <div
@@ -340,6 +389,23 @@ export function Composer(props: ComposerProps) {
                 <span className="min-w-0 flex-1 truncate text-[0.86rem] text-muted-foreground">{item.description}</span>
                 {item.badge && <span className="shrink-0 rounded border px-1 text-[0.72rem] text-muted-foreground">{item.badge}</span>}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {images.length > 0 && (
+        <div className={cn('flex flex-wrap gap-2', large ? 'px-4 pt-3.5' : 'px-3 pt-2.5')}>
+          {images.map((image, index) => (
+            <div key={image.id} className="relative" data-testid="composer-image">
+              <img src={imageUrl(image)} alt={`图片 ${index + 1}`} className="size-14 rounded-lg border object-cover" />
+              <button
+                type="button"
+                aria-label={`移除图片 ${index + 1}`}
+                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+              >
+                <X className="size-3" />
+              </button>
             </div>
           ))}
         </div>
@@ -373,6 +439,12 @@ export function Composer(props: ComposerProps) {
         }}
         onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
         onKeyDown={onKeyDown}
+        onPaste={(event) => {
+          const files = imageFiles(event.clipboardData.files)
+          if (files.length === 0) return
+          event.preventDefault()
+          void addImages(files)
+        }}
         className={cn(
           'max-h-[40vh] resize-none bg-transparent outline-none placeholder:text-muted-foreground',
           large ? 'px-4.5 pt-4 pb-2 text-[1.07rem]' : 'px-3.5 pt-3 pb-1',
@@ -393,6 +465,28 @@ export function Composer(props: ComposerProps) {
           <ListChecks className="size-3.5" />
           先出计划
         </button>
+        <button
+          type="button"
+          aria-label="添加图片"
+          title="添加图片，也可以直接粘贴或拖进输入框"
+          disabled={disabled}
+          className="flex size-7.5 items-center justify-center rounded-full text-foreground/70 hover:bg-muted disabled:opacity-40"
+          onClick={() => fileInput.current?.click()}
+        >
+          <ImagePlus className="size-4" />
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          hidden
+          data-testid="image-file-input"
+          onChange={(event) => {
+            void addImages(imageFiles(event.target.files))
+            event.target.value = ''
+          }}
+        />
         <div className="flex-1" />
         <ModelMenu label={props.modelLabel} locked={props.modelLocked} onChange={props.onModelChange} />
         <ArgumentsDialog

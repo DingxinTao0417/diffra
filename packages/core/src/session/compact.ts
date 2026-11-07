@@ -3,7 +3,8 @@ import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import type { ActiveModel, TurnIO } from './loop.js'
-import type { Session } from './session.js'
+import { SCREENSHOT_MARKER } from './browser.js'
+import { IMAGE_CHARS, messagesChars, type Session } from './session.js'
 
 // 最近这么多步（模型的回复和它调用工具的结果）原样保留，压缩只动更早的部分
 export const KEEP_RECENT_STEPS = 4
@@ -35,7 +36,7 @@ export type CompactionOutcome = { kind: 'ok' } | { kind: 'too-large' } | { kind:
 
 // 发给编码模型的字数：系统提示词、工具定义和对话，用来按比例估算 token 数
 export function contextChars(session: Session): number {
-  return session.systemPrompt.length + session.toolChars() + JSON.stringify(session.contextMessages()).length
+  return session.systemPrompt.length + session.toolChars() + messagesChars(session.contextMessages())
 }
 
 // 用上一次调用的实际输入 token 数，按字数比例估算下一次调用的大小；还没调用过时不知道
@@ -105,6 +106,15 @@ function omitOldToolOutputs(session: Session): { count: number; chars: number } 
   let chars = 0
   for (let index = start; index < end; index++) {
     const message = session.messages[index]
+    // 浏览器截图那条消息里的图片换成一句话
+    if (message?.role === 'user' && Array.isArray(message.content) && message.content[0]?.type === 'text' && message.content[0].text === SCREENSHOT_MARKER) {
+      const images = message.content.filter((part) => part.type === 'image').length
+      if (images === 0) continue
+      count += images
+      chars += images * IMAGE_CHARS
+      session.messages[index] = { role: 'user', content: `${OMITTED_PREFIX}: ${images} earlier browser screenshot(s). Take a new screenshot if you need to see the page.]` }
+      continue
+    }
     if (message?.role !== 'tool') continue
     const content = message.content.map((part) => {
       if (part.type !== 'tool-result') return part

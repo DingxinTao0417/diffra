@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { ipcMain, type WebContents } from 'electron'
+import type { DevServerParams, DevServerResult } from '@diffra/core/types'
+import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import { type IPty, spawn } from 'node-pty'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
@@ -16,7 +17,18 @@ const idSchema = z.string().min(1)
 interface TerminalEntry {
   pty: IPty
   owner: WebContents
+  // 开发服务器的终端留着最近的输出（去掉颜色控制符），给智能体看
+  output: string | null
+  exited: boolean
 }
+
+// 开发服务器：一个任务一个，跑在终端里
+const DEV_SERVER_WAIT_MS = 60_000
+const MAX_OUTPUT_CHARS = 64_000
+const LOG_LINES = 80
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)/g
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+\.localhost):\d+[^\s'"\x1b]*/
+const devServers = new Map<string, { terminalId: string; command: string }>()
 
 const terminals = new Map<string, TerminalEntry>()
 // 已经挂了清理监听的窗口
@@ -49,34 +61,99 @@ function ownedEntry(id: string, sender: WebContents): TerminalEntry | null {
   return entry && entry.owner === sender ? entry : null
 }
 
+async function openTerminal(
+  owner: WebContents,
+  cwd: string,
+  shell: { file: string; args: string[] },
+  size: { cols: number; rows: number },
+  keepOutput: boolean,
+): Promise<string> {
+  if (!(await stat(cwd).catch(() => null))?.isDirectory()) throw new Error(`目录不存在：${cwd}`)
+  if (terminals.size >= MAX_TERMINALS) throw new Error(`最多同时开 ${MAX_TERMINALS} 个终端，先关掉几个`)
+  // 页面刷新或窗口关掉时，这个窗口开的终端一起结束
+  if (!watched.has(owner)) {
+    watched.add(owner)
+    owner.on('destroyed', () => killOwnedBy(owner))
+    owner.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) killOwnedBy(owner)
+    })
+  }
+  const pty = spawn(shell.file, shell.args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: process.env })
+  const id = randomUUID()
+  const entry: TerminalEntry = { pty, owner, output: keepOutput ? '' : null, exited: false }
+  terminals.set(id, entry)
+  pty.onData((data) => {
+    if (entry.output !== null) entry.output = (entry.output + data.replace(ANSI, '')).slice(-MAX_OUTPUT_CHARS)
+    if (!owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalData, { id, data })
+  })
+  pty.onExit(({ exitCode }) => {
+    entry.exited = true
+    terminals.delete(id)
+    if (!owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalExit, { id, exitCode })
+  })
+  return id
+}
+
+const tail = (output: string) => output.split(/\r?\n/).slice(-LOG_LINES).join('\n').trim()
+
+function localUrl(output: string): string | null {
+  const match = LOCAL_URL.exec(output)
+  return match ? match[0].replace('0.0.0.0', 'localhost').replace(/[.,;)]+$/, '') : null
+}
+
+// 智能体起开发服务器：开一个终端标签页跑命令，等它打出本地地址（最多一分钟）
+export async function devServer(params: DevServerParams): Promise<DevServerResult> {
+  const running = devServers.get(params.sessionId)
+  const entry = running ? terminals.get(running.terminalId) : undefined
+  if (params.action === 'stop') {
+    if (!running || !entry) return { text: '这个任务没有在运行的开发服务器。', url: null }
+    devServers.delete(params.sessionId)
+    killTerminal(running.terminalId)
+    return { text: `已停止：${running.command}`, url: null }
+  }
+  if (params.action === 'logs') {
+    if (!running) return { text: '这个任务还没有起开发服务器。', url: null }
+    const output = entry?.output ?? ''
+    return { text: `${entry ? '运行中' : '已退出'}：${running.command}\n${tail(output) || '（还没有输出）'}`, url: localUrl(output) }
+  }
+  if (running && entry) {
+    const output = entry.output ?? ''
+    return { text: `已经在运行：${running.command}\n地址：${localUrl(output) ?? '还没看到'}\n${tail(output)}`, url: localUrl(output) }
+  }
+  const owner = BrowserWindow.getAllWindows()[0]?.webContents
+  if (!owner) throw new Error('应用窗口还没打开')
+  const shell =
+    process.platform === 'win32'
+      ? { file: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-Command', params.command] }
+      : { file: process.env.SHELL || '/bin/bash', args: ['-lc', params.command] }
+  const terminalId = await openTerminal(owner, params.cwd, shell, { cols: 120, rows: 30 }, true)
+  devServers.set(params.sessionId, { terminalId, command: params.command })
+  owner.send(IPC_CHANNELS.terminalOpened, { id: terminalId, cwd: params.cwd, shell: '开发服务器' })
+  const started = Date.now()
+  const opened = terminals.get(terminalId)
+  while (Date.now() - started < DEV_SERVER_WAIT_MS) {
+    const output = opened?.output ?? ''
+    const url = localUrl(output)
+    if (url) return { text: `已启动：${params.command}\n地址：${url}\n${tail(output)}`, url }
+    if (!opened || opened.exited) return { text: `命令退出了：${params.command}\n${tail(output) || '（没有输出）'}`, url: null }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  return { text: `已经在跑，但一分钟内没看到本地地址：${params.command}\n${tail(opened?.output ?? '')}\n可以用 dev_server_logs 再看输出。`, url: null }
+}
+
+export function stopDevServer(sessionId: string): void {
+  const running = devServers.get(sessionId)
+  if (!running) return
+  devServers.delete(sessionId)
+  killTerminal(running.terminalId)
+}
+
 export function registerTerminalIpc(): void {
   ipcMain.handle(IPC_CHANNELS.terminalCreate, async (event, rawCwd: unknown, rawSize: unknown) => {
     const cwd = parse(z.string().min(1), rawCwd)
-    const { cols, rows } = parse(sizeSchema, rawSize)
-    if (!(await stat(cwd).catch(() => null))?.isDirectory()) throw new Error(`目录不存在：${cwd}`)
-    if (terminals.size >= MAX_TERMINALS) throw new Error(`最多同时开 ${MAX_TERMINALS} 个终端，先关掉几个`)
-
-    const owner = event.sender
-    // 页面刷新或窗口关掉时，这个窗口开的终端一起结束
-    if (!watched.has(owner)) {
-      watched.add(owner)
-      owner.on('destroyed', () => killOwnedBy(owner))
-      owner.on('did-start-navigation', (details) => {
-        if (details.isMainFrame && !details.isSameDocument) killOwnedBy(owner)
-      })
-    }
-
+    const size = parse(sizeSchema, rawSize)
     const shell = defaultShell()
-    const pty = spawn(shell.file, shell.args, { name: 'xterm-256color', cols, rows, cwd, env: process.env })
-    const id = randomUUID()
-    terminals.set(id, { pty, owner })
-    pty.onData((data) => {
-      if (!owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalData, { id, data })
-    })
-    pty.onExit(({ exitCode }) => {
-      terminals.delete(id)
-      if (!owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalExit, { id, exitCode })
-    })
+    const id = await openTerminal(event.sender, cwd, shell, size, false)
     return { id, shell: basename(shell.file) }
   })
 

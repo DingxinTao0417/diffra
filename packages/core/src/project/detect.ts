@@ -109,6 +109,20 @@ async function detectNode(cwd: string, checks: DetectedCheck[], notes: string[])
   }
 }
 
+// 开发服务器的启动命令：package.json 里的 dev、start 或 serve 脚本
+export async function detectDevCommand(cwd: string): Promise<string | null> {
+  const raw = await readText(join(cwd, 'package.json'))
+  if (raw === null) return null
+  let pkg: PackageJson
+  try {
+    pkg = JSON.parse(raw) as PackageJson
+  } catch {
+    return null
+  }
+  const script = ['dev', 'start', 'serve'].find((name) => typeof pkg.scripts?.[name] === 'string')
+  return script ? runScript(await packageManagerOf(cwd, pkg), script) : null
+}
+
 export async function packageManagerOf(cwd: string, pkg: PackageJson): Promise<PackageManager> {
   if (typeof pkg.packageManager === 'string') {
     const name = pkg.packageManager.split('@')[0]

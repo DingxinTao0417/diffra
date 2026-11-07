@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
+import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
+import { normalizeUrl } from '../src/urls.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
-import { Session, type SessionOptions } from '../src/session/session.js'
+import { IMAGE_CHARS, messagesChars, Session, type SessionOptions } from '../src/session/session.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
 import { testMcpServer } from './mcp-fixture.js'
 
@@ -952,5 +953,105 @@ describe('MCP 工具', () => {
     const notices = io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
     expect(notices).toEqual(['MCP 服务器「broken」不可用，这一轮不用它的工具'])
     expect(model.doStreamCalls).toHaveLength(1)
+  })
+})
+
+describe('图片', () => {
+  test('提问带图片时作为图片发给模型；估算上下文时每张图按固定字数算，不按 base64 长度', async () => {
+    const model = scriptedModel([{ text: '好' }])
+    const session = await makeSession(model)
+    const data = 'A'.repeat(200_000)
+    await runTurn(session, { id: 'turn-1', text: '看图', images: [{ mimeType: 'image/webp', data }] }, recordingIO())
+    const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    expect(prompt).toContain('"mediaType":"image/webp"')
+    expect(prompt).toContain('看图')
+    const withImage = messagesChars(session.messages)
+    const textOnly = messagesChars([{ role: 'user', content: '看图' }, ...session.messages.slice(1)])
+    expect(withImage - textOnly).toBeGreaterThan(IMAGE_CHARS - 200)
+    expect(withImage - textOnly).toBeLessThan(IMAGE_CHARS + 200)
+  })
+})
+
+describe('内置浏览器工具', () => {
+  // 假的浏览器：记下收到的操作，按顺序回话
+  function fakeBrowser(replies: Array<BrowserActionResult | Error>) {
+    const actions: BrowserAction[] = []
+    return {
+      actions,
+      browser: async (action: BrowserAction) => {
+        actions.push(action)
+        const reply = replies.shift() ?? { text: 'ok', image: null }
+        if (reply instanceof Error) throw reply
+        return reply
+      },
+    }
+  }
+  const withBrowser = async (model: MockLanguageModelV4, images = false) => {
+    const session = await makeSession(model)
+    session.config = { ...session.config, browser: true, model: { ...session.config.model, supportsImages: images } }
+    return session
+  }
+
+  test('客户端有浏览器才给工具；截图只给能看图的模型', async () => {
+    const plain = await makeSession(scriptedModel([]))
+    expect(Object.keys(plain.toolSet()).filter((name) => name.startsWith('browser_'))).toEqual([])
+    const text = await withBrowser(scriptedModel([]))
+    expect(Object.keys(text.toolSet()).filter((name) => name.startsWith('browser_'))).toEqual([
+      'browser_navigate',
+      'browser_snapshot',
+      'browser_click',
+      'browser_type',
+      'browser_press_key',
+      'browser_console',
+    ])
+    expect(Object.keys((await withBrowser(scriptedModel([]), true)).toolSet())).toContain('browser_screenshot')
+  })
+
+  test('本地地址直接打开，外部网站先问，拒绝了告诉模型；读页面、点击的结果发给模型', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_navigate', input: { url: 'localhost:5173' } }] },
+      { toolCalls: [{ name: 'browser_snapshot', input: {} }] },
+      { toolCalls: [{ name: 'browser_click', input: { ref: 'e2' } }] },
+      { toolCalls: [{ name: 'browser_navigate', input: { url: 'example.com/docs' } }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model)
+    const fake = fakeBrowser([
+      { text: '已打开 http://localhost:5173/', image: null },
+      { text: '- button "保存" [ref=e2]', image: null },
+      new Error('页面上没有 e2，先重新读页面'),
+    ])
+    // recordingIO 的计数记在它自己身上，不能展开复制
+    const io = Object.assign(recordingIO('reject'), { browser: fake.browser })
+    await runTurn(session, { id: 'turn-1', text: '看看页面' }, io)
+
+    expect(fake.actions).toEqual([{ action: 'navigate', url: 'http://localhost:5173/' }, { action: 'snapshot' }, { action: 'click', ref: 'e2' }])
+    expect(io.permissionRequests).toBe(1)
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain('- button \\"保存\\" [ref=e2]')
+    expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('Browser action failed: 页面上没有 e2')
+    expect(JSON.stringify(model.doStreamCalls[4]?.prompt)).toContain('did not allow opening example.com')
+    const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
+    expect(titles).toEqual(['浏览器 打开 http://localhost:5173/', '浏览器 读取页面', '浏览器 点击 e2', '浏览器 打开 https://example.com/docs'])
+  })
+
+  test('截图跟在工具结果后面作为一条带图片的消息，工具结果里只有文字', async () => {
+    const model = scriptedModel([{ toolCalls: [{ name: 'browser_screenshot', input: {} }] }, { text: '看到了' }])
+    const session = await withBrowser(model, true)
+    const fake = fakeBrowser([{ text: '截图 1280x800', image: { mimeType: 'image/jpeg', data: 'SCREENSHOTDATA' } }])
+    await runTurn(session, { id: 'turn-1', text: '截个图' }, Object.assign(recordingIO(), { browser: fake.browser }))
+    const tool = session.messages.find((message) => message.role === 'tool')
+    expect(JSON.stringify(tool)).not.toContain('SCREENSHOTDATA')
+    const next = session.messages[session.messages.indexOf(tool!) + 1]
+    expect(next?.role).toBe('user')
+    expect(JSON.stringify(next)).toContain('SCREENSHOTDATA')
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('"mediaType":"image/jpeg"')
+  })
+
+  test('网址补全：本地按 http，其他按 https，只能 http(s)', () => {
+    expect(normalizeUrl('localhost:3000/a')).toBe('http://localhost:3000/a')
+    expect(normalizeUrl('127.0.0.1:8080')).toBe('http://127.0.0.1:8080/')
+    expect(normalizeUrl('example.com')).toBe('https://example.com/')
+    expect(normalizeUrl('http://example.com/x')).toBe('http://example.com/x')
+    expect(() => normalizeUrl('file:///C:/secret.txt')).toThrow('Only http(s)')
   })
 })

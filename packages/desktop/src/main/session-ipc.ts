@@ -30,6 +30,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
+import { PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -41,6 +42,8 @@ import {
 } from '../shared/ipc'
 import type { ModelRef, ProjectRuleSettings } from '../shared/settings'
 import { coreConnection } from './core-process'
+import { browserHost } from './browser'
+import { devServer, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
 import { mcpServersFor } from './mcp-servers'
 import { enabledPlugins } from './plugins-ipc'
@@ -64,7 +67,10 @@ const sessionOptionsSchema = z.object({
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
 const skillNamesSchema = z.array(z.string().min(1).max(200)).max(20)
-const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean() })
+const promptImagesSchema = z
+  .array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string().min(1).max(8_000_000).regex(/^[A-Za-z0-9+/]+=*$/) }))
+  .max(6)
+const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean(), images: promptImagesSchema })
 
 const mcpTargetSchema = z.union([z.object({ sessionId: z.string().min(1) }), z.object({ projectPath: z.string().min(1).nullable() })])
 
@@ -106,6 +112,8 @@ export const coreClientHandlers: CoreClientHandlers = {
       // 没有窗口能回答时直接按取消处理，不让 core 一直等
       if (broadcast(IPC_CHANNELS.sessionPermission, event) === 0) settlePermission(requestId, null)
     }),
+  onBrowserAction: (params) => browserHost.act(params),
+  onDevServer: (params) => devServer(params),
 }
 
 function settlePermission(requestId: string, optionId: string | null): void {
@@ -146,6 +154,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         modelId: model.id,
         contextWindow: model.contextWindow,
         provider: { id: provider.id, name: provider.name },
+        supportsImages: model.images,
       },
     }
   }
@@ -229,6 +238,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
           goalMaxRounds: settings.get().execution.goalMaxRounds,
         },
         plugins: enabledPlugins(settings),
+        browser: true,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
@@ -331,7 +341,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionDelete, async (_event, rawSessionId: unknown) => {
-    await deleteSession(await coreConnection(), parse(z.string().min(1), rawSessionId))
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    await deleteSession(await coreConnection(), sessionId)
+    browserHost.close(sessionId)
+    stopDevServer(sessionId)
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawOptions: unknown) => {

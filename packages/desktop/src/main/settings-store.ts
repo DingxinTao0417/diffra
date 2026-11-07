@@ -29,6 +29,8 @@ export const providerFieldsSchema = z.object({
       z.object({
         id: z.string().trim().min(1, '模型 ID 不能为空'),
         contextWindow: z.number().int().positive().nullable(),
+        // 图片输入那一步加的，旧设置文件里没有
+        images: z.boolean().default(false),
       }),
     )
     .refine((models) => new Set(models.map((model) => model.id)).size === models.length, '模型 ID 重复'),

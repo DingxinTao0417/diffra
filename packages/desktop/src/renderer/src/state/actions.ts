@@ -1,4 +1,4 @@
-import type { PermissionMode, StopReason, StoredSessionSummary, TurnKind } from '@diffra/core/types'
+import type { PermissionMode, PromptImage, StopReason, StoredSessionSummary, TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, turnFromStored, usageOf } from '../features/session/transcript'
@@ -123,9 +123,19 @@ export function wireCoreEvents(): () => void {
     }
     updateLive(request.sessionId, (task) => ({ ...task, permission: request }))
   })
+  const offBrowserState = window.diffra.onBrowserState((state) =>
+    store.set((current) => ({ ...current, browsers: { ...current.browsers, [state.sessionId]: state } })),
+  )
+  // 智能体在用浏览器：正在看这个任务时把浏览器面板打开
+  const offBrowserActivity = window.diffra.onBrowserActivity(({ sessionId }) => {
+    const { route, panel } = store.get()
+    if (route.name === 'task' && route.sessionId === sessionId && panel !== 'browser') store.set((current) => ({ ...current, panel: 'browser' }))
+  })
   return () => {
     offUpdate()
     offPermission()
+    offBrowserState()
+    offBrowserActivity()
   }
 }
 
@@ -184,16 +194,16 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
 export async function sendMessage(sessionId: string, text: string, options: Partial<MessageOptions> = {}): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task) return
-  const message: MessageOptions = { plan: false, goal: false, skills: [], ...options }
+  const message: MessageOptions = { plan: false, goal: false, skills: [], images: [], ...options }
   if (task.running) {
     updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text, options: message }] }))
     return
   }
-  const { skills } = message
-  if (message.plan) await runTurnOnCore(sessionId, text, 'plan', skills, (turnId) => window.diffra.plan(sessionId, turnId, text, skills))
+  const { skills, images } = message
+  if (message.plan) await runTurnOnCore(sessionId, text, 'plan', skills, [], (turnId) => window.diffra.plan(sessionId, turnId, text, skills))
   else
-    await runTurnOnCore(sessionId, text, message.goal ? 'goal' : 'prompt', skills, (turnId) =>
-      window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal }),
+    await runTurnOnCore(sessionId, text, message.goal ? 'goal' : 'prompt', skills, images, (turnId) =>
+      window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images }),
     )
 }
 
@@ -207,7 +217,7 @@ const DEEP_SCAN_TITLES = { task: '深度安全扫描 · 本任务改动', projec
 export async function runDeepScan(sessionId: string, scope: 'task' | 'project'): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task || task.running) return
-  await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
+  await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
 }
 
 async function runTurnOnCore(
@@ -215,10 +225,11 @@ async function runTurnOnCore(
   text: string,
   kind: TurnKind,
   skills: string[],
+  images: PromptImage[],
   run: (turnId: string) => Promise<StopReason>,
 ): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏
@@ -294,7 +305,7 @@ export async function regenerate(sessionId: string, turnId: string): Promise<voi
       changeVersion: current.changeVersion + 1,
       turns: current.turns.slice(0, current.turns.findIndex((item) => item.id === turnId)),
     }))
-    await sendMessage(sessionId, turn.prompt, { goal: turn.kind === 'goal', skills: turn.skills })
+    await sendMessage(sessionId, turn.prompt, { goal: turn.kind === 'goal', skills: turn.skills, images: turn.images })
   } catch (error) {
     showToast(`重新生成失败：${errorMessage(error)}`)
   }

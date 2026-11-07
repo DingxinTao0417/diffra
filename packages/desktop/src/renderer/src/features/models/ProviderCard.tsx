@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { errorMessage } from '@/lib/errors'
 
 type TestState = { state: 'running' } | { state: 'ok' | 'error'; text: string }
@@ -69,7 +70,7 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
       setError('这个模型已经添加过了')
       return
     }
-    if (await saveModels([...provider.models, { id, contextWindow }])) {
+    if (await saveModels([...provider.models, { id, contextWindow, images: false }])) {
       setNewModelId('')
       setNewContextWindow('')
     }
@@ -169,7 +170,15 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
                     <span className="text-muted-foreground">
                       {model.contextWindow ? `上下文 ${formatTokens(model.contextWindow)}` : '上下文未填'}
                     </span>
-                    <div className="ml-auto flex gap-2">
+                    <label className="ml-auto flex items-center gap-1.5 text-muted-foreground" title="模型能看图时打开：提问可以带图片，浏览器工具可以截图给它看">
+                      <Switch
+                        label={`${model.id} 支持图片`}
+                        checked={model.images}
+                        onChange={(images) => void saveModels(provider.models.map((item) => (item.id === model.id ? { ...item, images } : item)))}
+                      />
+                      图片
+                    </label>
+                    <div className="flex gap-2">
                       <Button
                         size="sm"
                         variant="outline"

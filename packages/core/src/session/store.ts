@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
-import type { SessionSearchResult, StoredTurn } from '../protocol.js'
+import { PROMPT_IMAGE_TYPES, type SessionSearchResult, type StoredTurn } from '../protocol.js'
 
 // 会话 id 拼进文件名，只接受 UUID 这类字符，防止路径穿越
 const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/
@@ -80,6 +80,7 @@ const recordSchema = z.object({
       messageStart: z.number().int().nonnegative().nullable().default(null),
       // 第 17 步加的
       skills: z.array(z.string()).default([]),
+  images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
     }),
   ),
   messages: z.array(z.unknown()),

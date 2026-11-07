@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
+import { registerBrowserIpc } from './browser'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { RulePackStore } from './rule-packs'
@@ -71,6 +72,7 @@ app
     registerRulesIpc(rulePacks)
     registerSessionIpc(settings, secrets, userDataDir, rulePacks)
     registerPluginsIpc(settings, userDataDir)
+    registerBrowserIpc()
     registerTerminalIpc()
     setupUpdater()
     setupWindowChrome()

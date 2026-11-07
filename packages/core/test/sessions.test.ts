@@ -387,3 +387,26 @@ describe('插件', () => {
     }
   })
 })
+
+describe('图片输入', () => {
+  // 1x1 的 PNG
+  const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  test('模型没打开图片时不开始这一轮；打开了就把图片发给模型，记在这一轮里', async () => {
+    server = await startScriptedServer([{ text: '看到了一个像素' }])
+    const core = await startCore()
+    const plain = await createSession(core, project, config(server.baseUrl))
+    await expect(sendPrompt(core, plain.sessionId, 'turn-1', '看看这张图', { images: [{ mimeType: 'image/png', data: PIXEL }] })).rejects.toThrow(
+      '没有打开图片输入',
+    )
+
+    const base = config(server.baseUrl)
+    const { sessionId } = await createSession(core, project, { ...base, model: { ...base.model, supportsImages: true } })
+    await sendPrompt(core, sessionId, 'turn-1', '看看这张图', { images: [{ mimeType: 'image/png', data: PIXEL }] })
+    expect(server.bodies[0]).toContain('看看这张图')
+    expect(server.bodies[0]).toContain(`data:image/png;base64,${PIXEL}`)
+
+    const loaded = await loadSession(core, sessionId, project, { ...base, model: { ...base.model, supportsImages: true } })
+    expect(loaded.turns[0]).toMatchObject({ prompt: '看看这张图', images: [{ mimeType: 'image/png', data: PIXEL }] })
+  })
+})

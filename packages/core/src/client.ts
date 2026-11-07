@@ -1,17 +1,24 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
+import { browserActionParamsSchema, devServerParamsSchema } from './session/config.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
   type CheckDetection,
   type CheckpointChange,
   type CheckRunResult,
+  type BrowserActionParams,
+  type BrowserActionResult,
+  CLIENT_EXT_METHODS,
   type CommandInfo,
+  type DevServerParams,
+  type DevServerResult,
   type LoadedSession,
   type McpServer,
   type McpServerStatus,
   type McpTarget,
   type PluginInfo,
   type PluginRef,
+  type PromptImage,
   type PermissionMode,
   SESSION_EXT_METHODS,
   type SessionConfig,
@@ -26,11 +33,15 @@ import {
 
 export * from './protocol.js'
 export { parseRulePack, RulePackError } from './rules/pack.js'
+export { isLocalHost, normalizeUrl } from './urls.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {
   onSessionUpdate(notification: acp.SessionNotification): void
   onPermissionRequest(request: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse>
+  // 智能体操作内置浏览器、起开发服务器；不提供时会话里不要开 browser
+  onBrowserAction?(params: BrowserActionParams): Promise<BrowserActionResult>
+  onDevServer?(params: DevServerParams): Promise<DevServerResult>
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -49,6 +60,10 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     app
       .onNotification(acp.methods.client.session.update, ({ params }) => handlers.onSessionUpdate(params))
       .onRequest(acp.methods.client.session.requestPermission, ({ params }) => handlers.onPermissionRequest(params))
+    const onBrowserAction = handlers.onBrowserAction
+    if (onBrowserAction) app.onRequest(CLIENT_EXT_METHODS.browserAction, browserActionParamsSchema, ({ params }) => onBrowserAction(params))
+    const onDevServer = handlers.onDevServer
+    if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
 }
@@ -72,6 +87,7 @@ export async function createSession(
 export interface PromptOptions {
   skills?: string[]
   goal?: boolean
+  images?: PromptImage[]
 }
 
 export function sendPrompt(
@@ -83,7 +99,7 @@ export function sendPrompt(
 ): Promise<acp.PromptResponse> {
   return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
-    prompt: [{ type: 'text', text }],
+    prompt: [{ type: 'text', text }, ...(options.images ?? []).map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.data }))],
     _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false } },
   })
 }

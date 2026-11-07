@@ -5,6 +5,7 @@ import type {
   CommandInfo,
   ListModelsResult,
   McpServerStatus,
+  PromptImage,
   PermissionMode,
   PermissionOption,
   RequestPermissionRequest,
@@ -76,6 +77,7 @@ export const IPC_CHANNELS = {
   terminalKill: 'terminal:kill',
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
+  terminalOpened: 'terminal:opened',
   preferencesSave: 'settings:preferences-save',
   openExternal: 'shell:open-external',
   sessionPrompt: 'session:prompt',
@@ -95,6 +97,12 @@ export const IPC_CHANNELS = {
   windowChrome: 'window:chrome',
   menuPopup: 'menu:popup',
   menuCommand: 'menu:command',
+  browserBounds: 'browser:bounds',
+  browserNavigate: 'browser:navigate',
+  browserCommand: 'browser:command',
+  browserGetState: 'browser:get-state',
+  browserState: 'browser:state',
+  browserActivity: 'browser:activity',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -102,6 +110,26 @@ export const IPC_CHANNELS = {
   checkpointPreview: 'session:checkpoint-preview',
   checkpointRestore: 'session:checkpoint-restore',
 } as const
+
+// 内置浏览器面板在窗口里的位置（CSS 像素，相对窗口内容区）
+export interface BrowserRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// 一个任务的浏览器标签页；还没打开过网页时 url 为空
+export interface BrowserState {
+  sessionId: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
+export type BrowserCommand = 'back' | 'forward' | 'reload' | 'stop' | 'external'
 
 // 中文菜单里交给页面处理的命令
 export type MenuCommand =
@@ -172,6 +200,7 @@ export type McpStatusTarget = { sessionId: string } | { projectPath: string | nu
 export interface PromptOptions {
   skills: string[]
   goal: boolean
+  images: PromptImage[]
 }
 
 // 打开历史任务时多带标题和每轮的记录
@@ -234,6 +263,8 @@ export interface DiffraApi {
   killTerminal(id: string): Promise<void>
   onTerminalData(listener: (event: { id: string; data: string }) => void): () => void
   onTerminalExit(listener: (event: { id: string; exitCode: number }) => void): () => void
+  // 主进程开的终端（智能体起的开发服务器），界面加一个标签页
+  onTerminalOpened(listener: (event: { id: string; cwd: string; shell: string }) => void): () => void
   savePreferences(change: {
     appearance?: Appearance
     defaultPermissionMode?: PermissionMode
@@ -269,6 +300,14 @@ export interface DiffraApi {
   // 在窗口坐标 (x, y) 弹出主菜单
   popupMenu(position: { x: number; y: number }): Promise<void>
   onMenuCommand(listener: (command: MenuCommand) => void): () => void
+  // 内置浏览器：面板位置（null 表示不显示）、用户在地址栏打开网页、前进后退刷新、标签页状态
+  setBrowserBounds(sessionId: string, rect: BrowserRect | null): void
+  browserNavigate(sessionId: string, url: string): Promise<void>
+  browserCommand(sessionId: string, command: BrowserCommand): void
+  getBrowserState(sessionId: string): Promise<BrowserState | null>
+  onBrowserState(listener: (state: BrowserState) => void): () => void
+  // 智能体在用某个任务的浏览器，界面把面板打开
+  onBrowserActivity(listener: (event: { sessionId: string }) => void): () => void
   // 弹出文件夹选择框；取消时返回 null
   installPluginFromFolder(): Promise<PluginView[] | null>
   installPluginFromGit(url: string): Promise<PluginView[]>

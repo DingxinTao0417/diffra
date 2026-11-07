@@ -149,6 +149,11 @@ export function wireTerminalEvents(): () => void {
     if (chunks.length > MAX_PENDING_CHUNKS) chunks.shift()
     pending.set(id, chunks)
   })
+  // 智能体起的开发服务器：加一个标签页，打开终端面板让用户看到
+  const offOpened = window.diffra.onTerminalOpened(({ id, cwd, shell }) => {
+    if (!views.has(id)) createView(id)
+    store.set((state) => ({ ...state, terminalOpen: true, terminals: [...state.terminals, { id, cwd, shell, exitCode: null }], activeTerminal: id }))
+  })
   const offExit = window.diffra.onTerminalExit(({ id, exitCode }) => {
     views.get(id)?.term.write(`\r\n\x1b[2m[进程已退出，代码 ${exitCode}]\x1b[0m\r\n`)
     store.set((state) => ({ ...state, terminals: state.terminals.map((item) => (item.id === id ? { ...item, exitCode } : item)) }))
@@ -166,6 +171,7 @@ export function wireTerminalEvents(): () => void {
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-palette', 'data-font'] })
   return () => {
     offData()
+    offOpened()
     offExit()
     observer.disconnect()
   }

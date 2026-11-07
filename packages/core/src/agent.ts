@@ -6,7 +6,20 @@ import { Checkpoints } from './checkpoint.js'
 import { findBash, findRipgrep } from './environment.js'
 import { listModels, testModel } from './models/operations.js'
 import { EXT_METHODS } from './models/types.js'
-import { type LoadedSession, SESSION_EXT_METHODS, type SessionInfo, type StoredSessionMeta, type TurnKind } from './protocol.js'
+import {
+  type BrowserActionParams,
+  type BrowserActionResult,
+  CLIENT_EXT_METHODS,
+  type DevServerParams,
+  type DevServerResult,
+  type LoadedSession,
+  PROMPT_IMAGE_TYPES,
+  type PromptImage,
+  SESSION_EXT_METHODS,
+  type SessionInfo,
+  type StoredSessionMeta,
+  type TurnKind,
+} from './protocol.js'
 import { detectLanguages } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
 import { commandRoots, loadCommands } from './commands.js'
@@ -79,6 +92,14 @@ const usageQueryParams = z
   .refine((query) => Date.parse(query.to) - Date.parse(query.from) <= MAX_USAGE_RANGE_MS, '一次最多统计 400 天')
 
 const sameDir = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
+
+// 客户端处理请求时抛的错，原文在 data.details 里
+function clientErrorMessage(error: unknown): string {
+  const data = error instanceof acp.RequestError ? error.data : null
+  const details = typeof data === 'object' && data !== null && 'details' in data ? data.details : null
+  if (typeof details === 'string' && details) return details
+  return error instanceof Error ? error.message : String(error)
+}
 
 // 用户选的 Skill 按名字取出来；有一个找不到就不开始这一轮，免得悄悄少了说明
 async function selectedSkills(session: SessionType, names: string[]): Promise<Skill[]> {
@@ -185,10 +206,11 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     text: string,
     kind: TurnKind,
     skills: string[],
+    images: PromptImage[],
     run: (io: TurnIO) => Promise<acp.StopReason>,
   ): Promise<acp.StopReason> => {
     const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
-    session.startTurn(turnId, text, kind, skills)
+    session.startTurn(turnId, text, kind, skills, images)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
     try {
@@ -211,6 +233,26 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             return null
           }
         },
+        browser: (action, signal) =>
+          client
+            .request<BrowserActionResult, BrowserActionParams>(
+              CLIENT_EXT_METHODS.browserAction,
+              { sessionId: session.id, ...action },
+              { cancellationSignal: signal, stopWaitingOnCancel: true },
+            )
+            .catch((error: unknown) => {
+              throw new Error(clientErrorMessage(error))
+            }),
+        devServer: (params, signal) =>
+          client
+            .request<DevServerResult, DevServerParams>(
+              CLIENT_EXT_METHODS.devServer,
+              { sessionId: session.id, ...params },
+              { cancellationSignal: signal, stopWaitingOnCancel: true },
+            )
+            .catch((error: unknown) => {
+              throw new Error(clientErrorMessage(error))
+            }),
         // 用量只用于统计，写失败不打断任务
         recordUsage: async (call) => {
           if (!usageLog) return
@@ -277,13 +319,23 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const meta = promptMetaSchema.safeParse(params._meta)
       const turnId = meta.success ? meta.data.diffra.turnId : randomUUID()
       const text = params.prompt
-        .map((block) => (block.type === 'text' ? block.text : `[${block.type} content is not supported yet]`))
+        .flatMap((block) => (block.type === 'text' ? [block.text] : block.type === 'image' ? [] : [`[${block.type} content is not supported yet]`]))
         .join('\n')
+      const images = params.prompt.flatMap((block): PromptImage[] => {
+        if (block.type !== 'image') return []
+        const mimeType = PROMPT_IMAGE_TYPES.find((type) => type === block.mimeType)
+        if (!mimeType) throw new Error(`不支持的图片格式：${block.mimeType}`)
+        return [{ mimeType, data: block.data }]
+      })
+      // 模型不支持图片时 API 会直接报错，先在这里说明去哪里改
+      if (images.length > 0 && !session.config.model.supportsImages) {
+        throw new Error(`当前模型 ${session.config.model.modelId} 没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」`)
+      }
       const skillNames = meta.success ? meta.data.diffra.skills : []
       const goal = meta.success && meta.data.diffra.goal
       const skills = await selectedSkills(session, skillNames)
-      const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, (io) =>
-        runTurn(session, { id: turnId, text: withSkills(text, skills) }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
+      const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, images, (io) =>
+        runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
       )
       return { stopReason }
     })
@@ -291,7 +343,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.deepScan, deepScanParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
-      const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', [], (io) =>
+      const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', [], [], (io) =>
         runDeepScan(session, { id: params.turnId }, params.scope, io),
       )
       return { stopReason }
@@ -322,7 +374,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
       const skills = await selectedSkills(session, params.skills)
-      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', params.skills, (io) =>
+      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', params.skills, [], (io) =>
         runPlan(session, { id: params.turnId, text: withSkills(params.prompt, skills) }, io),
       )
       return { stopReason }

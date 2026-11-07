@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Ellipsis, FileDiff, GitBranch, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Ellipsis, FileDiff, GitBranch, Globe, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
+import { BrowserPanel } from '@/features/browser/BrowserPanel'
 import { RestoreDialog } from '@/features/session/RestoreDialog'
 import type { Usage } from '@/features/session/transcript'
 import { TaskMenu } from '@/features/shell/TaskMenu'
@@ -98,6 +99,9 @@ function TaskPage({ task }: { task: LiveTask }) {
         <IconButton label="终端 Ctrl+`" active={terminalOpen} onClick={() => toggleTerminalPanel(task.project)}>
           <SquareTerminal className="size-4" />
         </IconButton>
+        <IconButton label="浏览器" active={panel === 'browser'} onClick={() => togglePanel('browser')}>
+          <Globe className="size-4" />
+        </IconButton>
         <IconButton label="审阅改动" active={panel === 'review'} onClick={() => togglePanel('review')}>
           <FileDiff className="size-4" />
         </IconButton>
@@ -113,7 +117,10 @@ function TaskPage({ task }: { task: LiveTask }) {
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {task.queue.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 self-start rounded-lg border border-dashed bg-sidebar px-2.5 py-1.5 text-xs" data-testid="queued-message">
-                  <span className="text-muted-foreground">{item.options.plan ? '排队中 · 出计划' : item.options.goal ? '排队中 · 目标' : '排队中'}</span>
+                  <span className="text-muted-foreground">
+                    {item.options.plan ? '排队中 · 出计划' : item.options.goal ? '排队中 · 目标' : '排队中'}
+                    {item.options.images.length > 0 && ` · ${item.options.images.length} 张图片`}
+                  </span>
                   <span className="max-w-96 truncate">{item.text}</span>
                   <button type="button" className="text-primary hover:underline" onClick={() => dequeue(task.sessionId, item.id)}>
                     撤回
@@ -156,6 +163,7 @@ function TaskPage({ task }: { task: LiveTask }) {
         </section>
         {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
+        {panel === 'browser' && <BrowserPanel sessionId={task.sessionId} />}
       </div>
       {terminalOpen && <TerminalPanel cwd={task.project} />}
 

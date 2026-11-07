@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import type { PermissionMode, SessionInfo, StoredSessionSummary } from '@diffra/core/types'
-import type { PermissionRequestEvent } from '../../../shared/ipc'
+import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary } from '@diffra/core/types'
+import type { BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { SettingsView } from '../../../shared/settings'
 import type { Turn, Usage } from '../features/session/transcript'
 
@@ -11,13 +11,14 @@ export type Route =
   | { name: 'task'; sessionId: string }
   | { name: 'settings'; section: SettingsSection }
 
-export type SidePanel = 'monitor' | 'review' | null
+export type SidePanel = 'monitor' | 'review' | 'browser' | null
 
 // 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
 export interface MessageOptions {
   plan: boolean
   goal: boolean
   skills: string[]
+  images: PromptImage[]
 }
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载
@@ -61,6 +62,8 @@ export interface AppState {
   // 侧栏显示的项目：有任务的项目和最近选过的项目
   projects: string[]
   live: Record<string, LiveTask>
+  // 各任务内置浏览器标签页的状态
+  browsers: Record<string, BrowserState>
   settings: SettingsView | null
   sidebarOpen: boolean
   searchOpen: boolean
@@ -79,6 +82,7 @@ const initialState: AppState = {
   tasks: [],
   projects: [],
   live: {},
+  browsers: {},
   settings: null,
   sidebarOpen: true,
   searchOpen: false,

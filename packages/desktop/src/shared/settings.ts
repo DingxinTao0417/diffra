@@ -11,6 +11,8 @@ export interface ModelRef {
 export interface ModelConfig {
   id: string
   contextWindow: number | null
+  // 能看图：提问可以带图片，浏览器工具可以截图给它看
+  images: boolean
 }
 
 export interface ProviderConfig {

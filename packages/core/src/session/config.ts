@@ -33,6 +33,7 @@ export const modelConfigSchema = z.object({
   modelId: z.string().min(1),
   contextWindow: z.number().int().positive().nullable(),
   provider: providerSchema,
+  supportsImages: z.boolean().default(false),
 })
 
 export const sessionConfigSchema = z.object({
@@ -51,10 +52,30 @@ export const sessionConfigSchema = z.object({
     goalMaxRounds: z.number().int().min(1).max(50),
   }),
   plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1) })).default([]),
+  browser: z.boolean().default(false),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 
 export const newSessionMetaSchema = z.object({ diffra: sessionConfigSchema })
+
+export const browserActionParamsSchema = z.intersection(
+  z.object({ sessionId: z.string().min(1) }),
+  z.discriminatedUnion('action', [
+    z.object({ action: z.literal('navigate'), url: z.url() }),
+    z.object({ action: z.literal('snapshot') }),
+    z.object({ action: z.literal('click'), ref: z.string().min(1) }),
+    z.object({ action: z.literal('type'), ref: z.string().min(1), text: z.string(), submit: z.boolean() }),
+    z.object({ action: z.literal('press'), key: z.string().min(1) }),
+    z.object({ action: z.literal('console') }),
+    z.object({ action: z.literal('screenshot') }),
+  ]),
+)
+
+export const devServerParamsSchema = z.discriminatedUnion('action', [
+  z.object({ sessionId: z.string().min(1), action: z.literal('start'), command: z.string().trim().min(1).max(2000), cwd: z.string().min(1) }),
+  z.object({ sessionId: z.string().min(1), action: z.literal('logs') }),
+  z.object({ sessionId: z.string().min(1), action: z.literal('stop') }),
+])
 
 export const pluginRefSchema = z.object({ name: z.string().min(1), dir: z.string().min(1) })
 

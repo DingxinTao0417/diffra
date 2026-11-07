@@ -4,13 +4,30 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
+import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import type { Compaction, SessionRecord } from './store.js'
-import { TOOL_DEFINITION_CHARS, TOOLS } from './tools.js'
+import { browserTools } from './browser.js'
+import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
 
 // 会话标题默认取第一条提问的开头
 const TITLE_CHARS = 40
+
+// 图片在对话里是 base64，按字数算会大上百倍；估算上下文时每张按这么多字算（约一千多个 token）
+export const IMAGE_CHARS = 6000
+
+export function messagesChars(messages: ModelMessage[]): number {
+  let images = 0
+  const json = JSON.stringify(messages, (key, value: unknown) => {
+    // 提问里的图片在 image 字段，工具结果里的截图在 data 字段
+    if ((key === 'image' || key === 'data') && typeof value === 'string' && value.length > IMAGE_CHARS) {
+      images++
+      return ''
+    }
+    return value
+  })
+  return json.length + images * IMAGE_CHARS
+}
 
 export interface SessionEnvironment {
   bashPath: string | null
@@ -140,13 +157,13 @@ export class Session {
     this.activeTurn?.abort()
   }
 
-  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = []): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
@@ -198,11 +215,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具
   toolSet(): ToolSet {
-    return this.mcpTools ? { ...TOOLS, ...this.mcpTools.tools } : TOOLS
+    return { ...TOOLS, ...browserTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
@@ -212,7 +229,7 @@ export class Session {
       system: prompt.base,
       rules: prompt.rules,
       tools: this.toolChars(),
-      messages: JSON.stringify(this.contextMessages()).length,
+      messages: messagesChars(this.contextMessages()),
     }
     const total = chars.system + chars.rules + chars.tools + chars.messages
     const share = (value: number) => (total > 0 ? Math.round((value / total) * used) : 0)

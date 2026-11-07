@@ -1,4 +1,4 @@
-import type { SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
+import type { PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -20,6 +20,8 @@ export interface Turn {
   prompt: string
   // 这一轮带上的 Skill
   skills: string[]
+  // 提问带的图片
+  images: PromptImage[]
   items: TranscriptItem[]
   stopReason: StopReason | null
   error: string | null
@@ -33,8 +35,8 @@ export interface Usage {
   breakdown: UsageBreakdown | null
 }
 
-export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = []): Turn {
-  return { id, kind, prompt, skills, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): Turn {
+  return { id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -45,6 +47,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     kind: turn.kind ?? 'prompt',
     prompt: turn.prompt,
     skills: turn.skills ?? [],
+    images: turn.images ?? [],
     items,
     // 应用退出时没跑完的一轮记为已停止
     stopReason: turn.stopReason ?? 'cancelled',

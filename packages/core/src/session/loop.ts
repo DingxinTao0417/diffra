@@ -6,7 +6,26 @@ import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
 import { truncateLines } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
-import { PERMISSION_OPTIONS, type SessionModel } from '../protocol.js'
+import { detectDevCommand } from '../project/detect.js'
+import {
+  type BrowserAction,
+  type BrowserActionResult,
+  type DevServerParams,
+  type DevServerResult,
+  PERMISSION_OPTIONS,
+  type PromptImage,
+  type SessionModel,
+} from '../protocol.js'
+import {
+  allowNavigation,
+  type BrowserToolName,
+  browserTitle,
+  type DevServerToolName,
+  isBrowserTool,
+  isDevServerTool,
+  screenshotMessage,
+  toBrowserAction,
+} from './browser.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -43,7 +62,13 @@ export interface TurnIO {
   requestPermission(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<string | null>
   // 每次模型调用结束后记一次用量；记录失败由实现方处理，不影响任务
   recordUsage(call: ModelCallUsage): Promise<void>
+  // 操作客户端的内置浏览器；客户端没有浏览器时不提供
+  browser?(action: BrowserAction, signal: AbortSignal): Promise<BrowserActionResult>
+  // 在客户端的终端里起、看、停开发服务器
+  devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
 }
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
 export interface StepToolCall {
   toolCallId: string
@@ -83,7 +108,18 @@ function goalRequest(text: string, maxRounds: number): string {
   ].join('\n')
 }
 
-export async function runTurn(session: Session, turn: { id: string; text: string }, io: TurnIO, options: TurnOptions = {}): Promise<StopReason> {
+// 提问的文字和图片；没有图片时就是一段文字
+function userContent(text: string, images: PromptImage[]): ModelMessage['content'] {
+  if (images.length === 0) return text
+  return [{ type: 'text', text }, ...images.map((image) => ({ type: 'image' as const, image: image.data, mediaType: image.mimeType }))]
+}
+
+export async function runTurn(
+  session: Session,
+  turn: { id: string; text: string; images?: PromptImage[] },
+  io: TurnIO,
+  options: TurnOptions = {},
+): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
   const controller = new AbortController()
   session.activeTurn = controller
@@ -112,7 +148,10 @@ export async function runTurn(session: Session, turn: { id: string; text: string
     await takeCheckpoint(session, turn.id, io)
     await prepareMcpTools(session, io)
     const requestIndex = session.messages.length
-    session.messages.push({ role: 'user', content: goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds) })
+    session.messages.push({
+      role: 'user',
+      content: userContent(goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds), turn.images ?? []),
+    } as ModelMessage)
     let round = 1
 
     let editedThisTurn = false
@@ -163,6 +202,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       }
 
       const results: ToolResultPart[] = []
+      const screenshots: PromptImage[] = []
       let editedThisStep = false
       let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
@@ -185,6 +225,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
         }
         const outcome = await runToolCall(session, call, signal, io)
         results.push(outcome.result)
+        screenshots.push(...(outcome.images ?? []))
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
@@ -197,6 +238,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
         }
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
+      if (screenshots.length > 0) session.messages.push(screenshotMessage(screenshots))
 
       if (finished && (goalMaxRounds === null || signal.aborted)) return 'end_turn'
       if (finished && finished.goalMet) {
@@ -418,10 +460,12 @@ export async function runToolCall(
   call: StepToolCall,
   signal: AbortSignal,
   io: TurnIO,
-): Promise<{ result: ToolResultPart; edited: boolean }> {
+): Promise<{ result: ToolResultPart; edited: boolean; images?: PromptImage[] }> {
   const name = call.toolName
   const mcp = session.mcpTools?.byName.get(name)
   if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
+  if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
+  if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
     sessionUpdate: 'tool_call',
@@ -465,6 +509,101 @@ export async function runToolCall(
       content: [{ type: 'content', content: { type: 'text', text: message } }],
     })
     return { result: errorResult(call, message), edited: false }
+  }
+}
+
+// 内置浏览器：打开外部网站前按权限模式问一下；页面由客户端操作
+async function runBrowserToolCall(
+  session: Session,
+  call: StepToolCall,
+  name: BrowserToolName,
+  signal: AbortSignal,
+  io: TurnIO,
+): Promise<{ result: ToolResultPart; edited: boolean; images?: PromptImage[] }> {
+  const fail = async (message: string) => {
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: message } }],
+    })
+    return { result: errorResult(call, message), edited: false }
+  }
+  let action: BrowserAction
+  try {
+    action = toBrowserAction(name, call.input)
+  } catch (error) {
+    await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: name, kind: 'other', status: 'in_progress', rawInput: call.input })
+    return fail(error instanceof Error ? error.message : String(error))
+  }
+  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'screenshot' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
+  await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: browserTitle(action), kind, status: 'in_progress', rawInput: call.input })
+  if (!io.browser) return fail('The built-in browser is not available in this client.')
+  if (action.action === 'navigate') {
+    const permission = await allowNavigation(session, action.url, (title) =>
+      io.requestPermission({ toolCallId: call.toolCallId, title, kind: 'fetch', status: 'pending', rawInput: call.input }, PERMISSION_CHOICES),
+    )
+    if (!permission.allowed) return fail(permission.reason)
+  }
+  try {
+    const output = await io.browser(action, signal)
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: output.image ? `${output.text}\n（截图已发给模型）` : output.text } }],
+    })
+    const text = output.image ? `${output.text}\nThe screenshot is attached in the next message.` : output.text
+    return { result: textResult(call, text), edited: false, images: output.image ? [output.image] : [] }
+  } catch (error) {
+    if (signal.aborted) return fail('Cancelled by the user.')
+    return fail(`Browser action failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+// 开发服务器：启动和普通命令一样按权限模式确认，命令默认取 package.json 的脚本
+async function runDevServerToolCall(
+  session: Session,
+  call: StepToolCall,
+  name: DevServerToolName,
+  signal: AbortSignal,
+  io: TurnIO,
+): Promise<{ result: ToolResultPart; edited: boolean }> {
+  const titles: Record<DevServerToolName, string> = { dev_server_start: '开发服务器 启动', dev_server_logs: '开发服务器 输出', dev_server_stop: '开发服务器 停止' }
+  await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: titles[name], kind: name === 'dev_server_logs' ? 'read' : 'execute', status: 'in_progress', rawInput: call.input })
+  const fail = async (message: string) => {
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: message } }],
+    })
+    return { result: errorResult(call, message), edited: false }
+  }
+  if (!io.devServer) return fail('The dev server is not available in this client.')
+  try {
+    let output: DevServerResult
+    if (name === 'dev_server_start') {
+      const requested = typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string' ? call.input.command.trim() : ''
+      const command = requested || (await detectDevCommand(session.cwd))
+      if (!command) return fail('No dev/start/serve script was found in package.json. Pass the command to run.')
+      const permission = await askCommandPermission(session, call.toolCallId, command, io)
+      if (!permission.allowed) return fail(permission.reason)
+      await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, title: `开发服务器 启动 ${command}` })
+      output = await io.devServer({ action: 'start', command, cwd: session.cwd }, signal)
+    } else {
+      output = await io.devServer({ action: name === 'dev_server_logs' ? 'logs' : 'stop' }, signal)
+    }
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: output.text } }],
+    })
+    return { result: textResult(call, output.text), edited: false }
+  } catch (error) {
+    if (signal.aborted) return fail('Cancelled by the user.')
+    return fail(`Dev server failed: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 

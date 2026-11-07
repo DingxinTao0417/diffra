@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { StopReason } from '@diffra/core/types'
+import type { PromptImage, StopReason } from '@diffra/core/types'
 import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
 import { PermissionCard } from '@/features/session/PermissionCard'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { formatDuration } from '@/lib/format'
+import { imageUrl } from '@/lib/images'
 import { respondPermission, sendMessage } from '@/state/actions'
 import { type LiveTask, showToast, store } from '@/state/store'
 import { Markdown } from './Markdown'
@@ -218,7 +220,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
-            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} />
+            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} />
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
           case 'edit':
@@ -274,6 +276,24 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   )
 }
 
+// 点开看大图
+function ImageThumbnail({ image, label }: { image: PromptImage; label: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" aria-label={label} className="overflow-hidden rounded-lg border hover:opacity-90" onClick={() => setOpen(true)}>
+        <img src={imageUrl(image)} alt={label} className="max-h-40 max-w-64 object-contain" data-testid="message-image" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90vh] max-w-[90vw] sm:max-w-[90vw]">
+          <DialogTitle className="sr-only">{label}</DialogTitle>
+          <img src={imageUrl(image)} alt={label} className="max-h-[80vh] max-w-full object-contain" />
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 function ActionButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick(): void; children: React.ReactNode }) {
   return (
     <Tooltip>
@@ -293,11 +313,11 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
   )
 }
 
-// goal、skills 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill
-function ItemView({ item, goal, skills }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[] }) {
+// goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
+function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[] }) {
   switch (item.kind) {
     case 'user':
-      if (!goal && skills.length === 0) {
+      if (!goal && skills.length === 0 && images.length === 0) {
         return (
           <div className="max-w-[80%] self-end rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
             {item.text}
@@ -306,7 +326,14 @@ function ItemView({ item, goal, skills }: { item: Exclude<TranscriptItem, ToolIt
       }
       return (
         <div className="flex max-w-[80%] flex-col items-end gap-1.5 self-end">
-          <div className="flex flex-wrap justify-end gap-1.5 text-xs text-muted-foreground" data-testid="message-tags">
+          {images.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {images.map((image, index) => (
+                <ImageThumbnail key={index} image={image} label={`提问的图片 ${index + 1}`} />
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap justify-end gap-1.5 text-xs text-muted-foreground empty:hidden" data-testid="message-tags">
             {goal && (
               <span className="flex items-center gap-1 rounded-md border px-1.5 py-0.5">
                 <Target className="size-3" />

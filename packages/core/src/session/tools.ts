@@ -1,5 +1,5 @@
 import type { ToolKind } from '@agentclientprotocol/sdk'
-import { tool } from 'ai'
+import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
 import { runCommandTool } from '../tools/command.js'
 import { editFileTool, listFilesTool, readFileTool, searchTool } from '../tools/files.js'
@@ -118,8 +118,12 @@ function parseInput<T>(schema: z.ZodType<T>, input: unknown): T {
 }
 
 // 工具定义发给模型时的大致篇幅，用来估算上下文分项
-export const TOOL_DEFINITION_CHARS = Object.entries(TOOLS).reduce(
-  (sum, [name, definition]) =>
-    sum + name.length + (definition.description?.length ?? 0) + JSON.stringify(z.toJSONSchema(definition.inputSchema as z.ZodType)).length,
-  0,
-)
+export function toolDefinitionChars(tools: ToolSet): number {
+  return Object.entries(tools).reduce(
+    (sum, [name, definition]) =>
+      sum + name.length + (definition.description?.length ?? 0) + JSON.stringify(z.toJSONSchema(definition.inputSchema as z.ZodType)).length,
+    0,
+  )
+}
+
+export const TOOL_DEFINITION_CHARS = toolDefinitionChars(TOOLS)
