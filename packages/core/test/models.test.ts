@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { connectToCore, handshake, requestListModels, requestTestModel } from '../src/client.js'
-import { listModels, testModel } from '../src/models/operations.js'
+import { generateText } from 'ai'
+import { createLanguageModel, listModels, testModel } from '../src/models/operations.js'
+import { modelConfigSchema } from '../src/session/config.js'
 import type { ModelEndpoint } from '../src/models/types.js'
 import { GOOD_KEY, type MockProvider, startMockProvider, unusedLocalUrl } from './mock-provider.js'
 
@@ -19,6 +21,24 @@ afterAll(async () => {
 function openai(apiKey = GOOD_KEY): ModelEndpoint {
   return { protocol: 'openai-compatible', baseUrl: `${mock.baseUrl}/openai/v1`, apiKey }
 }
+
+describe('思考程度', () => {
+  test.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'default'] as const)('兼容接口实际传递 %s 参数', async (effort) => {
+    await generateText({ model: createLanguageModel(openai(), 'mock-a', effort), prompt: 'OK', abortSignal: AbortSignal.timeout(5000), maxRetries: 0 })
+    const request = mock.requests.findLast((item) => item.path === '/openai/v1/chat/completions')
+    expect(request?.body).toBeDefined()
+    const body: unknown = JSON.parse(request?.body ?? '{}')
+    if (effort === 'default') expect(body).not.toHaveProperty('reasoning_effort')
+    else expect(body).toHaveProperty('reasoning_effort', effort)
+  })
+
+  test('会话配置拒绝未知档位', () => {
+    const model = { endpoint: openai(), modelId: 'mock-a', contextWindow: null, provider: null }
+    expect(modelConfigSchema.safeParse({ ...model, reasoningEffort: 'invalid' }).success).toBe(false)
+    expect(modelConfigSchema.parse({ ...model, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(modelConfigSchema.safeParse(model).success).toBe(true)
+  })
+})
 
 describe('OpenAI 兼容', () => {
   test('拉取模型列表并按 id 排序，带 Diffra 的 User-Agent', async () => {

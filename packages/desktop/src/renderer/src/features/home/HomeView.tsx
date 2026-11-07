@@ -77,13 +77,14 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          placeholder={projectPath ? '描述任务，比如「修复登录页的报错」；输入 / 用命令和 Skill，Ctrl+Enter 发送' : '先在下面选择项目文件夹'}
+          placeholder={projectPath ? '描述任务，比如「修复登录页的报错」；输入 / 用命令和 Skill，Enter 发送，Shift+Enter 换行' : '先在下面选择项目文件夹'}
           disabled={!projectPath}
           projectPath={projectPath}
           mcpTarget={projectPath ? { projectPath } : null}
           permissionMode={permissionMode}
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
+          modelRef={model ?? settings?.roles.coder ?? undefined}
           onModelChange={setModel}
           planMode={planMode}
           onPlanModeChange={setPlanMode}

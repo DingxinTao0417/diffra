@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROTOCOLS } from '../models/types.js'
-import type { SessionConfig } from '../protocol.js'
+import { REASONING_EFFORTS, type SessionConfig } from '../protocol.js'
 
 export const endpointSchema = z.object({
   protocol: z.enum(PROTOCOLS),
@@ -29,6 +29,7 @@ const rulePackSchema = z.object({
 const providerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) }).nullable()
 
 export const modelConfigSchema = z.object({
+  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
   endpoint: endpointSchema,
   modelId: z.string().min(1),
   contextWindow: z.number().int().positive().nullable(),

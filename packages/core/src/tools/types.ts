@@ -16,6 +16,7 @@ export interface ToolContext {
   readOnlyPaths: string[]
   // 项目外可以只读访问的目录（Skill 目录），读文件、列文件、搜索、大纲能用绝对路径访问
   readRoots: string[]
+  requestExternalPermission?(path: string, access: 'read' | 'write'): Promise<boolean>
 }
 
 export interface ToolOutput {

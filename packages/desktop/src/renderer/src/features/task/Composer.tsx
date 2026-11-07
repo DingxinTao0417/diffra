@@ -1,8 +1,9 @@
 import { type DragEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CommandInfo, PermissionMode, PromptImage, SkillInfo, SkillSource } from '@diffra/core/types'
+import { type CommandInfo, type PermissionMode, type PromptImage, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
 import { ArrowUp, Check, ChevronDown, Cpu, ImagePlus, ListChecks, type LucideIcon, Plug, Shield, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
+import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { cn } from 'cn'
 import {
   DropdownMenu,
@@ -46,6 +47,7 @@ interface ComposerProps {
   permissionMode: PermissionMode
   onPermissionModeChange(mode: PermissionMode): void
   modelLabel: string | null
+  modelRef?: ModelRef
   modelLocked?: boolean
   onModelChange(ref: ModelRef): void
   // 开着时发的消息先由规划模型出计划，不改代码
@@ -312,7 +314,7 @@ export function Composer(props: ComposerProps) {
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
     if (menuOpen && items.length > 0) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -340,8 +342,10 @@ export function Composer(props: ComposerProps) {
       else setGoal(false)
       return
     }
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
+      // 斜杠菜单尚在加载或没有匹配项时，不把命令意外发送成任务。
+      if (menuOpen && !event.ctrlKey && !event.metaKey) return
       void send()
     }
   }
@@ -488,7 +492,7 @@ export function Composer(props: ComposerProps) {
           }}
         />
         <div className="flex-1" />
-        <ModelMenu label={props.modelLabel} locked={props.modelLocked} onChange={props.onModelChange} />
+        <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} />
         <ArgumentsDialog
           request={argumentsRequest?.request ?? null}
           onCancel={() => setArgumentsRequest(null)}
@@ -511,7 +515,7 @@ export function Composer(props: ComposerProps) {
           <button
             type="button"
             aria-label={running ? '排队发送' : '发送'}
-            title={running ? '这一轮结束后发送' : '发送 Ctrl+Enter'}
+            title={running ? 'Enter 排队发送；Shift+Enter 换行' : 'Enter 发送；Shift+Enter 换行'}
             disabled={!canSend}
             className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
             onClick={() => void send()}
@@ -588,8 +592,16 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
   )
 }
 
-function ModelMenu({ label, locked, onChange }: { label: string | null; locked?: boolean; onChange(ref: ModelRef): void }) {
+const REASONING_LABELS: Record<ReasoningEffort, string> = { default: '默认', none: '关闭', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' }
+
+function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null; modelRef?: ModelRef; locked?: boolean; onChange(ref: ModelRef): void }) {
   const providers = useAppState((state) => state.settings?.providers ?? null)
+  const selectedProvider = providers?.find((provider) => provider.id === modelRef?.providerId)
+  const selectedModel = selectedProvider?.models.find((model) => model.id === modelRef?.modelId)
+  const efforts = selectedProvider && selectedModel ? reasoningEffortsFor(selectedProvider, selectedModel) : ['default' as const]
+  const supportsReasoning = efforts.length > 1
+  const requestedEffort = modelRef?.reasoningEffort ?? 'default'
+  const effort = efforts.includes(requestedEffort) ? requestedEffort : 'default'
   return (
     <DropdownMenu onOpenChange={(open) => open && void refreshSettings()}>
       <DropdownMenuTrigger asChild>
@@ -620,7 +632,48 @@ function ModelMenu({ label, locked, onChange }: { label: string | null; locked?:
           </div>
         ))}
         {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
+        {supportsReasoning && modelRef && (
+          <>
+            <DropdownMenuSeparator />
+            <div
+              className="space-y-3 px-3 py-2"
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') event.stopPropagation()
+              }}
+              onKeyUp={(event) => {
+                if (event.key !== 'Escape') event.stopPropagation()
+              }}
+            >
+              <div className="flex items-center justify-between text-sm">
+                <label htmlFor={`reasoning-${modelRef.providerId}`}>思考程度</label>
+                <span className="text-muted-foreground">{REASONING_LABELS[effort]}</span>
+              </div>
+              <input
+                id={`reasoning-${modelRef.providerId}`}
+                type="range"
+                min={0}
+                max={efforts.length - 1}
+                step={1}
+                value={efforts.indexOf(effort)}
+                aria-valuetext={REASONING_LABELS[effort]}
+                disabled={locked}
+                className="block w-full cursor-pointer accent-primary"
+                onChange={(event) => {
+                  const effortIndex = event.target.valueAsNumber
+                  if (!Number.isInteger(effortIndex) || effortIndex < 0 || effortIndex >= efforts.length) return
+                  const nextEffort = efforts[effortIndex]
+                  if (nextEffort) onChange({ ...modelRef, reasoningEffort: nextEffort })
+                }}
+              />
+              <div className="flex justify-between text-xs text-muted-foreground" aria-hidden="true">
+                {efforts.map((value) => <span key={value}>{REASONING_LABELS[value]}</span>)}
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">更高通常会增加耗时和用量。需模型及服务商支持；默认不发送思考参数。</p>
+            </div>
+          </>
+        )}
         <DropdownMenuSeparator />
+        {!supportsReasoning && modelRef && <p className="px-3 py-2 text-xs text-muted-foreground">未配置此模型的思考档位，可在模型管理中设置。</p>}
         <DropdownMenuItem onSelect={() => openSettings('models')}>模型管理…</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { ToolError } from './types.js'
+import { isProtectedFile } from './protected.js'
+import { ToolError, type ToolContext } from './types.js'
 
 export interface WorkspacePath {
   absolute: string
@@ -35,6 +36,30 @@ export async function resolveReadable(root: string, readRoots: string[], input: 
     }
     throw error
   }
+}
+
+// 授权只覆盖规范化后的确切目标，不把整个磁盘或父目录加入允许列表。
+export async function resolveToolPath(context: ToolContext, input: string, access: 'read' | 'write'): Promise<WorkspacePath> {
+  const requested = resolve(context.cwd, fromMsysPath(input))
+  const absolute = await realpathOfExisting(requested)
+  const projectRoot = await realpath(context.cwd)
+  if (isInside(relative(context.cwd, requested)) && isInside(relative(projectRoot, absolute))) {
+    return { absolute: requested, display: relative(context.cwd, requested).split(sep).join('/') || '.' }
+  }
+  if (access === 'read' && isAbsolute(fromMsysPath(input))) {
+    for (const readRoot of context.readRoots) {
+      const allowedRoot = await realpathOfExisting(readRoot)
+      if (isInside(relative(allowedRoot, absolute))) return { absolute, display: absolute.split(sep).join('/') }
+    }
+  }
+  if (!context.requestExternalPermission) throw new ToolError(`Path is outside the project: ${input}`)
+  if (isProtectedFile(absolute)) throw new ToolError('Protected files cannot be accessed, even with external path permission.')
+  if (context.signal.aborted) throw new ToolError('External path access was cancelled.')
+  if (!await context.requestExternalPermission(absolute, access)) throw new ToolError('The user rejected external path access. Do not retry without new instructions.')
+  if (context.signal.aborted) throw new ToolError('External path access was cancelled.')
+  const verified = await realpathOfExisting(requested)
+  if (verified !== absolute) throw new ToolError('The external path changed during approval. Request access again.')
+  return { absolute, display: absolute.split(sep).join('/') }
 }
 
 export function contentHash(text: string): string {

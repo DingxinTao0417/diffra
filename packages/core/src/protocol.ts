@@ -74,7 +74,13 @@ export interface SessionLimits {
   goalMaxRounds: number
 }
 
+export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
+
+export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
+
 export interface SessionModel {
+  reasoningEffort?: ReasoningEffort
   endpoint: ModelEndpoint
   modelId: string
   contextWindow: number | null

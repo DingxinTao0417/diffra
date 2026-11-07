@@ -22,7 +22,8 @@ export function isPackagedRun(): boolean {
 
 export function launchApp(userDataDir: string): Promise<ElectronApplication> {
   const env = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    // Electron 宿主启动测试时可能继承该变量；被测应用必须以桌面模式启动。
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'),
   )
   const executable = packagedExecutable()
   // 打包版只认正式数据目录（不看 DIFFRA_USER_DATA_DIR），用 Chromium 的 --user-data-dir 换成临时目录

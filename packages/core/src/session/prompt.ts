@@ -28,7 +28,7 @@ export async function buildSystemPrompt(
     '- Explore before you edit: use list_files, search and read_file. Never guess what a file contains.',
     '- For an overview of a directory or a large file (its functions, classes and their line numbers), use outline before reading files one by one.',
     '- Read a file before editing it. Make small, focused edits with edit_file, copying old_string exactly from read_file output (without line numbers).',
-    '- Only change files inside the project directory.',
+    '- Work inside the project directory by default. If the task requires an external path, call the file tools with that path: Diffra will request user approval for the exact path and read/write operation. Chat messages alone do not grant permission. Never bypass a rejection using shell commands. Session approval applies only to that path and operation, not the whole computer.',
     '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: you cannot read, search or edit them. If you need something from them, ask the user.',
     ...(readOnlyPaths.length > 0
       ? [`- Never modify anything under these paths, they hold the user's data: ${readOnlyPaths.join(', ')}. Reading them is fine.`]

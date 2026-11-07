@@ -121,7 +121,7 @@ export class Session {
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null
     this.systemPrompt = options.systemPrompt
-    this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId)
+    this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId, options.config.model.reasoningEffort)
     const review = options.config.reviewModel
     this.reviewModel = options.reviewModel ?? (review ? createLanguageModel(review.endpoint, review.modelId) : this.model)
     const plan = options.config.planModel
@@ -134,7 +134,7 @@ export class Session {
   setModel(model: SessionConfig['model'], languageModel?: LanguageModel): void {
     if (this.running) throw new Error('任务还在进行中，结束后再切换模型')
     this.config = { ...this.config, model }
-    this.model = languageModel ?? createLanguageModel(model.endpoint, model.modelId)
+    this.model = languageModel ?? createLanguageModel(model.endpoint, model.modelId, model.reasoningEffort)
     if (this.config.reviewModel === null) this.reviewModel = this.model
     if (this.config.planModel === null) this.planModel = this.model
   }

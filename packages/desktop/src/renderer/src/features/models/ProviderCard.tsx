@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from 'react'
-import type { ListedModel } from '@diffra/core/types'
+import { REASONING_EFFORTS, type ListedModel } from '@diffra/core/types'
+import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { PROTOCOL_LABELS } from '../../../../shared/presets'
 import type { ModelConfig, ProviderView, SettingsView } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
@@ -191,6 +192,30 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
                         移除
                       </Button>
                     </div>
+                    {(provider.protocol === 'openai-compatible' || provider.protocol === 'openai-responses') && (
+                      <details className="w-full text-xs text-muted-foreground">
+                        <summary className="cursor-pointer">思考档位 · {model.reasoningEfforts === undefined ? '自动识别' : '自定义'}</summary>
+                        <p className="my-2">按服务商文档勾选支持的值。未知模型默认不启用；「默认」始终不发送参数。</p>
+                        <div className="flex flex-wrap gap-3">
+                          {REASONING_EFFORTS.filter((effort) => effort !== 'default').map((effort) => (
+                            <label key={effort} className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                aria-label={`${model.id} 思考 ${effort}`}
+                                checked={reasoningEffortsFor(provider, model).includes(effort)}
+                                onChange={(event) => {
+                                  const current = reasoningEffortsFor(provider, model).filter((value) => value !== 'default')
+                                  const reasoningEfforts = event.target.checked ? [...current, effort] : current.filter((value) => value !== effort)
+                                  void saveModels(provider.models.map((item) => item.id === model.id ? { ...item, reasoningEfforts } : item))
+                                }}
+                              />
+                              {effort}
+                            </label>
+                          ))}
+                        </div>
+                        <Button size="sm" variant="ghost" onClick={() => saveModels(provider.models.map((item) => item.id === model.id ? { ...item, reasoningEfforts: undefined } : item))}>恢复自动识别</Button>
+                      </details>
+                    )}
                     {test && test.state !== 'running' && (
                       <p
                         data-testid={`test-result-${model.id}`}

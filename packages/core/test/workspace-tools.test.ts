@@ -63,6 +63,31 @@ describe('文件工具', () => {
     await expect(readFileTool(context, { path: '../outside.txt' })).rejects.toThrow('outside the project')
   })
 
+  test('项目外文件必须批准，拒绝不写入，密钥文件不触发授权', async () => {
+    const external = mkdtempSync(join(tmpdir(), 'diffra-external-'))
+    const requested: Array<{ path: string; access: string }> = []
+    let approved = false
+    context.requestExternalPermission = async (path, access) => {
+      requested.push({ path, access })
+      return approved
+    }
+    try {
+      const target = join(external, 'note.txt')
+      await expect(editFileTool(context, { path: target, old_string: '', new_string: 'hello' })).rejects.toThrow('rejected')
+      expect(() => readFileSync(target)).toThrow()
+      approved = true
+      await editFileTool(context, { path: target, old_string: '', new_string: 'hello' })
+      expect(readFileSync(target, 'utf8')).toBe('hello')
+      expect((await readFileTool(context, { path: target })).text).toContain('hello')
+      expect(requested.map((item) => item.access)).toEqual(['write', 'write', 'read'])
+      expect(requested.every((item) => item.path.toLowerCase() === target.toLowerCase())).toBe(true)
+      await expect(readFileTool(context, { path: join(external, '.env') })).rejects.toThrow('Protected')
+      expect(requested).toHaveLength(3)
+    } finally {
+      rmSync(external, { recursive: true, force: true })
+    }
+  })
+
   test('list_files 和 search 用 ripgrep，遵守 .gitignore', async () => {
     writeFileSync(join(project, '.gitignore'), 'ignored.txt\n')
     writeFileSync(join(project, 'ignored.txt'), 'needle\n')

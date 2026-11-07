@@ -4,7 +4,7 @@ import { runProcess, truncateLines } from '../process.js'
 import { applyEdit } from './edit-match.js'
 import { isProtectedFile, isUnderReadOnly, PROTECTED_GLOBS } from './protected.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
-import { contentHash, resolveInWorkspace, resolveReadable } from './workspace.js'
+import { contentHash, resolveToolPath } from './workspace.js'
 
 function protectedFileError(display: string): ToolError {
   return new ToolError(
@@ -24,7 +24,7 @@ export async function readFileTool(
   context: ToolContext,
   input: { path: string; offset?: number; limit?: number },
 ): Promise<ToolOutput> {
-  const target = await resolveReadable(context.cwd, context.readRoots, input.path)
+  const target = await resolveToolPath(context, input.path, 'read')
   if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   const info = await stat(target.absolute).catch(() => null)
   if (!info) throw new ToolError(`File not found: ${target.display}`)
@@ -56,7 +56,7 @@ export async function readFileTool(
 }
 
 export async function listFilesTool(context: ToolContext, input: { path?: string }): Promise<ToolOutput> {
-  const target = await resolveReadable(context.cwd, context.readRoots, input.path ?? '.')
+  const target = await resolveToolPath(context, input.path ?? '.', 'read')
   const result = await runProcess(
     context.rgPath,
     ['--files', '--hidden', '--glob', '!.git', '--path-separator', '/', '--', target.display],
@@ -77,7 +77,7 @@ export async function searchTool(
   context: ToolContext,
   input: { pattern: string; path?: string; glob?: string; literal?: boolean },
 ): Promise<ToolOutput> {
-  const target = await resolveReadable(context.cwd, context.readRoots, input.path ?? '.')
+  const target = await resolveToolPath(context, input.path ?? '.', 'read')
   if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   const args = [
     '--line-number',
@@ -112,7 +112,7 @@ export async function editFileTool(
   context: ToolContext,
   input: { path: string; old_string: string; new_string: string; replace_all?: boolean },
 ): Promise<ToolOutput> {
-  const target = await resolveInWorkspace(context.cwd, input.path)
+  const target = await resolveToolPath(context, input.path, 'write')
   if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   if (isUnderReadOnly(context.cwd, target.absolute, context.readOnlyPaths)) {
     throw new ToolError(

@@ -1,4 +1,5 @@
 import { ShieldQuestion } from 'lucide-react'
+import { EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 
@@ -18,6 +19,9 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       <pre className="overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
         {command ?? request.toolCall.title}
       </pre>
+      {isExternalAccess(request.toolCall.rawInput) && (
+        <p className="text-xs text-muted-foreground">授权仅适用于上方确切路径和读/写操作；目录读取会包含子目录。本会话授权不会保留到重启后。项目外的修改不包含在项目检查点撤销中。</p>
+      )}
       <div className="flex flex-wrap gap-2">
         {request.options.map((option) => (
           <Button
@@ -32,6 +36,10 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       </div>
     </div>
   )
+}
+
+function isExternalAccess(rawInput: unknown): boolean {
+  return typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput && rawInput.scope === EXTERNAL_ACCESS_SCOPE
 }
 
 function commandOf(rawInput: unknown): string | null {

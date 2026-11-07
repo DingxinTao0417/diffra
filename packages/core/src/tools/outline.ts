@@ -1,11 +1,11 @@
 import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 import { parse, type SgNode } from '@ast-grep/napi'
 import { runProcess } from '../process.js'
 import { type Language, languageOf, vueScripts } from '../syntax.js'
 import { isProtectedFile } from './protected.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
-import { resolveReadable } from './workspace.js'
+import { resolveToolPath } from './workspace.js'
 
 const SOURCE_GLOB = '*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,py}'
 const MAX_FILE_BYTES = 1_000_000
@@ -22,7 +22,7 @@ interface OutlineEntry {
 
 // 列出一个文件或一个目录下所有源文件里定义的函数、类和方法、接口和类型，带行号
 export async function outlineTool(context: ToolContext, input: { path?: string }): Promise<ToolOutput> {
-  const target = await resolveReadable(context.cwd, context.readRoots, input.path ?? '.')
+  const target = await resolveToolPath(context, input.path ?? '.', 'read')
   const info = await stat(target.absolute).catch(() => null)
   if (!info) throw new ToolError(`Not found: ${target.display}`)
   const title = `大纲 ${target.display}`
@@ -53,7 +53,7 @@ export async function outlineTool(context: ToolContext, input: { path?: string }
   let chars = 0
   let shown = 0
   for (const path of files.slice(0, MAX_OUTLINED_FILES)) {
-    const entries = await outlineFile(join(context.cwd, path))
+    const entries = await outlineFile(resolve(context.cwd, path))
     const part = entries.length > 0 ? formatFile(path, entries) : path
     if (chars + part.length > MAX_OUTPUT_CHARS) break
     parts.push(part)

@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { PROTOCOLS } from '@diffra/core/types'
+import { PROTOCOLS, REASONING_EFFORTS } from '@diffra/core/types'
 import { z } from 'zod'
 import {
   COMPACT_AT_PERCENTS,
@@ -17,7 +17,7 @@ import {
 } from '../shared/settings'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
-export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1) })
+export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1), reasoningEffort: z.enum(REASONING_EFFORTS).optional() })
 
 export const providerFieldsSchema = z.object({
   presetId: z.string().nullable(),
@@ -31,6 +31,7 @@ export const providerFieldsSchema = z.object({
         contextWindow: z.number().int().positive().nullable(),
         // 图片输入那一步加的，旧设置文件里没有
         images: z.boolean().default(false),
+        reasoningEfforts: z.array(z.enum(REASONING_EFFORTS)).max(REASONING_EFFORTS.length).optional(),
       }),
     )
     .refine((models) => new Set(models.map((model) => model.id)).size === models.length, '模型 ID 重复'),

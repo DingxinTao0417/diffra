@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary } from '@diffra/core/types'
 import type { BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
-import type { SettingsView } from '../../../shared/settings'
+import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Turn, Usage } from '../features/session/transcript'
 
 export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
@@ -27,6 +27,7 @@ export interface LiveTask {
   project: string
   title: string
   modelLabel: string
+  modelRef?: ModelRef
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode

@@ -6,7 +6,7 @@ import { editFileTool, listFilesTool, readFileTool, searchTool } from '../tools/
 import { outlineTool } from '../tools/outline.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 
-const pathField = z.string().describe('Path relative to the project directory')
+const pathField = z.string().describe('Path relative to the project directory, or an external absolute path (requires user approval)')
 
 const readFileInput = z.object({
   path: pathField,

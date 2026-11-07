@@ -1,0 +1,78 @@
+import { rmSync } from 'node:fs'
+import { expect, test } from '@playwright/test'
+import { startMockProvider } from '../../core/test/mock-provider'
+import { launchApp, makeUserDataDir } from './launch'
+import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { reasoningEffortsFor } from '../src/shared/reasoning'
+
+test('已知型号、未知别名、自定义档位及不支持协议的能力列表', () => {
+  const model = { id: 'gpt-5', images: false, contextWindow: null }
+  const provider = { protocol: 'openai-compatible' as const }
+  expect(reasoningEffortsFor(provider, model)).toEqual(['default', 'minimal', 'low', 'medium', 'high'])
+  expect(reasoningEffortsFor(provider, { ...model, id: 'gpt-5.2' })).toEqual(['default', 'none', 'low', 'medium', 'high', 'xhigh'])
+  expect(reasoningEffortsFor(provider, { ...model, id: 'o3-mini-2025-01-31' })).toEqual(['default', 'low', 'medium', 'high'])
+  expect(reasoningEffortsFor(provider, { ...model, id: 'unknown' })).toEqual(['default'])
+  expect(reasoningEffortsFor(provider, { ...model, reasoningEfforts: [] })).toEqual(['default'])
+  expect(reasoningEffortsFor(provider, { ...model, reasoningEfforts: ['xhigh', 'low', 'low'] })).toEqual(['default', 'low', 'xhigh'])
+  expect(reasoningEffortsFor({ protocol: 'gemini' }, model)).toEqual(['default'])
+})
+
+test('模型菜单支持用键盘调整思考滑条并在重新打开后保留', async () => {
+  const userDataDir = makeUserDataDir()
+  const mock = await startMockProvider()
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '思考模型', baseUrl: `${mock.baseUrl}/openai/v1`, apiKey: 'e2e-key-123456', modelId: 'o3-mini' })
+    await window.getByTestId('model-menu').click()
+    const slider = window.getByRole('slider', { name: '思考程度' })
+    await expect(slider).toHaveValue('0')
+    await slider.focus()
+    await slider.press('End')
+    await expect(slider).toHaveValue('3')
+    await expect(slider).toHaveAttribute('aria-valuetext', '高')
+    await window.keyboard.press('Escape')
+    await expect(slider).toBeHidden()
+    await window.getByTestId('model-menu').click()
+    await expect(slider).toHaveValue('3')
+    await slider.focus()
+    await slider.press('Home')
+    await expect(slider).toHaveValue('0')
+    await expect(slider).toHaveAttribute('aria-valuetext', '默认')
+    await window.keyboard.press('Escape')
+    await expect(slider).toBeHidden()
+    await openModelsPage(window)
+    const card = providerCard(window, '思考模型')
+    await card.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
+    await card.getByRole('button', { name: '添加模型' }).click()
+    await expect(card.getByTestId('model-row-gpt-5.2')).toBeVisible()
+    await window.getByRole('button', { name: '返回', exact: true }).click()
+    await window.getByTestId('model-menu').click()
+    await window.getByRole('menuitem').filter({ hasText: 'gpt-5.2' }).click()
+    await expect(window.getByRole('menu')).toBeHidden()
+    await window.getByTestId('model-menu').click()
+    await expect(slider).toHaveAttribute('max', '5')
+    await expect(slider).toHaveValue('0')
+    await slider.focus()
+    await slider.press('End')
+    await expect(slider).toHaveAttribute('aria-valuetext', '极高')
+    await window.keyboard.press('Escape')
+    await expect(slider).toBeHidden()
+    await openModelsPage(window)
+    const row = card.getByTestId('model-row-gpt-5.2')
+    await row.locator('summary').click()
+    await row.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true }).click()
+    await expect(row.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true })).not.toBeChecked()
+    await window.getByRole('button', { name: '返回', exact: true }).click()
+    await window.getByTestId('model-menu').click()
+    await window.getByRole('menuitem').filter({ hasText: 'gpt-5.2' }).click()
+    await expect(window.getByRole('menu')).toBeHidden()
+    await window.getByTestId('model-menu').click()
+    await expect(slider).toHaveAttribute('max', '4')
+    await expect(slider).toHaveValue('0')
+  } finally {
+    await app.close()
+    await mock.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

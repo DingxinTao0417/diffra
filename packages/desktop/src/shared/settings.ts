@@ -1,14 +1,17 @@
-import type { PermissionMode, PluginInfo, Protocol, SessionChecks } from '@diffra/core/types'
+import type { PermissionMode, PluginInfo, Protocol, ReasoningEffort, SessionChecks } from '@diffra/core/types'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
 
 export interface ModelRef {
+  reasoningEffort?: ReasoningEffort
   providerId: string
   modelId: string
 }
 
 export interface ModelConfig {
+  // 未配置时按已知模型推断；空数组表示不支持
+  reasoningEfforts?: ReasoningEffort[]
   id: string
   contextWindow: number | null
   // 能看图：提问可以带图片，浏览器工具可以截图给它看

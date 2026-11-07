@@ -41,6 +41,7 @@ import {
   type SessionHandle,
 } from '../shared/ipc'
 import type { ModelRef } from '../shared/settings'
+import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
 import { devServer, stopDevServer } from './terminal-ipc'
@@ -142,6 +143,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
     if (!provider || !model) throw new Error(`${label}指向的模型不存在，请到「模型」页重新选择`)
+    if (ref.reasoningEffort && !reasoningEffortsFor(provider, model).includes(ref.reasoningEffort)) {
+      throw new Error(`${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
+    }
     const target = await providerEndpoint(settings, secrets, provider.id)
     if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
     return {
@@ -152,6 +156,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         contextWindow: model.contextWindow,
         provider: { id: provider.id, name: provider.name },
         supportsImages: model.images,
+        reasoningEffort: ref.reasoningEffort,
       },
     }
   }
@@ -243,7 +248,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options)
     const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode }
+    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode }
   })
 
   // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
@@ -307,7 +312,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info: loaded.info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
+    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>

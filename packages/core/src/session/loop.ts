@@ -12,6 +12,7 @@ import {
   type BrowserActionResult,
   type DevServerParams,
   type DevServerResult,
+  EXTERNAL_ACCESS_SCOPE,
   PERMISSION_OPTIONS,
   type PromptImage,
   type SessionModel,
@@ -76,6 +77,8 @@ export interface StepToolCall {
   input: unknown
   invalid: string | null
 }
+
+const EXTERNAL_PERMISSION_KEY_PREFIX = 'external:'
 
 const PERMISSION_CHOICES: PermissionOption[] = [
   { optionId: PERMISSION_OPTIONS.allowOnce, name: '允许一次', kind: 'allow_once' },
@@ -489,6 +492,28 @@ export async function runToolCall(
       readOnlyPaths: session.config.readOnlyPaths,
       readRoots: session.readRoots,
       requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
+      requestExternalPermission: async (path, access) => {
+        const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
+        if (signal.aborted) return false
+        if (session.alwaysAllowed.has(allowKey)) return true
+        const choice = await io.requestPermission(
+          {
+            toolCallId: call.toolCallId,
+            title: `项目外${access === 'read' ? '读取' : '写入'}：${path}`,
+            kind: access === 'read' ? 'read' : 'edit',
+            status: 'pending',
+            rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE },
+          },
+          [
+            { optionId: PERMISSION_OPTIONS.allowOnce, name: '仅允许本次操作', kind: 'allow_once' },
+            { optionId: PERMISSION_OPTIONS.allowAlways, name: '本会话允许此路径的同类操作', kind: 'allow_always' },
+            { optionId: PERMISSION_OPTIONS.reject, name: '拒绝', kind: 'reject_once' },
+          ],
+        )
+        if (signal.aborted) return false
+        if (choice === PERMISSION_OPTIONS.allowAlways) session.alwaysAllowed.add(allowKey)
+        return choice === PERMISSION_OPTIONS.allowOnce || choice === PERMISSION_OPTIONS.allowAlways
+      },
     }
     const output = await executeTool(name, call.input, context)
     await io.update({

@@ -5,7 +5,7 @@ export const GOOD_KEY = 'good-key-1234'
 
 export interface MockProvider {
   baseUrl: string
-  requests: Array<{ method: string; path: string; headers: IncomingHttpHeaders }>
+  requests: Array<{ method: string; path: string; headers: IncomingHttpHeaders; body?: string }>
   close(): Promise<void>
 }
 
@@ -15,12 +15,14 @@ export async function startMockProvider(): Promise<MockProvider> {
   const requests: MockProvider['requests'] = []
   const server: Server = createServer((req, res) => {
     const path = req.url ?? ''
-    requests.push({ method: req.method ?? '', path, headers: req.headers })
+    const request: MockProvider['requests'][number] = { method: req.method ?? '', path, headers: req.headers }
+    requests.push(request)
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
       if (path.startsWith('/slow/')) return
       const raw = Buffer.concat(chunks).toString('utf8')
+      request.body = raw
       // 请求里带了工具（测试连接的工具调用探测），就返回一次工具调用
       const wantsTool = raw.includes('"tools"')
 

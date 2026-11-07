@@ -159,6 +159,7 @@ export interface ProjectState {
 }
 
 export interface SessionHandle {
+  modelRef?: ModelRef
   sessionId: string
   info: SessionInfo
   // 这个会话用的模型，显示在输入框上

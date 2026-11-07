@@ -2,7 +2,8 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogle } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { generateText, type LanguageModel, tool } from 'ai'
+import { defaultSettingsMiddleware, generateText, type LanguageModel, tool, wrapLanguageModel } from 'ai'
+import type { ReasoningEffort } from '../protocol.js'
 import { z } from 'zod'
 import { CORE_VERSION } from '../version.js'
 import { httpError, toModelError } from './errors.js'
@@ -30,7 +31,18 @@ function anthropicApiBase(baseUrl: string): string {
   return `${trimSlash(baseUrl)}/v1`
 }
 
-export function createLanguageModel(endpoint: ModelEndpoint, modelId: string): LanguageModel {
+export function createLanguageModel(endpoint: ModelEndpoint, modelId: string, reasoningEffort?: ReasoningEffort): LanguageModel {
+  const model = createBaseLanguageModel(endpoint, modelId)
+  if (!reasoningEffort || reasoningEffort === 'default') return model
+  if (endpoint.protocol !== 'openai-responses' && endpoint.protocol !== 'openai-compatible') return model
+  const provider = endpoint.protocol === 'openai-responses' ? 'openai' : 'openai-compatible'
+  return wrapLanguageModel({
+    model,
+    middleware: defaultSettingsMiddleware({ settings: { providerOptions: { [provider]: { reasoningEffort } } } }),
+  })
+}
+
+function createBaseLanguageModel(endpoint: ModelEndpoint, modelId: string) {
   const { protocol, baseUrl, apiKey } = endpoint
   switch (protocol) {
     case 'anthropic':

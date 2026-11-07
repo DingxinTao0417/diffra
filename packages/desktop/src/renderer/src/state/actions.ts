@@ -145,6 +145,7 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
     project,
     title,
     modelLabel: handle.modelLabel,
+    modelRef: handle.modelRef,
     planLabel: handle.planLabel,
     fallbackLabel: handle.fallbackLabel,
     permissionMode: handle.permissionMode,
@@ -329,7 +330,7 @@ export async function setPermissionMode(sessionId: string | null, mode: Permissi
 export async function setTaskModel(sessionId: string, model: ModelRef): Promise<void> {
   try {
     const { modelLabel } = await window.diffra.configureSession(sessionId, { model })
-    if (modelLabel) updateLive(sessionId, (task) => ({ ...task, modelLabel }))
+    if (modelLabel) updateLive(sessionId, (task) => ({ ...task, modelLabel, modelRef: model }))
   } catch (error) {
     showToast(errorMessage(error))
   }

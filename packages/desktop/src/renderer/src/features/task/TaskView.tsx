@@ -129,7 +129,7 @@ function TaskPage({ task }: { task: LiveTask }) {
               ))}
               <Composer
                 size="normal"
-                placeholder="继续说明，输入 / 用命令和 Skill；Ctrl+Enter 发送，运行中发送会排队"
+                placeholder="继续说明，输入 / 用命令和 Skill；Enter 发送，Shift+Enter 换行，运行中发送会排队"
                 projectPath={task.project}
                 mcpTarget={{ sessionId: task.sessionId }}
                 commands={commands}
@@ -137,6 +137,7 @@ function TaskPage({ task }: { task: LiveTask }) {
                 permissionMode={task.permissionMode}
                 onPermissionModeChange={(mode) => void setPermissionMode(task.sessionId, mode)}
                 modelLabel={task.modelLabel}
+                modelRef={task.modelRef}
                 modelLocked={task.running}
                 onModelChange={(ref) => void setTaskModel(task.sessionId, ref)}
                 planMode={task.planMode}
