@@ -58,7 +58,7 @@ interface ComposerProps {
   onStop?(): void
 }
 
-const SOURCE_LABELS: Record<SkillSource, string> = { project: '项目', user: '用户', plugin: '插件', claude: 'Claude', codex: 'Codex' }
+const SOURCE_LABELS: Record<SkillSource, string> = { project: '项目', user: '用户', plugin: '插件', claude: 'Claude', codex: 'Codex', builtin: '内置' }
 
 interface MenuItem {
   key: string

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
+import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity, SkillInfo, SkillSource } from '../src/protocol.js'
 import { normalizeUrl } from '../src/urls.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
@@ -389,6 +389,55 @@ describe('系统提示词', () => {
     writeFileSync(join(project, 'AGENTS.md'), '用 pnpm，不要用 npm\n')
     const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('--- AGENTS.md ---\n用 pnpm，不要用 npm')
+  })
+})
+
+describe('系统提示词里的 Skill 索引和前端做法', () => {
+  const base = { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }
+  const skill = (name: string, source: SkillSource, description = '说明'): SkillInfo => ({ name, description, source, dir: `C:\\skills\\${name}` })
+
+  test('没有 Skill、不是前端项目时都不写', async () => {
+    const prompt = await buildSystemPrompt(project, null, base, [])
+    expect(prompt).not.toContain('Skills: instructions')
+    expect(prompt).not.toContain('Front-end work')
+  })
+
+  test('Skill 索引：名称、截短的描述和 SKILL.md 的位置；项目和内置的排在兼容读取的前面；放不下的只写条数', async () => {
+    const long = 'x'.repeat(400)
+    const skills = [
+      skill('zeta', 'claude', long),
+      skill('frontend-design', 'builtin', 'Guidance\nfor design'),
+      skill('mine', 'project'),
+      ...Array.from({ length: 30 }, (_, index) => skill(`extra-${index}`, 'codex', long)),
+    ]
+    const prompt = await buildSystemPrompt(project, null, base, [], { skills, frontend: null })
+    const index = prompt.slice(prompt.indexOf('Skills: instructions'))
+    expect(index).toContain('- mine: 说明 (C:/skills/mine/SKILL.md)')
+    expect(index).toContain('- frontend-design: Guidance for design (C:/skills/frontend-design/SKILL.md)')
+    expect(index.indexOf('- mine:')).toBeLessThan(index.indexOf('- frontend-design:'))
+    expect(index.indexOf('- frontend-design:')).toBeLessThan(index.indexOf('- zeta:'))
+    expect(index).toContain(`- zeta: ${'x'.repeat(150)}… (C:/skills/zeta/SKILL.md)`)
+    const entries = index.split('\n').filter((line) => line.startsWith('- '))
+    expect(entries.join('\n').length).toBeLessThanOrEqual(2000)
+    expect(index).toContain(`(${skills.length - entries.length} more skills are installed but not listed here`)
+  })
+
+  test('前端项目：先跟着项目已有的设计走；开了浏览器才让它检查页面，能看图才让它截图', async () => {
+    const off = await buildSystemPrompt(project, null, base, [], { skills: [], frontend: { browser: false, screenshots: false } })
+    expect(off).toContain('Front-end work (this project has UI code):')
+    expect(off).toContain('Reuse those components, colors, spacing and font sizes')
+    expect(off).toContain('The built-in browser is off')
+    expect(off).not.toContain('browser_check_layout')
+    expect(off).not.toContain('frontend-design skill')
+
+    const text = await buildSystemPrompt(project, null, base, [], { skills: [skill('frontend-design', 'builtin')], frontend: { browser: true, screenshots: false } })
+    expect(text).toContain('run browser_check_layout')
+    expect(text).toContain('(read the frontend-design skill listed below)')
+    expect(text).not.toContain('browser_screenshot with width')
+    expect(text.indexOf('Front-end work')).toBeLessThan(text.indexOf('Skills: instructions'))
+
+    const vision = await buildSystemPrompt(project, null, base, [], { skills: [], frontend: { browser: true, screenshots: true } })
+    expect(vision).toContain('browser_screenshot with width 1280 and with width 375')
   })
 })
 
@@ -1161,8 +1210,30 @@ describe('内置浏览器工具', () => {
       'browser_type',
       'browser_press_key',
       'browser_console',
+      'browser_check_layout',
     ])
     expect(Object.keys((await withBrowser(scriptedModel([]), true)).toolSet())).toContain('browser_screenshot')
+  })
+
+  test('截图可以指定视口宽度，不指定就是面板里的样子；布局检查的结果是文字', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_screenshot', input: { width: 375 } }] },
+      { toolCalls: [{ name: 'browser_screenshot', input: {} }] },
+      { toolCalls: [{ name: 'browser_check_layout', input: {} }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model, true)
+    const fake = fakeBrowser([
+      { text: '截图 375x812', image: { mimeType: 'image/jpeg', data: 'PHONEPIC' } },
+      { text: '截图 900x700', image: { mimeType: 'image/jpeg', data: 'PANELPIC' } },
+      { text: '手机 375×812：\n- 横向溢出：页面内容宽 600px', image: null },
+    ])
+    const io = Object.assign(recordingIO(), { browser: fake.browser })
+    await runTurn(session, { id: 'turn-1', text: '看看手机上的样子' }, io)
+    expect(fake.actions).toEqual([{ action: 'screenshot', width: 375 }, { action: 'screenshot', width: null }, { action: 'layout' }])
+    const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
+    expect(titles).toEqual(['浏览器 截图 375px 宽', '浏览器 截图', '浏览器 检查布局'])
+    expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('横向溢出：页面内容宽 600px')
   })
 
   test('本地地址直接打开，外部网站先问，拒绝了告诉模型；读页面、点击的结果发给模型', async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { findRipgrep } from '../src/environment.js'
-import { loadSkills, parseFrontmatter, withSkills } from '../src/skills.js'
+import { loadSkills, parseFrontmatter, skillRoots, withSkills } from '../src/skills.js'
 import { editFileTool, readFileTool } from '../src/tools/files.js'
 import type { ToolContext } from '../src/tools/types.js'
 
@@ -49,6 +49,19 @@ describe('Skill', () => {
       { name: 'notes', description: '', source: 'claude', body: '没有 frontmatter 的正文' },
       { name: 'review', description: '项目里的审查', source: 'project', body: '项目版' },
     ])
+  })
+
+  test('随 Diffra 带的 frontend-design 排在最后，用户自己装了同名的就用用户的', async () => {
+    const builtin = skillRoots(root).at(-1)!
+    expect(builtin.source).toBe('builtin')
+    const design = (await loadSkills([builtin])).find((skill) => skill.name === 'frontend-design')
+    expect(design?.description).toContain('distinctive, intentional visual design')
+    expect(design?.body).toContain('# Frontend Design')
+
+    const project = join(root, '.diffra', 'skills')
+    writeSkill(project, 'frontend-design', '---\nname: frontend-design\ndescription: 项目自己的设计说明\n---\n项目版')
+    const skills = await loadSkills([{ source: 'project', dir: project }, builtin])
+    expect(skills.find((skill) => skill.name === 'frontend-design')?.source).toBe('project')
   })
 
   test('选了 Skill 的提问：说明放在前面，带着目录，后面是原话', () => {

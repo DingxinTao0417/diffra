@@ -1,9 +1,10 @@
 import { normalizeUrl } from '@diffra/core'
 import type { BrowserAction, BrowserActionParams, BrowserActionResult } from '@diffra/core/types'
-import { BrowserWindow, session as electronSession, ipcMain, shell, WebContentsView, type WebContents } from 'electron'
+import { BrowserWindow, session as electronSession, ipcMain, type NativeImage, nativeImage, shell, WebContentsView, type WebContents } from 'electron'
 import { z } from 'zod'
 import { type BrowserRect, type BrowserState, IPC_CHANNELS } from '../shared/ipc'
 import { parse } from './ipc-input'
+import { formatLayoutReport, type LayoutPass, type LayoutResult, layoutCheckExpression } from './layout-check'
 
 // 内置浏览器：每个任务一个标签页（WebContentsView），叠在窗口里浏览器面板的位置上；
 // 所有任务共用一个和应用、和用户自己浏览器都分开的浏览器配置。智能体通过 Chrome 调试协议读页面、点击、输入
@@ -17,6 +18,16 @@ const MAX_TEXT_CHARS = 300
 const MAX_CONSOLE_ENTRIES = 200
 const MAX_CONSOLE_CHARS = 500
 const SCREENSHOT_WIDTH = 1280
+// 布局检查和指定宽度截图用的视口；比 MOBILE_MAX_WIDTH 窄的按手机模拟（遵守页面的 viewport 标签）
+const PHONE_VIEWPORT = { width: 375, height: 812 }
+const DESKTOP_VIEWPORT = { width: 1280, height: 800 }
+const MOBILE_MAX_WIDTH = 768
+const VIEWPORT_WAIT_MS = 1_000
+const VIEWPORT_SETTLE_MS = 200
+const CONSOLE_PROBLEMS = new Set(['error', 'warning', 'assert'])
+
+const viewportHeight = (width: number) => (width < MOBILE_MAX_WIDTH ? PHONE_VIEWPORT.height : width < 1024 ? 1024 : DESKTOP_VIEWPORT.height)
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // 这些角色给 ref，可以点击、输入
 const INTERACTIVE = new Set([
@@ -303,8 +314,10 @@ export class BrowserHost {
         if (entries.length === 0) return { text: '上次读取之后没有新的控制台消息。', image: null }
         return { text: entries.map((entry) => `[${entry.level}] ${entry.text}`).join('\n'), image: null }
       }
+      case 'layout':
+        return { text: await this.checkLayout(tab), image: null }
       case 'screenshot':
-        return this.screenshot(tab)
+        return this.screenshot(tab, action.width)
     }
   }
 
@@ -421,19 +434,83 @@ export class BrowserHost {
     return parts.join(' ')
   }
 
-  // 截图要标签页显示着：面板没打开时先请界面打开，等一会儿
-  private async screenshot(tab: Tab): Promise<BrowserActionResult> {
-    if (!tab.hasPage) throw new Error('浏览器还没有打开网页，先用 browser_navigate 打开')
+  // 面板没打开时界面收到 browserActivity 会打开它，等一会儿
+  private async waitShown(tab: Tab): Promise<boolean> {
     const deadline = Date.now() + SHOW_WAIT_MS
-    while (!tab.shown && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
-    if (!tab.shown) throw new Error('浏览器面板没有显示（这个任务不在前台），截不了图；用户切到这个任务后再试')
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    let image = await tab.view.webContents.capturePage()
+    while (!tab.shown && Date.now() < deadline) await sleep(100)
+    return tab.shown
+  }
+
+  private async evaluate<T>(contents: WebContents, expression: string): Promise<T> {
+    const { result, exceptionDetails } = await this.send<{
+      result: { value?: unknown }
+      exceptionDetails?: { text?: string; exception?: { description?: string } }
+    }>(contents, 'Runtime.evaluate', { expression, returnByValue: true })
+    if (exceptionDetails) throw new Error(`页面里的检查脚本出错：${exceptionDetails.exception?.description ?? exceptionDetails.text ?? ''}`)
+    return result.value as T
+  }
+
+  // 用调试协议的设备模拟临时按指定宽度渲染页面，用完调 clearViewport 恢复成面板的大小；期间面板里的页面会跟着变一下。
+  // 页面的宽度可能不等于设置的宽度（手机模拟下没有 viewport 标签是 980，内容超宽时会整体缩小），所以等 screen.width 变过去
+  private async setViewport(contents: WebContents, width: number): Promise<void> {
+    const height = viewportHeight(width)
+    await this.send(contents, 'Emulation.setDeviceMetricsOverride', { width, height, screenWidth: width, screenHeight: height, deviceScaleFactor: 1, mobile: width < MOBILE_MAX_WIDTH })
+    const deadline = Date.now() + VIEWPORT_WAIT_MS
+    while (Date.now() < deadline && (await this.evaluate<number>(contents, 'window.screen.width')) !== width) await sleep(25)
+    await sleep(VIEWPORT_SETTLE_MS)
+  }
+
+  private async clearViewport(contents: WebContents): Promise<void> {
+    await this.send(contents, 'Emulation.clearDeviceMetricsOverride').catch((error: unknown) => console.error('[browser] 恢复视口失败', error))
+  }
+
+  // 截图要标签页显示着。指定了宽度时按那个宽度渲染后截图，否则截面板里用户看到的样子
+  private async screenshot(tab: Tab, width: number | null): Promise<BrowserActionResult> {
+    if (!tab.hasPage) throw new Error('浏览器还没有打开网页，先用 browser_navigate 打开')
+    if (!(await this.waitShown(tab))) throw new Error('浏览器面板没有显示（这个任务不在前台），截不了图；用户切到这个任务后再试')
+    await sleep(200)
+    const contents = tab.view.webContents
+    let image: NativeImage
+    let source: string
+    if (width === null) {
+      image = await contents.capturePage()
+      const size = image.getSize()
+      source = `页面区域 ${size.width}x${size.height}`
+    } else {
+      try {
+        await this.setViewport(contents, width)
+        const { data } = await this.send<{ data: string }>(contents, 'Page.captureScreenshot', { format: 'png' })
+        image = nativeImage.createFromBuffer(Buffer.from(data, 'base64'))
+      } finally {
+        await this.clearViewport(contents)
+      }
+      source = `按 ${width}px 宽的视口渲染`
+    }
     if (image.isEmpty()) throw new Error('截图是空的，页面可能还没画出来，稍后再试')
-    const { width, height } = image.getSize()
-    if (width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH })
+    if (image.getSize().width > SCREENSHOT_WIDTH) image = image.resize({ width: SCREENSHOT_WIDTH })
     const size = image.getSize()
-    return { text: `截图 ${size.width}x${size.height}（页面区域 ${width}x${height}）`, image: { mimeType: 'image/jpeg', data: image.toJPEG(80).toString('base64') } }
+    return { text: `截图 ${size.width}x${size.height}（${source}）`, image: { mimeType: 'image/jpeg', data: image.toJPEG(80).toString('base64') } }
+  }
+
+  // 按手机和桌面两种宽度各跑一遍页面里的检查脚本。面板没显示也能查，只是靠脚本响应宽度变化的页面可能没来得及重排
+  private async checkLayout(tab: Tab): Promise<string> {
+    if (!tab.hasPage) return '浏览器还没有打开网页，先用 browser_navigate 打开。'
+    await this.waitShown(tab)
+    const contents = tab.view.webContents
+    const passes: LayoutPass[] = []
+    try {
+      for (const [label, viewport, phone] of [
+        ['手机', PHONE_VIEWPORT, true],
+        ['桌面', DESKTOP_VIEWPORT, false],
+      ] as const) {
+        await this.setViewport(contents, viewport.width)
+        passes.push({ label, viewport, phone, result: await this.evaluate<LayoutResult>(contents, layoutCheckExpression(phone)) })
+      }
+    } finally {
+      await this.clearViewport(contents)
+    }
+    const unread = tab.console.filter((entry) => entry.seq > tab.consoleRead && CONSOLE_PROBLEMS.has(entry.level)).length
+    return formatLayoutReport(contents.getTitle(), contents.getURL(), passes, unread)
   }
 }
 

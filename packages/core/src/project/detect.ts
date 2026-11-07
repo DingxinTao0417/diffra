@@ -1,5 +1,5 @@
 import { access, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
 import type { CheckDetection, DetectedCheck } from '../protocol.js'
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun'
@@ -121,6 +121,13 @@ export async function detectDevCommand(cwd: string): Promise<string | null> {
   }
   const script = ['dev', 'start', 'serve'].find((name) => typeof pkg.scripts?.[name] === 'string')
   return script ? runScript(await packageManagerOf(cwd, pkg), script) : null
+}
+
+// 有界面代码的项目：组件、页面模板或样式文件。系统提示词据此加上前端的做法
+const UI_EXTENSIONS = new Set(['.tsx', '.jsx', '.vue', '.svelte', '.astro', '.html', '.htm', '.css', '.scss', '.sass', '.less'])
+
+export function hasFrontend(files: string[]): boolean {
+  return files.some((file) => UI_EXTENSIONS.has(extname(file).toLowerCase()))
 }
 
 export async function packageManagerOf(cwd: string, pkg: PackageJson): Promise<PackageManager> {

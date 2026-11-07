@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROTOCOLS } from '../models/types.js'
-import { REASONING_EFFORTS, TERMINAL_MAX_LINES, type SessionConfig } from '../protocol.js'
+import { REASONING_EFFORTS, SCREENSHOT_MAX_WIDTH, SCREENSHOT_MIN_WIDTH, TERMINAL_MAX_LINES, type SessionConfig } from '../protocol.js'
 
 export const endpointSchema = z.object({
   protocol: z.enum(PROTOCOLS),
@@ -68,7 +68,8 @@ export const browserActionParamsSchema = z.intersection(
     z.object({ action: z.literal('type'), ref: z.string().min(1), text: z.string(), submit: z.boolean() }),
     z.object({ action: z.literal('press'), key: z.string().min(1) }),
     z.object({ action: z.literal('console') }),
-    z.object({ action: z.literal('screenshot') }),
+    z.object({ action: z.literal('screenshot'), width: z.number().int().min(SCREENSHOT_MIN_WIDTH).max(SCREENSHOT_MAX_WIDTH).nullable() }),
+    z.object({ action: z.literal('layout') }),
   ]),
 )
 

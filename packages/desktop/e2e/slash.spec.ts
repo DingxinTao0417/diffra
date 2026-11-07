@@ -49,6 +49,8 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     await expect(option('计划')).toBeVisible()
     await expect(option('diffra-e2e-style')).toContainText('测试用的写作风格')
     await expect(option('diffra-e2e-style')).toContainText('项目')
+    // 随 Diffra 带的 Skill 也能手动选，标成「内置」
+    await expect(option('frontend-design')).toContainText('内置')
     await expect(option('深度扫描')).toHaveCount(0)
     await window.screenshot({ path: 'test-results/slash-menu.png' })
 

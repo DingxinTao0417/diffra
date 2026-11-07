@@ -84,6 +84,9 @@ export interface TaskProgressView {
 export const TERMINAL_DEFAULT_LINES = 80
 export const TERMINAL_MAX_LINES = 200
 export const TERMINAL_READ_PERMISSION_PREFIX = 'terminal-read:'
+// 截图时可以指定的视口宽度范围（CSS 像素），从小屏手机到常见桌面
+export const SCREENSHOT_MIN_WIDTH = 320
+export const SCREENSHOT_MAX_WIDTH = 1920
 export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
 
 export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
@@ -159,8 +162,8 @@ export interface UsageBreakdown {
 export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact'
 export const MANUAL_COMPACTION_PROMPT = '/compact'
 
-// Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，以及兼容读取的 Claude Code、Codex 的目录
-export type SkillSource = 'project' | 'user' | 'plugin' | 'claude' | 'codex'
+// Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，兼容读取的 Claude Code、Codex 的目录，以及随 Diffra 带的
+export type SkillSource = 'project' | 'user' | 'plugin' | 'claude' | 'codex' | 'builtin'
 
 export interface SkillInfo {
   name: string
@@ -202,7 +205,10 @@ export type BrowserAction =
   | { action: 'type'; ref: string; text: string; submit: boolean }
   | { action: 'press'; key: string }
   | { action: 'console' }
-  | { action: 'screenshot' }
+  // width：按这个视口宽度（CSS 像素）渲染后截图，截完恢复；null 是面板里用户看到的样子
+  | { action: 'screenshot'; width: number | null }
+  // 按手机和桌面两种宽度检查布局问题，结果是文字
+  | { action: 'layout' }
 
 export type BrowserActionParams = BrowserAction & { sessionId: string }
 

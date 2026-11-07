@@ -6,7 +6,7 @@ import * as acp from '@agentclientprotocol/sdk'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createAgent } from '../src/agent.js'
 import { connectToCore, detectProjectChecks, handshake, runProjectCheck } from '../src/client.js'
-import { detectChecks } from '../src/project/detect.js'
+import { detectChecks, hasFrontend } from '../src/project/detect.js'
 
 let project: string
 
@@ -82,6 +82,17 @@ describe('识别检查命令', () => {
   test('没有可识别的配置时什么都不选', async () => {
     write('README.md', '# hi')
     expect(await detectChecks(project)).toEqual({ checks: [], afterEdit: null, beforeFinish: null, notes: [] })
+  })
+})
+
+describe('识别前端项目', () => {
+  test('有组件、页面模板或样式文件就算，扩展名不分大小写', () => {
+    expect(hasFrontend(['src/App.tsx'])).toBe(true)
+    expect(hasFrontend(['web/src/Home.vue'])).toBe(true)
+    expect(hasFrontend(['app/templates/index.html'])).toBe(true)
+    expect(hasFrontend(['static/Site.CSS'])).toBe(true)
+    expect(hasFrontend(['src/main.ts', 'server.py', 'README.md'])).toBe(false)
+    expect(hasFrontend([])).toBe(false)
   })
 })
 

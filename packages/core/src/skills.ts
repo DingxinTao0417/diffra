@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { SkillInfo, SkillSource } from './protocol.js'
 
 // 一个 Skill 是一个目录，里面的 SKILL.md 开头是 YAML frontmatter（name、description），后面是给模型的说明。
@@ -14,7 +15,7 @@ export interface SkillRoot {
   dir: string
 }
 
-// 按优先级排：同名的 Skill 只认排在前面的
+// 按优先级排：同名的 Skill 只认排在前面的。内置的排最后，用户自己装了同名的就用用户的
 export function skillRoots(cwd: string, extra: SkillRoot[] = []): SkillRoot[] {
   const home = homedir()
   return [
@@ -23,7 +24,14 @@ export function skillRoots(cwd: string, extra: SkillRoot[] = []): SkillRoot[] {
     ...extra,
     { source: 'claude', dir: join(home, '.claude', 'skills') },
     { source: 'codex', dir: join(home, '.codex', 'skills') },
+    { source: 'builtin', dir: builtinSkillsDir() },
   ]
+}
+
+// 桌面端把 core 打进 out/main/core.js，内置 Skill 随安装包放在 resources/skills，由主进程通过 DIFFRA_SKILLS_DIR 传进来；
+// 直接跑 core 的源码或构建产物时就是 core 包里的 skills 目录
+function builtinSkillsDir(): string {
+  return process.env.DIFFRA_SKILLS_DIR || fileURLToPath(new URL('../skills', import.meta.url))
 }
 
 export interface Skill extends SkillInfo {

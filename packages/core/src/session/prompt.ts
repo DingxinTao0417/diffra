@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { RulePack, SessionChecks, SessionConfig } from '../protocol.js'
+import type { RulePack, SessionChecks, SessionConfig, SkillInfo, SkillSource } from '../protocol.js'
 import { renderRules } from '../rules/select.js'
 
 // 项目里的规则文件，按顺序都读，合计最多 8000 字
@@ -8,6 +8,21 @@ const RULE_FILES = ['AGENTS.md', 'CLAUDE.md']
 const MAX_RULES_CHARS = 8000
 const PROJECT_RULES_HEADING = 'Project rules from the repository (follow them):'
 const CODING_RULES_HEADING = 'Coding rules (written in Chinese; each starts with its rule ID).'
+const SKILLS_HEADING =
+  "Skills: instructions for specific kinds of work. When a request matches a skill's description, read its SKILL.md with read_file before you start and follow it; " +
+  'read other files in the skill folder only when SKILL.md points to them. Skills the user attached to a request are already included in it.'
+// Skill 索引只放名称、截短的描述和 SKILL.md 的位置，全文由模型按需去读
+const MAX_SKILL_DESCRIPTION_CHARS = 150
+const MAX_SKILL_INDEX_CHARS = 2000
+// 篇幅不够时先列项目、用户、插件和内置的，兼容读取的 Claude Code、Codex 的排后面
+const SKILL_SOURCE_ORDER: SkillSource[] = ['project', 'user', 'plugin', 'builtin', 'claude', 'codex']
+const DESIGN_SKILL = 'frontend-design'
+
+export interface PromptContext {
+  skills: SkillInfo[]
+  // 有界面代码的项目才有：browser 是能不能用内置浏览器，screenshots 是模型能不能看截图
+  frontend: { browser: boolean; screenshots: boolean } | null
+}
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
 export async function buildSystemPrompt(
@@ -15,7 +30,9 @@ export async function buildSystemPrompt(
   bashPath: string | null,
   { checks, readOnlyPaths, rules }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules'>,
   rulePacks: RulePack[],
+  context: PromptContext = { skills: [], frontend: null },
 ): Promise<string> {
+  const skills = skillIndex(context.skills)
   const shell = bashPath
     ? 'run_command uses bash (Git Bash on Windows): use bash syntax and forward slashes.'
     : 'run_command is unavailable because bash was not found.'
@@ -37,6 +54,8 @@ export async function buildSystemPrompt(
     ...checkLines(checks),
     '- If the user only asked a question and you changed nothing, just answer without calling finish.',
     '- Reply in the same language the user writes in.',
+    ...(context.frontend ? frontendLines(context.frontend, skills.listed.has(DESIGN_SKILL)) : []),
+    ...skills.lines,
   ]
   const projectRules = await readProjectRules(cwd)
   if (projectRules) lines.push('', PROJECT_RULES_HEADING, projectRules)
@@ -82,6 +101,64 @@ function checkLines(checks: SessionChecks): string[] {
   }
   return lines
 }
+
+// 前端改动先跟着项目已有的设计走，改完在内置浏览器里检查；能看图的模型再按手机和桌面两种宽度截图对照
+function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designSkill: boolean): string[] {
+  const lines = [
+    '',
+    'Front-end work (this project has UI code):',
+    '- Before changing UI, learn how the project builds it: the styling setup (Tailwind config, CSS variables or theme tokens), the shared components, and a similar existing screen. ' +
+      'Reuse those components, colors, spacing and font sizes; do not add new colors, fonts or one-off sizes unless the user asks.',
+    `- Match the screens around the change. For a new page or a redesign with no existing style to follow, settle on a clear visual direction before writing code${designSkill ? ` (read the ${DESIGN_SKILL} skill listed below)` : ''}.`,
+    '- Handle the states real users hit: loading, empty, error, long text, narrow screens, and dark mode if the project has one.',
+    '- A reference image from the user is the spec: match its layout, spacing, sizes and colors.',
+  ]
+  if (!frontend.browser) {
+    lines.push('- The built-in browser is off, so you cannot check pages yourself; after a visible change, tell the user which screens to check.')
+    return lines
+  }
+  lines.push(
+    '- After a visible change, check it in the built-in browser: start the dev server with dev_server_start, open the page with browser_navigate, ' +
+      'read browser_console for errors, and run browser_check_layout. Fix what they report.',
+  )
+  if (frontend.screenshots) {
+    lines.push(
+      '- Then look at it: browser_screenshot with width 1280 and with width 375. Compare with the reference image if there is one, and keep refining until it looks right.',
+    )
+  }
+  return lines
+}
+
+// 已装的 Skill 列成索引，任务对得上时模型自己用 read_file 读全文（Skill 目录本来就可以只读访问）
+function skillIndex(skills: SkillInfo[]): { lines: string[]; listed: Set<string> } {
+  const listed = new Set<string>()
+  if (skills.length === 0) return { lines: [], listed }
+  const sorted = [...skills].sort(
+    (a, b) => SKILL_SOURCE_ORDER.indexOf(a.source) - SKILL_SOURCE_ORDER.indexOf(b.source) || a.name.localeCompare(b.name),
+  )
+  const entries: string[] = []
+  let chars = 0
+  for (const skill of sorted) {
+    const description = clip(skill.description.replace(/\s+/g, ' ').trim(), MAX_SKILL_DESCRIPTION_CHARS)
+    const entry = `- ${skill.name}${description ? `: ${description}` : ''} (${skill.dir.replace(/\\/g, '/')}/SKILL.md)`
+    if (chars + entry.length > MAX_SKILL_INDEX_CHARS) continue
+    entries.push(entry)
+    listed.add(skill.name)
+    chars += entry.length + 1
+  }
+  const omitted = skills.length - entries.length
+  return {
+    lines: [
+      '',
+      SKILLS_HEADING,
+      ...entries,
+      ...(omitted > 0 ? [`(${omitted} more skills are installed but not listed here; the user can attach them from the / menu.)`] : []),
+    ],
+    listed,
+  }
+}
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
 
 async function readProjectRules(cwd: string): Promise<string> {
   const parts: string[] = []

@@ -21,7 +21,7 @@ import {
   type StoredSessionMeta,
   type TurnKind,
 } from './protocol.js'
-import { detectLanguages } from './rules/languages.js'
+import { countLanguages, listProjectFiles } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
 import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
@@ -41,7 +41,7 @@ import type { Session as SessionType } from './session/session.js'
 import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
 import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
-import { detectChecks } from './project/detect.js'
+import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
 import { Session } from './session/session.js'
 import { type SessionRecord, SessionStore } from './session/store.js'
@@ -157,16 +157,19 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
           return null
         })
       : null
-    const rulePacks =
-      config.rules.packs.length > 0 ? selectRulePacks(config.rules.packs, await detectLanguages(cwd, environment.rgPath)) : []
+    const files = await listProjectFiles(cwd, environment.rgPath)
+    const rulePacks = config.rules.packs.length > 0 ? selectRulePacks(config.rules.packs, countLanguages(files)) : []
+    const roots = skillRoots(cwd, pluginSkillRoots(config.plugins))
+    const skills = (await loadSkills(roots)).map(({ body: _body, ...info }) => info)
+    const frontend = hasFrontend(files) ? { browser: config.browser, screenshots: config.browser && config.model.supportsImages } : null
     const session = new Session({
       cwd,
       config,
       environment,
       checkpoints,
       rulePacks,
-      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks),
-      readRoots: skillRoots(cwd, pluginSkillRoots(config.plugins)).map((root) => root.dir),
+      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { skills, frontend }),
+      readRoots: roots.map((root) => root.dir),
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
       record,

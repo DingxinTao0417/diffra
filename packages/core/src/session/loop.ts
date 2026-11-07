@@ -622,7 +622,7 @@ async function runBrowserToolCall(
     await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: name, kind: 'other', status: 'in_progress', rawInput: call.input })
     return fail(error instanceof Error ? error.message : String(error))
   }
-  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'screenshot' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
+  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'layout' || action.action === 'screenshot' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
   await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: browserTitle(action), kind, status: 'in_progress', rawInput: call.input })
   if (!io.browser) return fail('The built-in browser is not available in this client.')
   if (action.action === 'navigate') {

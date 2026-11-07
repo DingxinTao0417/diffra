@@ -19,7 +19,11 @@ const config: Configuration = {
   files: ['out/**/*'],
   // 唯一的原生依赖 node-pty 自带 N-API 预编译文件，Electron 直接能用；重编要装 VS 编译工具，而且会失败
   npmRebuild: false,
-  extraResources: [{ from: rgPath, to: 'rg.exe' }],
+  // 内置 Skill 要是真实文件：模型按索引里的路径用 read_file 读，主进程通过 DIFFRA_SKILLS_DIR 告诉 core
+  extraResources: [
+    { from: rgPath, to: 'rg.exe' },
+    { from: '../core/skills', to: 'skills' },
+  ],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
   },

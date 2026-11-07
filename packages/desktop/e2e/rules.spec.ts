@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -31,6 +31,11 @@ test('内置规范全部生效：按项目语言选包，强制级和推荐级�
     for (const ruleId of ['GEN-ERR-1', 'SEC-INJ-1', 'TS-TYPE-1']) expect(prompt).toContain(`- ${ruleId}: `)
     expect(prompt).toContain('- GEN-NAME-4（推荐）: ')
     expect(prompt).not.toContain('- JAVA-')
+    // 随 Diffra 带的 Skill 在索引里，路径指向真实的文件（打包后在 resources/skills）；项目里没有界面代码，不加前端的做法
+    const designSkill = /- frontend-design: [^\n]*?\(([^()]+\/SKILL\.md)\)/.exec(JSON.parse(prompt).messages[0].content as string)
+    expect(designSkill?.[1]).toMatch(/\/skills\/frontend-design\/SKILL\.md$/)
+    expect(existsSync(designSkill?.[1] ?? '')).toBe(true)
+    expect(prompt).not.toContain('Front-end work')
 
     await window.keyboard.press('Control+,')
     await expect(settingsNav(window).getByRole('button', { name: '规范' })).toHaveCount(0)

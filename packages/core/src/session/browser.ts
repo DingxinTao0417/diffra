@@ -1,6 +1,14 @@
 import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
-import { type BrowserAction, PERMISSION_OPTIONS, type PromptImage, TERMINAL_DEFAULT_LINES, TERMINAL_MAX_LINES } from '../protocol.js'
+import {
+  type BrowserAction,
+  PERMISSION_OPTIONS,
+  type PromptImage,
+  SCREENSHOT_MAX_WIDTH,
+  SCREENSHOT_MIN_WIDTH,
+  TERMINAL_DEFAULT_LINES,
+  TERMINAL_MAX_LINES,
+} from '../protocol.js'
 import { isLocalHost, normalizeUrl } from '../urls.js'
 import type { Session } from './session.js'
 
@@ -8,6 +16,15 @@ import type { Session } from './session.js'
 // 读页面给的是无障碍树，元素带 ref 编号，按编号点击、输入；不看图的模型也能用。截图只给打开了「图片」的模型
 const navigateInput = z.object({ url: z.string().min(1).describe('URL to open, e.g. http://localhost:5173 or https://example.com') })
 const refInput = z.string().min(1).describe('Element ref from the latest browser_snapshot, e.g. e12')
+const screenshotInput = z.object({
+  width: z
+    .number()
+    .int()
+    .min(SCREENSHOT_MIN_WIDTH)
+    .max(SCREENSHOT_MAX_WIDTH)
+    .optional()
+    .describe('Render the page at this viewport width in CSS pixels for the screenshot, e.g. 375 for a phone or 1280 for a desktop. Default: the page as the user sees it in the panel.'),
+})
 
 export const BROWSER_TOOLS = {
   browser_navigate: tool({
@@ -35,7 +52,13 @@ export const BROWSER_TOOLS = {
     description: 'Read console messages and page errors logged since the last call (errors and warnings from the page, failed requests).',
     inputSchema: z.object({}),
   }),
-  browser_screenshot: tool({ description: 'Take a screenshot of the current page in the built-in browser.', inputSchema: z.object({}) }),
+  browser_check_layout: tool({
+    description:
+      'Check the current page for layout problems at a phone width (375px) and a desktop width (1280px): horizontal overflow, clipped text, ' +
+      'buttons or links that are covered or too small to tap, low text contrast, and images without alt text. Returns text, so it works without screenshots.',
+    inputSchema: z.object({}),
+  }),
+  browser_screenshot: tool({ description: 'Take a screenshot of the current page in the built-in browser.', inputSchema: screenshotInput }),
 }
 
 // 开发服务器和浏览器一起提供：先起服务，再在浏览器里打开
@@ -93,8 +116,10 @@ export function toBrowserAction(name: BrowserToolName, input: unknown): BrowserA
       return { action: 'press', key: parse(z.object({ key: z.string().min(1) })).key }
     case 'browser_console':
       return { action: 'console' }
+    case 'browser_check_layout':
+      return { action: 'layout' }
     case 'browser_screenshot':
-      return { action: 'screenshot' }
+      return { action: 'screenshot', width: parse(screenshotInput).width ?? null }
   }
 }
 
@@ -127,8 +152,10 @@ export function browserTitle(action: BrowserAction): string {
       return `浏览器 按键 ${action.key}`
     case 'console':
       return '浏览器 控制台'
+    case 'layout':
+      return '浏览器 检查布局'
     case 'screenshot':
-      return '浏览器 截图'
+      return action.width ? `浏览器 截图 ${action.width}px 宽` : '浏览器 截图'
   }
 }
 
