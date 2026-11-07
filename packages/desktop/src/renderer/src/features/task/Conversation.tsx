@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { PromptImage, StopReason } from '@diffra/core/types'
+import type { PromptImage, StopReason, TaskProgressView } from '@diffra/core/types'
 import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -17,7 +17,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
-  | { type: 'tools'; id: string; items: ToolItem[] }
+  | { type: 'tools' | 'edits'; id: string; items: ToolItem[] }
   | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
@@ -52,6 +52,12 @@ function toBlocks(items: TranscriptItem[]): Block[] {
       continue
     }
     const type = toolBlockType(item)
+    if (type === 'edit') {
+      const previous = blocks.at(-1)
+      if (previous?.type === 'edits') previous.items.push(item)
+      else blocks.push({ type: 'edits', id: item.id, items: [item] })
+      continue
+    }
     if (type) {
       blocks.push({ type, item })
       continue
@@ -192,6 +198,7 @@ interface TurnViewProps {
 
 function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnViewProps) {
   const blocks = useMemo(() => toBlocks(turn.items), [turn.items])
+  const [showEditDetails, setShowEditDetails] = useState(false)
   // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动
   const finishFiles = useMemo(() => {
     const result = new Map<string, ChangedFile[]>()
@@ -217,12 +224,17 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
 
   return (
     <section data-testid="turn" data-turn-id={turn.id} className="flex flex-col gap-3.5">
+      {turn.items.some((item) => item.kind === 'tool' && item.content.some((content) => content.type === 'diff')) && (
+        <button type="button" aria-expanded={showEditDetails} className="self-end text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowEditDetails(!showEditDetails)}>{showEditDetails ? '收起代码详情' : '展开代码详情'}</button>
+      )}
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
             return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} />
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
+          case 'edits':
+            return <EditGroup key={block.id} items={block.items} projectPath={task.project} expanded={showEditDetails} />
           case 'edit':
             return <EditBlock key={block.item.id} item={block.item} projectPath={task.project} />
           case 'check':
@@ -238,7 +250,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id) ?? []} projectPath={task.project} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id) ?? []} projectPath={task.project} progress={last && block.item.id === [...finishFiles.keys()].at(-1) ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionCard request={task.permission} onRespond={(optionId) => respondPermission(task.sessionId, optionId)} />}
@@ -495,20 +507,41 @@ function CompactionRow({ item }: { item: ToolItem }) {
   )
 }
 
-function EditBlock({ item, projectPath }: { item: ToolItem; projectPath: string }) {
+function EditGroup({ items, projectPath, expanded }: { items: ToolItem[]; projectPath: string; expanded: boolean }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => setOpen(expanded), [expanded])
+  if (items.length === 1 && items[0]) return <EditBlock item={items[0]} projectPath={projectPath} expanded={expanded} />
+  const files = filesOf(items)
+  return (
+    <div className="space-y-2" data-testid="edit-group">
+      <button type="button" aria-expanded={open} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        修改 {files.length} 个文件 · {items.length} 次编辑
+        <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+      </button>
+      <div hidden={!open} className="space-y-2 border-l pl-3">{items.map((item) => <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={expanded} />)}</div>
+    </div>
+  )
+}
+
+function EditBlock({ item, projectPath, expanded = false }: { item: ToolItem; projectPath: string; expanded?: boolean }) {
+  const [open, setOpen] = useState(expanded)
+  useEffect(() => setOpen(expanded), [expanded])
   return (
     <div className="flex flex-col gap-2" data-testid="tool-call" data-kind="edit" data-status={item.status}>
       {item.content.flatMap((content) =>
         content.type === 'diff'
           ? [
-              <DiffView
-                key={content.path}
-                path={content.path}
-                oldText={content.oldText ?? null}
-                newText={content.newText}
-                projectPath={projectPath}
-                status={<StatusIcon status={item.status} />}
-              />,
+              <div key={content.path} className="space-y-2">
+                <button type="button" aria-expanded={open} aria-label={`查看改动 ${relativePath(content.path, projectPath)}`} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => setOpen(!open)}>
+                  {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                  <StatusIcon status={item.status} />
+                  <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>
+                  <span title={relativePath(content.path, projectPath)} className="min-w-0 flex-1 truncate font-mono text-xs">{relativePath(content.path, projectPath)}</span>
+                  <DiffCounts {...diffStats(content.oldText ?? null, content.newText)} />
+                </button>
+                {open && <DiffView path={content.path} oldText={content.oldText ?? null} newText={content.newText} projectPath={projectPath} status={<StatusIcon status={item.status} />} />}
+              </div>,
             ]
           : [],
       )}
@@ -736,29 +769,36 @@ interface ChangedFile {
 }
 
 function filesOf(items: TranscriptItem[]): ChangedFile[] {
-  const files = new Map<string, ChangedFile>()
+  const files = new Map<string, { oldText: string | null; newText: string }>()
   for (const item of items) {
-    if (item.kind !== 'tool') continue
+    if (item.kind !== 'tool' || item.status !== 'completed') continue
     for (const content of item.content) {
       if (content.type !== 'diff') continue
-      const { added, removed } = diffStats(content.oldText ?? null, content.newText)
       const existing = files.get(content.path)
-      files.set(content.path, { path: content.path, added: (existing?.added ?? 0) + added, removed: (existing?.removed ?? 0) + removed })
+      files.set(content.path, { oldText: existing ? existing.oldText : content.oldText ?? null, newText: content.newText })
     }
   }
-  return [...files.values()]
+  return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
-function FinishCard({ item, files, projectPath }: { item: ToolItem; files: ChangedFile[]; projectPath: string }) {
+function FinishCard({ item, files, projectPath, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; projectPath: string; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
   return (
     <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3" data-testid="tool-call" data-kind="finish" data-status={item.status}>
       <div className={cn('flex items-center gap-2 font-medium', !passed && 'text-destructive')}>
         <StatusIcon status={item.status} className="size-4" />
-        {passed ? '完成' : '还没完成'}
+        {passed ? '本轮交付' : '还没完成'}
+        {passed && files.length > 0 && <span className="ml-auto text-xs font-normal text-muted-foreground">{files.length} 个文件 · 净改动</span>}
       </div>
       {text && (passed ? <Markdown text={text} /> : <p className="text-[0.93rem] text-muted-foreground">{text}</p>)}
+      {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
+      </div>}
+      {passed && files.length > 0 && <div className="flex items-center gap-3 text-xs">
+        <button type="button" className="text-primary hover:underline" onClick={() => store.set((state) => ({ ...state, panel: 'review' }))}>审阅本任务改动</button>
+        {onRestore && <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onRestore}>撤销本轮改动</button>}
+      </div>}
       {passed && files.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {files.map((file) => (

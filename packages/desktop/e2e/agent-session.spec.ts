@@ -43,6 +43,8 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     // 带重定向的命令需要确认
     const permission = window.getByTestId('permission-card')
     await expect(permission).toContainText('echo done > done.txt', { timeout: 20_000 })
+    await expect(window.getByTestId('diff-view')).toHaveCount(0)
+    await window.getByRole('button', { name: '查看改动 hello.txt', exact: true }).click()
     await expect(window.getByTestId('diff-view')).toContainText('+hello diffra')
     await permission.getByRole('button', { name: '允许一次' }).click()
 

@@ -10,6 +10,8 @@ import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
 import type { TaskDiff } from './useTaskDiff'
 
+const COLLAPSED_CHANGED_FILE_LIMIT = 10
+
 interface MonitorPanelProps {
   task: LiveTask
   project: ProjectState | null
@@ -22,6 +24,8 @@ interface MonitorPanelProps {
 
 export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan }: MonitorPanelProps) {
   const [editing, setEditing] = useState(false)
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
+  const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const mcp = useMcpStatus({ sessionId: task.sessionId })
   const progressLabels = { running: '执行中', waiting: '等待中', blocked: '受阻（未完成）', cancelled: '已取消', completed: '已完成' }
@@ -78,7 +82,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         {diff?.state === 'error' && <p className="text-destructive">{diff.message}</p>}
         {diff?.state === 'ready' && diff.files.length === 0 && <p className="text-muted-foreground">还没有改动文件</p>}
         {diff?.state === 'ready' &&
-          diff.files.map((file) => (
+          diff.files.slice(0, filesExpanded ? diff.files.length : COLLAPSED_CHANGED_FILE_LIMIT).map((file) => (
             <div key={file.path} className="flex items-center gap-2" data-testid="monitor-file">
               <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.path}>
                 {file.path}
@@ -86,6 +90,16 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
               {file.binary ? <span className="text-xs text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
             </div>
           ))}
+        {diff?.state === 'ready' && diff.files.length > COLLAPSED_CHANGED_FILE_LIMIT && (
+          <button
+            type="button"
+            aria-expanded={filesExpanded}
+            className="self-start text-xs text-primary hover:underline"
+            onClick={() => setExpandedSessionId(filesExpanded ? null : task.sessionId)}
+          >
+            {filesExpanded ? '收起改动列表' : `展开全部（剩余 ${diff.files.length - COLLAPSED_CHANGED_FILE_LIMIT} 个）`}
+          </button>
+        )}
       </Section>
 
       <Section title="规范">

@@ -42,7 +42,12 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     // 对话流：读文件收成一组，Markdown 渲染，两张改动卡片，每次改动后跑了快速检查，完成卡片列出改动的文件
     await expect(window.getByRole('button', { name: '执行工具 2 次' })).toBeVisible()
     await expect(window.getByTestId('agent-message').locator('strong')).toHaveText('hello world')
+    await expect(window.getByTestId('diff-view')).toHaveCount(0)
+    await expect(window.getByRole('button', { name: '查看改动 hello.txt', exact: true })).toHaveAttribute('aria-expanded', 'false')
+    await expect(window.getByRole('button', { name: '查看改动 greet.js', exact: true })).toHaveAttribute('aria-expanded', 'false')
+    await window.getByRole('button', { name: '展开代码详情', exact: true }).click()
     await expect(cards(window, 'edit')).toHaveCount(2)
+    await expect(window.getByTestId('diff-view')).toHaveCount(2)
     await expect(cards(window, 'check')).toHaveCount(3)
     await expect(cards(window, 'check').first()).toContainText('通过')
     await expect(cards(window, 'finish')).toContainText('greet.js')
