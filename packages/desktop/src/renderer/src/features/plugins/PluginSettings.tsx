@@ -16,8 +16,12 @@ export function PluginSettings() {
   const [installing, setInstalling] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
 
+  // 安装按钮一开始就能点：装完的结果比最初的列表先回来时，不能被晚到的旧列表盖掉
   useEffect(() => {
-    window.diffra.listPlugins().then(setPlugins, (caught: unknown) => setError(errorMessage(caught)))
+    window.diffra.listPlugins().then(
+      (list) => setPlugins((current) => current ?? list),
+      (caught: unknown) => setError(errorMessage(caught)),
+    )
   }, [])
 
   const run = async (action: () => Promise<PluginView[] | null>) => {
