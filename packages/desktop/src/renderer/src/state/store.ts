@@ -43,6 +43,8 @@ export interface LiveTask {
   queue: Array<{ id: string; text: string; options: MessageOptions }>
   // 文件可能变了就加一，任务监控和审阅面板据此刷新
   changeVersion: number
+  // 一轮在用户没看着这个任务时结束，侧栏标「完成未读」；打开任务后清掉，只在内存里
+  unread: boolean
 }
 
 // 底部终端面板里的一个终端；进程退出后标签留着，exitCode 不为 null
@@ -68,6 +70,9 @@ export interface AppState {
   browsers: Record<string, BrowserState>
   settings: SettingsView | null
   sidebarOpen: boolean
+  // 侧栏收起的项目、展开了全部任务的项目（按项目路径）；侧栏会随 Ctrl+B 和设置页卸载，所以放这里，只在内存里
+  collapsedProjects: ReadonlySet<string>
+  expandedProjects: ReadonlySet<string>
   searchOpen: boolean
   panel: SidePanel
   terminalOpen: boolean
@@ -88,6 +93,8 @@ const initialState: AppState = {
   browsers: {},
   settings: null,
   sidebarOpen: true,
+  collapsedProjects: new Set(),
+  expandedProjects: new Set(),
   searchOpen: false,
   panel: 'monitor',
   terminalOpen: false,

@@ -38,7 +38,9 @@ export function navigate(route: Route, record = true): void {
         historyIndex = history.length - 1
       }
     }
-    return { ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route, history, historyIndex }
+    const opened = route.name === 'task' ? state.live[route.sessionId] : undefined
+    const live = opened?.unread ? { ...state.live, [opened.sessionId]: { ...opened, unread: false } } : state.live
+    return { ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route, history, historyIndex, live }
   })
 }
 
@@ -158,6 +160,7 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
     permission: null,
     queue: [],
     changeVersion: 0,
+    unread: false,
   }
 }
 
@@ -251,9 +254,11 @@ async function runTurnOnCore(
   } finally {
     clearTimeout(refresh)
     let next: LiveTask['queue'][number] | undefined
+    const route = store.get().route
+    const viewing = route.name === 'task' && route.sessionId === sessionId
     updateLive(sessionId, (current) => {
       next = current.queue[0]
-      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1 }
+      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
     })
     await refreshTasks()
     if (next) void sendMessage(sessionId, next.text, next.options)

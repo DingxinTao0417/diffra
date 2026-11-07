@@ -55,10 +55,10 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
 
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
-    // 菜单项「设置」；设置页里侧栏开关不可用
+    // 菜单项「设置」；设置页里不显示侧栏开关
     await clickMenuItem(app, 'settings')
     await expect(settingsNav(window)).toBeVisible()
-    await expect(bar.getByRole('button', { name: /侧栏/ })).toBeDisabled()
+    await expect(bar.getByRole('button', { name: /侧栏/ })).toHaveCount(0)
 
     // 系统窗口按钮的颜色跟着深浅色，原生菜单也跟着
     if (process.platform === 'win32') {

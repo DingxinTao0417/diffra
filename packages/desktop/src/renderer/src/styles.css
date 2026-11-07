@@ -76,6 +76,7 @@
 :root {
   --radius: 8px;
   --content-max: 48rem;
+  --sidebar-w: 16.5rem;
   --background: #ffffff;
   --foreground: #1c1c1a;
   --card: #ffffff;

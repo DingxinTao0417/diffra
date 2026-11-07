@@ -28,6 +28,7 @@ import { UsageSection } from './UsageSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatBytes, formatTime } from '@/lib/format'
+import { INSET_PANEL } from '@/lib/shell'
 import { PERMISSION_MODES } from '@/lib/permission-modes'
 import { leaveSettings, openSettings, setArchived, setPermissionMode } from '@/state/actions'
 import { type SettingsSection, showToast, store, useAppState } from '@/state/store'
@@ -70,9 +71,9 @@ export function SettingsView({ section }: { section: SettingsSection }) {
   })).filter((group) => group.items.length > 0)
 
   return (
-    <div className="flex h-full min-w-0">
-      <nav aria-label="设置分区" className="flex w-60 shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar px-2.5 py-3">
-        <button type="button" className="flex h-8.5 items-center gap-2 rounded-lg px-2.5 text-left hover:bg-accent" onClick={leaveSettings}>
+    <div className="flex min-w-0 flex-1">
+      <nav aria-label="设置分区" className="flex w-(--sidebar-w) shrink-0 flex-col gap-1 bg-sidebar px-2 py-3">
+        <button type="button" className="flex h-8.5 items-center gap-2 rounded-lg px-2 text-left hover:bg-accent" onClick={leaveSettings}>
           <ArrowLeft className="size-4" />
           返回
         </button>
@@ -85,13 +86,13 @@ export function SettingsView({ section }: { section: SettingsSection }) {
         />
         {groups.map((group) => (
           <div key={group.name} className="mb-2 flex flex-col gap-0.5">
-            <div className="px-2.5 pb-1 text-xs text-muted-foreground">{group.name}</div>
+            <div className="px-2 pb-1 text-xs text-muted-foreground">{group.name}</div>
             {group.items.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 aria-current={item.id === section ? 'page' : undefined}
-                className={cn('flex h-8 items-center rounded-lg px-2.5 text-left hover:bg-accent', item.id === section && 'bg-soft font-medium hover:bg-soft')}
+                className={cn('flex h-8 items-center rounded-lg px-2 text-left hover:bg-accent', item.id === section && 'bg-soft hover:bg-soft')}
                 onClick={() => openSettings(item.id)}
               >
                 {item.label}
@@ -100,9 +101,11 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           </div>
         ))}
       </nav>
-      <main className="m-1 ml-0 min-w-0 flex-1 overflow-y-auto rounded-xl border bg-muted/15">
-        <div className="mx-auto max-w-[760px] px-6 py-10 lg:py-12">
-          <SectionBody section={section} />
+      <main className={cn('min-w-0 flex-1', INSET_PANEL)}>
+        <div className="h-full overflow-y-auto">
+          <div className="mx-auto max-w-[760px] px-6 py-10 lg:py-12">
+            <SectionBody section={section} />
+          </div>
         </div>
       </main>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { HomeView } from '@/features/home/HomeView'
@@ -9,6 +10,7 @@ import { TitleBar } from '@/features/shell/TitleBar'
 import { TaskView } from '@/features/task/TaskView'
 import { toggleTerminalPanel, wireTerminalEvents } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
+import { INSET_PANEL } from '@/lib/shell'
 import { initialize, moveHistory, openHome, openSettings, pickProject, wireCoreEvents } from '@/state/actions'
 import { showToast, store, useAppState } from '@/state/store'
 
@@ -95,15 +97,20 @@ export function App() {
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="flex h-screen flex-col bg-background">
+      <div className="flex h-screen flex-col bg-sidebar">
         <TitleBar />
         <div className="flex min-h-0 flex-1">
-          {sidebarOpen && route.name !== 'settings' && <Sidebar />}
-          <main className="min-w-0 flex-1">
-            {route.name === 'home' && <HomeView projectPath={route.project} />}
-            {route.name === 'task' && <TaskView sessionId={route.sessionId} />}
-            {route.name === 'settings' && <SettingsView section={route.section} />}
-          </main>
+          {route.name === 'settings' ? (
+            <SettingsView section={route.section} />
+          ) : (
+            <>
+              {sidebarOpen && <Sidebar />}
+              <main className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarOpen && 'rounded-tl-none border-l-0')}>
+                {route.name === 'home' && <HomeView projectPath={route.project} />}
+                {route.name === 'task' && <TaskView sessionId={route.sessionId} />}
+              </main>
+            </>
+          )}
         </div>
       </div>
       <SearchDialog />

@@ -23,14 +23,18 @@ export function TitleBar() {
       <BarButton label="主菜单" buttonRef={menuButton} onClick={openMenu}>
         <Menu className="size-[16px]" />
       </BarButton>
-      <BarButton
-        label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
-        shortcut="Ctrl+B"
-        disabled={settingsOpen}
-        onClick={() => store.set((state) => ({ ...state, sidebarOpen: !state.sidebarOpen }))}
-      >
-        <PanelLeft className="size-[16px]" />
-      </BarButton>
+      {/* 设置页没有侧栏，开关不显示，但留出同样的位置，免得后退、前进在进出设置时左右跳 */}
+      {settingsOpen ? (
+        <span aria-hidden className="size-[30px] shrink-0" />
+      ) : (
+        <BarButton
+          label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
+          shortcut="Ctrl+B"
+          onClick={() => store.set((state) => ({ ...state, sidebarOpen: !state.sidebarOpen }))}
+        >
+          <PanelLeft className="size-[16px]" />
+        </BarButton>
+      )}
       <BarButton label="后退" shortcut="Alt+←" disabled={!canGoBack} onClick={() => void moveHistory(-1)}>
         <ArrowLeft className="size-[16px]" />
       </BarButton>

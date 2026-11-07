@@ -107,7 +107,7 @@ function SearchBody({ onClose }: { onClose(): void }) {
             type="button"
             role="option"
             aria-selected={index === selected}
-            className={cn('flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left', index === selected && 'bg-soft')}
+            className={cn('flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left', index === selected && 'bg-accent')}
             onMouseEnter={() => setSelected(index)}
             onClick={() => pick(item)}
           >
