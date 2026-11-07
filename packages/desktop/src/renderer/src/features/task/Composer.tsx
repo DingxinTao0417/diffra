@@ -1,8 +1,9 @@
 import { type DragEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { type CommandInfo, type PermissionMode, type PromptImage, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, Cpu, ImagePlus, ListChecks, type LucideIcon, Plug, Shield, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, Cpu, File as FileIcon, Folder, ListChecks, type LucideIcon, Plug, Shield, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
-import type { ModelRef } from '../../../../shared/settings'
+import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences, type FileReference } from '../../../../shared/attachments'
+import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
 import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { cn } from 'cn'
 import {
@@ -35,7 +36,6 @@ export interface ComposerCommand {
 
 interface ComposerProps {
   size: 'large' | 'normal'
-  placeholder: string
   // 没准备好（没选项目、会话没建好）时不能发送
   disabled?: boolean
   running?: boolean
@@ -90,22 +90,26 @@ function expandCommand(body: string, input: string): string {
 }
 
 export function Composer(props: ComposerProps) {
-  const { size, placeholder, disabled, running, onSend, onStop } = props
+  const { size, disabled, running, onSend, onStop } = props
+  const placeholder = COMPOSER_PLACEHOLDER
   const goalRounds = useAppState((state) => state.settings?.execution.goalMaxRounds ?? null)
   const [draft, setDraft] = useState('')
   const [caret, setCaret] = useState(0)
   const [sending, setSending] = useState(false)
   const [goal, setGoal] = useState(false)
   const [skills, setSkills] = useState<SkillInfo[]>([])
-  // 粘贴、拖进来或点按钮加的图片，已经缩小、转成 WebP
+  // 粘贴或拖入的图片，已经缩小、转成 WebP；普通文件只保留路径引用。
   const [images, setImages] = useState<Array<PromptImage & { id: string }>>([])
+  const [fileReferences, setFileReferences] = useState<FileReference[]>([])
   const [dragging, setDragging] = useState(false)
-  const fileInput = useRef<HTMLInputElement>(null)
+  const [addingAttachments, setAddingAttachments] = useState(false)
+  const attachmentBusy = useRef(false)
+  const dragDepth = useRef(0)
   // 当前模型打开了「图片」没有；对不上设置里的模型时为 null，交给 core 判断
   const imagesSupported = useAppState((state) => {
     const providers = state.settings?.providers ?? []
     for (const provider of providers) {
-      const model = provider.models.find((item) => `${provider.name} / ${item.id}` === props.modelLabel)
+      const model = provider.models.find((item) => `${provider.name} / ${modelDisplayName(item)}` === props.modelLabel)
       if (model) return model.images
     }
     return null
@@ -126,7 +130,8 @@ export function Composer(props: ComposerProps) {
   const listRef = useRef<HTMLDivElement>(null)
   // 选完菜单项后光标要放回的位置；输入框内容更新后立刻放，晚了会和接着输入的字抢
   const pendingCaret = useRef<number | null>(null)
-  const canSend = !disabled && !sending && draft.trim() !== ''
+  const hasMessage = draft.trim() !== '' || images.length > 0 || fileReferences.length > 0
+  const canSend = !disabled && !sending && !addingAttachments && hasMessage
 
   const token = disabled ? null : slashToken(draft, caret)
   const menuOpen = token !== null && token.start !== dismissed
@@ -296,27 +301,58 @@ export function Composer(props: ComposerProps) {
 
   const imageFiles = (list: FileList | null) => [...(list ?? [])].filter((file) => file.type.startsWith('image/'))
 
+  const addAttachments = async (files: File[], includeReferences: boolean) => {
+    if (disabled || sending) return
+    if (attachmentBusy.current) { showToast('正在处理上一批附件，请稍后再添加'); return }
+    attachmentBusy.current = true
+    setAddingAttachments(true)
+    try {
+      const pictures = files.filter((file) => file.type.startsWith('image/'))
+      const documents = includeReferences ? files.filter((file) => !file.type.startsWith('image/')) : []
+      const room = MAX_PROMPT_FILE_REFERENCES - fileReferences.length
+      if (documents.length > room) showToast(`一条消息最多引用 ${MAX_PROMPT_FILE_REFERENCES} 个文件或文件夹`)
+      const paths = documents.slice(0, Math.max(0, room)).map((file) => window.diffra.getPathForFile(file)).filter((path) => path !== '')
+      if (paths.length !== Math.min(documents.length, Math.max(0, room))) showToast('无法获取部分附件的本地路径，请从文件管理器拖入')
+      if (paths.length > 0) {
+        const references = await window.diffra.describeAttachments(paths)
+        setFileReferences((current) => [...current, ...references.filter((item) => !current.some((entry) => entry.path === item.path))].slice(0, MAX_PROMPT_FILE_REFERENCES))
+      }
+      if (pictures.length > 0) await addImages(pictures)
+    } catch (error) {
+      showToast(`添加附件失败：${errorMessage(error)}`)
+    } finally {
+      attachmentBusy.current = false
+      setAddingAttachments(false)
+    }
+  }
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    setDragging(false)
-    const files = imageFiles(event.dataTransfer.files)
-    if (files.length === 0) return
+    if (!event.dataTransfer.types.includes('Files')) return
     event.preventDefault()
-    void addImages(files)
+    event.stopPropagation()
+    dragDepth.current = 0
+    setDragging(false)
+    if (disabled || sending) return
+    void addAttachments([...event.dataTransfer.files], true)
   }
 
   const send = async () => {
-    if (!canSend) return
-    if (props.planMode && images.length > 0) return showToast('出计划暂时不能带图片，关掉「先出计划」再发')
+    if (!canSend || attachmentBusy.current) return
+    if (props.planMode && images.length > 0) return showToast('出计划暂时不能带图片，请移除图片或计划标签后再发送')
     if (images.length > 0 && imagesSupported === false) return showToast('当前模型没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」')
     setSending(true)
     try {
-      if (await onSend(draft.trim(), { goal, skills: skills.map((skill) => skill.name), images: images.map(({ id: _id, ...image }) => image) })) {
+      const text = promptWithFileReferences(draft.trim(), fileReferences)
+      if (await onSend(text === '' ? IMAGE_ONLY_PROMPT : text, { goal, skills: skills.map((skill) => skill.name), images: images.map(({ id: _id, ...image }) => image) })) {
         setDraft('')
         setCaret(0)
         setGoal(false)
         setSkills([])
         setImages([])
+        setFileReferences([])
       }
+    } catch (error) {
+      showToast(`发送失败：${errorMessage(error)}`)
     } finally {
       setSending(false)
     }
@@ -345,10 +381,11 @@ export function Composer(props: ComposerProps) {
     }
     // 光标在最前面时退格删掉最后一个标签
     const target = event.currentTarget
-    if (event.key === 'Backspace' && target.selectionStart === 0 && target.selectionEnd === 0 && (skills.length > 0 || goal)) {
+    if (event.key === 'Backspace' && target.selectionStart === 0 && target.selectionEnd === 0 && (skills.length > 0 || goal || props.planMode)) {
       event.preventDefault()
       if (skills.length > 0) setSkills((current) => current.slice(0, -1))
-      else setGoal(false)
+      else if (goal) setGoal(false)
+      else changePlanMode(false)
       return
     }
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -367,14 +404,28 @@ export function Composer(props: ComposerProps) {
         large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-[14px]',
         dragging && 'border-primary/60 bg-primary/5',
       )}
-      onDragOver={(event) => {
-        if (disabled || !event.dataTransfer.types.includes('Files')) return
+      data-testid="composer"
+      aria-busy={addingAttachments}
+      onDragEnter={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return
         event.preventDefault()
-        setDragging(true)
+        dragDepth.current++
+        if (!disabled && !sending) setDragging(true)
       }}
-      onDragLeave={() => setDragging(false)}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = disabled || sending ? 'none' : 'copy'
+      }}
+      onDragLeave={(event) => {
+        if (!event.dataTransfer.types.includes('Files')) return
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current <= 0) setDragging(false)
+      }}
       onDrop={onDrop}
     >
+      {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-background/95 text-sm font-medium text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
+      {addingAttachments && <p role="status" className="px-4 pt-2 text-xs text-muted-foreground">正在添加附件…</p>}
       {menuOpen && items.length > 0 && (
         <div
           ref={listRef}
@@ -423,8 +474,16 @@ export function Composer(props: ComposerProps) {
           ))}
         </div>
       )}
-      {(goal || skills.length > 0) && (
+      {fileReferences.length > 0 && <div className={cn('flex flex-wrap gap-2', large ? 'px-4 pt-3.5' : 'px-3 pt-2.5')}>
+        {fileReferences.map((file) => <div key={file.path} title={file.path} className="flex max-w-full items-center gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1 pl-2.5 text-xs" data-testid="composer-file">
+          {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-primary" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
+          <span className="max-w-52 truncate">{file.name}</span><span className="text-muted-foreground">{file.kind === 'directory' ? '文件夹' : '文件'}</span>
+          <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded p-1 hover:bg-muted" onClick={() => setFileReferences((current) => current.filter((item) => item.path !== file.path))}><X className="size-3" /></button>
+        </div>)}
+      </div>}
+      {(props.planMode || goal || skills.length > 0) && (
         <div className={cn('flex flex-wrap gap-1.5', large ? 'px-4 pt-3.5' : 'px-3 pt-2.5')} data-testid="composer-chips">
+          {props.planMode && <Chip icon={ListChecks} label="计划" removeLabel="移除计划" onRemove={() => changePlanMode(false)} />}
           {goal && <Chip icon={Target} label={`目标${goalRounds ? ` · 最多 ${goalRounds} 轮` : ''}`} removeLabel="移除目标" onRemove={() => setGoal(false)} />}
           {skills.map((skill) => (
             <Chip
@@ -456,7 +515,7 @@ export function Composer(props: ComposerProps) {
           const files = imageFiles(event.clipboardData.files)
           if (files.length === 0) return
           event.preventDefault()
-          void addImages(files)
+          void addAttachments(files, false)
         }}
         className={cn(
           'max-h-[40vh] resize-none bg-transparent outline-none placeholder:text-muted-foreground',
@@ -465,41 +524,7 @@ export function Composer(props: ComposerProps) {
       />
       <div className="flex flex-wrap items-center gap-2 px-2.5 pt-1.5 pb-2.5">
         <PermissionModeMenu mode={props.permissionMode} onChange={props.onPermissionModeChange} />
-        <button
-          type="button"
-          aria-pressed={props.planMode}
-          title="开着时，发的消息先由规划模型只读地看代码、出一份计划，你确认后再改代码"
-          className={cn(
-            'flex h-7.5 items-center gap-1.5 rounded-full border px-2.5 text-[0.93rem] hover:bg-muted',
-            props.planMode ? 'border-primary/50 bg-primary/10 text-primary hover:bg-primary/15' : 'text-foreground/80',
-          )}
-          onClick={() => changePlanMode(!props.planMode)}
-        >
-          <ListChecks className="size-3.5" />
-          先出计划
-        </button>
-        <button
-          type="button"
-          aria-label="添加图片"
-          title="添加图片，也可以直接粘贴或拖进输入框"
-          disabled={disabled}
-          className="flex size-7.5 items-center justify-center rounded-full text-foreground/70 hover:bg-muted disabled:opacity-40"
-          onClick={() => fileInput.current?.click()}
-        >
-          <ImagePlus className="size-4" />
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          multiple
-          hidden
-          data-testid="image-file-input"
-          onChange={(event) => {
-            void addImages(imageFiles(event.target.files))
-            event.target.value = ''
-          }}
-        />
+
         <div className="flex-1" />
         <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} />
         <ArgumentsDialog
@@ -510,7 +535,7 @@ export function Composer(props: ComposerProps) {
             setArgumentsRequest(null)
           }}
         />
-        {running && draft.trim() === '' ? (
+        {running && !hasMessage ? (
           <button
             type="button"
             aria-label="停止"
@@ -631,11 +656,11 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
         {providers?.map((provider) => (
           <div key={provider.id}>
             <DropdownMenuLabel className="text-xs text-muted-foreground">{provider.name}</DropdownMenuLabel>
-            {provider.models.map((model) => (
+            {provider.models.filter((model) => model.enabled !== false).map((model) => (
               <DropdownMenuItem key={model.id} onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}>
-                <span className="min-w-0 flex-1 truncate">{model.id}</span>
+                <span title={model.id} className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
                 {model.contextWindow && <span className="text-xs text-muted-foreground">{formatTokens(model.contextWindow)}</span>}
-                <Check className={cn('size-4 text-primary', label === `${provider.name} / ${model.id}` ? 'visible' : 'invisible')} />
+                <Check className={cn('size-4 text-primary', modelRef?.providerId === provider.id && modelRef.modelId === model.id ? 'visible' : 'invisible')} />
               </DropdownMenuItem>
             ))}
           </div>

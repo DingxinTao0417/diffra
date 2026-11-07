@@ -9,13 +9,29 @@ export interface ModelRef {
   modelId: string
 }
 
+export const MAX_MODEL_ID_LENGTH = 200
+export const MAX_MODEL_DISPLAY_NAME_LENGTH = 100
+export const MAX_MODEL_CONTEXT_WINDOWS = 20
+export const MAX_PROVIDER_MODELS = 20
+export const CONTEXT_WINDOW_OPTIONS = [32_000, 64_000, 128_000, 200_000, 256_000, 1_000_000] as const
+
 export interface ModelConfig {
+  // 旧配置缺少这些字段时沿用模型 ID、启用状态和单个上下文窗口。
+  displayName?: string
+  enabled?: boolean
+  contextWindows?: number[]
   // 未配置时按已知模型推断；空数组表示不支持
   reasoningEfforts?: ReasoningEffort[]
   id: string
   contextWindow: number | null
   // 能看图：提问可以带图片，浏览器工具可以截图给它看
   images: boolean
+}
+
+// 显式处理空白名称，兼容旧配置；所有展示入口使用同一回退规则。
+export function modelDisplayName(model: Pick<ModelConfig, 'id' | 'displayName'>): string {
+  const displayName = model.displayName?.trim() ?? ''
+  return displayName === '' ? model.id : displayName
 }
 
 export interface ProviderConfig {
@@ -35,10 +51,12 @@ export interface ProjectSettings {
 
 export const THEME_MODES = ['light', 'dark', 'system'] as const
 export const PALETTES = ['forest', 'indigo', 'amber', 'graphite'] as const
+export const FONT_STYLES = ['sans', 'serif'] as const
 export const FONT_SIZES = ['sm', 'md', 'lg'] as const
 export const CONTENT_WIDTHS = ['standard', 'wide'] as const
 
 export interface Appearance {
+  fontStyle?: (typeof FONT_STYLES)[number]
   theme: (typeof THEME_MODES)[number]
   palette: (typeof PALETTES)[number]
   fontSize: (typeof FONT_SIZES)[number]

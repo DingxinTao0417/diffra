@@ -21,6 +21,17 @@ const PASTE_BIG_IMAGE = `(async () => {
   data.items.add(new File([blob], 'big.png', { type: 'image/png' }))
   element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
 })()`
+const DROP_SMALL_IMAGE = `(async () => {
+  const canvas = document.createElement('canvas')
+  canvas.width = 1
+  canvas.height = 1
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  const data = new DataTransfer()
+  data.items.add(new File([blob], 'pixel.png', { type: 'image/png' }))
+  const element = document.querySelector('[data-testid="composer"]')
+  element.dispatchEvent(new DragEvent('dragenter', { dataTransfer: data, bubbles: true, cancelable: true }))
+  element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
+})()`
 const COMPOSER_IMAGE_SIZES = `[...document.querySelectorAll('[data-testid="composer-image"] img')].map((image) => [image.naturalWidth, image.naturalHeight])`
 
 // 1x1 的 PNG
@@ -46,8 +57,9 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
     const thumbnails = window.getByTestId('composer-image')
     await expect(thumbnails).toHaveCount(1)
     await expect.poll(() => window.evaluate(COMPOSER_IMAGE_SIZES)).toEqual([[1600, 800]])
-    // 再用按钮加一张
-    await window.getByTestId('image-file-input').setInputFiles(pngFile)
+    // 常驻图片按钮已移除，拖入第二张图片。
+    await expect(window.getByRole('button', { name: '添加图片', exact: true })).toHaveCount(0)
+    await window.evaluate(DROP_SMALL_IMAGE)
     await expect(thumbnails).toHaveCount(2)
     await window.screenshot({ path: 'test-results/images-composer.png' })
 
@@ -61,12 +73,19 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
 
     // 在模型设置里打开「图片」，回首页再发
     await openModelsPage(window)
-    await providerCard(window, '脚本模型').getByRole('switch', { name: 'scripted 支持图片' }).click()
-    await expect(providerCard(window, '脚本模型').getByRole('switch', { name: 'scripted 支持图片' })).toHaveAttribute('aria-checked', 'true')
+    await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
+    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
+    const capabilities = window.getByRole('dialog')
+    await capabilities.getByRole('button', { name: '视觉', exact: true }).click()
+    await expect(capabilities.getByRole('button', { name: '视觉', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
+    await expect(capabilities).toBeHidden()
     await window.getByRole('button', { name: '返回' }).click()
     // 去设置页时首页的输入框卸载了，草稿和图片不保留，重新加
     await window.evaluate(PASTE_BIG_IMAGE)
-    await window.getByTestId('image-file-input').setInputFiles(pngFile)
+    await expect(thumbnails).toHaveCount(1)
+    await expect(window.getByTestId('composer')).toHaveAttribute('aria-busy', 'false')
+    await window.evaluate(DROP_SMALL_IMAGE)
     await expect(thumbnails).toHaveCount(2)
     await input.fill('这两张图是什么')
     await window.getByRole('button', { name: '发送', exact: true }).click()

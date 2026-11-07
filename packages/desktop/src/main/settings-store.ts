@@ -8,8 +8,12 @@ import {
   DEFAULT_EXECUTION,
   DEFAULT_SECURITY,
   FONT_SIZES,
+  FONT_STYLES,
   GOAL_ROUND_OPTIONS,
   MAX_STEP_OPTIONS,
+  MAX_MODEL_ID_LENGTH,
+  MAX_MODEL_DISPLAY_NAME_LENGTH,
+  MAX_MODEL_CONTEXT_WINDOWS,
   MCP_TRANSPORTS,
   PALETTES,
   type Settings,
@@ -27,7 +31,10 @@ export const providerFieldsSchema = z.object({
   models: z
     .array(
       z.object({
-        id: z.string().trim().min(1, '模型 ID 不能为空'),
+        id: z.string().trim().min(1, '模型 ID 不能为空').max(MAX_MODEL_ID_LENGTH),
+        displayName: z.string().trim().max(MAX_MODEL_DISPLAY_NAME_LENGTH).optional(),
+        enabled: z.boolean().optional(),
+        contextWindows: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).max(MAX_MODEL_CONTEXT_WINDOWS).optional(),
         contextWindow: z.number().int().positive().nullable(),
         // 图片输入那一步加的，旧设置文件里没有
         images: z.boolean().default(false),
@@ -58,6 +65,7 @@ export const projectSettingsSchema = z.object({
 })
 
 export const appearanceSchema = z.object({
+  fontStyle: z.enum(FONT_STYLES).optional(),
   theme: z.enum(THEME_MODES),
   palette: z.enum(PALETTES),
   fontSize: z.enum(FONT_SIZES),

@@ -12,6 +12,7 @@ import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, Sessi
 import { normalizeUrl } from '../src/urls.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
+import { compactManually } from '../src/session/compact.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { IMAGE_CHARS, messagesChars, Session, type SessionOptions } from '../src/session/session.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
@@ -643,6 +644,62 @@ describe('完成前的轻量安全扫描', () => {
 })
 
 describe('上下文压缩', () => {
+  test('手动压缩不受百分比限制，保留原记录及最近完整步骤，任务状态不变，之后可继续聊', async () => {
+    const model = scriptedModel([{ text: '保留用户约束及已读文件，继续待办。' }, { text: '按摘要接着做' }])
+    const session = await makeSession(model)
+    session.messages.push({ role: 'user', content: `早期需求 ${'历史细节'.repeat(3000)}` })
+    for (let index = 0; index < 6; index++) {
+      session.messages.push({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: `read-${index}`, toolName: 'read_file', input: { path: `f${index}.txt` } }] })
+      session.messages.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: `read-${index}`, toolName: 'read_file', output: { type: 'text', value: 'old tool result' } }] })
+    }
+    session.lastContext = { inputTokens: 100, chars: messagesChars(session.messages) + session.systemPrompt.length + session.toolChars() }
+    const original = JSON.stringify(session.messages)
+    const taskState = JSON.stringify(session.taskState)
+    const io = recordingIO()
+    expect(await compactManually(session, io)).toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(1)
+    expect(model.doStreamCalls[0]?.toolChoice).toEqual({ type: 'none' })
+    expect(session.compaction?.upTo).toBe(5)
+    expect(JSON.stringify(session.messages)).toBe(original)
+    expect(JSON.stringify(session.taskState)).toBe(taskState)
+    expect(session.contextMessages().filter((message) => message.role === 'assistant')).toHaveLength(4)
+    expect(session.contextMessages().filter((message) => message.role === 'tool')).toHaveLength(4)
+    expect(io.updates.some((update) => update.sessionUpdate === 'usage_update')).toBe(true)
+    expect(session.running).toBe(false)
+    await runTurn(session, { id: 'after-compact', text: '继续' }, recordingIO())
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('保留用户约束及已读文件')
+  })
+
+  test('短会话不调用模型，正在运行不能并发手动压缩', async () => {
+    const model = scriptedModel([])
+    const session = await makeSession(model)
+    session.messages.push({ role: 'user', content: '只有一轮' }, { role: 'assistant', content: '答复' })
+    expect(await compactManually(session, recordingIO())).toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(0)
+    expect(session.compaction).toBeNull()
+    session.activeTurn = new AbortController()
+    await expect(compactManually(session, recordingIO())).rejects.toThrow('任务还在进行中')
+    session.activeTurn = null
+  })
+
+  test('手动压缩失败或取消时已有摘要、消息原文保持不变', async () => {
+    const model = scriptedModel([{ text: '' }])
+    const session = await makeSession(model)
+    session.messages.push({ role: 'user', content: '早期'.repeat(3000) }, { role: 'assistant', content: '回复' }, { role: 'user', content: '最新请求' }, { role: 'assistant', content: '最新回复' })
+    const original = JSON.stringify(session.messages)
+    const io = recordingIO()
+    expect(await compactManually(session, io)).toBe('end_turn')
+    expect(session.compaction).toBeNull()
+    expect(JSON.stringify(session.messages)).toBe(original)
+    expect(JSON.stringify(io.updates)).toContain('压缩失败')
+    const cancelledIO = recordingIO()
+    cancelledIO.update = async (update) => { cancelledIO.updates.push(update); if (update.sessionUpdate === 'tool_call') session.cancel() }
+    expect(await compactManually(session, cancelledIO)).toBe('cancelled')
+    expect(session.compaction).toBeNull()
+    expect(JSON.stringify(session.messages)).toBe(original)
+    expect(session.running).toBe(false)
+  })
+
   // 每个文件约 18000 字，读出来的输出足够大，可以被省略
   const writeBigFiles = (count: number) => {
     for (let index = 1; index <= count; index++) {

@@ -7,6 +7,7 @@ import {
   cancelSession,
   checkpointDiff,
   configureSession,
+  compactSession,
   type CoreClientHandlers,
   createSession,
   deepScan,
@@ -40,7 +41,7 @@ import {
   type ProjectState,
   type SessionHandle,
 } from '../shared/ipc'
-import type { ModelRef } from '../shared/settings'
+import { modelDisplayName, type ModelRef } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
@@ -143,13 +144,14 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
     if (!provider || !model) throw new Error(`${label}指向的模型不存在，请到「模型」页重新选择`)
+    if (model.enabled === false) throw new Error(`${label}已停用，请到「模型」页启用或重新选择`)
     if (ref.reasoningEffort && !reasoningEffortsFor(provider, model).includes(ref.reasoningEffort)) {
       throw new Error(`${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
     }
     const target = await providerEndpoint(settings, secrets, provider.id)
     if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
     return {
-      label: `${provider.name} / ${model.id}`,
+      label: `${provider.name} / ${modelDisplayName(model)}`,
       model: {
         endpoint: target.endpoint,
         modelId: model.id,
@@ -357,6 +359,11 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       parse(z.string().min(1), rawTurnId),
       parse(z.enum(['task', 'project']), rawScope),
     )
+    return response.stopReason
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionCompact, async (_event, rawSessionId: unknown, rawTurnId: unknown) => {
+    const response = await compactSession(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId))
     return response.stopReason
   })
 

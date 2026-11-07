@@ -9,6 +9,7 @@ export function applyAppearance(appearance: Appearance): void {
   const root = document.documentElement
   root.dataset.palette = appearance.palette
   root.dataset.font = appearance.fontSize
+  root.dataset.fontStyle = appearance.fontStyle ?? 'sans'
   root.dataset.width = appearance.contentWidth
   const dark = appearance.theme === 'dark' || (appearance.theme === 'system' && darkQuery.matches)
   root.classList.toggle('dark', dark)

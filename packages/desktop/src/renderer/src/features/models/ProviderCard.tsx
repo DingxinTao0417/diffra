@@ -1,12 +1,13 @@
-import { type FormEvent, useState } from 'react'
-import { REASONING_EFFORTS, type ListedModel } from '@diffra/core/types'
-import { reasoningEffortsFor } from '../../../../shared/reasoning'
+import { useState } from 'react'
+import { type ListedModel } from '@diffra/core/types'
+import { Ellipsis, Plus, Zap } from 'lucide-react'
+import { ModelCapabilityDialog } from './ModelCapabilityDialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { PROTOCOL_LABELS } from '../../../../shared/presets'
-import type { ModelConfig, ProviderView, SettingsView } from '../../../../shared/settings'
+import { modelDisplayName, type ModelConfig, type ProviderView, type SettingsView } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { errorMessage } from '@/lib/errors'
 
@@ -22,12 +23,10 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
   const [fetched, setFetched] = useState<ListedModel[]>([])
   const [fetching, setFetching] = useState(false)
   const [fetchStatus, setFetchStatus] = useState<{ ok: boolean; text: string } | null>(null)
-  const [newModelId, setNewModelId] = useState('')
-  const [newContextWindow, setNewContextWindow] = useState('')
+  const [capabilities, setCapabilities] = useState<{ model: ModelConfig | null } | null>(null)
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const datalistId = `models-${provider.id}`
 
   const saveModels = async (models: ModelConfig[]): Promise<boolean> => {
     setError(null)
@@ -59,23 +58,6 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
     }
   }
 
-  const addModel = async (event: FormEvent) => {
-    event.preventDefault()
-    const id = newModelId.trim()
-    const contextWindow = newContextWindow.trim() === '' ? null : Number(newContextWindow)
-    if (contextWindow !== null && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
-      setError('上下文长度要填正整数（单位：token）')
-      return
-    }
-    if (provider.models.some((model) => model.id === id)) {
-      setError('这个模型已经添加过了')
-      return
-    }
-    if (await saveModels([...provider.models, { id, contextWindow, images: false }])) {
-      setNewModelId('')
-      setNewContextWindow('')
-    }
-  }
 
   const runTest = async (modelId: string) => {
     setTests((current) => ({ ...current, [modelId]: { state: 'running' } }))
@@ -105,7 +87,7 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
   }
 
   return (
-    <Card data-testid="provider-card">
+    <Card data-testid="provider-card" className="gap-3 rounded-xl py-4 shadow-none">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {provider.name}
@@ -167,55 +149,21 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
                 const test = tests[model.id]
                 return (
                   <li key={model.id} data-testid={`model-row-${model.id}`} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-                    <span className="font-mono">{model.id}</span>
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/50"><Zap className="size-4 text-muted-foreground" /></span>
+                    <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{modelDisplayName(model)}</div><div className="mt-1 text-xs text-muted-foreground">{PROTOCOL_LABELS[provider.protocol]} · {model.id}</div></div>
                     <span className="text-muted-foreground">
                       {model.contextWindow ? `上下文 ${formatTokens(model.contextWindow)}` : '上下文未填'}
                     </span>
-                    <label className="ml-auto flex items-center gap-1.5 text-muted-foreground" title="模型能看图时打开：提问可以带图片，浏览器工具可以截图给它看">
-                      <Switch
-                        label={`${model.id} 支持图片`}
-                        checked={model.images}
-                        onChange={(images) => void saveModels(provider.models.map((item) => (item.id === model.id ? { ...item, images } : item)))}
-                      />
-                      图片
-                    </label>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => runTest(model.id)}
-                        disabled={test?.state === 'running'}
-                      >
-                        {test?.state === 'running' ? '测试中…' : '测试'}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => saveModels(provider.models.filter((item) => item.id !== model.id))}>
-                        移除
-                      </Button>
-                    </div>
-                    {(provider.protocol === 'openai-compatible' || provider.protocol === 'openai-responses') && (
-                      <details className="w-full text-xs text-muted-foreground">
-                        <summary className="cursor-pointer">思考档位 · {model.reasoningEfforts === undefined ? '自动识别' : '自定义'}</summary>
-                        <p className="my-2">按服务商文档勾选支持的值。未知模型默认不启用；「默认」始终不发送参数。</p>
-                        <div className="flex flex-wrap gap-3">
-                          {REASONING_EFFORTS.filter((effort) => effort !== 'default').map((effort) => (
-                            <label key={effort} className="flex items-center gap-1">
-                              <input
-                                type="checkbox"
-                                aria-label={`${model.id} 思考 ${effort}`}
-                                checked={reasoningEffortsFor(provider, model).includes(effort)}
-                                onChange={(event) => {
-                                  const current = reasoningEffortsFor(provider, model).filter((value) => value !== 'default')
-                                  const reasoningEfforts = event.target.checked ? [...current, effort] : current.filter((value) => value !== effort)
-                                  void saveModels(provider.models.map((item) => item.id === model.id ? { ...item, reasoningEfforts } : item))
-                                }}
-                              />
-                              {effort}
-                            </label>
-                          ))}
-                        </div>
-                        <Button size="sm" variant="ghost" onClick={() => saveModels(provider.models.map((item) => item.id === model.id ? { ...item, reasoningEfforts: undefined } : item))}>恢复自动识别</Button>
-                      </details>
-                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`${model.id} 模型操作`}><Ellipsis className="size-4" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => setCapabilities({ model })}>配置能力</DropdownMenuItem>
+                        <DropdownMenuItem disabled={test?.state === 'running'} onSelect={() => void runTest(model.id)}>测试连接</DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => void saveModels(provider.models.filter((item) => item.id !== model.id))}>移除模型</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Switch label={`${model.id} 启用`} checked={model.enabled !== false} onChange={(enabled) => void saveModels(provider.models.map((item) => item.id === model.id ? { ...item, enabled } : item))} />
                     {test && test.state !== 'running' && (
                       <p
                         data-testid={`test-result-${model.id}`}
@@ -230,34 +178,9 @@ export function ProviderCard({ provider, onChange, onEdit }: ProviderCardProps) 
             </ul>
           )}
 
-          <form onSubmit={addModel} className="flex gap-2">
-            <Input
-              aria-label="模型 ID"
-              placeholder="模型 ID"
-              list={datalistId}
-              value={newModelId}
-              onChange={(event) => setNewModelId(event.target.value)}
-              className="flex-1"
-            />
-            <Input
-              aria-label="上下文长度"
-              placeholder="上下文长度（可选）"
-              inputMode="numeric"
-              value={newContextWindow}
-              onChange={(event) => setNewContextWindow(event.target.value)}
-              className="w-44"
-            />
-            <Button type="submit" variant="secondary" disabled={newModelId.trim() === ''}>
-              添加模型
-            </Button>
-            <datalist id={datalistId}>
-              {fetched.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
-                </option>
-              ))}
-            </datalist>
-          </form>
+          <Button size="sm" variant="ghost" onClick={() => setCapabilities({ model: null })}><Plus className="size-3.5" />添加模型</Button>
+          {fetched.length > 0 && <div className="flex max-h-32 flex-wrap gap-1 overflow-auto">{fetched.filter((item) => !provider.models.some((model) => model.id === item.id)).map((item) => <Button key={item.id} size="sm" variant="outline" onClick={() => setCapabilities({ model: { id: item.id, contextWindow: null, images: false } })}>{item.id}</Button>)}</div>}
+          {capabilities && <ModelCapabilityDialog key={capabilities.model?.id ?? 'new'} provider={provider} model={capabilities.model} onClose={() => setCapabilities(null)} onSaved={onChange} />}
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}

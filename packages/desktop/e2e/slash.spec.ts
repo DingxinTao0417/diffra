@@ -40,7 +40,7 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     const menu = window.getByRole('listbox', { name: '命令和 Skill' })
     const option = (name: string) => menu.getByRole('option').filter({ hasText: name })
     const chips = window.getByTestId('composer-chip')
-    const planToggle = window.getByRole('button', { name: '先出计划' })
+    const planChip = window.getByRole('button', { name: '移除计划', exact: true })
 
     // 「/」打开菜单：首页有目标、计划和项目里的 Skill，没有深度扫描
     await input.pressSequentially('/')
@@ -67,10 +67,10 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     // 计划和目标二选一
     await input.pressSequentially('/计划')
     await input.press('Enter')
-    await expect(planToggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(planChip).toBeVisible()
     await input.pressSequentially('/goal')
     await input.press('Tab')
-    await expect(planToggle).toHaveAttribute('aria-pressed', 'false')
+    await expect(planChip).toHaveCount(0)
     await expect(chips).toHaveText(['目标 · 最多 3 轮', 'diffra-e2e-style'])
 
     // 光标在最前面时退格删最后一个标签；× 删指定的

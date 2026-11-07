@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { startMockProvider } from '../../core/test/mock-provider'
+import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
 import { reasoningEffortsFor } from '../src/shared/reasoning'
@@ -23,7 +23,7 @@ test('模型菜单支持用键盘调整思考滑条并在重新打开后保留',
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
-    await configureCoderModel(window, { name: '思考模型', baseUrl: `${mock.baseUrl}/openai/v1`, apiKey: 'e2e-key-123456', modelId: 'o3-mini' })
+    await configureCoderModel(window, { name: '思考模型', baseUrl: `${mock.baseUrl}/openai/v1`, apiKey: GOOD_KEY, modelId: 'o3-mini' })
     await window.getByTestId('model-menu').click()
     const slider = window.getByRole('slider', { name: '思考程度' })
     await expect(slider).toHaveValue('0')
@@ -43,8 +43,11 @@ test('模型菜单支持用键盘调整思考滑条并在重新打开后保留',
     await expect(slider).toBeHidden()
     await openModelsPage(window)
     const card = providerCard(window, '思考模型')
-    await card.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
-    await card.getByRole('button', { name: '添加模型' }).click()
+    await card.getByRole('button', { name: '添加模型', exact: true }).click()
+    const capabilityDialog = window.getByRole('dialog')
+    await capabilityDialog.getByLabel('Model ID', { exact: true }).fill('gpt-5.2')
+    await capabilityDialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
+    await expect(capabilityDialog).toBeHidden()
     await expect(card.getByTestId('model-row-gpt-5.2')).toBeVisible()
     await window.getByRole('button', { name: '返回', exact: true }).click()
     await window.getByTestId('model-menu').click()
@@ -60,9 +63,12 @@ test('模型菜单支持用键盘调整思考滑条并在重新打开后保留',
     await expect(slider).toBeHidden()
     await openModelsPage(window)
     const row = card.getByTestId('model-row-gpt-5.2')
-    await row.locator('summary').click()
-    await row.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true }).click()
-    await expect(row.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true })).not.toBeChecked()
+    await row.getByRole('button', { name: 'gpt-5.2 模型操作', exact: true }).click()
+    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
+    await capabilityDialog.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true }).click()
+    await expect(capabilityDialog.getByRole('checkbox', { name: 'gpt-5.2 思考 xhigh', exact: true })).not.toBeChecked()
+    await capabilityDialog.getByRole('button', { name: '保存模型能力', exact: true }).click()
+    await expect(capabilityDialog).toBeHidden()
     await window.getByRole('button', { name: '返回', exact: true }).click()
     await window.getByTestId('model-menu').click()
     await window.getByRole('menuitem').filter({ hasText: 'gpt-5.2' }).click()

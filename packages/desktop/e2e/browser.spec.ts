@@ -98,7 +98,12 @@ test('内置浏览器：智能体打开本地页面、读页面、输入、点�
 
     // 给模型打开「图片」，新任务里截图：截图作为图片跟在工具结果后面发给模型
     await openModelsPage(window)
-    await providerCard(window, '脚本模型').getByRole('switch', { name: 'scripted 支持图片' }).click()
+    await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
+    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
+    const capabilities = window.getByRole('dialog')
+    await capabilities.getByRole('button', { name: '视觉', exact: true }).click()
+    await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
+    await expect(capabilities).toBeHidden()
     await window.getByRole('button', { name: '返回' }).click()
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
     await taskInput(window).fill('截个图')

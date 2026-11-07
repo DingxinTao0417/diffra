@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ArrowLeft, Ellipsis } from 'lucide-react'
+import { ArrowLeft, Check, Ellipsis, Monitor, Moon, Sun } from 'lucide-react'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
 import {
   type Appearance,
@@ -8,6 +8,7 @@ import {
   CONTENT_WIDTHS,
   type ExecutionSettings,
   FONT_SIZES,
+  FONT_STYLES,
   GOAL_ROUND_OPTIONS,
   MAX_STEP_OPTIONS,
   PALETTES,
@@ -17,6 +18,7 @@ import {
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
 import { PluginSettings } from '@/features/plugins/PluginSettings'
@@ -97,8 +99,8 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           </div>
         ))}
       </nav>
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-8 py-8">
+      <main className="m-1 ml-0 min-w-0 flex-1 overflow-y-auto rounded-xl border bg-muted/15">
+        <div className="mx-auto max-w-[760px] px-6 py-10 lg:py-12">
           <SectionBody section={section} />
         </div>
       </main>
@@ -240,47 +242,56 @@ function AppearanceSection() {
 
   return (
     <>
-      <Heading title="外观" description="改动立即生效，所有项目共用。" />
-      <SettingRow label="主题" hint="跟随系统时按 Windows 的深浅色设置切换">
-        <Segmented label="主题" value={appearance.theme} options={THEME_MODES.map((value) => ({ value, label: THEME_LABELS[value] }))} onChange={(theme) => void change({ theme })} />
-      </SettingRow>
-      <SettingRow label="配色" hint="强调色和侧栏底色">
-        <div className="flex gap-2.5" role="radiogroup" aria-label="配色">
-          {PALETTES.map((palette) => {
-            const item = PALETTE_LABELS[palette]
-            const active = appearance.palette === palette
-            return (
-              <button
-                key={palette}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                className="flex flex-col items-center gap-1.5 text-xs"
-                onClick={() => void change({ palette })}
-              >
-                <span className={cn('flex h-10 w-14 overflow-hidden rounded-lg border-2', active ? 'border-primary' : 'border-border')}>
-                  <span className="w-4" style={{ background: item.side }} />
-                  <span className="flex flex-1 items-end bg-white p-1">
-                    <span className="h-2 w-full rounded-sm" style={{ background: item.swatch }} />
-                  </span>
+      <Heading title="外观" />
+      <p className="mb-3 text-xs text-muted-foreground">界面样式</p>
+      <div className="rounded-xl border bg-card px-4 shadow-xs sm:px-5" data-testid="appearance-settings">
+        <div className="border-b border-dashed py-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="text-sm font-medium">主题模式</h2><p className="mt-1 text-xs text-muted-foreground">选择 Diffra 的界面主题和亮暗模式。</p></div>
+            <Select value={appearance.theme} onValueChange={(value) => { const theme = THEME_MODES.find((item) => item === value); if (theme) void change({ theme }) }}>
+              <SelectTrigger aria-label="主题" className="w-32 bg-background"><SelectValue /></SelectTrigger>
+              <SelectContent>{THEME_MODES.map((value) => {
+                const Icon = value === 'light' ? Sun : value === 'dark' ? Moon : Monitor
+                return <SelectItem key={value} value={value}><Icon className="size-3.5" />{THEME_LABELS[value]}</SelectItem>
+              })}</SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="radiogroup" aria-label="配色">
+            {PALETTES.map((palette) => {
+              const item = PALETTE_LABELS[palette]
+              const selected = appearance.palette === palette
+              return <button key={palette} type="button" role="radio" aria-checked={selected} onClick={() => void change({ palette })} className="group space-y-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg">
+                <span className={cn('relative flex h-24 overflow-hidden rounded-lg border transition-shadow group-hover:shadow-sm', selected ? 'border-primary ring-1 ring-primary/30' : 'border-border')} style={{ background: item.side }}>
+                  <span className="absolute top-3 left-3 h-1.5 w-1/2 rounded" style={{ background: item.swatch }} />
+                  <span className="absolute top-6 left-3 h-1 w-1/3 rounded bg-black/10" />
+                  <span className="absolute top-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border bg-white" style={{ borderColor: selected ? item.swatch : '#c9ccc9', color: item.swatch }}>{selected && <Check className="size-3" />}</span>
+                  <span className="absolute inset-x-3 top-10 bottom-0 space-y-2 rounded-t-md border border-black/10 bg-white/85 p-3"><span className="block h-1.5 w-3/4 rounded bg-black/20" /><span className="block h-1.5 w-1/2 rounded bg-black/10" /></span>
                 </span>
-                <span className={cn(active ? 'font-medium' : 'text-muted-foreground')}>{item.label}</span>
+                <span className={selected ? 'font-semibold text-foreground' : 'text-muted-foreground'}>{item.label}</span>
               </button>
-            )
-          })}
+            })}
+          </div>
         </div>
-      </SettingRow>
-      <SettingRow label="文字大小" hint="对话、输入框和侧栏的字号">
-        <Segmented label="文字大小" value={appearance.fontSize} options={FONT_SIZES.map((value) => ({ value, label: FONT_LABELS[value] }))} onChange={(fontSize) => void change({ fontSize })} />
-      </SettingRow>
-      <SettingRow label="内容宽度" hint="对话区和输入框的最大宽度">
-        <Segmented
-          label="内容宽度"
-          value={appearance.contentWidth}
-          options={CONTENT_WIDTHS.map((value) => ({ value, label: WIDTH_LABELS[value] }))}
-          onChange={(contentWidth) => void change({ contentWidth })}
-        />
-      </SettingRow>
+        <SettingRow label="字体风格" hint="对话内容使用无衬线或衬线字体。">
+          <Select value={appearance.fontStyle ?? 'sans'} onValueChange={(value) => { const fontStyle = FONT_STYLES.find((item) => item === value); if (fontStyle) void change({ fontStyle }) }}>
+            <SelectTrigger aria-label="字体风格" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="sans">无衬线</SelectItem><SelectItem value="serif">衬线</SelectItem></SelectContent>
+          </Select>
+        </SettingRow>
+        <SettingRow label="文字大小" hint="调整对话内容和输入框的字号。">
+          <Select value={appearance.fontSize} onValueChange={(value) => { const fontSize = FONT_SIZES.find((item) => item === value); if (fontSize) void change({ fontSize }) }}>
+            <SelectTrigger aria-label="文字大小" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>{FONT_SIZES.map((value) => <SelectItem key={value} value={value}>{FONT_LABELS[value]}</SelectItem>)}</SelectContent>
+          </Select>
+        </SettingRow>
+        <SettingRow label="内容宽度" hint="调整任务内容和输入区域的最大宽度。">
+          <Select value={appearance.contentWidth} onValueChange={(value) => { const contentWidth = CONTENT_WIDTHS.find((item) => item === value); if (contentWidth) void change({ contentWidth }) }}>
+            <SelectTrigger aria-label="内容宽度" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>{CONTENT_WIDTHS.map((value) => <SelectItem key={value} value={value}>{WIDTH_LABELS[value]}</SelectItem>)}</SelectContent>
+          </Select>
+        </SettingRow>
+        <div className="border-t border-dashed py-4 text-xs text-muted-foreground">设置立即生效并自动保存，所有项目共用。终端保留等宽字体，不随对话字体改变。</div>
+      </div>
     </>
   )
 }

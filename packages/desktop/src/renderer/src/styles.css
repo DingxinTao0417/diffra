@@ -134,6 +134,12 @@
   --ring: #d0d0d0;
 }
 
+/* 仅更改对话正文和输入框，设置界面仍使用清晰的无衬线字体。 */
+:root[data-font-style="serif"] .markdown,
+:root[data-font-style="serif"] textarea[aria-label="任务"] {
+  font-family: Georgia, "Noto Serif SC", "Songti SC", SimSun, serif;
+}
+
 /* 文字大小：Tailwind 的尺寸都按 rem 算，改根字号整体缩放 */
 :root[data-font="sm"] {
   font-size: 13px;

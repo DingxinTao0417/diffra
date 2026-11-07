@@ -25,6 +25,10 @@ const config: Configuration = {
   },
   nsis: {
     artifactName: 'Diffra-Setup-${version}.${ext}',
+    // 非一键向导才会展示目录页；不改变 appId、包名及每用户安装身份。
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    perMachine: false,
   },
   publish: [{ provider: 'generic', url: updateUrl }],
 }

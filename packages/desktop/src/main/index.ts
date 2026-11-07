@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { registerBrowserIpc } from './browser'
+import { registerAttachmentIpc } from './attachments'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { registerPluginsIpc } from './plugins-ipc'
@@ -69,6 +70,7 @@ app
     registerSessionIpc(settings, secrets, userDataDir)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
+    registerAttachmentIpc()
     registerTerminalIpc()
     setupUpdater()
     setupWindowChrome()

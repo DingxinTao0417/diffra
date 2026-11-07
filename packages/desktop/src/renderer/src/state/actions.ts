@@ -1,4 +1,4 @@
-import type { PermissionMode, PromptImage, StopReason, StoredSessionSummary, TurnKind } from '@diffra/core/types'
+import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, usageOf } from '../features/session/transcript'
@@ -221,6 +221,12 @@ export async function runDeepScan(sessionId: string, scope: 'task' | 'project'):
   const task = store.get().live[sessionId]
   if (!task || task.running) return
   await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
+}
+
+export async function compactTask(sessionId: string): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  await runTurnOnCore(sessionId, MANUAL_COMPACTION_PROMPT, 'compact', [], [], (turnId) => window.diffra.compactSession(sessionId, turnId))
 }
 
 async function runTurnOnCore(

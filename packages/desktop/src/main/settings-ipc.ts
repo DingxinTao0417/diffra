@@ -3,7 +3,7 @@ import { type ModelEndpoint, type ModelError, requestListModels, requestTestMode
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { MCP_TRANSPORTS, type McpServerConfig, type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
+import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
@@ -180,6 +180,16 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     return requestListModels(await coreConnection(), target.endpoint)
   })
 
+  // 校验草稿连接，不落盘；编辑时密钥留空沿用已保存密钥，绝不回传给界面。
+  ipcMain.handle(IPC_CHANNELS.modelsValidate, async (_event, raw: unknown, rawModelId: unknown) => {
+    const input = parse(providerInputSchema, raw)
+    const modelId = parse(z.string().trim().min(1).max(MAX_MODEL_ID_LENGTH), rawModelId)
+    if (input.id && !settings.get().providers.some((provider) => provider.id === input.id)) throw new Error('供应商不存在')
+    const apiKey = input.apiKey || (input.id ? await secrets.get(input.id) : null)
+    if (!apiKey) throw new Error('请填写 API Key')
+    return requestTestModel(await coreConnection(), { protocol: input.protocol, baseUrl: input.baseUrl, apiKey }, modelId)
+  })
+
   ipcMain.handle(IPC_CHANNELS.modelsTest, async (_event, rawProviderId: unknown, rawModelId: unknown) => {
     const target = await endpointFor(parse(z.string().min(1), rawProviderId))
     if (!target.ok) return target
@@ -189,7 +199,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
 
 function modelExists(settings: Settings, ref: ModelRef): boolean {
   return settings.providers.some(
-    (provider) => provider.id === ref.providerId && provider.models.some((model) => model.id === ref.modelId),
+    (provider) => provider.id === ref.providerId && provider.models.some((model) => model.id === ref.modelId && model.enabled !== false),
   )
 }
 

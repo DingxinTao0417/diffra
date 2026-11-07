@@ -1,5 +1,5 @@
 import type { SessionNotification } from '@diffra/core/types'
-import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -21,6 +21,7 @@ const api: DiffraApi = {
   setRole: (role, ref) => ipcRenderer.invoke(IPC_CHANNELS.roleSet, role, ref),
   listProviderModels: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.modelsList, providerId),
   testProviderModel: (providerId, modelId) => ipcRenderer.invoke(IPC_CHANNELS.modelsTest, providerId, modelId),
+  validateProviderModel: (input, modelId) => ipcRenderer.invoke(IPC_CHANNELS.modelsValidate, input, modelId),
   pickProject: () => ipcRenderer.invoke(IPC_CHANNELS.projectPick),
   getLastProject: () => ipcRenderer.invoke(IPC_CHANNELS.projectLast),
   getProject: (path) => ipcRenderer.invoke(IPC_CHANNELS.projectGet, path),
@@ -33,6 +34,8 @@ const api: DiffraApi = {
   checkpointDiff: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointDiff, sessionId, turnId),
   projectBranch: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectBranch, projectPath),
   openProjectFolder: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectOpenFolder, projectPath),
+  describeAttachments: (paths) => ipcRenderer.invoke(IPC_CHANNELS.attachmentDescribe, paths),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   sessionsStorage: () => ipcRenderer.invoke(IPC_CHANNELS.sessionsStorage),
   usageSummary: (query) => ipcRenderer.invoke(IPC_CHANNELS.usageSummary, query),
   createTerminal: (cwd, size) => ipcRenderer.invoke(IPC_CHANNELS.terminalCreate, cwd, size),
@@ -52,6 +55,7 @@ const api: DiffraApi = {
   sendPrompt: (sessionId, turnId, text, options) => ipcRenderer.invoke(IPC_CHANNELS.sessionPrompt, sessionId, turnId, text, options),
   deepScan: (sessionId, turnId, scope) => ipcRenderer.invoke(IPC_CHANNELS.sessionDeepScan, sessionId, turnId, scope),
   plan: (sessionId, turnId, text, skills) => ipcRenderer.invoke(IPC_CHANNELS.sessionPlan, sessionId, turnId, text, skills),
+  compactSession: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCompact, sessionId, turnId),
   listSkills: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, projectPath),
   saveMcpServer: (input) => ipcRenderer.invoke(IPC_CHANNELS.mcpSave, input),
   deleteMcpServer: (serverId) => ipcRenderer.invoke(IPC_CHANNELS.mcpDelete, serverId),

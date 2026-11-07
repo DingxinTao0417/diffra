@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { type ModelRef, type Role, ROLES, type SettingsView } from '../../../../shared/settings'
+import { modelDisplayName, type ModelRef, type Role, ROLES, type SettingsView } from '../../../../shared/settings'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -28,10 +28,10 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
   const [error, setError] = useState<string | null>(null)
 
   const options = view.providers.flatMap((provider) =>
-    provider.models.map((model) => ({
+    provider.models.filter((model) => model.enabled !== false).map((model) => ({
       value: encode({ providerId: provider.id, modelId: model.id }),
       ref: { providerId: provider.id, modelId: model.id },
-      label: `${provider.name} / ${model.id}`,
+      label: `${provider.name} / ${modelDisplayName(model)}`,
     })),
   )
 

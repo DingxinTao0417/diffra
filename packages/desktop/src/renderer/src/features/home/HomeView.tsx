@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { PromptImage } from '@diffra/core/types'
 import { ChevronDown, Folder, FolderOpen, GitBranch, Settings2 } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
-import type { ModelRef, SettingsView } from '../../../../shared/settings'
+import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import {
   DropdownMenu,
@@ -23,7 +24,8 @@ const RECENT_LIMIT = 5
 function modelLabelOf(settings: SettingsView | null, ref: ModelRef | null): string | null {
   if (!settings || !ref) return null
   const provider = settings.providers.find((item) => item.id === ref.providerId)
-  return provider && provider.models.some((model) => model.id === ref.modelId) ? `${provider.name} / ${ref.modelId}` : null
+  const model = provider?.models.find((item) => item.id === ref.modelId && item.enabled !== false)
+  return provider && model ? `${provider.name} / ${modelDisplayName(model)}` : null
 }
 
 export function HomeView({ projectPath }: { projectPath: string | null }) {
@@ -55,7 +57,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     }
   }
 
-  const send = async (text: string, extras: { goal: boolean; skills: string[] }) => {
+  const send = async (text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }) => {
     if (!projectPath) return false
     setError(null)
     try {
@@ -77,7 +79,6 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          placeholder={projectPath ? '描述任务，比如「修复登录页的报错」；输入 / 用命令和 Skill，Enter 发送，Shift+Enter 换行' : '先在下面选择项目文件夹'}
           disabled={!projectPath}
           projectPath={projectPath}
           mcpTarget={projectPath ? { projectPath } : null}

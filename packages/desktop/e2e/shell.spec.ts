@@ -63,9 +63,11 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
 
     // 外观立即生效
     await settingsNav(window).getByRole('button', { name: '外观' }).click()
-    await window.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click()
+    await window.getByRole('combobox', { name: '主题', exact: true }).click()
+    await window.getByRole('option', { name: '深色', exact: true }).click()
     await window.getByRole('radiogroup', { name: '配色' }).getByRole('radio', { name: '靛蓝' }).click()
-    await window.getByRole('radiogroup', { name: '文字大小' }).getByRole('radio', { name: '大' }).click()
+    await window.getByRole('combobox', { name: '文字大小', exact: true }).click()
+    await window.getByRole('option', { name: '大', exact: true }).click()
     const html = window.locator('html')
     await expect(html).toHaveClass(/dark/)
     await expect(html).toHaveAttribute('data-palette', 'indigo')

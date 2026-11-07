@@ -74,7 +74,8 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
       })
     }
     await settingsNav(window).getByRole('button', { name: '外观' }).click()
-    await window.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click()
+    await window.getByRole('combobox', { name: '主题', exact: true }).click()
+    await window.getByRole('option', { name: '深色', exact: true }).click()
     await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe('dark')
     if (process.platform === 'win32') {
       await expect
@@ -82,7 +83,8 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
         .toEqual({ color: '#1b1b19', symbolColor: '#ecece8', height: 40 })
     }
     await window.screenshot({ path: 'test-results/titlebar-dark.png' })
-    await window.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click()
+    await window.getByRole('combobox', { name: '主题', exact: true }).click()
+    await window.getByRole('option', { name: '浅色', exact: true }).click()
     await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe('light')
 
     // 设置页里后退就是回到进设置前的页面

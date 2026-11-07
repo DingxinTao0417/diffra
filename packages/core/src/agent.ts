@@ -16,6 +16,7 @@ import {
   PROMPT_IMAGE_TYPES,
   type PromptImage,
   SESSION_EXT_METHODS,
+  MANUAL_COMPACTION_PROMPT,
   type SessionInfo,
   type StoredSessionMeta,
   type TurnKind,
@@ -35,6 +36,7 @@ import {
 } from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { runPlan } from './session/plan.js'
+import { compactManually } from './session/compact.js'
 import type { Session as SessionType } from './session/session.js'
 import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
 import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
@@ -338,6 +340,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, images, (io) =>
         runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
       )
+      return { stopReason }
+    })
+    .onRequest(SESSION_EXT_METHODS.compact, checkpointParams, async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('任务还在进行中，结束后再压缩上下文')
+      const stopReason = await runRecordedTurn(session, client, params.turnId, MANUAL_COMPACTION_PROMPT, 'compact', [], [], (io) => compactManually(session, io))
       return { stopReason }
     })
     // 深度安全扫描作为一轮记进会话：进度实时显示、能停止、存进历史

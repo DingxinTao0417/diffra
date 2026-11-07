@@ -89,7 +89,7 @@ export const PROTOCOL_LABELS: Record<Protocol, string> = {
 }
 
 // 自定义供应商可选的协议
-export const CUSTOM_PROTOCOLS: Protocol[] = ['openai-compatible', 'anthropic-compatible']
+export const CUSTOM_PROTOCOLS: Protocol[] = ['openai-compatible', 'openai-responses', 'anthropic-compatible', 'gemini']
 
 export function baseUrlHint(protocol: Protocol): string {
   return protocol === 'anthropic' || protocol === 'anthropic-compatible'

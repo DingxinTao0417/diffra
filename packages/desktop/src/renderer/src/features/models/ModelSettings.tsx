@@ -34,7 +34,7 @@ export function ModelSettings() {
           <p className="text-sm text-muted-foreground">用 API Key 接入模型服务，再给各个角色分配模型。</p>
         </div>
         <Button onClick={() => setDialog({ open: true, provider: null })} disabled={view.loadError !== null}>
-          添加供应商
+          + 添加模型
         </Button>
       </div>
 
@@ -47,7 +47,7 @@ export function ModelSettings() {
 
       {view.providers.length === 0 ? (
         <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-          还没有供应商。点「添加供应商」，选一个预置或自定义。
+          还没有模型。点「添加模型」，配置连接信息和模型能力。
         </p>
       ) : (
         view.providers.map((provider) => (

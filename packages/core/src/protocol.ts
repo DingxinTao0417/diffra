@@ -156,7 +156,8 @@ export interface UsageBreakdown {
 
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
-export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal'
+export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact'
+export const MANUAL_COMPACTION_PROMPT = '/compact'
 
 // Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，以及兼容读取的 Claude Code、Codex 的目录
 export type SkillSource = 'project' | 'user' | 'plugin' | 'claude' | 'codex'
@@ -371,6 +372,7 @@ export interface UsageSummary {
 }
 
 export const SESSION_EXT_METHODS = {
+  compact: '_diffra/session/compact',
   checkpointPreview: '_diffra/checkpoint/preview',
   checkpointRestore: '_diffra/checkpoint/restore',
   // 重命名、归档

@@ -271,7 +271,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           <ActionButton label="复制回复" onClick={copy}>
             <Copy className="size-3.5" />
           </ActionButton>
-          {task.info.checkpoints && (
+          {task.info.checkpoints && turn.kind !== 'compact' && (
             <ActionButton label="撤销到这一轮之前" disabled={task.running} onClick={onRestore}>
               <Undo2 className="size-3.5" />
             </ActionButton>

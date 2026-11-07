@@ -7,7 +7,7 @@ import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { type ScriptStep, startScriptedModel } from './scripted-model'
 
-test('先出计划：首页打开开关发任务，出计划；改了计划再按计划执行，编码模型按改过的计划做', async () => {
+test('计划通过斜杠菜单启用，改了计划再执行，编码模型按改过的计划做', async () => {
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-plan-'))
@@ -32,19 +32,21 @@ test('先出计划：首页打开开关发任务，出计划；改了计划再�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
 
-    const toggle = window.getByRole('button', { name: '先出计划' })
-    await expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(window.getByRole('button', { name: '先出计划', exact: true })).toHaveCount(0)
+    const input = window.getByRole('textbox', { name: '任务', exact: true })
+    await input.pressSequentially('/计划')
+    await expect(window.getByRole('listbox', { name: '命令和 Skill' }).getByRole('option')).toHaveCount(1)
+    await input.press('Enter')
+    await expect(window.getByRole('button', { name: '移除计划', exact: true })).toBeVisible()
     await startTask(window, '给项目加个 README')
 
     const planCard = cards(window, 'plan')
     await expect(planCard).toHaveCount(1, { timeout: 20_000 })
     await expect(window.getByTestId('task-status')).toContainText('已完成')
-    // 出计划不改文件，这一轮没有「重新生成」；新任务的开关跟着首页开着
+    // 出计划不改文件，这一轮没有「重新生成」；计划模式用可移除标签提示
     expect(existsSync(join(project, 'README.md'))).toBe(false)
     await expect(window.getByTestId('turn-actions').getByRole('button', { name: '重新生成' })).toHaveCount(0)
-    await expect(window.getByRole('button', { name: '先出计划' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(window.getByRole('button', { name: '移除计划', exact: true })).toBeVisible()
     // 任务监控里写明规划、兜底用的模型
     const monitor = window.getByTestId('monitor-panel')
     await expect(monitor).toContainText('同编码模型')

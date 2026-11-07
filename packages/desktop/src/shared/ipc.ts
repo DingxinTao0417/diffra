@@ -32,6 +32,7 @@ import type {
   SecuritySettings,
   SettingsView,
 } from './settings'
+import type { FileReference } from './attachments'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -46,6 +47,7 @@ export const IPC_CHANNELS = {
   roleSet: 'settings:role-set',
   modelsList: 'models:list',
   modelsTest: 'models:test',
+  modelsValidate: 'models:validate',
   projectPick: 'project:pick',
   projectLast: 'project:last',
   projectGet: 'project:get',
@@ -63,6 +65,7 @@ export const IPC_CHANNELS = {
   checkpointDiff: 'session:checkpoint-diff',
   projectBranch: 'project:branch',
   projectOpenFolder: 'project:open-folder',
+  attachmentDescribe: 'attachment:describe',
   sessionsStorage: 'sessions:storage',
   usageSummary: 'usage:summary',
   terminalCreate: 'terminal:create',
@@ -77,6 +80,7 @@ export const IPC_CHANNELS = {
   sessionPrompt: 'session:prompt',
   sessionDeepScan: 'session:deep-scan',
   sessionPlan: 'session:plan',
+  sessionCompact: 'session:compact',
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
   mcpDelete: 'mcp:delete',
@@ -216,6 +220,7 @@ export interface DiffraApi {
   setRole(role: Role, ref: ModelRef | null): Promise<SettingsView>
   listProviderModels(providerId: string): Promise<ListModelsResult>
   testProviderModel(providerId: string, modelId: string): Promise<TestModelResult>
+  validateProviderModel(input: ProviderInput, modelId: string): Promise<TestModelResult>
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
   getProject(path: string): Promise<ProjectState>
@@ -231,6 +236,8 @@ export interface DiffraApi {
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
   openProjectFolder(projectPath: string): Promise<void>
+  describeAttachments(paths: string[]): Promise<FileReference[]>
+  getPathForFile(file: File): string
   sessionsStorage(): Promise<{ bytes: number; dir: string }>
   usageSummary(query: UsageQuery): Promise<UsageSummary>
   // 在项目目录开一个终端；返回终端 id 和 shell 名
@@ -261,6 +268,7 @@ export interface DiffraApi {
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
+  compactSession(sessionId: string, turnId: string): Promise<StopReason>
   // 项目、用户目录和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个
   listSkills(projectPath: string): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>

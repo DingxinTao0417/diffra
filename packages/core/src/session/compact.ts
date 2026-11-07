@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import type { ActiveModel, TurnIO } from './loop.js'
+import { DEFAULT_CONTEXT_WINDOW, type ActiveModel, type TurnIO } from './loop.js'
+import type { StopReason } from '../protocol.js'
 import { SCREENSHOT_MARKER } from './browser.js'
 import { IMAGE_CHARS, messagesChars, type Session } from './session.js'
 
@@ -12,6 +13,7 @@ export const KEEP_RECENT_STEPS = 4
 const MIN_OMITTED_CHARS = 500
 // 压缩之后这么多步内不再压缩，免得最近几步本身就很大时每一步都压一遍
 const COOLDOWN_STEPS = 3
+const MANUAL_COMPACTION_TIMEOUT_MS = 5 * 60_000
 // 压缩后还超过窗口的这个比例，再跑下去就会被模型拒绝，只能停下
 const HARD_STOP_RATIO = 0.95
 const OMITTED_PREFIX = '[Output omitted by Diffra'
@@ -95,6 +97,65 @@ export async function compactIfNeeded(
     const message = toModelError(error, options.model.config.endpoint.apiKey, 0).message
     await finishCard('failed', `压缩失败：${message}`)
     return { kind: 'failed', message }
+  }
+}
+
+// 手动压缩不省略/改写原消息：失败和取消都不改变上下文，历史和撤销所需索引保留。
+export async function compactManually(session: Session, io: TurnIO): Promise<StopReason> {
+  if (session.running) throw new Error('任务还在进行中，结束后再压缩上下文')
+  const controller = new AbortController()
+  session.activeTurn = controller
+  const timeoutSignal = AbortSignal.timeout(MANUAL_COMPACTION_TIMEOUT_MS)
+  const signal = AbortSignal.any([controller.signal, timeoutSignal])
+  const toolCallId = randomUUID()
+  const finishCard = (status: 'completed' | 'failed', text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  try {
+    await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '上下文压缩', kind: 'other', status: 'in_progress' })
+    const start = session.compaction?.upTo ?? 0
+    // 优先保留最近四步；短会话至少保留最新用户轮，工具调用与结果不会拆开。
+    let latestRequest = -1
+    for (let index = session.messages.length - 1; index >= start; index--) {
+      if (session.messages[index]?.role === 'user') { latestRequest = index; break }
+    }
+    const cut = recentStepsStart(session.messages, start) ?? (latestRequest > start ? latestRequest : null)
+    if (cut === null) {
+      await finishCard('completed', '当前上下文较短，没有可压缩的早期对话；未调用模型，原文保持不变。')
+      return signal.aborted ? 'cancelled' : 'end_turn'
+    }
+    if (signal.aborted) { await finishCard('failed', '已停止，原上下文保持不变。'); return 'cancelled' }
+    const before = messagesChars(session.contextMessages())
+    const active: ActiveModel = { language: session.model, config: session.config.model }
+    let summary: string
+    // 仅将模型摘要请求的失败转成压缩卡片；通知/状态更新错误交由调用方处理。
+    try {
+      summary = await summarize(session, active, cut, signal, io)
+    } catch (error) {
+      if (signal.aborted) {
+        await finishCard('failed', timeoutSignal.aborted ? '压缩超时，原上下文保持不变。' : '已停止，原上下文保持不变。')
+        return 'cancelled'
+      }
+      if (!(error instanceof Error)) throw new Error('模型摘要请求返回了非标准错误', { cause: error })
+      console.error(`[session] 会话 ${session.id} 模型摘要请求失败`, error)
+      await finishCard('failed', `压缩失败，原上下文保持不变：${toModelError(error, session.config.model.endpoint.apiKey, 0).message}`)
+      return 'end_turn'
+    }
+    if (signal.aborted) { await finishCard('failed', '已停止，原上下文保持不变。'); return 'cancelled' }
+    const content = summaryMessage(session, latestRequest, cut, summary)
+    const after = messagesChars([{ role: 'user', content }, ...session.messages.slice(cut)])
+    if (after >= before) {
+      await finishCard('completed', '摘要未减少上下文长度，已保留原上下文。')
+      return 'end_turn'
+    }
+    session.compaction = { upTo: cut, summary: content }
+    const estimate = estimateContextTokens(session)
+    if (estimate !== null) {
+      await io.update({ sessionUpdate: 'usage_update', used: estimate, size: session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW, _meta: { diffra: session.usageBreakdown(estimate) } })
+    }
+    await finishCard('completed', `已手动压缩早期上下文（对话约 ${before.toLocaleString()} → ${after.toLocaleString()} 字），保留最近内容。历史记录和任务完成条件不变。\n\n${summary}`)
+    return 'end_turn'
+  } finally {
+    session.activeTurn = null
   }
 }
 

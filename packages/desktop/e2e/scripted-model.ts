@@ -43,6 +43,13 @@ export async function startScriptedModel(
         return
       }
       const body = Buffer.concat(chunks).toString('utf8')
+      // 配置向导的真实连接/工具探测不消耗任务剧本，独立返回非流式兼容响应。
+      if (!/"stream"\s*:\s*true/.test(body)) {
+        const toolsRequested = /"tools"\s*:/.test(body)
+        const message = toolsRequested ? { role: 'assistant', content: null, tool_calls: [{ id: 'probe', type: 'function', function: { name: 'echo', arguments: '{"text":"OK"}' } }] } : { role: 'assistant', content: 'OK' }
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ id: 'probe', object: 'chat.completion', created: 1, model: 'scripted', choices: [{ index: 0, message, finish_reason: toolsRequested ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }))
+        return
+      }
       let step: ScriptStep
       let index: number
       if (body.includes(SECURITY_REVIEW_MARKER)) {

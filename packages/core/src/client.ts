@@ -34,6 +34,7 @@ import {
 export * from './protocol.js'
 export { parseRulePack, RulePackError } from './rules/pack.js'
 export { isLocalHost, normalizeUrl } from './urls.js'
+export { isProtectedFile } from './tools/protected.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {
@@ -129,6 +130,11 @@ export function plan(
     SESSION_EXT_METHODS.plan,
     { sessionId, turnId, prompt, skills },
   )
+}
+
+// 用户手动压缩，和任务一样可取消；限制请求等待时间，不自动重试模型操作。
+export function compactSession(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string }>(SESSION_EXT_METHODS.compact, { sessionId, turnId }, { cancellationSignal: AbortSignal.timeout(CHECK_RUN_TIMEOUT_MS), stopWaitingOnCancel: true })
 }
 
 export function listSkills(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<SkillInfo[]> {

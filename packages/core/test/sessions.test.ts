@@ -9,6 +9,7 @@ import { McpPool } from '../src/mcp.js'
 import {
   checkpointDiff,
   configureSession,
+  compactSession,
   connectToCore,
   createSession,
   deepScan,
@@ -79,6 +80,28 @@ function config(baseUrl: string): SessionConfig {
 }
 
 describe('会话持久化', () => {
+  test('手动 compact 扩展请求记录和摘要持久化，重启后继续使用摘要，历史仍可加载', async () => {
+    server = await startScriptedServer([{ text: '早期回复' }, { text: '最新回复' }, { text: '用户要求保留项目偏好，下一步继续。' }, { text: '已按摘要继续' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'early', `偏好：保持中文。${'早期细节'.repeat(3000)}`)
+    await sendPrompt(core, sessionId, 'recent', '继续之前的任务')
+    expect(await compactSession(core, sessionId, 'manual')).toEqual({ stopReason: 'end_turn' })
+    const store = new SessionStore(join(dataDir, 'sessions'))
+    const saved = await store.load(sessionId)
+    expect(saved.compaction?.summary).toContain('保留项目偏好')
+    expect(saved.turns.at(-1)).toMatchObject({ kind: 'compact', prompt: '/compact' })
+    expect(server.bodies[2]).toContain('早期细节')
+    const restarted = await startCore()
+    const loaded = await loadSession(restarted, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns).toHaveLength(3)
+    expect(loaded.turns[0]?.prompt).toContain('早期细节')
+    await sendPrompt(restarted, sessionId, 'continued', '继续')
+    expect(server.bodies[3]).toContain('保留项目偏好')
+    expect(server.bodies[3]).not.toContain('早期细节')
+    expect(server.bodies[3]).toContain('继续之前的任务')
+  })
+
   test('重启后能列出、加载并接着聊，撤销还能用；改名、归档、搜索、删除', async () => {
     server = await startScriptedServer([
       { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },

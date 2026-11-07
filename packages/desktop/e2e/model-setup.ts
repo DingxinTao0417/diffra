@@ -16,19 +16,18 @@ export async function configureCoderModel(
   options: { name: string; baseUrl: string; apiKey: string; modelId: string; role?: '编码' | '规划' | '兜底' },
 ): Promise<void> {
   await openModelsPage(window)
-  await window.getByRole('button', { name: '添加供应商' }).click()
+  await window.getByRole('button', { name: '+ 添加模型', exact: true }).click()
   const dialog = window.getByRole('dialog')
-  await dialog.getByRole('combobox', { name: '类型' }).click()
-  await window.getByRole('option', { name: '自定义' }).click()
-  await dialog.getByLabel('名称').fill(options.name)
-  await dialog.getByLabel('地址').fill(options.baseUrl)
-  await dialog.getByLabel('API Key').fill(options.apiKey)
-  await dialog.getByRole('button', { name: '保存' }).click()
+  await dialog.getByLabel('名称', { exact: true }).fill(options.name)
+  await dialog.getByLabel('地址', { exact: true }).fill(options.baseUrl)
+  await dialog.getByLabel('API Key', { exact: true }).fill(options.apiKey)
+  await dialog.getByRole('textbox', { name: 'Model ID 1', exact: true }).fill(options.modelId)
+  await dialog.getByRole('button', { name: '下一步', exact: true }).click()
+  await expect(dialog.getByRole('heading', { name: '配置模型能力', exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
   await expect(dialog).toBeHidden()
 
   const card = providerCard(window, options.name)
-  await card.getByLabel('模型 ID').fill(options.modelId)
-  await card.getByRole('button', { name: '添加模型' }).click()
   await expect(card.getByTestId(`model-row-${options.modelId}`)).toBeVisible()
 
   const role = window.getByRole('combobox', { name: options.role ?? '编码' })

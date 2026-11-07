@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Ellipsis, FileDiff, GitBranch, Globe, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Ellipsis, FileDiff, GitBranch, Globe, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -13,7 +13,7 @@ import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
-import { cancelTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
+import { cancelTask, compactTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
 import { Conversation } from './Conversation'
@@ -40,15 +40,13 @@ function TaskPage({ task }: { task: LiveTask }) {
 
   const status = task.running ? '运行中' : task.turns.at(-1)?.error ? '出错' : task.turns.at(-1)?.stopReason === 'cancelled' ? '已停止' : task.turns.length > 0 ? '已完成' : '未开始'
   // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
-  const commands: ComposerCommand[] =
-    deepScanEnabled && !task.running
-      ? [
-          ...(task.turns.length > 0
-            ? [{ id: 'deep-scan-task', label: '深度扫描 · 本任务改动', description: '只读地跨文件追踪这个任务改过的代码，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('task') }]
-            : []),
-          { id: 'deep-scan-project', label: '深度扫描 · 整个项目', description: '只读地扫描整个项目，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('project') },
-        ]
-      : []
+  const commands: ComposerCommand[] = [
+    ...(!task.running ? [{ id: 'compact', label: 'compact', description: '手动压缩早期上下文，保留最近内容和完整聊天历史', keywords: ['compact', '压缩', '上下文'], icon: Archive, run: () => { compactTask(task.sessionId).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`)) } }] : []),
+    ...(deepScanEnabled && !task.running ? [
+      ...(task.turns.length > 0 ? [{ id: 'deep-scan-task', label: '深度扫描 · 本任务改动', description: '只读地跨文件追踪这个任务改过的代码，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('task') }] : []),
+      { id: 'deep-scan-project', label: '深度扫描 · 整个项目', description: '只读地扫描整个项目，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('project') },
+    ] : []),
+  ]
   const togglePanel = (target: SidePanel) => store.set((state) => ({ ...state, panel: state.panel === target ? null : target }))
 
   const askRestore = async (mode: 'restore' | 'regenerate', turnId: string) => {
@@ -129,7 +127,6 @@ function TaskPage({ task }: { task: LiveTask }) {
               ))}
               <Composer
                 size="normal"
-                placeholder="继续说明，输入 / 用命令和 Skill；Enter 发送，Shift+Enter 换行，运行中发送会排队"
                 projectPath={task.project}
                 mcpTarget={{ sessionId: task.sessionId }}
                 commands={commands}
