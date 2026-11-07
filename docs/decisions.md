@@ -86,6 +86,10 @@ v2：
   - HTTPS 证书来自 Let's Encrypt（没留邮箱），certbot 的定时任务自动续期；HTTP 跳转到 HTTPS。`.dev` 域名浏览器只允许 HTTPS。
   - Cloudflare 上是「仅 DNS」，不走它的代理：要保证多段 Range 能直接到 nginx，差分下载才不退回整包。
   - 上传用 root 和专用密钥（`~/.ssh/diffra_server_ed25519`）；服务器原本只允许密码登录，密钥是用户自己加的。没有建单独的部署账号。
+- 官网 `https://diffra.dev`：同一台服务器，只有一个静态下载页（仓库的 `website/`，纯 HTML 和 CSS，不放统计、不用 Cookie）。http 和 `www` 都跳到 `https://diffra.dev`，页面不缓存。
+  - 下载按钮指向固定地址 `https://update.diffra.dev/win/Diffra-Setup-latest.exe`，它是指向最新安装包的软链接，由发布脚本维护，nginx 对它不缓存；每次发版不用改网页。
+  - 页面读更新源上的 `latest.yml` 显示版本号和大小（更新源只允许 `https://diffra.dev` 跨域读 `.yml`）；还没有发布版本时按钮变灰，读不到时保留默认文字、按钮照样能用。
+  - 更新网页：`pnpm --filter @diffra/desktop publish:website`（`scripts/publish-website.ts`），传完从公网取回首页核对。
   - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置；发布脚本发现它设了就拒绝发布。
 - 客户端行为：启动时检查一次，之后每 4 小时检查一次，有新版本就后台下载。下载完后界面出现「重启并更新」，点击后静默安装并自动重启；不点的话，下次正常退出时也会安装。未打包运行（开发模式、e2e）时不检查更新。
 - 发布流程（现阶段手动）：
@@ -93,7 +97,7 @@ v2：
   2. 提交后打 `vX.Y.Z` tag 并推送；
   3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致，跑类型检查、测试并打包，产物传到 `v<版本号>` 的草稿 Release（已有就覆盖里面的文件）；
      - 不用 Actions 的产物存储：账号的存储配额按月累计，满了以后上传直接失败（2026-11 的一次构建就卡在这一步）。仓库私有，草稿 Release 只有有权限的人能下载。
-  4. 本机运行 `pnpm --filter @diffra/desktop publish:release`（`scripts/publish-release.ts`，服务器连接方式写在不提交的 `publish.config.json`，样例 `publish.config.example.json`）：从 Release 下载三个文件，核对 `latest.yml` 的版本、文件名、sha512 和大小，先传安装包和 `.blockmap`、最后传 `latest.yml`，每个先传成 `.partial` 再改名，传完从公网取回核对。
+  4. 本机运行 `pnpm --filter @diffra/desktop publish:release`（`scripts/publish-release.ts`，服务器连接方式写在不提交的 `publish.config.json`，样例 `publish.config.example.json`）：从 Release 下载三个文件，核对 `latest.yml` 的版本、文件名、sha512 和大小，先传安装包和 `.blockmap`、最后传 `latest.yml`，每个先传成 `.partial` 再改名；再把官网用的 `Diffra-Setup-latest.exe` 指向这个版本；传完从公网取回核对。
   - 旧版本的 `.blockmap` 要留在更新源上，客户端靠它做差分下载；找不到时会退回整包下载（约 116MB）。
 - 打包版验收：`pnpm --filter @diffra/desktop test:packaged` 先打包，再把全部 e2e 跑在打包出来的 `release/win-unpacked/Diffra.exe` 上（Playwright 的 `packaged` 项目；`pnpm test` 只跑开发版）。
   - 打包版只认正式数据目录，不看 `DIFFRA_USER_DATA_DIR`；测试用 Chromium 的 `--user-data-dir` 启动参数换成临时目录，实测生效，正式目录不受影响。

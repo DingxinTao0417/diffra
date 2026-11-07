@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "electron-vite build && playwright test --project=dev",
     "test:packaged": "pnpm run package && playwright test --project=packaged",
-    "publish:release": "node scripts/publish-release.ts"
+    "publish:release": "node scripts/publish-release.ts",
+    "publish:website": "node scripts/publish-website.ts"
   },
   "devDependencies": {
     "@diffra/core": "workspace:*",

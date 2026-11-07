@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diffra · 桌面端编程 agent</title>
+<meta name="description" content="Diffra 是 Windows 上的编程 agent：在你的项目里读代码、改代码、跑检查，做完给你看改动。用你自己的模型 API Key。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232e6b57'/%3E%3Ctext x='16' y='22.5' font-family='Segoe UI,Arial,sans-serif' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --background: #ffffff;
+  --foreground: #1c1c1a;
+  --muted: #5f5e58;
+  --soft: #f5f5f2;
+  --border: #e7e6e1;
+  --primary: #2e6b57;
+  --primary-hover: #245644;
+  --primary-foreground: #ffffff;
+  --primary-soft: #e6efea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #161615;
+    --foreground: #ecece8;
+    --muted: #a3a29c;
+    --soft: #1f1f1d;
+    --border: #2f2f2c;
+    --primary: #5fa88c;
+    --primary-hover: #74b89d;
+    --primary-foreground: #10110f;
+    --primary-soft: #1d2b25;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+}
+.page { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+header { display: flex; align-items: center; gap: 10px; padding: 22px 0; font-weight: 600; font-size: 17px; }
+.mark { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; background: var(--primary); color: var(--primary-foreground); font-weight: 700; }
+.hero { padding: 64px 0 40px; }
+h1 { margin: 0 0 16px; font-size: clamp(30px, 6vw, 44px); line-height: 1.25; letter-spacing: -0.01em; }
+.lead { margin: 0 0 32px; color: var(--muted); font-size: 18px; }
+.download { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; }
+.button {
+  display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 22px;
+  border-radius: 12px; background: var(--primary); color: var(--primary-foreground);
+  font-weight: 600; text-decoration: none;
+}
+.button:hover { background: var(--primary-hover); }
+.button[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+.meta { color: var(--muted); font-size: 14px; }
+.points { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin: 48px 0; padding: 0; list-style: none; }
+.points li { padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--soft); }
+.points strong { display: block; margin-bottom: 4px; }
+.points span { color: var(--muted); font-size: 14px; }
+.notes { margin: 0 0 56px; padding: 18px 20px; border-radius: 12px; background: var(--primary-soft); font-size: 15px; }
+.notes h2 { margin: 0 0 6px; font-size: 16px; }
+.notes p { margin: 0; }
+.notes p + p { margin-top: 6px; }
+footer { padding: 24px 0 40px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="mark" aria-hidden="true">D</span>
+    Diffra
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>描述任务，Diffra 在你的项目里把它做完</h1>
+      <p class="lead">桌面端编程 agent：读代码、改代码、跑检查，做完给你看改动。模型用你自己的 API Key。</p>
+      <div class="download">
+        <a class="button" id="download" href="https://update.diffra.dev/win/Diffra-Setup-latest.exe">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          下载 Windows 版
+        </a>
+        <span class="meta" id="release">Windows 10 / 11 · 64 位</span>
+      </div>
+    </section>
+
+    <ul class="points">
+      <li><strong>改完先过检查</strong><span>自动跑项目的检查命令和安全扫描，没通过就打回去重改。</span></li>
+      <li><strong>每一轮都能撤销</strong><span>改动前打检查点，不满意一键退回，不碰你自己的 git。</span></li>
+      <li><strong>守住你的数据</strong><span>密钥文件读不到，数据目录改不了，有风险的命令先问你。</span></li>
+    </ul>
+
+    <section class="notes">
+      <h2>第一次安装</h2>
+      <p>安装包还没有代码签名，Windows 可能提示「Windows 已保护你的电脑」：点「更多信息」，再点「仍要运行」。</p>
+      <p>装好以后，有新版本时应用会在后台下载，重启一下就更新好了。</p>
+    </section>
+  </main>
+
+  <footer>Diffra · 自己和朋友在用的小工具</footer>
+</div>
+<script>
+// 读更新源上的 latest.yml，显示当前版本和大小；还没有发布过版本时按钮先不能点
+(async () => {
+  const release = document.getElementById('release')
+  const download = document.getElementById('download')
+  try {
+    const response = await fetch('https://update.diffra.dev/win/latest.yml', { cache: 'no-store' })
+    if (response.status === 404) {
+      release.textContent = '还没有发布版本，敬请期待'
+      download.setAttribute('aria-disabled', 'true')
+      return
+    }
+    if (!response.ok) return
+    const text = await response.text()
+    const version = /^version: (.+)$/m.exec(text)?.[1]
+    const size = Number(/^\s+size: (\d+)$/m.exec(text)?.[1])
+    if (!version) return
+    release.textContent = `版本 ${version}${size ? ` · ${Math.round(size / 1024 / 1024)} MB` : ''} · Windows 10 / 11 · 64 位`
+  } catch {
+    // 读不到版本信息时保留默认文字，按钮照样能下载
+  }
+})()
+</script>
+</body>
+</html>

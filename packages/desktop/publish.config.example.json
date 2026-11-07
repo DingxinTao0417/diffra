@@ -4,5 +4,6 @@
     "port": 55488,
     "identityFile": "~/.ssh/diffra_server_ed25519"
   },
-  "remoteDir": "/var/www/diffra-update/win"
+  "remoteDir": "/var/www/diffra-update/win",
+  "siteDir": "/var/www/diffra-site"
 }
