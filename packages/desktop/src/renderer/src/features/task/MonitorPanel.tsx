@@ -79,8 +79,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
 
       <Section title="规范">
         <div data-testid="monitor-rule-packs">{task.info.rulePacks.length > 0 ? task.info.rulePacks.join('、') : '没有选中的规则包'}</div>
-        {project && <Row dot={project.rules.review ? 'ok' : 'off'} label={project.rules.review ? '完成前规范审查已开' : '完成前规范审查未开'} />}
-        <LinkButton onClick={() => openSettings('rules')}>规范设置</LinkButton>
+        <Row dot="ok" label="完成前规范审查已开" />
       </Section>
 
       <Section title="安全">

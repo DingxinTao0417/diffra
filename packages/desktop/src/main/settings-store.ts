@@ -50,18 +50,10 @@ export const readOnlyPathSchema = z
     '禁写目录要填相对项目根目录的路径，不能是绝对路径，也不能包含 ..',
   )
 
-export const projectRuleSettingsSchema = z.object({
-  disabledPacks: z.array(z.string().min(1)),
-  disabledRules: z.array(z.string().min(1)),
-  includeRecommended: z.boolean(),
-  review: z.boolean(),
-})
-
 export const projectSettingsSchema = z.object({
   checks: sessionChecksSchema,
   readOnlyPaths: z.array(readOnlyPathSchema).default([]),
-  // 第 10 步加的，旧设置文件里没有这一项
-  rules: projectRuleSettingsSchema.default(() => ({ disabledPacks: [], disabledRules: [], includeRecommended: false, review: false })),
+  // 以前按项目存的规范设置（rules）不再使用，读的时候丢掉，下次保存就没了
 })
 
 export const appearanceSchema = z.object({

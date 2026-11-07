@@ -20,7 +20,6 @@ import { Switch } from '@/components/ui/switch'
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
 import { PluginSettings } from '@/features/plugins/PluginSettings'
-import { RulesView } from '@/features/rules/RulesView'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { UsageSection } from './UsageSection'
 import { applyAppearance } from '@/lib/appearance'
@@ -42,7 +41,6 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
     name: '智能体',
     items: [
       { id: 'models', label: '模型与角色', keywords: '供应商 API Key 编码 评审 规划' },
-      { id: 'rules', label: '规范', keywords: '规则包 编码规范 审查' },
       { id: 'permissions', label: '命令权限', keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
@@ -116,8 +114,6 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <AppearanceSection />
     case 'models':
       return <ModelSettings />
-    case 'rules':
-      return <RulesSection />
     case 'permissions':
       return <PermissionsSection />
     case 'security':
@@ -287,17 +283,6 @@ function AppearanceSection() {
       </SettingRow>
     </>
   )
-}
-
-function RulesSection() {
-  const projects = useAppState((state) => state.projects)
-  const lastWorkRoute = useAppState((state) => state.lastWorkRoute)
-  const live = useAppState((state) => state.live)
-  // 默认显示刚才在用的项目
-  const current = lastWorkRoute.name === 'task' ? (live[lastWorkRoute.sessionId]?.project ?? null) : lastWorkRoute.name === 'home' ? lastWorkRoute.project : null
-  const [picked, setPicked] = useState<string | null>(null)
-  const projectPath = picked ?? current ?? projects[0] ?? null
-  return <RulesView projectPath={projectPath} projects={projects} onProjectChange={setPicked} />
 }
 
 function PermissionsSection() {

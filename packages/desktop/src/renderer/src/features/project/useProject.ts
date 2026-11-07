@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ProjectState } from '../../../../shared/ipc'
 
-// 项目的检查命令、禁写目录、规范设置和当前分支
+// 项目的检查命令、禁写目录和当前分支
 export function useProject(path: string | null) {
   const [project, setProject] = useState<ProjectState | null>(null)
   const [branch, setBranch] = useState<string | null>(null)

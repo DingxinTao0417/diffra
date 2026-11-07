@@ -36,7 +36,6 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const [error, setError] = useState<string | null>(null)
   const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
   const detectedCount = useDetectedChecks(project)
-  const rulePacks = useEnabledRulePacks(project?.rules.disabledPacks ?? null)
 
   useEffect(() => setError(null), [projectPath])
 
@@ -142,11 +141,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
               {detectedCount ? `检测到 ${detectedCount} 个检查命令` : checksSummary(project)}
             </button>
           )}
-          {project && rulePacks && rulePacks.length > 0 && (
-            <button type="button" className="hover:text-foreground" title={rulePacks.join('、')} onClick={() => openSettings('rules')}>
-              规范：{rulePacks.length} 个规则包{project.rules.review ? ' · 完成前审查' : ''}
-            </button>
-          )}
+          {project && <span title="内置编码规范按项目语言全部生效，完成前按规范审查改动">规范：内置规则 · 完成前审查</span>}
         </div>
       </div>
 
@@ -196,23 +191,4 @@ function useDetectedChecks(project: ProjectState | null): number | null {
     }
   }, [project])
   return count
-}
-
-// 这个项目启用的规则包名称；实际写进提示词的由 core 按项目语言再筛一遍
-function useEnabledRulePacks(disabledPacks: string[] | null): string[] | null {
-  const [names, setNames] = useState<string[] | null>(null)
-  const key = disabledPacks?.join('\n') ?? null
-  useEffect(() => {
-    if (key === null) return
-    const disabled = new Set(key ? key.split('\n') : [])
-    let stale = false
-    window.diffra.listRulePacks().then(
-      (view) => !stale && setNames(view.packs.filter((entry) => !disabled.has(entry.pack.id)).map((entry) => entry.pack.name)),
-      (error: unknown) => console.error('读取规则包失败', error),
-    )
-    return () => {
-      stale = true
-    }
-  }, [key])
-  return names
 }

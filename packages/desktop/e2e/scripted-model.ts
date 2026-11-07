@@ -15,16 +15,24 @@ export interface ScriptedModel {
   bodies(): string[]
   // 收到的轻量安全扫描请求数
   securityReviews(): number
+  // 收到的完成前规范审查请求数
+  ruleReviews(): number
   close(): Promise<void>
 }
 
-// 轻量安全扫描的请求按系统提示词认出来，单独按 securityReplies 回复，不占剧本的步骤；用完后回「没有问题」
+// 轻量安全扫描和完成前规范审查的请求按系统提示词认出来，分别按 securityReplies、reviewReplies 回复，
+// 不占剧本的步骤；用完后回「没有问题」。规范审查一直开着，改了文件的任务都会多一次审查请求
 const SECURITY_REVIEW_MARKER = 'You are a security reviewer'
+const RULE_REVIEW_MARKER = 'You review a code change against coding rules.'
 
 // OpenAI 兼容的流式接口：每收到一次 chat/completions 请求，按顺序返回剧本里的下一步
-export async function startScriptedModel(steps: ScriptStep[], options: { securityReplies?: string[] } = {}): Promise<ScriptedModel> {
+export async function startScriptedModel(
+  steps: ScriptStep[],
+  options: { securityReplies?: string[]; reviewReplies?: string[] } = {},
+): Promise<ScriptedModel> {
   let served = 0
   let reviews = 0
+  let ruleReviews = 0
   const bodies: string[] = []
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -40,6 +48,9 @@ export async function startScriptedModel(steps: ScriptStep[], options: { securit
       if (body.includes(SECURITY_REVIEW_MARKER)) {
         step = { text: options.securityReplies?.[reviews] ?? 'NO_FINDINGS' }
         index = 1000 + reviews++
+      } else if (body.includes(RULE_REVIEW_MARKER)) {
+        step = { text: options.reviewReplies?.[ruleReviews] ?? 'NO_VIOLATIONS' }
+        index = 2000 + ruleReviews++
       } else {
         step = steps[served] ?? { text: '（剧本已结束）' }
         bodies.push(body)
@@ -59,6 +70,7 @@ export async function startScriptedModel(steps: ScriptStep[], options: { securit
     requests: () => served,
     bodies: () => [...bodies],
     securityReviews: () => reviews,
+    ruleReviews: () => ruleReviews,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()

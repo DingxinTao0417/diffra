@@ -40,20 +40,19 @@ import {
   type ProjectState,
   type SessionHandle,
 } from '../shared/ipc'
-import type { ModelRef, ProjectRuleSettings } from '../shared/settings'
+import type { ModelRef } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
 import { devServer, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
 import { mcpServersFor } from './mcp-servers'
 import { enabledPlugins } from './plugins-ipc'
-import { type RulePackStore, sessionRules } from './rule-packs'
+import { SESSION_RULES } from './rule-packs'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint } from './settings-ipc'
 import {
   modelRefSchema,
   permissionModeSchema,
-  projectRuleSettingsSchema,
   projectSettingsSchema,
   type SettingsStore,
 } from './settings-store'
@@ -75,7 +74,6 @@ const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean
 const mcpTargetSchema = z.union([z.object({ sessionId: z.string().min(1) }), z.object({ projectPath: z.string().min(1).nullable() })])
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
-const DEFAULT_RULE_SETTINGS: ProjectRuleSettings = { disabledPacks: [], disabledRules: [], includeRecommended: false, review: false }
 
 interface PendingPermission {
   sessionId: string
@@ -123,20 +121,19 @@ function settlePermission(requestId: string, optionId: string | null): void {
   pending.resolve(optionId)
 }
 
-export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string, rulePacks: RulePackStore): void {
+export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): void {
   const projectState = (path: string): ProjectState => {
     const project = settings.get().projects[path]
     return {
       path,
       checks: project?.checks ?? NO_CHECKS,
       readOnlyPaths: project?.readOnlyPaths ?? [],
-      rules: project?.rules ?? DEFAULT_RULE_SETTINGS,
     }
   }
 
   const saveProjectState = async (path: string, change: (current: ProjectState) => ProjectState) => {
-    const { checks, readOnlyPaths, rules } = change(projectState(path))
-    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths, rules } } }))
+    const { checks, readOnlyPaths } = change(projectState(path))
+    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths } } }))
     return projectState(path)
   }
 
@@ -201,12 +198,6 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return saveProjectState(path, (current) => ({ ...current, ...input }))
   })
 
-  ipcMain.handle(IPC_CHANNELS.projectSaveRules, async (_event, rawPath: unknown, rawRules: unknown) => {
-    const path = parse(z.string().min(1), rawPath)
-    const rules = parse(projectRuleSettingsSchema, rawRules)
-    return saveProjectState(path, (current) => ({ ...current, rules }))
-  })
-
   // 新建和加载都按当前设置组装会话配置：模型、检查、规范改过的话，打开旧任务也用新的。
   // 输入框里选的模型和权限模式优先，没选就用「编码」角色和默认权限模式
   const sessionConfig = async (
@@ -216,9 +207,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
     if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
     const project = projectState(path)
-    const rules = sessionRules((await rulePacks.list()).packs.map((entry) => entry.pack), project.rules)
-    // 只有开了审查才用到评审模型；没分配评审角色时 core 用编码模型审查
-    const reviewer = rules.review ? await resolveRole('reviewer', '评审') : null
+    // 审查一直开着；没分配评审角色时 core 用编码模型审查
+    const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
     const fallback = await resolveRole('fallback', '兜底')
     return {
@@ -229,7 +219,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         fallbackModel: fallback?.model ?? null,
         checks: project.checks,
         readOnlyPaths: project.readOnlyPaths,
-        rules,
+        rules: SESSION_RULES,
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
         security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan },
         limits: {

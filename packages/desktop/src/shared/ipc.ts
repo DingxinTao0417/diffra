@@ -9,7 +9,6 @@ import type {
   PermissionMode,
   PermissionOption,
   RequestPermissionRequest,
-  RulePack,
   SessionChecks,
   SessionSearchResult,
   SkillInfo,
@@ -28,7 +27,6 @@ import type {
   McpServerInput,
   ModelRef,
   PluginView,
-  ProjectRuleSettings,
   ProviderInput,
   Role,
   SecuritySettings,
@@ -54,10 +52,6 @@ export const IPC_CHANNELS = {
   projectDetectChecks: 'project:detect-checks',
   projectRunCheck: 'project:run-check',
   projectSave: 'project:save',
-  projectSaveRules: 'project:save-rules',
-  rulesList: 'rules:list',
-  rulesImport: 'rules:import',
-  rulesDelete: 'rules:delete',
   sessionsList: 'sessions:list',
   sessionsSearch: 'sessions:search',
   sessionLoad: 'session:load',
@@ -162,19 +156,6 @@ export interface ProjectState {
   path: string
   checks: SessionChecks
   readOnlyPaths: string[]
-  rules: ProjectRuleSettings
-}
-
-export interface RulePackEntry {
-  pack: RulePack
-  // 内置的不能删除，只能在项目里关闭
-  builtin: boolean
-}
-
-export interface RulePacksView {
-  packs: RulePackEntry[]
-  // 用户规则包目录里解析失败的文件
-  errors: Array<{ file: string; message: string }>
 }
 
 export interface SessionHandle {
@@ -242,11 +223,6 @@ export interface DiffraApi {
   // 在项目目录试跑一条检查命令
   runCheck(path: string, command: string): Promise<CheckRunResult>
   saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
-  saveProjectRules(path: string, rules: ProjectRuleSettings): Promise<ProjectState>
-  listRulePacks(): Promise<RulePacksView>
-  // 弹出文件选择框导入 markdown 规则包；取消时 imported 为 null
-  importRulePack(): Promise<{ view: RulePacksView; imported: string | null }>
-  deleteRulePack(packId: string): Promise<RulePacksView>
   createSession(projectPath: string, options?: SessionOptions): Promise<SessionHandle>
   // 返回新的模型名（换了模型时）
   configureSession(sessionId: string, options: SessionOptions): Promise<{ modelLabel: string | null }>

@@ -5,9 +5,7 @@ import { IPC_CHANNELS } from '../shared/ipc'
 import { registerBrowserIpc } from './browser'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
-import { RulePackStore } from './rule-packs'
 import { registerPluginsIpc } from './plugins-ipc'
-import { registerRulesIpc } from './rules-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
@@ -67,10 +65,8 @@ app
     const userDataDir = app.getPath('userData')
     const settings = await SettingsStore.open(userDataDir)
     const secrets = await SecretStore.open(userDataDir)
-    const rulePacks = new RulePackStore(join(userDataDir, 'rules'))
     registerSettingsIpc(settings, secrets)
-    registerRulesIpc(rulePacks)
-    registerSessionIpc(settings, secrets, userDataDir, rulePacks)
+    registerSessionIpc(settings, secrets, userDataDir)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
     registerTerminalIpc()
