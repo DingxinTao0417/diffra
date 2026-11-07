@@ -6,6 +6,7 @@ import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { taskStatus } from '@/lib/task-status'
 import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
 import type { TaskDiff } from './useTaskDiff'
@@ -28,8 +29,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const mcp = useMcpStatus({ sessionId: task.sessionId })
-  const progressLabels = { running: '执行中', waiting: '等待中', blocked: '受阻（未完成）', cancelled: '已取消', completed: '已完成' }
-  const status = task.permission ? '等待授权' : task.running ? '运行中' : task.progress ? progressLabels[task.progress.status === 'running' ? 'blocked' : task.progress.status] : task.turns.length === 0 ? '未开始' : '本轮已停止'
+  const status = taskStatus(task).label
   const checks = project?.checks
 
   return (
@@ -41,13 +41,13 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         </span>
       </div>
 
-      {task.progress && (
+      {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
+      {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
         <Section title="完成条件">
           {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
           {task.progress.requirements.map((item) => (
             <Row key={item.id} dot={item.receiptId ? 'ok' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
           ))}
-          {task.progress.requirements.length === 0 && <p className="text-muted-foreground">尚未定义多阶段完成条件；检查通过不等于任务完成。</p>}
         </Section>
       )}
 

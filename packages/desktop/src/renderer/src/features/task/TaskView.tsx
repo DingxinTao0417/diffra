@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Archive, Ellipsis, FileDiff, GitBranch, Globe, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
 import { BrowserPanel } from '@/features/browser/BrowserPanel'
+import { PermissionCard } from '@/features/session/PermissionCard'
 import { RestoreDialog } from '@/features/session/RestoreDialog'
 import type { Usage } from '@/features/session/transcript'
 import { TaskMenu } from '@/features/shell/TaskMenu'
@@ -13,7 +14,8 @@ import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
-import { cancelTask, compactTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
+import { type TaskStatus, taskStatus } from '@/lib/task-status'
+import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
 import { Conversation } from './Conversation'
@@ -38,7 +40,7 @@ function TaskPage({ task }: { task: LiveTask }) {
   const firstTurn = task.turns[0]?.id ?? null
   const monitorDiff = useTaskDiff(task.sessionId, firstTurn, task.info.checkpoints && panel === 'monitor', task.changeVersion)
 
-  const status = task.running ? '运行中' : task.turns.at(-1)?.error ? '出错' : task.turns.at(-1)?.stopReason === 'cancelled' ? '已停止' : task.turns.length > 0 ? '已完成' : '未开始'
+  const status = taskStatus(task)
   // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
   const commands: ComposerCommand[] = [
     ...(!task.running ? [{ id: 'compact', label: 'compact', description: '手动压缩早期上下文，保留最近内容和完整聊天历史', keywords: ['compact', '压缩', '上下文'], icon: Archive, run: () => { compactTask(task.sessionId).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`)) } }] : []),
@@ -90,9 +92,7 @@ function TaskPage({ task }: { task: LiveTask }) {
             <Ellipsis className="size-4" />
           </button>
         </TaskMenu>
-        <span className="shrink-0 text-xs text-muted-foreground" data-testid="task-status">
-          {folderName(task.project)} · {status}
-        </span>
+        <StatusLabel status={status} />
         <div className="flex-1" />
         <IconButton label="终端 Ctrl+`" active={terminalOpen} onClick={() => toggleTerminalPanel(task.project)}>
           <SquareTerminal className="size-4" />
@@ -113,6 +113,12 @@ function TaskPage({ task }: { task: LiveTask }) {
           <Conversation task={task} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
           <div className="px-8 pb-3.5">
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
+              {/* 固定在输入框上方，用户往上翻着看改动时也能看到；多行命令只让命令区滚动，否则卡片会把对话挤没，按钮也不能随之滚出视野 */}
+              {task.permission && (
+                <div className="[&_pre]:max-h-40">
+                  <PermissionCard request={task.permission} onRespond={(optionId) => respondPermission(task.sessionId, optionId)} />
+                </div>
+              )}
               {task.queue.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 self-start rounded-lg border border-dashed bg-sidebar px-2.5 py-1.5 text-xs" data-testid="queued-message">
                   <span className="text-muted-foreground">
@@ -169,6 +175,38 @@ function TaskPage({ task }: { task: LiveTask }) {
       <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
     </div>
   )
+}
+
+function StatusLabel({ status }: { status: TaskStatus }) {
+  return (
+    <span
+      className={cn(
+        'flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground',
+        status.tone === 'confirm' && 'text-warning',
+        status.tone === 'error' && 'text-destructive',
+      )}
+      data-testid="task-status"
+      data-tone={status.tone}
+    >
+      <StatusIndicator tone={status.tone} />
+      {status.label}
+    </span>
+  )
+}
+
+// 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，出错实心点
+function StatusIndicator({ tone }: { tone: TaskStatus['tone'] }) {
+  if (tone === 'running') return <LoaderCircle className="size-3 animate-spin text-primary" />
+  if (tone === 'done') return <Check className="size-3" />
+  const dot = {
+    confirm: 'size-2 border-2 border-warning',
+    error: 'size-2 bg-destructive',
+    blocked: 'size-2 bg-warning',
+    waiting: 'size-2 border-2 border-muted-foreground/60',
+    stopped: 'size-1.5 bg-muted-foreground/60',
+    idle: null,
+  }[tone]
+  return dot && <span className={cn('shrink-0 rounded-full', dot)} />
 }
 
 function IconButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick(): void; children: React.ReactNode }) {

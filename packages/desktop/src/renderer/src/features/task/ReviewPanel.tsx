@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import { cn } from 'cn'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DiffCounts } from '@/features/session/DiffView'
+import { DiffLines } from '@/features/session/DiffLines'
 import type { FileDiff } from '@/lib/unified-diff'
 import { type LiveTask, store } from '@/state/store'
 import { type TaskDiff, useTaskDiff } from './useTaskDiff'
@@ -71,40 +73,29 @@ function ReviewBody({ task, diff, files }: { task: LiveTask; diff: TaskDiff | nu
   return files.map((file) => <FileCard key={file.path} file={file} />)
 }
 
-const STATUS_LABELS: Record<FileDiff['status'], string | null> = { added: '新文件', deleted: '已删除', modified: null }
+const STATUS_BADGES: Record<FileDiff['status'], React.ReactNode> = {
+  added: <Badge variant="success">新文件</Badge>,
+  deleted: <Badge variant="destructive">已删除</Badge>,
+  modified: null,
+}
 
 function FileCard({ file }: { file: FileDiff }) {
   const [open, setOpen] = useState(true)
   return (
-    <div className="overflow-hidden rounded-[10px] border" data-testid="review-file">
-      <button type="button" className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left text-sm" onClick={() => setOpen(!open)}>
+    <div className="overflow-hidden rounded-lg border" data-testid="review-file">
+      <button
+        type="button"
+        className={cn('flex w-full items-center gap-2 bg-muted/50 px-2 py-1.5 text-left text-sm hover:bg-accent dark:bg-muted dark:hover:bg-accent', open && 'border-b')}
+        onClick={() => setOpen(!open)}
+      >
         {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         <span className="min-w-0 truncate font-mono text-xs">{file.path}</span>
-        {STATUS_LABELS[file.status] && <span className="shrink-0 text-xs text-muted-foreground">{STATUS_LABELS[file.status]}</span>}
+        {STATUS_BADGES[file.status]}
         <span className="ml-auto">
           <DiffCounts added={file.added} removed={file.removed} />
         </span>
       </button>
-      {open && (
-        <div className="overflow-x-auto border-t py-1.5 font-mono text-xs leading-relaxed">
-          {file.binary && <p className="px-3.5 text-muted-foreground">二进制文件，不显示内容</p>}
-          {file.hunks.map((hunk, index) => (
-            <div key={index}>
-              {index > 0 && <div className="px-3.5 text-muted-foreground">⋯</div>}
-              {hunk.map((line, lineIndex) => (
-                <div
-                  key={lineIndex}
-                  className={cn('flex min-w-max', line.kind === 'add' && 'bg-success/10', line.kind === 'remove' && 'bg-destructive/10')}
-                >
-                  <span className="w-10 shrink-0 pr-2 text-right text-muted-foreground select-none">{line.newLine ?? line.oldLine}</span>
-                  <span className="w-4 shrink-0 select-none">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span>
-                  <span className="pr-4 whitespace-pre">{line.text}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
+      {open && (file.binary ? <p className="px-3 py-1.5 text-xs text-muted-foreground">二进制文件，不显示内容</p> : <DiffLines hunks={file.hunks} />)}
     </div>
   )
 }

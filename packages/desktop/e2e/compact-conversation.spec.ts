@@ -38,10 +38,10 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     const delivery = cards(window, 'finish')
     await expect(delivery).toContainText('本轮交付')
-    await expect(delivery).toContainText('1 个文件 · 净改动')
+    await expect(delivery.getByTestId('finish-counts')).toHaveText('1 个文件 +1 −1')
     await expect(delivery).toContainText('+1')
     await expect(delivery).not.toContainText('+2')
-    await delivery.getByRole('button', { name: '审阅本任务改动', exact: true }).click()
+    await delivery.getByRole('button', { name: '审阅改动', exact: true }).click()
     await expect(window.getByTestId('review-file')).toContainText('note.txt')
   } finally {
     await app.close()

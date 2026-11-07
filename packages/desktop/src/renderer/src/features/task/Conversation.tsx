@@ -1,16 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PromptImage, StopReason, TaskProgressView } from '@diffra/core/types'
-import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
+import type { PermissionRequestEvent } from '../../../../shared/ipc'
+import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
+import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
-import { PermissionCard } from '@/features/session/PermissionCard'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
-import { respondPermission, sendMessage } from '@/state/actions'
+import { sendMessage } from '@/state/actions'
 import { type LiveTask, showToast, store } from '@/state/store'
 import { Markdown } from './Markdown'
 
@@ -18,8 +19,8 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
-  | { type: 'tools' | 'edits'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish'; item: ToolItem }
+  | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -30,7 +31,13 @@ const STOP_LABELS: Partial<Record<StopReason, string>> = {
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 
-const SECURITY_TITLES = ['安全检查', '安全扫描']
+// 旧会话里存的是改名前的标题，显示时统一成监控面板的叫法
+const SECURITY_TITLES = new Map([
+  ['静态检查', '静态检查'],
+  ['轻量扫描', '轻量扫描'],
+  ['安全检查', '静态检查'],
+  ['安全扫描', '轻量扫描'],
+])
 
 function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | null {
   if (item.title === '完成') return 'finish'
@@ -38,7 +45,7 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security'
   if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
-  if (SECURITY_TITLES.includes(item.title)) return 'security'
+  if (SECURITY_TITLES.has(item.title)) return 'security'
   if (CHECK_PREFIXES.some((prefix) => item.title.startsWith(prefix))) return 'check'
   if (item.content.some((content) => content.type === 'diff')) return 'edit'
   return null
@@ -57,6 +64,12 @@ function toBlocks(items: TranscriptItem[]): Block[] {
       const previous = blocks.at(-1)
       if (previous?.type === 'edits') previous.items.push(item)
       else blocks.push({ type: 'edits', id: item.id, items: [item] })
+      continue
+    }
+    if (type === 'check' || type === 'review' || type === 'security') {
+      const previous = blocks.at(-1)
+      if (previous?.type === 'checks') previous.items.push(item)
+      else blocks.push({ type: 'checks', id: item.id, items: [item] })
       continue
     }
     if (type) {
@@ -198,8 +211,12 @@ interface TurnViewProps {
 }
 
 function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnViewProps) {
-  const blocks = useMemo(() => toBlocks(turn.items), [turn.items])
+  // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
+  const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
+  const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
+  // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
+  const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
   // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动
   const finishFiles = useMemo(() => {
     const result = new Map<string, ChangedFile[]>()
@@ -225,9 +242,6 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
 
   return (
     <section data-testid="turn" data-turn-id={turn.id} className="flex flex-col gap-3.5">
-      {turn.items.some((item) => item.kind === 'tool' && item.content.some((content) => content.type === 'diff')) && (
-        <button type="button" aria-expanded={showEditDetails} className="self-end text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowEditDetails(!showEditDetails)}>{showEditDetails ? '收起代码详情' : '展开代码详情'}</button>
-      )}
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
@@ -235,15 +249,19 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
           case 'edits':
-            return <EditGroup key={block.id} items={block.items} projectPath={task.project} expanded={showEditDetails} />
+            return (
+              <EditGroup
+                key={block.id}
+                items={block.items}
+                projectPath={task.project}
+                expanded={showEditDetails}
+                toggle={block.id === editToggleId ? <EditDetailsToggle expanded={showEditDetails} onToggle={() => setShowEditDetails(!showEditDetails)} /> : undefined}
+              />
+            )
           case 'edit':
             return <EditBlock key={block.item.id} item={block.item} projectPath={task.project} />
-          case 'check':
-            return <CheckRow key={block.item.id} item={block.item} />
-          case 'review':
-            return <ReviewBlock key={block.item.id} item={block.item} />
-          case 'security':
-            return <SecurityBlock key={block.item.id} item={block.item} />
+          case 'checks':
+            return <CheckGroup key={block.id} items={block.items} />
           case 'deep-scan':
             return <DeepScanReport key={block.item.id} item={block.item} task={task} />
           case 'compaction':
@@ -254,8 +272,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id) ?? []} projectPath={task.project} progress={last && block.item.id === [...finishFiles.keys()].at(-1) ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
-      {active && task.permission && <PermissionCard request={task.permission} onRespond={(optionId) => respondPermission(task.sessionId, optionId)} />}
-      {active && (
+      {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
+      {active && !task.permission && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
           进行中…
@@ -286,6 +304,23 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
         </div>
       )}
     </section>
+  )
+}
+
+function PermissionPending({ toolCall }: { toolCall: PermissionRequestEvent['toolCall'] }) {
+  const input = toolCall.rawInput
+  const command = typeof input === 'object' && input !== null && 'command' in input && typeof input.command === 'string' ? input.command : null
+  const target = command ?? toolCall.title ?? ''
+  return (
+    <div data-testid="permission-pending">
+      <DisclosureRow className="text-foreground/85">
+        <span className="flex size-3.5 shrink-0 items-center justify-center">
+          <span className="size-2 rounded-full border-2 border-warning" />
+        </span>
+        <span className="shrink-0 text-muted-foreground">等待确认</span>
+        {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
+      </DisclosureRow>
+    </div>
   )
 }
 
@@ -418,14 +453,13 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
   if (items.length === 1 && items[0]) return <ToolStep item={items[0]} />
   const expanded = open ?? busy
   return (
-    <div className="flex flex-col gap-1.5">
-      <button type="button" className="flex items-center gap-1.5 self-start text-sm text-muted-foreground hover:text-foreground" onClick={() => setOpen(!expanded)}>
-        {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+    <div className="flex flex-col gap-1.5" data-testid="tool-group">
+      <DisclosureRow open={expanded} onToggle={() => setOpen(!expanded)} className="text-muted-foreground hover:text-foreground">
+        <StatusIcon status={busy ? 'in_progress' : failed > 0 ? 'failed' : 'completed'} />
         执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}
-        {busy && <LoaderCircle className="size-3 animate-spin" />}
-      </button>
+      </DisclosureRow>
       {expanded && (
-        <div className="flex flex-col gap-1 pl-4.5">
+        <div className="flex flex-col gap-0.5 pl-5">
           {items.map((item) => (
             <ToolStep key={item.id} item={item} />
           ))}
@@ -441,13 +475,32 @@ function ToolStep({ item }: { item: ToolItem }) {
   const output = textOf(item)
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status}>
-      <button type="button" className="flex max-w-full items-center gap-2 text-left text-foreground/85" onClick={() => setOpen(!open)} disabled={!output}>
+      <DisclosureRow open={open} onToggle={output ? () => setOpen(!open) : undefined} className="text-foreground/85">
         <StatusIcon status={item.status} />
         <span className="shrink-0 text-muted-foreground">{action}</span>
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
-      </button>
-      {open && output && <pre className="mt-1.5 ml-5.5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      </DisclosureRow>
+      {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
+  )
+}
+
+// 对话里可以点开的一行。有内容可展开才是按钮，带箭头和 hover；没有时箭头位置留空，和相邻的行对齐
+function DisclosureRow({ open, onToggle, className, children }: { open?: boolean; onToggle?: () => void; className?: string; children: React.ReactNode }) {
+  const base = '-mx-1.5 flex w-fit max-w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-sm'
+  if (!onToggle) {
+    return (
+      <div className={cn(base, className)}>
+        <span className="size-3.5 shrink-0" />
+        {children}
+      </div>
+    )
+  }
+  return (
+    <button type="button" aria-expanded={open} className={cn(base, 'cursor-pointer hover:bg-accent/60', className)} onClick={onToggle}>
+      {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
+      {children}
+    </button>
   )
 }
 
@@ -508,46 +561,111 @@ function CompactionRow({ item }: { item: ToolItem }) {
   )
 }
 
-function EditGroup({ items, projectPath, expanded }: { items: ToolItem[]; projectPath: string; expanded: boolean }) {
+function EditGroup({ items, projectPath, expanded, toggle }: { items: ToolItem[]; projectPath: string; expanded: boolean; toggle?: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   useEffect(() => setOpen(expanded), [expanded])
-  if (items.length === 1 && items[0]) return <EditBlock item={items[0]} projectPath={projectPath} expanded={expanded} />
+  if (items.length === 1 && items[0]) return <EditBlock item={items[0]} projectPath={projectPath} expanded={expanded} toggle={toggle} />
   const files = filesOf(items)
   return (
     <div className="space-y-2" data-testid="edit-group">
-      <button type="button" aria-expanded={open} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-        修改 {files.length} 个文件 · {items.length} 次编辑
-        <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
-      </button>
+      <div className="flex items-center gap-2">
+        <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-muted-foreground hover:text-foreground">
+          <StatusIcon status={items.some((item) => item.status === 'failed') ? 'failed' : items.every((item) => item.status === 'completed') ? 'completed' : 'in_progress'} />
+          修改 {files.length} 个文件 · {items.length} 次编辑
+          <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+        </DisclosureRow>
+        {toggle && open && <span className="ml-auto flex pr-1">{toggle}</span>}
+      </div>
       <div hidden={!open} className="space-y-2 border-l pl-3">{items.map((item) => <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={expanded} />)}</div>
     </div>
   )
 }
 
-function EditBlock({ item, projectPath, expanded = false }: { item: ToolItem; projectPath: string; expanded?: boolean }) {
+// 每个文件只有一行标题：收起时是普通行，展开后这一行就是改动卡片的顶栏，代码区直接接在下面
+function EditBlock({ item, projectPath, expanded = false, toggle }: { item: ToolItem; projectPath: string; expanded?: boolean; toggle?: React.ReactNode }) {
   const [open, setOpen] = useState(expanded)
   useEffect(() => setOpen(expanded), [expanded])
+  const diffs = item.content.flatMap((content) => (content.type === 'diff' ? [content] : []))
   return (
     <div className="flex flex-col gap-2" data-testid="tool-call" data-kind="edit" data-status={item.status}>
-      {item.content.flatMap((content) =>
-        content.type === 'diff'
-          ? [
-              <div key={content.path} className="space-y-2">
-                <button type="button" aria-expanded={open} aria-label={`查看改动 ${relativePath(content.path, projectPath)}`} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => setOpen(!open)}>
-                  {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-                  <StatusIcon status={item.status} />
-                  <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>
-                  <span title={relativePath(content.path, projectPath)} className="min-w-0 flex-1 truncate font-mono text-xs">{relativePath(content.path, projectPath)}</span>
-                  <DiffCounts {...diffStats(content.oldText ?? null, content.newText)} />
-                </button>
-                {open && <DiffView path={content.path} oldText={content.oldText ?? null} newText={content.newText} projectPath={projectPath} status={<StatusIcon status={item.status} />} />}
-              </div>,
-            ]
-          : [],
-      )}
+      {diffs.map((content, index) => {
+        const path = relativePath(content.path, projectPath)
+        return (
+          <div key={content.path} className={cn('overflow-hidden rounded-lg border', !open && 'border-transparent')}>
+            <div className={cn('flex items-center', open ? 'border-b bg-muted/50 hover:bg-accent dark:bg-muted dark:hover:bg-accent' : 'hover:bg-muted/60')}>
+              <button type="button" aria-expanded={open} aria-label={`查看改动 ${path}`} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm focus-visible:-outline-offset-2" onClick={() => setOpen(!open)}>
+                {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                <StatusIcon status={item.status} />
+                <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>
+                <span title={path} className="min-w-0 flex-1 truncate font-mono text-xs">{path}</span>
+                <DiffCounts {...diffStats(content.oldText ?? null, content.newText)} />
+              </button>
+              {index === 0 && toggle && <span className="flex pr-1">{toggle}</span>}
+            </div>
+            {open && <DiffView oldText={content.oldText ?? null} newText={content.newText} />}
+          </div>
+        )
+      })}
     </div>
   )
+}
+
+// 一轮里所有改动一起展开或收起
+function EditDetailsToggle({ expanded, onToggle }: { expanded: boolean; onToggle(): void }) {
+  const label = expanded ? '收起代码详情' : '展开代码详情'
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-xs" aria-label={label} className="text-muted-foreground" onClick={onToggle}>
+          {expanded ? <ChevronsDownUp /> : <ChevronsUpDown />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+// 连续的检查、扫描、审查全部干净通过时收成一行，点开看各项；有一项没过、有提醒或附注就逐项显示。
+// 收起时各项仍留在 DOM 里（hidden），按 data-kind 数卡片的地方不受影响
+function CheckGroup({ items }: { items: ToolItem[] }) {
+  const [open, setOpen] = useState(false)
+  const rows = items.map((item) => <CheckItem key={item.id} item={item} />)
+  if (items.length < 2 || !items.every(checkPassed)) return <>{rows}</>
+  const names = [...new Set(items.map(checkName))]
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="check-group">
+      <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground/85">
+        <Check className="size-3.5 shrink-0 text-success" strokeWidth={2.6} />
+        <span className="shrink-0 text-muted-foreground">自动检查通过</span>
+        <span className="min-w-0 truncate">{names.join('、')}</span>
+      </DisclosureRow>
+      <div hidden={!open} className="flex flex-col gap-0.5 pl-5">
+        {rows}
+      </div>
+    </div>
+  )
+}
+
+function CheckItem({ item }: { item: ToolItem }) {
+  const type = toolBlockType(item)
+  if (type === 'review') return <ReviewBlock item={item} />
+  if (type === 'security') return <SecurityBlock item={item} />
+  return <CheckRow item={item} />
+}
+
+function checkName(item: ToolItem): string {
+  const type = toolBlockType(item)
+  if (type === 'review') return '规范审查'
+  if (type === 'security') return SECURITY_TITLES.get(item.title) ?? item.title
+  return item.title.slice(0, item.title.indexOf('：'))
+}
+
+// 安全和审查的结果只有一行「没有发现…」才算干净通过；带提醒项或附注（只看了一部分、模型扫描没完成）的要单独显示
+function checkPassed(item: ToolItem): boolean {
+  if (item.status !== 'completed') return false
+  if (toolBlockType(item) === 'check') return true
+  const lines = textOf(item).split('\n').filter(Boolean)
+  return lines.length === 1 && !SECURITY_LINE.test(lines[0] ?? '')
 }
 
 function CheckRow({ item }: { item: ToolItem }) {
@@ -559,13 +677,13 @@ function CheckRow({ item }: { item: ToolItem }) {
   const result = item.status === 'completed' ? '通过' : item.status === 'failed' ? '没通过' : '运行中…'
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="check" data-status={item.status}>
-      <button type="button" className="flex max-w-full items-center gap-2 text-left" onClick={() => setOpen(!open)} disabled={!output}>
+      <DisclosureRow open={open} onToggle={output ? () => setOpen(!open) : undefined}>
         <StatusIcon status={item.status} />
         <span className="shrink-0 text-muted-foreground">{label}</span>
         <span className="min-w-0 truncate font-mono text-xs">{command}</span>
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
-      </button>
-      {open && output && <pre className="mt-1.5 ml-5.5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      </DisclosureRow>
+      {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
   )
 }
@@ -577,18 +695,22 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   const common = { 'data-testid': 'tool-call', 'data-kind': 'review', 'data-status': item.status }
   if (item.status !== 'completed' && item.status !== 'failed') {
     return (
-      <div {...common} className="flex items-center gap-2 text-sm text-muted-foreground">
-        <StatusIcon status={item.status} />
-        规范审查中…
+      <div {...common}>
+        <DisclosureRow className="text-muted-foreground">
+          <StatusIcon status={item.status} />
+          规范审查中…
+        </DisclosureRow>
       </div>
     )
   }
   if (item.status === 'completed') {
     return (
-      <div {...common} className="flex items-start gap-2 text-sm">
-        <StatusIcon status="completed" className="mt-1" />
-        <span className="shrink-0 text-muted-foreground">规范审查</span>
-        <span className="whitespace-pre-wrap">{text}</span>
+      <div {...common}>
+        <DisclosureRow className="items-start">
+          <StatusIcon status="completed" className="mt-1" />
+          <span className="shrink-0 text-muted-foreground">规范审查</span>
+          <span className="whitespace-pre-wrap">{text}</span>
+        </DisclosureRow>
       </div>
     )
   }
@@ -626,12 +748,15 @@ const LEVEL_STYLES: Record<string, string> = {
 
 function SecurityBlock({ item }: { item: ToolItem }) {
   const text = textOf(item)
+  const title = SECURITY_TITLES.get(item.title) ?? item.title
   const common = { 'data-testid': 'tool-call', 'data-kind': 'security', 'data-status': item.status }
   if (item.status !== 'completed' && item.status !== 'failed') {
     return (
-      <div {...common} className="flex items-center gap-2 text-sm text-muted-foreground">
-        <StatusIcon status={item.status} />
-        {item.title}中…
+      <div {...common}>
+        <DisclosureRow className="text-muted-foreground">
+          <StatusIcon status={item.status} />
+          {title}中…
+        </DisclosureRow>
       </div>
     )
   }
@@ -642,10 +767,12 @@ function SecurityBlock({ item }: { item: ToolItem }) {
   const findings = rows.filter((row) => row.match)
   if (findings.length === 0) {
     return (
-      <div {...common} className={cn('flex items-start gap-2 text-sm', item.status === 'failed' && 'text-muted-foreground')}>
-        <StatusIcon status={item.status === 'failed' ? 'failed' : 'completed'} className="mt-1" />
-        <span className="shrink-0 text-muted-foreground">{item.title}</span>
-        <span className="whitespace-pre-wrap">{text}</span>
+      <div {...common}>
+        <DisclosureRow className={cn('items-start', item.status === 'failed' && 'text-muted-foreground')}>
+          <StatusIcon status={item.status === 'failed' ? 'failed' : 'completed'} className="mt-1" />
+          <span className="shrink-0 text-muted-foreground">{title}</span>
+          <span className="whitespace-pre-wrap">{text}</span>
+        </DisclosureRow>
       </div>
     )
   }
@@ -660,7 +787,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     >
       <div className={cn('flex items-center gap-2 font-medium', high > 0 && 'text-destructive')}>
         {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <Check className="size-3.5 text-success" strokeWidth={2.6} />}
-        {high > 0 ? `${item.title} · ${high} 处高危问题，已打回` : `${item.title} · 没有高危问题，${findings.length} 条需要留意`}
+        {high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
       </div>
       {rows.map(({ line, match }, index) =>
         match ? (
@@ -785,35 +912,45 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
 function FinishCard({ item, files, projectPath, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; projectPath: string; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
+  const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   return (
-    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3" data-testid="tool-call" data-kind="finish" data-status={item.status}>
-      <div className={cn('flex items-center gap-2 font-medium', !passed && 'text-destructive')}>
+    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status}>
+      <div className={cn('flex items-center gap-2 font-semibold', !passed && 'text-destructive')}>
         <StatusIcon status={item.status} className="size-4" />
         {passed ? '本轮交付' : '还没完成'}
-        {passed && files.length > 0 && <span className="ml-auto text-xs font-normal text-muted-foreground">{files.length} 个文件 · 净改动</span>}
+        {passed && files.length > 0 && (
+          <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
+            {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+          </span>
+        )}
       </div>
       {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
       </div>}
-      {passed && files.length > 0 && <div className="flex items-center gap-3 text-xs">
-        <button type="button" className="text-primary hover:underline" onClick={() => store.set((state) => ({ ...state, panel: 'review' }))}>审阅本任务改动</button>
-        {onRestore && <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onRestore}>撤销本轮改动</button>}
-      </div>}
       {passed && files.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {files.map((file) => (
-            <button
-              key={file.path}
-              type="button"
-              className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm hover:bg-muted"
-              onClick={() => store.set((state) => ({ ...state, panel: 'review' }))}
-            >
-              <File className="size-3.5" />
-              <span className="font-mono text-xs">{relativePath(file.path, projectPath)}</span>
-              <DiffCounts added={file.added} removed={file.removed} />
-            </button>
-          ))}
+        <div className="-mx-2 flex flex-col">
+          {files.map((file) => {
+            const path = relativePath(file.path, projectPath)
+            const slash = path.lastIndexOf('/')
+            return (
+              <button key={file.path} type="button" title={path} className="flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent" onClick={openReview}>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                  {slash >= 0 && <span className="text-muted-foreground">{path.slice(0, slash + 1)}</span>}
+                  {path.slice(slash + 1)}
+                </span>
+                <span className="tabular-nums">
+                  <DiffCounts added={file.added} removed={file.removed} />
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {passed && files.length > 0 && (
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={openReview}>审阅改动</Button>
+          {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销本轮</Button>}
         </div>
       )}
     </div>

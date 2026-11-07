@@ -923,7 +923,7 @@ async function runSecurityChecks(session: Session, diff: string, summary: string
 
 async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
   const toolCallId = `security-static-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全检查', kind: 'other', status: 'in_progress' })
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '静态检查', kind: 'other', status: 'in_progress' })
   const finishCard = (status: 'completed' | 'failed', text: string) =>
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
   try {
@@ -952,7 +952,7 @@ async function runLightScan(
   const depsChanged = dependenciesChanged(added)
   if (diff.addedLines.size === 0 && !depsChanged) return []
   const toolCallId = `security-scan-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全扫描', kind: 'other', status: 'in_progress' })
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '轻量扫描', kind: 'other', status: 'in_progress' })
   const findings: SecurityFinding[] = []
   const notes: string[] = []
   if (diff.addedLines.size > 0) {

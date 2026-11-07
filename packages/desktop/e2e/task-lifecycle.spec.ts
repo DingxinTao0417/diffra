@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { chooseProject, startTask, waitTaskDone } from './flows'
+import { chooseProject, startTask } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -28,7 +28,8 @@ test('中间验证后继续；发布未完成显示等待及清单，重启恢�
     await configureCoderModel(window, { name: '生命周期', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '提交推送打包发布 0.1.2')
-    await waitTaskDone(window)
+    // 主动暂停等待的任务顶栏和任务监控都写「等待中」，不冒充已完成
+    await expect(window.getByTestId('task-status')).toContainText('等待中', { timeout: 20_000 })
     const panel = window.getByTestId('monitor-panel')
     await expect(panel).toContainText('等待中')
     await expect(panel).toContainText('尚未发布')

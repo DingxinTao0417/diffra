@@ -599,7 +599,7 @@ describe('任务进行中读改动', () => {
 
 describe('完成前的静态安全检查', () => {
   const securityCards = (io: { updates: SessionUpdate[] }) =>
-    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '安全检查')
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '静态检查')
 
   test('新增的代码有高危写法时打回，改好后通过；没改代码的轮次不检查', async () => {
     const model = scriptedModel([
@@ -650,7 +650,7 @@ describe('完成前的静态安全检查', () => {
 
 describe('完成前的轻量安全扫描', () => {
   const scanCards = (io: { updates: SessionUpdate[] }) =>
-    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '安全扫描')
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '轻量扫描')
 
   test('模型发现高危问题时打回，改好后再扫描通过；请求里带着改动所在的完整文件', async () => {
     const model = scriptedModel([

@@ -54,7 +54,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
 
     // 任务监控和审阅面板列出两个改动文件
     await expect(window.getByTestId('monitor-file')).toHaveCount(2)
-    await window.getByRole('button', { name: '审阅改动' }).click()
+    await window.locator('header').getByRole('button', { name: '审阅改动', exact: true }).click()
     await expect(window.getByTestId('review-file')).toHaveCount(2)
     await expect(window.getByTestId('review-file').filter({ hasText: 'greet.js' })).toContainText('新文件')
     await window.getByRole('button', { name: '任务监控' }).click()

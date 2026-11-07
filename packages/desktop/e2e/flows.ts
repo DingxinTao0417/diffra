@@ -31,7 +31,7 @@ export async function waitTaskDone(window: Page, timeout = 20_000): Promise<void
   await expect(window.getByTestId('task-status')).toContainText('已完成', { timeout })
 }
 
-// 对话里某一类卡片：tool（普通工具）、edit（改动）、check（检查）、review（规范审查）、security（安全检查和扫描）、
+// 对话里某一类卡片：tool（普通工具）、edit（改动）、check（检查）、review（规范审查）、security（静态检查和轻量扫描）、
 // deep-scan（深度扫描报告）、compaction（上下文压缩）、plan（计划）、finish（完成）
 export function cards(window: Page, kind: 'tool' | 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish') {
   return window.locator(`[data-testid="tool-call"][data-kind="${kind}"]`)

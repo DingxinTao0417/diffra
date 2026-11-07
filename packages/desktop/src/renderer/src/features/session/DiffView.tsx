@@ -1,15 +1,7 @@
 import { structuredPatch } from 'diff'
-import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-
-interface DiffViewProps {
-  path: string
-  // null 表示新建的文件
-  oldText: string | null
-  newText: string
-  projectPath: string
-  status?: React.ReactNode
-}
+import { useMemo } from 'react'
+import type { DiffLine } from '@/lib/unified-diff'
+import { DiffLines } from './DiffLines'
 
 export function diffStats(oldText: string | null, newText: string) {
   const patch = structuredPatch('a', 'b', oldText ?? '', newText, undefined, undefined, { context: 3, stripTrailingCr: true })
@@ -24,35 +16,23 @@ export function diffStats(oldText: string | null, newText: string) {
   return { patch, added, removed }
 }
 
-export function DiffView({ path, oldText, newText, projectPath, status }: DiffViewProps) {
-  const { patch, added, removed } = useMemo(() => diffStats(oldText, newText), [oldText, newText])
-  const [open, setOpen] = useState(true)
+// 标题行由调用方画（对话里是 EditBlock 那一行），这里只画代码区
+export function DiffView({ oldText, newText }: { oldText: string | null; newText: string }) {
+  const hunks = useMemo(() => diffStats(oldText, newText).patch.hunks.map(toDiffLines), [oldText, newText])
+  return <DiffLines hunks={hunks} className="max-h-96 overflow-y-auto" data-testid="diff-view" />
+}
 
-  return (
-    <div className="overflow-hidden rounded-[10px] border text-sm" data-testid="diff-view">
-      <button type="button" className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left" onClick={() => setOpen(!open)}>
-        {status}
-        <span>{oldText === null ? '新建' : '编辑'}</span>
-        <span className="min-w-0 truncate font-mono text-xs">{relativePath(path, projectPath)}</span>
-        <DiffCounts added={added} removed={removed} />
-        <span className="ml-auto text-muted-foreground">{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</span>
-      </button>
-      {open && (
-        <div className="max-h-96 overflow-auto border-t py-1.5 font-mono text-xs leading-relaxed">
-          {patch.hunks.map((hunk, index) => (
-            <div key={`${hunk.oldStart}-${hunk.newStart}`}>
-              {index > 0 && <div className="px-3.5 text-muted-foreground">⋯</div>}
-              {hunk.lines.map((line, lineIndex) => (
-                <div key={lineIndex} className={`px-3.5 whitespace-pre ${diffLineClass(line)}`}>
-                  {line}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+function toDiffLines(hunk: { oldStart: number; newStart: number; lines: string[] }): DiffLine[] {
+  let oldLine = hunk.oldStart
+  let newLine = hunk.newStart
+  return hunk.lines.flatMap((line): DiffLine[] => {
+    const text = line.slice(1)
+    if (line.startsWith('+')) return [{ kind: 'add', text, oldLine: null, newLine: newLine++ }]
+    if (line.startsWith('-')) return [{ kind: 'remove', text, oldLine: oldLine++, newLine: null }]
+    if (line.startsWith(' ')) return [{ kind: 'context', text, oldLine: oldLine++, newLine: newLine++ }]
+    // 「\ No newline at end of file」不是代码行，和 parseUnifiedDiff 一样跳过
+    return []
+  })
 }
 
 export function DiffCounts({ added, removed }: { added: number; removed: number }) {
@@ -63,12 +43,6 @@ export function DiffCounts({ added, removed }: { added: number; removed: number 
       {removed > 0 && <span className="text-destructive">−{removed}</span>}
     </span>
   )
-}
-
-export function diffLineClass(line: string): string {
-  if (line.startsWith('+')) return 'bg-success/10'
-  if (line.startsWith('-')) return 'bg-destructive/10'
-  return ''
 }
 
 export function relativePath(path: string, projectPath: string): string {
