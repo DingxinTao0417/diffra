@@ -71,11 +71,22 @@ export interface SessionLimits {
   maxSteps: number | null
 }
 
+export interface SessionModel {
+  endpoint: ModelEndpoint
+  modelId: string
+  contextWindow: number | null
+  provider: ModelProvider | null
+}
+
 // session/new 的 _meta.diffra
 export interface SessionConfig {
-  model: { endpoint: ModelEndpoint; modelId: string; contextWindow: number | null; provider: ModelProvider | null }
+  model: SessionModel
   // 「评审」角色的模型；null 时审查用编码模型
   reviewModel: { endpoint: ModelEndpoint; modelId: string; provider: ModelProvider | null } | null
+  // 「规划」角色的模型；null 时出计划用编码模型
+  planModel: SessionModel | null
+  // 「兜底」角色的模型：编码模型卡住或连续失败时，这一轮剩下的部分换它来做；null 时不换
+  fallbackModel: SessionModel | null
   checks: SessionChecks
   // 禁写目录（相对项目根目录），比如用户的数据目录：agent 不能改，检查点也不碰
   readOnlyPaths: string[]
@@ -113,7 +124,7 @@ export interface UsageBreakdown {
 
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
-export type TurnKind = 'prompt' | 'deep-scan'
+export type TurnKind = 'prompt' | 'deep-scan' | 'plan'
 
 export interface StoredTurn {
   id: string
@@ -181,7 +192,7 @@ export interface CheckRunResult {
   summary: string
 }
 
-export type ModelRole = 'coder' | 'reviewer'
+export type ModelRole = 'coder' | 'reviewer' | 'planner'
 
 // 用量记录的一行：一次模型调用。时间是调用结束时的 UTC 时刻；供应商没返回的数记成 null
 export interface UsageRecord {
@@ -246,6 +257,8 @@ export const SESSION_EXT_METHODS = {
   projectDetectChecks: '_diffra/project/detect-checks',
   projectRunCheck: '_diffra/project/run-check',
   deepScan: '_diffra/security/deep-scan',
+  // 先出计划：规划模型只读地看代码，交一份计划，不改文件
+  plan: '_diffra/session/plan',
 } as const
 
 export const PERMISSION_OPTIONS = {

@@ -1,21 +1,12 @@
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { StopReason } from '@agentclientprotocol/sdk'
-import { type ModelMessage, tool, type ToolResultPart } from 'ai'
+import { tool } from 'ai'
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { annotateDiff } from '../rules/review.js'
-import {
-  CONTEXT_STOP_RATIO,
-  DEFAULT_CONTEXT_WINDOW,
-  errorResult,
-  notice,
-  reportInvalidCall,
-  runToolCall,
-  streamModelStep,
-  takeCheckpoint,
-  type TurnIO,
-} from '../session/loop.js'
+import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, type TurnIO } from '../session/loop.js'
+import { runReadOnlyLoop } from '../session/read-only.js'
 import type { Session } from '../session/session.js'
 import { TOOLS } from '../session/tools.js'
 import { SECURITY_CATEGORIES } from './light.js'
@@ -106,48 +97,27 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
   const contextWindow = session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   try {
     await takeCheckpoint(session, turn.id, io)
-    const messages: ModelMessage[] = [{ role: 'user', content: await scanBrief(session, scope) }]
-    let nearLimit = false
-    for (let step = 0; step < MAX_STEPS; step++) {
-      // 最后一步或上下文快满时，要求模型直接交报告
-      const forceReport = step === MAX_STEPS - 1 || nearLimit
-      const { toolCalls, inputTokens, answered, responseMessages } = await streamModelStep(
-        {
-          model: session.reviewModel,
-          system: AUDITOR_PROMPT,
-          messages,
-          tools: DEEP_TOOLS,
-          toolChoice: forceReport ? { type: 'tool', toolName: 'report' } : 'auto',
-          usage: { role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId },
-        },
-        signal,
-        io,
-      )
-      messages.push(...responseMessages)
-      nearLimit = inputTokens > contextWindow * CONTEXT_STOP_RATIO
-      if (signal.aborted) return 'cancelled'
-      if (toolCalls.length === 0) {
-        messages.push({ role: 'user', content: 'Keep auditing with the tools, or call report when you are done.' })
-        continue
-      }
-      const results: ToolResultPart[] = []
-      for (const call of toolCalls) {
-        if (answered.has(call.toolCallId)) {
-          await reportInvalidCall(call, io)
-          continue
-        }
-        if (call.toolName === 'report') {
-          await showReport(session, call.toolCallId, reportInput.parse(call.input), io)
-          return 'end_turn'
-        }
-        if (!READ_ONLY_TOOLS.has(call.toolName)) {
-          results.push(errorResult(call, 'This audit is read-only. Use read_file, list_files, search or report.'))
-          continue
-        }
-        results.push((await runToolCall(session, call, signal, io)).result)
-      }
-      if (results.length > 0) messages.push({ role: 'tool', content: results })
-    }
+    const outcome = await runReadOnlyLoop(
+      session,
+      {
+        model: session.reviewModel,
+        system: AUDITOR_PROMPT,
+        messages: [{ role: 'user', content: await scanBrief(session, scope) }],
+        tools: DEEP_TOOLS,
+        readTools: READ_ONLY_TOOLS,
+        finalTool: 'report',
+        maxSteps: MAX_STEPS,
+        window: contextWindow,
+        usage: { role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId },
+        nudge: 'Keep auditing with the tools, or call report when you are done.',
+        readOnlyError: 'This audit is read-only. Use read_file, list_files, search or report.',
+        onFinal: (toolCallId, input) => showReport(session, toolCallId, reportInput.parse(input), io),
+      },
+      signal,
+      io,
+    )
+    if (outcome === 'cancelled') return 'cancelled'
+    if (outcome === 'done') return 'end_turn'
     await notice(io, 'warning', `深度扫描达到步数上限（${MAX_STEPS} 步），没有给出报告`)
     return 'max_turn_requests'
   } catch (error) {

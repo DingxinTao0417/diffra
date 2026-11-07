@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import type { TurnIO } from './loop.js'
+import type { ActiveModel, TurnIO } from './loop.js'
 import type { Session } from './session.js'
 import { TOOL_DEFINITION_CHARS, TOOLS } from './tools.js'
 
@@ -49,8 +49,8 @@ export function estimateContextTokens(session: Session): number | null {
 // 每次调用编码模型前检查：估算超过触发点时，先省略较早的工具输出，还不够再把早期对话压成摘要
 export async function compactIfNeeded(
   session: Session,
-  // requestIndex：这一轮的提问在 messages 里的位置
-  options: { window: number; requestIndex: number; step: number; state: CompactionState },
+  // requestIndex：这一轮的提问在 messages 里的位置；model：这一轮在用的编码模型，摘要也由它写
+  options: { window: number; requestIndex: number; step: number; state: CompactionState; model: ActiveModel },
   signal: AbortSignal,
   io: TurnIO,
 ): Promise<CompactionOutcome> {
@@ -82,7 +82,7 @@ export async function compactIfNeeded(
     return afterOmitting > window * HARD_STOP_RATIO ? { kind: 'too-large' } : { kind: 'ok' }
   }
   try {
-    const summary = await summarize(session, cut, signal, io)
+    const summary = await summarize(session, options.model, cut, signal, io)
     session.compaction = { upTo: cut, summary: summaryMessage(session, options.requestIndex, cut, summary) }
     await finishCard('completed', `上下文用到约 ${percent}%。${omittedNote}较早的对话压缩成了下面的摘要，最近 ${KEEP_RECENT_STEPS} 步保留原文。\n\n${summary}`)
     return { kind: 'ok' }
@@ -92,7 +92,7 @@ export async function compactIfNeeded(
       return { kind: 'cancelled' }
     }
     console.error('[session] 上下文压缩失败', error)
-    const message = toModelError(error, session.config.model.endpoint.apiKey, 0).message
+    const message = toModelError(error, options.model.config.endpoint.apiKey, 0).message
     await finishCard('failed', `压缩失败：${message}`)
     return { kind: 'failed', message }
   }
@@ -136,11 +136,11 @@ function recentStepsStart(messages: ModelMessage[], from: number): number | null
 }
 
 // 用编码模型写摘要：发过去的是压缩点之前的对话加一条要求，前缀和刚才的请求一样，能用上提示词缓存
-async function summarize(session: Session, cut: number, signal: AbortSignal, io: TurnIO): Promise<string> {
+async function summarize(session: Session, model: ActiveModel, cut: number, signal: AbortSignal, io: TurnIO): Promise<string> {
   const context = session.contextMessages()
   const kept = session.messages.length - cut
   const result = streamText({
-    model: session.model,
+    model: model.language,
     system: session.systemPrompt,
     messages: [...context.slice(0, context.length - kept), { role: 'user', content: SUMMARY_REQUEST }],
     tools: TOOLS,
@@ -153,7 +153,7 @@ async function summarize(session: Session, cut: number, signal: AbortSignal, io:
   for await (const part of result.fullStream) {
     if (part.type === 'text-delta') text += part.text
     if (part.type === 'finish-step') {
-      await io.recordUsage({ role: 'coder', provider: session.config.model.provider, modelId: session.config.model.modelId, usage: part.usage })
+      await io.recordUsage({ role: 'coder', provider: model.config.provider, modelId: model.config.modelId, usage: part.usage })
     }
     if (part.type === 'error') throw part.error
   }

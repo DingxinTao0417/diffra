@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { StopReason } from '@diffra/core/types'
-import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, LoaderCircle, RefreshCw, Undo2, X } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
@@ -16,7 +16,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'finish'; item: ToolItem }
+  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -29,8 +29,9 @@ const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 
 const SECURITY_TITLES = ['安全检查', '安全扫描']
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'finish' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | null {
   if (item.title === '完成') return 'finish'
+  if (item.title === '计划') return 'plan'
   if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
@@ -222,6 +223,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             return <DeepScanReport key={block.item.id} item={block.item} task={task} />
           case 'compaction':
             return <CompactionRow key={block.item.id} item={block.item} />
+          case 'plan':
+            return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={changedFiles} projectPath={task.project} />
         }
@@ -370,6 +373,44 @@ function ToolStep({ item }: { item: ToolItem }) {
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
       </button>
       {open && output && <pre className="mt-1.5 ml-5.5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+    </div>
+  )
+}
+
+// 计划：可以直接改文字；点「按计划执行」，把这一轮的需求和改过的计划作为新的一轮发给编码模型
+function PlanCard({ item, request, task }: { item: ToolItem; request: string; task: LiveTask }) {
+  const original = textOf(item)
+  const [text, setText] = useState(original)
+  const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
+  return (
+    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
+      <div className="flex items-center gap-2 font-medium">
+        <ListChecks className="size-4 text-primary" />
+        计划
+      </div>
+      <textarea
+        aria-label="计划内容"
+        value={text}
+        rows={Math.min(24, text.split('\n').length + 1)}
+        onChange={(event) => setText(event.target.value)}
+        className="w-full resize-y rounded-md border bg-background px-3 py-2 text-[0.93rem] leading-relaxed outline-none focus:border-ring/60"
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={task.running || text.trim() === ''}
+          className="h-8 rounded-lg bg-primary px-3.5 text-[0.93rem] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+          onClick={execute}
+        >
+          按计划执行
+        </button>
+        {text !== original && (
+          <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => setText(original)}>
+            恢复原计划
+          </button>
+        )}
+        <span className="text-xs text-muted-foreground">可以先改计划再执行；不满意就在下面接着说。</span>
+      </div>
     </div>
   )
 }

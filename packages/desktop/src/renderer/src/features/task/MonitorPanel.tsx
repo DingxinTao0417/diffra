@@ -33,6 +33,13 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved }: Mo
         </span>
       </div>
 
+      <Section title="模型">
+        <Row label="编码" value={task.modelLabel} />
+        <Row label="规划" value={task.planLabel ?? '同编码模型'} />
+        <Row label="兜底" value={task.fallbackLabel ?? '未设置'} />
+        <LinkButton onClick={() => openSettings('models')}>模型与角色</LinkButton>
+      </Section>
+
       <Section title="检查">
         {checks && (
           <>

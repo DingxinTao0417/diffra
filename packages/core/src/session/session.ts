@@ -27,6 +27,8 @@ export interface SessionOptions {
   // 测试时注入模拟模型；正常运行按 config 创建
   model?: LanguageModel
   reviewModel?: LanguageModel
+  planModel?: LanguageModel
+  fallbackModel?: LanguageModel
   // 从存储恢复时传入
   record?: SessionRecord
 }
@@ -48,6 +50,10 @@ export class Session {
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
   reviewModel: LanguageModel
+  // 没有单独配置规划模型时用编码模型
+  planModel: LanguageModel
+  // 没有配置兜底模型时为 null，卡住了就停下
+  readonly fallbackModel: LanguageModel | null
   readonly messages: ModelMessage[] = []
   readonly readHashes = new Map<string, string>()
   // 「本会话内允许同类命令」记下的命令键，见 permissions.commandKey
@@ -87,15 +93,19 @@ export class Session {
     this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId)
     const review = options.config.reviewModel
     this.reviewModel = options.reviewModel ?? (review ? createLanguageModel(review.endpoint, review.modelId) : this.model)
+    const plan = options.config.planModel
+    this.planModel = options.planModel ?? (plan ? createLanguageModel(plan.endpoint, plan.modelId) : this.model)
+    const fallback = options.config.fallbackModel
+    this.fallbackModel = options.fallbackModel ?? (fallback ? createLanguageModel(fallback.endpoint, fallback.modelId) : null)
   }
 
-  // 从下一轮开始用新模型；评审没有单独配置时跟着换
+  // 从下一轮开始用新模型；评审、规划没有单独配置时跟着换
   setModel(model: SessionConfig['model'], languageModel?: LanguageModel): void {
     if (this.running) throw new Error('任务还在进行中，结束后再切换模型')
-    const followsCoder = this.config.reviewModel === null
     this.config = { ...this.config, model }
     this.model = languageModel ?? createLanguageModel(model.endpoint, model.modelId)
-    if (followsCoder) this.reviewModel = this.model
+    if (this.config.reviewModel === null) this.reviewModel = this.model
+    if (this.config.planModel === null) this.planModel = this.model
   }
 
   get running(): boolean {

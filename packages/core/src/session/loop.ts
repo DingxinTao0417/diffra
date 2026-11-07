@@ -5,7 +5,7 @@ import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
 import { truncateLines } from '../process.js'
-import { PERMISSION_OPTIONS } from '../protocol.js'
+import { PERMISSION_OPTIONS, type SessionModel } from '../protocol.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -57,13 +57,38 @@ const PERMISSION_CHOICES: PermissionOption[] = [
   { optionId: PERMISSION_OPTIONS.reject, name: '拒绝', kind: 'reject_once' },
 ]
 
+// 这一轮在用的编码模型：一开始是编码模型，卡住时可能换成兜底模型
+export interface ActiveModel {
+  language: LanguageModel
+  config: SessionModel
+}
+
+export function modelLabel(model: SessionModel): string {
+  return model.provider ? `${model.provider.name} / ${model.modelId}` : model.modelId
+}
+
 export async function runTurn(session: Session, turn: { id: string; text: string }, io: TurnIO): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
   const controller = new AbortController()
   session.activeTurn = controller
   const { signal } = controller
-  const contextWindow = session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const maxSteps = session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY
+  let active: ActiveModel = { language: session.model, config: session.config.model }
+  const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  let escalated = false
+  // 卡住或连续失败时，配了兜底模型就换它做这一轮剩下的部分；每轮最多换一次。换成了返回 true
+  const escalate = async (reason: string, note: string): Promise<boolean> => {
+    const fallback = session.config.fallbackModel
+    if (escalated || !fallback || !session.fallbackModel) return false
+    escalated = true
+    active = { language: session.fallbackModel, config: fallback }
+    await notice(io, 'info', `已换用兜底模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
+    session.messages.push({
+      role: 'user',
+      content: `[Diffra] ${note} A different model takes over this task from here. Read what was tried above, work out why it did not work, and take a different approach.`,
+    })
+    return true
+  }
 
   try {
     await takeCheckpoint(session, turn.id, io)
@@ -79,7 +104,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
     let warnedStuck = false
 
     for (let step = 0; step < maxSteps; step++) {
-      const compacted = await compactIfNeeded(session, { window: contextWindow, requestIndex, step, state: compaction }, signal, io)
+      const compacted = await compactIfNeeded(session, { window: contextWindow(), requestIndex, step, state: compaction, model: active }, signal, io)
       if (compacted.kind === 'cancelled') return 'cancelled'
       if (compacted.kind === 'too-large') {
         await notice(io, 'warning', '上下文压缩后仍然太大，已停止', '最近几步的内容太多（比如一次读了很大的文件）。可以开一个新会话继续，或缩小任务范围。')
@@ -91,13 +116,13 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       }
 
       const sentChars = contextChars(session)
-      const { toolCalls, inputTokens, answered } = await streamStep(session, signal, io)
+      const { toolCalls, inputTokens, answered } = await streamStep(session, active, signal, io)
       if (inputTokens > 0) {
         session.lastContext = { inputTokens, chars: sentChars }
         await io.update({
           sessionUpdate: 'usage_update',
           used: inputTokens,
-          size: contextWindow,
+          size: contextWindow(),
           _meta: { diffra: session.usageBreakdown(inputTokens) },
         })
       }
@@ -154,8 +179,12 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       if (finished) return 'end_turn'
       if (signal.aborted) return 'cancelled'
 
-      if (repeated) {
-        if (warnedStuck) {
+      if (repeated && warnedStuck) {
+        const escalatedNow = await escalate(
+          `提醒过后仍在重复同样的操作（${describeCall(repeated)}）`,
+          'The previous model kept making the same call with the same result, even after a reminder.',
+        )
+        if (!escalatedNow) {
           await notice(
             io,
             'warning',
@@ -164,6 +193,9 @@ export async function runTurn(session: Session, turn: { id: string; text: string
           )
           return 'end_turn'
         }
+        warnedStuck = false
+        repeats.clear()
+      } else if (repeated) {
         warnedStuck = true
         repeats.clear()
         session.messages.push({
@@ -187,21 +219,35 @@ export async function runTurn(session: Session, turn: { id: string; text: string
             content: `[Diffra] The automatic check \`${afterEdit}\` failed after your edits:\n${check.output}\nFix the problems before continuing.`,
           })
           if (checkFailures >= MAX_CHECK_FAILURES) {
-            await notice(io, 'warning', `快速检查连续 ${MAX_CHECK_FAILURES} 次失败，已停止`, '请查看检查输出，或调整任务后再继续。')
-            return 'end_turn'
+            const escalatedNow = await escalate(
+              `快速检查连续 ${MAX_CHECK_FAILURES} 次失败`,
+              `The automatic check \`${afterEdit}\` failed ${MAX_CHECK_FAILURES} times in a row.`,
+            )
+            if (!escalatedNow) {
+              await notice(io, 'warning', `快速检查连续 ${MAX_CHECK_FAILURES} 次失败，已停止`, '请查看检查输出，或调整任务后再继续。')
+              return 'end_turn'
+            }
+            checkFailures = 0
           }
         }
       }
       if (gateAttempts >= MAX_GATE_ATTEMPTS) {
-        await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
-        return 'end_turn'
+        const escalatedNow = await escalate(
+          `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`,
+          `Finishing was rejected ${MAX_GATE_ATTEMPTS} times in a row because the checks did not pass.`,
+        )
+        if (!escalatedNow) {
+          await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
+          return 'end_turn'
+        }
+        gateAttempts = 0
       }
     }
     await notice(io, 'warning', `已达到单次任务的步数上限（${maxSteps} 步），已停止`, '发消息让它继续，或在「设置 → 任务执行」里调整上限。')
     return 'max_turn_requests'
   } catch (error) {
     if (signal.aborted) return 'cancelled'
-    const detail = toModelError(error, session.config.model.endpoint.apiKey, 0)
+    const detail = toModelError(error, active.config.endpoint.apiKey, 0)
     console.error('[session] 任务出错', error)
     await notice(io, 'error', '模型调用失败', detail.message)
     return 'end_turn'
@@ -220,14 +266,14 @@ export async function takeCheckpoint(session: Session, turnId: string, io: TurnI
   }
 }
 
-async function streamStep(session: Session, signal: AbortSignal, io: TurnIO) {
+async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO) {
   const step = await streamModelStep(
     {
-      model: session.model,
+      model: active.language,
       system: session.systemPrompt,
       messages: session.contextMessages(),
       tools: TOOLS,
-      usage: { role: 'coder', provider: session.config.model.provider, modelId: session.config.model.modelId },
+      usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
     },
     signal,
     io,

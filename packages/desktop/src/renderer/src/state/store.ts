@@ -19,14 +19,18 @@ export interface LiveTask {
   project: string
   title: string
   modelLabel: string
+  planLabel: string | null
+  fallbackLabel: string | null
   permissionMode: PermissionMode
+  // 输入框里「先出计划」开着：发的消息先由规划模型出计划
+  planMode: boolean
   info: SessionInfo
   turns: Turn[]
   running: boolean
   usage: Usage | null
   permission: PermissionRequestEvent | null
   // 运行中发的消息，这一轮结束后依次发出
-  queue: Array<{ id: string; text: string }>
+  queue: Array<{ id: string; text: string; plan: boolean }>
   // 文件可能变了就加一，任务监控和审阅面板据此刷新
   changeVersion: number
 }

@@ -32,8 +32,8 @@ export async function waitTaskDone(window: Page, timeout = 20_000): Promise<void
 }
 
 // 对话里某一类卡片：tool（普通工具）、edit（改动）、check（检查）、review（规范审查）、security（安全检查和扫描）、
-// deep-scan（深度扫描报告）、compaction（上下文压缩）、finish（完成）
-export function cards(window: Page, kind: 'tool' | 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'finish') {
+// deep-scan（深度扫描报告）、compaction（上下文压缩）、plan（计划）、finish（完成）
+export function cards(window: Page, kind: 'tool' | 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish') {
   return window.locator(`[data-testid="tool-call"][data-kind="${kind}"]`)
 }
 

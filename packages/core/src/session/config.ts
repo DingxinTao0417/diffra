@@ -38,6 +38,8 @@ export const modelConfigSchema = z.object({
 export const sessionConfigSchema = z.object({
   model: modelConfigSchema,
   reviewModel: z.object({ endpoint: endpointSchema, modelId: z.string().min(1), provider: providerSchema }).nullable(),
+  planModel: modelConfigSchema.nullable(),
+  fallbackModel: modelConfigSchema.nullable(),
   checks: z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema }),
   readOnlyPaths: z.array(z.string().trim().min(1)),
   rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),

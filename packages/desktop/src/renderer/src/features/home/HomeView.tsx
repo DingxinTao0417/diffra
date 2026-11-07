@@ -33,6 +33,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const sidebarOpen = useAppState((state) => state.sidebarOpen)
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
+  const [planMode, setPlanMode] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
   const detectedCount = useDetectedChecks(project)
@@ -60,7 +61,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     if (!projectPath) return false
     setError(null)
     try {
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) })
+      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, planMode)
       return true
     } catch (caught) {
       setError(errorMessage(caught))
@@ -95,6 +96,8 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
           onModelChange={setModel}
+          planMode={planMode}
+          onPlanModeChange={setPlanMode}
           onSend={send}
         />
         {error && (

@@ -95,13 +95,16 @@ export function wireCoreEvents(): () => void {
   }
 }
 
-function liveFrom(handle: SessionHandle, project: string, title: string): LiveTask {
+function liveFrom(handle: SessionHandle, project: string, title: string, planMode = false): LiveTask {
   return {
     sessionId: handle.sessionId,
     project,
     title,
     modelLabel: handle.modelLabel,
+    planLabel: handle.planLabel,
+    fallbackLabel: handle.fallbackLabel,
     permissionMode: handle.permissionMode,
+    planMode,
     info: handle.info,
     turns: [],
     running: false,
@@ -112,15 +115,16 @@ function liveFrom(handle: SessionHandle, project: string, title: string): LiveTa
   }
 }
 
-export async function startTask(project: string, text: string, options: SessionOptions): Promise<void> {
+// planMode：首页输入框的「先出计划」开着时，第一条消息先出计划，新任务也保持开着
+export async function startTask(project: string, text: string, options: SessionOptions, planMode = false): Promise<void> {
   const handle = await window.diffra.createSession(project, options)
   store.set((state) => ({
     ...state,
     projects: addProject(state.projects, project),
-    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text)) },
+    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), planMode) },
   }))
   navigate({ name: 'task', sessionId: handle.sessionId })
-  void sendMessage(handle.sessionId, text)
+  void sendMessage(handle.sessionId, text, { plan: planMode })
 }
 
 export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): Promise<void> {
@@ -142,15 +146,21 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
   }
 }
 
-// 运行中发的消息先排队，这一轮结束后再发
-export async function sendMessage(sessionId: string, text: string): Promise<void> {
+// 运行中发的消息先排队，这一轮结束后再发；plan 为 true 时这一轮先出计划
+export async function sendMessage(sessionId: string, text: string, options: { plan?: boolean } = {}): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task) return
+  const plan = options.plan ?? false
   if (task.running) {
-    updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text }] }))
+    updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text, plan }] }))
     return
   }
-  await runTurnOnCore(sessionId, text, 'prompt', (turnId) => window.diffra.sendPrompt(sessionId, turnId, text))
+  if (plan) await runTurnOnCore(sessionId, text, 'plan', (turnId) => window.diffra.plan(sessionId, turnId, text))
+  else await runTurnOnCore(sessionId, text, 'prompt', (turnId) => window.diffra.sendPrompt(sessionId, turnId, text))
+}
+
+export function setPlanMode(sessionId: string, planMode: boolean): void {
+  updateLive(sessionId, (task) => ({ ...task, planMode }))
 }
 
 const DEEP_SCAN_TITLES = { task: '深度安全扫描 · 本任务改动', project: '深度安全扫描 · 整个项目' } as const
@@ -176,13 +186,13 @@ async function runTurnOnCore(sessionId: string, text: string, kind: TurnKind, ru
     patchTurn((turn) => ({ ...turn, error: errorMessage(error), endedAt: Date.now() }))
   } finally {
     clearTimeout(refresh)
-    let next: { id: string; text: string } | undefined
+    let next: { id: string; text: string; plan: boolean } | undefined
     updateLive(sessionId, (current) => {
       next = current.queue[0]
       return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1 }
     })
     await refreshTasks()
-    if (next) void sendMessage(sessionId, next.text)
+    if (next) void sendMessage(sessionId, next.text, { plan: next.plan })
   }
 }
 

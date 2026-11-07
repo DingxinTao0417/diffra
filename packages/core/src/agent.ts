@@ -11,6 +11,7 @@ import { detectLanguages } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
 import { endpointSchema, modelConfigSchema, newSessionMetaSchema, promptMetaSchema } from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
+import { runPlan } from './session/plan.js'
 import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
 import { detectChecks } from './project/detect.js'
@@ -44,6 +45,7 @@ const sessionConfigureParams = z.object({
 })
 
 const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
+const planParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), prompt: z.string().trim().min(1) })
 
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
 const MAX_USAGE_RANGE_MS = 400 * 86_400_000
@@ -232,6 +234,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (session.running) throw new Error('上一个任务还没结束')
       const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', (io) =>
         runDeepScan(session, { id: params.turnId }, params.scope, io),
+      )
+      return { stopReason }
+    })
+    // 先出计划也作为一轮记进会话，和深度扫描一样
+    .onRequest(SESSION_EXT_METHODS.plan, planParams, async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('上一个任务还没结束')
+      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', (io) =>
+        runPlan(session, { id: params.turnId, text: params.prompt }, io),
       )
       return { stopReason }
     })

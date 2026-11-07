@@ -15,6 +15,7 @@ import {
   handshake,
   listSessions,
   loadSession,
+  plan,
   previewCheckpoint,
   rewindSession,
   searchSessions,
@@ -58,6 +59,8 @@ function config(baseUrl: string): SessionConfig {
   return {
     model: { endpoint: { protocol: 'openai-compatible', baseUrl, apiKey: 'secret-key-should-not-be-saved' }, modelId: 'scripted', contextWindow: 100_000, provider: { id: 'p1', name: '脚本供应商' } },
     reviewModel: null,
+    planModel: null,
+    fallbackModel: null,
     checks: { afterEdit: null, beforeFinish: null },
     readOnlyPaths: [],
     rules: { packs: [], review: false },
@@ -264,5 +267,29 @@ describe('深度安全扫描', () => {
     await sendPrompt(core, sessionId, 'turn-2', '继续')
     expect(server.bodies[6]).not.toContain('security auditor')
     expect(server.bodies[6]).not.toContain('req.query')
+  })
+})
+
+describe('先出计划', () => {
+  test('出计划记成一轮，存下计划卡片；编码模型的下一轮看不到规划过程', async () => {
+    writeFileSync(join(project, 'a.txt'), 'value = broken\n')
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'submit_plan', input: { understanding: '修复 a.txt', steps: [{ title: '改 a.txt', detail: 'broken 改成 fixed', files: ['a.txt'] }], risks: [] } }] },
+      { text: '好' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    expect(await plan(core, sessionId, 'plan-1', '修复 a.txt')).toEqual({ stopReason: 'end_turn' })
+    expect(server.bodies[0]).toContain('PLANNING MODE')
+
+    const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns[0]).toMatchObject({ id: 'plan-1', kind: 'plan', prompt: '修复 a.txt', stopReason: 'end_turn' })
+    const card = loaded.turns[0]?.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '计划')
+    expect(JSON.stringify(card)).toContain('1. 改 a.txt')
+
+    await sendPrompt(core, sessionId, 'turn-2', '按计划做')
+    expect(server.bodies[2]).not.toContain('PLANNING MODE')
+    expect(server.bodies[2]).not.toContain('value = broken')
   })
 })

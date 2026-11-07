@@ -10,10 +10,10 @@ export function providerCard(window: Page, name: string) {
   return window.getByTestId('provider-card').filter({ hasText: name })
 }
 
-// 通过界面添加一个自定义 OpenAI 兼容供应商和模型，并分配给编码角色；做完回到设置之前的页面
+// 通过界面添加一个自定义 OpenAI 兼容供应商和模型，并分配给一个角色（默认编码）；做完回到设置之前的页面
 export async function configureCoderModel(
   window: Page,
-  options: { name: string; baseUrl: string; apiKey: string; modelId: string },
+  options: { name: string; baseUrl: string; apiKey: string; modelId: string; role?: '编码' | '规划' | '兜底' },
 ): Promise<void> {
   await openModelsPage(window)
   await window.getByRole('button', { name: '添加供应商' }).click()
@@ -31,9 +31,9 @@ export async function configureCoderModel(
   await card.getByRole('button', { name: '添加模型' }).click()
   await expect(card.getByTestId(`model-row-${options.modelId}`)).toBeVisible()
 
-  const coder = window.getByRole('combobox', { name: '编码' })
-  await coder.click()
+  const role = window.getByRole('combobox', { name: options.role ?? '编码' })
+  await role.click()
   await window.getByRole('option', { name: `${options.name} / ${options.modelId}` }).click()
-  await expect(coder).toContainText(`${options.name} / ${options.modelId}`)
+  await expect(role).toContainText(`${options.name} / ${options.modelId}`)
   await window.getByRole('button', { name: '返回' }).click()
 }

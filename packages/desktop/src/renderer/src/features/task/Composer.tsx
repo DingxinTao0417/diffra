@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useState } from 'react'
 import type { PermissionMode } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, Cpu, Shield, Square } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, Cpu, ListChecks, Shield, Square } from 'lucide-react'
 import type { ModelRef } from '../../../../shared/settings'
 import { cn } from 'cn'
 import {
@@ -27,6 +27,9 @@ interface ComposerProps {
   modelLabel: string | null
   modelLocked?: boolean
   onModelChange(ref: ModelRef): void
+  // 开着时发的消息先由规划模型出计划，不改代码
+  planMode: boolean
+  onPlanModeChange(planMode: boolean): void
   // 返回 false 表示没发出去，输入框里的内容保留
   onSend(text: string): boolean | Promise<boolean>
   onStop?(): void
@@ -78,6 +81,19 @@ export function Composer(props: ComposerProps) {
       />
       <div className="flex flex-wrap items-center gap-2 px-2.5 pt-1.5 pb-2.5">
         <PermissionModeMenu mode={props.permissionMode} onChange={props.onPermissionModeChange} />
+        <button
+          type="button"
+          aria-pressed={props.planMode}
+          title="开着时，发的消息先由规划模型只读地看代码、出一份计划，你确认后再改代码"
+          className={cn(
+            'flex h-7.5 items-center gap-1.5 rounded-full border px-2.5 text-[0.93rem] hover:bg-muted',
+            props.planMode ? 'border-primary/50 bg-primary/10 text-primary hover:bg-primary/15' : 'text-foreground/80',
+          )}
+          onClick={() => props.onPlanModeChange(!props.planMode)}
+        >
+          <ListChecks className="size-3.5" />
+          先出计划
+        </button>
         <div className="flex-1" />
         <ModelMenu label={props.modelLabel} locked={props.modelLocked} onChange={props.onModelChange} />
         {running && draft.trim() === '' ? (

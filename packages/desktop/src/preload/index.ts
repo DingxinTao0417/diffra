@@ -54,6 +54,7 @@ const api: DiffraApi = {
   deleteSession: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionDelete, sessionId),
   sendPrompt: (sessionId, turnId, text) => ipcRenderer.invoke(IPC_CHANNELS.sessionPrompt, sessionId, turnId, text),
   deepScan: (sessionId, turnId, scope) => ipcRenderer.invoke(IPC_CHANNELS.sessionDeepScan, sessionId, turnId, scope),
+  plan: (sessionId, turnId, text) => ipcRenderer.invoke(IPC_CHANNELS.sessionPlan, sessionId, turnId, text),
   cancelSession: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCancel, sessionId),
   onSessionUpdate: (listener) => subscribe<SessionNotification>(IPC_CHANNELS.sessionUpdate, listener),
   onPermissionRequest: (listener) => subscribe<PermissionRequestEvent>(IPC_CHANNELS.sessionPermission, listener),

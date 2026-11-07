@@ -12,7 +12,7 @@ import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
-import { cancelTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setTaskModel } from '@/state/actions'
+import { cancelTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer } from './Composer'
 import { Conversation } from './Conversation'
@@ -107,7 +107,7 @@ function TaskPage({ task }: { task: LiveTask }) {
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {task.queue.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 self-start rounded-lg border border-dashed bg-sidebar px-2.5 py-1.5 text-xs" data-testid="queued-message">
-                  <span className="text-muted-foreground">排队中</span>
+                  <span className="text-muted-foreground">{item.plan ? '排队中 · 出计划' : '排队中'}</span>
                   <span className="max-w-96 truncate">{item.text}</span>
                   <button type="button" className="text-primary hover:underline" onClick={() => dequeue(task.sessionId, item.id)}>
                     撤回
@@ -123,8 +123,10 @@ function TaskPage({ task }: { task: LiveTask }) {
                 modelLabel={task.modelLabel}
                 modelLocked={task.running}
                 onModelChange={(ref) => void setTaskModel(task.sessionId, ref)}
+                planMode={task.planMode}
+                onPlanModeChange={(planMode) => setPlanMode(task.sessionId, planMode)}
                 onSend={(text) => {
-                  void sendMessage(task.sessionId, text)
+                  void sendMessage(task.sessionId, text, { plan: task.planMode })
                   return true
                 }}
                 onStop={() => cancelTask(task.sessionId)}

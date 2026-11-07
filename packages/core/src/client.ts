@@ -86,6 +86,15 @@ export function deepScan(
   )
 }
 
+// 先出计划：和一轮任务一样可能跑很久，不设超时；用 cancelSession 停止
+export function plan(connection: acp.ClientConnection, sessionId: string, turnId: string, prompt: string): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string; prompt: string }>(SESSION_EXT_METHODS.plan, {
+    sessionId,
+    turnId,
+    prompt,
+  })
+}
+
 export function cancelSession(connection: acp.ClientConnection, sessionId: string): Promise<void> {
   return connection.agent.notify(acp.methods.agent.session.cancel, { sessionId })
 }

@@ -133,6 +133,8 @@ describe('经过 agent 记录和汇总', () => {
           provider: { id: 'p1', name: '脚本供应商' },
         },
         reviewModel: null,
+        planModel: null,
+        fallbackModel: null,
         checks: { afterEdit: null, beforeFinish: null },
         readOnlyPaths: [],
         rules: { packs: [], review: false },

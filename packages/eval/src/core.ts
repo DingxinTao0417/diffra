@@ -61,6 +61,9 @@ export function sessionConfig(
   return {
     model: { endpoint: endpointOf(model), modelId: model.modelId, contextWindow: model.contextWindow, provider: { id: model.name, name: model.name } },
     reviewModel: reviewer ? { endpoint: endpointOf(reviewer), modelId: reviewer.modelId, provider: { id: reviewer.name, name: reviewer.name } } : null,
+    // 评测只量编码模型本身：不出计划，也不换兜底模型
+    planModel: null,
+    fallbackModel: null,
     checks: options.checks,
     readOnlyPaths: options.readOnlyPaths,
     rules: { packs: builtinRulePacks(), review: options.review },

@@ -66,6 +66,7 @@ export const IPC_CHANNELS = {
   openExternal: 'shell:open-external',
   sessionPrompt: 'session:prompt',
   sessionDeepScan: 'session:deep-scan',
+  sessionPlan: 'session:plan',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -112,6 +113,9 @@ export interface SessionHandle {
   info: SessionInfo
   // 这个会话用的模型，显示在输入框上
   modelLabel: string
+  // 「规划」「兜底」角色的模型，显示在任务监控里；null 表示规划用编码模型、没有兜底
+  planLabel: string | null
+  fallbackLabel: string | null
   permissionMode: PermissionMode
 }
 
@@ -197,6 +201,8 @@ export interface DiffraApi {
   sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
   // 深度安全扫描作为一轮记进任务，像 sendPrompt 一样等它跑完
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
+  // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
+  plan(sessionId: string, turnId: string, text: string): Promise<StopReason>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void

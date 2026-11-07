@@ -17,7 +17,7 @@ const usageRecordSchema = z.object({
   providerId: z.string().nullable(),
   providerName: z.string().nullable(),
   modelId: z.string().min(1),
-  role: z.enum(['coder', 'reviewer']),
+  role: z.enum(['coder', 'reviewer', 'planner']),
   input: count,
   cacheRead: count,
   cacheWrite: count,

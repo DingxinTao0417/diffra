@@ -10,6 +10,7 @@ import {
   type CoreClientHandlers,
   createSession,
   deepScan,
+  plan,
   deleteSession,
   detectProjectChecks,
   listSessions,
@@ -138,7 +139,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     }
   }
 
-  const resolveRole = async (role: 'coder' | 'reviewer', label: string) => {
+  const resolveRole = async (role: 'coder' | 'reviewer' | 'planner' | 'fallback', label: string) => {
     const ref = settings.get().roles[role]
     return ref ? resolveModel(ref, `「${label}」角色`) : null
   }
@@ -188,17 +189,24 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   // 新建和加载都按当前设置组装会话配置：模型、检查、规范改过的话，打开旧任务也用新的。
   // 输入框里选的模型和权限模式优先，没选就用「编码」角色和默认权限模式
-  const sessionConfig = async (path: string, options: SessionOptions = {}): Promise<{ config: SessionConfig; modelLabel: string }> => {
+  const sessionConfig = async (
+    path: string,
+    options: SessionOptions = {},
+  ): Promise<{ config: SessionConfig; modelLabel: string; planLabel: string | null; fallbackLabel: string | null }> => {
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
     if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
     const project = projectState(path)
     const rules = sessionRules((await rulePacks.list()).packs.map((entry) => entry.pack), project.rules)
     // 只有开了审查才用到评审模型；没分配评审角色时 core 用编码模型审查
     const reviewer = rules.review ? await resolveRole('reviewer', '评审') : null
+    const planner = await resolveRole('planner', '规划')
+    const fallback = await resolveRole('fallback', '兜底')
     return {
       config: {
         model: coder.model,
         reviewModel: reviewer ? { endpoint: reviewer.model.endpoint, modelId: reviewer.model.modelId, provider: reviewer.model.provider } : null,
+        planModel: planner?.model ?? null,
+        fallbackModel: fallback?.model ?? null,
         checks: project.checks,
         readOnlyPaths: project.readOnlyPaths,
         rules,
@@ -208,16 +216,18 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
+      planLabel: planner?.label ?? null,
+      fallbackLabel: fallback?.label ?? null,
     }
   }
 
   ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
     const path = parse(z.string().min(1), rawPath)
     const options = parse(sessionOptionsSchema, rawOptions ?? {})
-    const { config, modelLabel } = await sessionConfig(path, options)
+    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options)
     const { sessionId, info } = await createSession(await coreConnection(), path, config)
     await rememberProject(path)
-    return { sessionId, info, modelLabel, permissionMode: config.permissionMode }
+    return { sessionId, info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode }
   })
 
   // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
@@ -278,10 +288,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.sessionLoad, async (_event, rawSessionId: unknown, rawPath: unknown): Promise<LoadedSessionHandle> => {
     const sessionId = parse(z.string().min(1), rawSessionId)
     const path = parse(z.string().min(1), rawPath)
-    const { config, modelLabel } = await sessionConfig(path)
+    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config)
     await rememberProject(path)
-    return { sessionId, info: loaded.info, modelLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
+    return { sessionId, info: loaded.info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>
@@ -322,6 +332,16 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       parse(z.string().min(1), rawSessionId),
       parse(z.string().min(1), rawTurnId),
       parse(z.enum(['task', 'project']), rawScope),
+    )
+    return response.stopReason
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown) => {
+    const response = await plan(
+      await coreConnection(),
+      parse(z.string().min(1), rawSessionId),
+      parse(z.string().min(1), rawTurnId),
+      parse(z.string().trim().min(1, '任务内容不能为空'), rawText),
     )
     return response.stopReason
   })

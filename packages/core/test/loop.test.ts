@@ -9,6 +9,7 @@ import { Checkpoints } from '../src/checkpoint.js'
 import { findBash, findRipgrep } from '../src/environment.js'
 import type { RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
+import { formatPlan, runPlan } from '../src/session/plan.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
@@ -97,14 +98,24 @@ async function makeSession(
   review?: { packs: RulePack[]; model: MockLanguageModelV4 },
   security: SessionSecurity = { staticCheck: false, lightScan: false },
   limits: SessionLimits = { compactAtPercent: 70, maxSteps: 100 },
+  // 规划、兜底角色的模拟模型；不给就是没配
+  roles: { plan?: MockLanguageModelV4; fallback?: MockLanguageModelV4 } = {},
 ) {
   const bashPath = await findBash()
   const rules = review ? { packs: review.packs, review: true } : NO_RULES
+  const roleModel = (modelId: string, name: string) => ({
+    endpoint: { protocol: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:1', apiKey: 'k' },
+    modelId,
+    contextWindow: 100_000,
+    provider: { id: modelId, name },
+  })
   return new Session({
     cwd: project,
     config: {
       model: { endpoint: { protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }, modelId: 'mock', contextWindow: 100_000, provider: null },
       reviewModel: null,
+      planModel: roles.plan ? roleModel('planner', '规划供应商') : null,
+      fallbackModel: roles.fallback ? roleModel('fallback', '兜底供应商') : null,
       checks,
       readOnlyPaths,
       rules,
@@ -119,6 +130,8 @@ async function makeSession(
     systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths, rules }, rules.packs),
     model,
     reviewModel: review?.model,
+    planModel: roles.plan,
+    fallbackModel: roles.fallback,
   })
 }
 
@@ -688,5 +701,136 @@ describe('卡死检测和步数上限', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_turn_requests')
     expect(model.doStreamCalls).toHaveLength(3)
     expect(notices(io)).toEqual(['已达到单次任务的步数上限（3 步），已停止'])
+  })
+})
+
+describe('兜底模型', () => {
+  const notices = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+  const finish = (summary: string): Step => ({ toolCalls: [{ name: 'finish', input: { summary } }] })
+
+  test('快速检查连续 3 次失败时换兜底模型接着做；用量按兜底模型记，对话里交代了换人的原因', async () => {
+    writeFileSync(join(project, 'a.txt'), 'value = broken\n')
+    const coder = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'broken', new_string: 'try1' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'try1', new_string: 'try2' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'try2', new_string: 'try3' } }] },
+    ])
+    const fallback = scriptedModel([{ toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'try3', new_string: 'fixed' } }] }, finish('改好了')])
+    const session = await makeSession(coder, { afterEdit: 'grep -q "value = fixed" a.txt', beforeFinish: null }, [], undefined, undefined, undefined, { fallback })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('value = fixed\n')
+    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback'])
+    expect(coder.doStreamCalls).toHaveLength(4)
+    expect(fallback.doStreamCalls).toHaveLength(2)
+    expect(JSON.stringify(fallback.doStreamCalls[0]?.prompt)).toContain('A different model takes over')
+    expect(io.usage.map((call) => call.modelId)).toEqual(['mock', 'mock', 'mock', 'mock', 'fallback', 'fallback'])
+  })
+
+  test('完成检查连续 3 次不过时换兜底模型', async () => {
+    const coder = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'new.txt', old_string: '', new_string: 'draft\n' } }] },
+      finish('完成'),
+      finish('完成'),
+      finish('完成'),
+    ])
+    const fallback = scriptedModel([{ toolCalls: [{ name: 'edit_file', input: { path: 'new.txt', old_string: 'draft', new_string: 'final' } }] }, finish('改成 final 了')])
+    const session = await makeSession(coder, { afterEdit: null, beforeFinish: 'grep -q final new.txt' }, [], undefined, undefined, undefined, { fallback })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
+    expect(readFileSync(join(project, 'new.txt'), 'utf8')).toBe('final\n')
+    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback'])
+  })
+
+  test('卡死提醒后仍重复时换兜底模型；兜底模型也卡住就停下，每轮只换一次', async () => {
+    writeFileSync(join(project, 'b.txt'), 'b\n')
+    const readB: Step = { toolCalls: [{ name: 'read_file', input: { path: 'b.txt' } }] }
+    const coder = scriptedModel([readB, readB, readB, readB, readB, readB])
+    const fallback = scriptedModel([readB, readB, readB, readB, readB, readB, { text: '不会走到这里' }])
+    const session = await makeSession(coder, undefined, [], undefined, undefined, undefined, { fallback })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '看看 b.txt' }, io)).resolves.toBe('end_turn')
+    expect(coder.doStreamCalls).toHaveLength(6)
+    expect(fallback.doStreamCalls).toHaveLength(6)
+    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback', '智能体在重复同样的操作，已停止'])
+  })
+
+  test('下一轮回到编码模型', async () => {
+    writeFileSync(join(project, 'b.txt'), 'b\n')
+    const readB: Step = { toolCalls: [{ name: 'read_file', input: { path: 'b.txt' } }] }
+    const coder = scriptedModel([readB, readB, readB, readB, readB, readB, { text: '第二轮由编码模型回答' }])
+    const fallback = scriptedModel([{ text: '兜底模型回答' }])
+    const session = await makeSession(coder, undefined, [], undefined, undefined, undefined, { fallback })
+
+    await expect(runTurn(session, { id: 'turn-1', text: '看看 b.txt' }, recordingIO())).resolves.toBe('end_turn')
+    expect(fallback.doStreamCalls).toHaveLength(1)
+    await expect(runTurn(session, { id: 'turn-2', text: '再说一遍' }, recordingIO())).resolves.toBe('end_turn')
+    expect(coder.doStreamCalls).toHaveLength(7)
+    expect(fallback.doStreamCalls).toHaveLength(1)
+  })
+})
+
+describe('先出计划', () => {
+  const plan = {
+    understanding: '把 a.txt 里的 broken 改成 fixed',
+    steps: [{ title: '改 a.txt', detail: '把 broken 换成 fixed\n改完跑一下检查', files: ['a.txt'] }],
+    risks: ['b.txt 也引用了这个值，要不要一起改？'],
+  }
+  const planCards = (io: { updates: SessionUpdate[] }) =>
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '计划')
+
+  test('规划模型只读地看代码、交计划；改文件被拒，计划不进编码模型的对话，用量记成规划', async () => {
+    writeFileSync(join(project, 'a.txt'), 'value = broken\n')
+    const coder = scriptedModel([])
+    const planner = scriptedModel([
+      { toolCalls: [{ name: 'list_files', input: {} }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'broken', new_string: 'fixed' } }] },
+      { toolCalls: [{ name: 'submit_plan', input: plan }] },
+    ])
+    const session = await makeSession(coder, undefined, [], undefined, undefined, undefined, { plan: planner })
+    const io = recordingIO()
+
+    await expect(runPlan(session, { id: 'plan-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('value = broken\n')
+    // 不在只读工具里的调用，AI SDK 直接答复模型这个工具不可用
+    expect(JSON.stringify(planner.doStreamCalls[3]?.prompt)).toContain("unavailable tool 'edit_file'")
+    expect(JSON.stringify(planner.doStreamCalls[0]?.prompt)).toContain('PLANNING MODE')
+    expect(coder.doStreamCalls).toHaveLength(0)
+    expect(session.messages).toEqual([])
+    expect(io.usage.map((call) => [call.role, call.modelId])).toEqual(Array.from({ length: 4 }, () => ['planner', 'planner']))
+
+    const card = planCards(io)[0]
+    expect(card && card.sessionUpdate === 'tool_call' ? card.content : null).toEqual([{ type: 'content', content: { type: 'text', text: formatPlan(plan) } }])
+    expect(formatPlan(plan)).toBe(
+      ['把 a.txt 里的 broken 改成 fixed', '', '1. 改 a.txt', '   把 broken 换成 fixed', '   改完跑一下检查', '   涉及：a.txt', '', '风险和需要确认的问题：', '- b.txt 也引用了这个值，要不要一起改？'].join('\n'),
+    )
+  })
+
+  test('上下文快满时要求直接交计划', async () => {
+    const planner = scriptedModel([{ toolCalls: [{ name: 'search', input: { pattern: 'x' } }], inputTokens: 85_000 }, { toolCalls: [{ name: 'submit_plan', input: plan }] }])
+    const session = await makeSession(scriptedModel([]), undefined, [], undefined, undefined, undefined, { plan: planner })
+
+    await expect(runPlan(session, { id: 'plan-1', text: '修复 a.txt' }, recordingIO())).resolves.toBe('end_turn')
+    expect(planner.doStreamCalls[0]?.toolChoice).toEqual({ type: 'auto' })
+    expect(planner.doStreamCalls[1]?.toolChoice).toEqual({ type: 'tool', toolName: 'submit_plan' })
+  })
+
+  test('没配规划模型时用编码模型；看得到之前的对话', async () => {
+    const coder = scriptedModel([{ toolCalls: [{ name: 'submit_plan', input: plan }] }])
+    const session = await makeSession(coder)
+    session.messages.push({ role: 'user', content: '之前说过：不要动 b.txt' }, { role: 'assistant', content: '好的' })
+    const io = recordingIO()
+
+    await expect(runPlan(session, { id: 'plan-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
+    const prompt = JSON.stringify(coder.doStreamCalls[0]?.prompt)
+    expect(prompt).toContain('不要动 b.txt')
+    expect(prompt).toContain('修复 a.txt')
+    expect(io.usage.map((call) => [call.role, call.modelId])).toEqual([['planner', 'mock']])
+    expect(session.messages).toHaveLength(2)
   })
 })
