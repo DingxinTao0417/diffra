@@ -66,7 +66,12 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           action={task.info.checkpoints ? <SectionAction onClick={openReview}>审阅</SectionAction> : undefined}
         >
           {!task.info.checkpoints && <p className="text-muted-foreground">检查点不可用（需要 Git），看不到改动汇总</p>}
-          {diff?.state === 'loading' && <p className="text-muted-foreground">正在读取…</p>}
+          {diff?.state === 'loading' && (
+            <div role="status" aria-label="正在读取改动" className="flex h-7 items-center gap-2 motion-safe:animate-pulse">
+              <div className="h-3 w-2/3 rounded-sm bg-muted" />
+              <div className="ml-auto h-3 w-10 rounded-sm bg-muted" />
+            </div>
+          )}
           {diff?.state === 'error' && <p className="text-destructive">{diff.message}</p>}
           {diff?.state === 'ready' && diff.files.length === 0 && <p className="text-muted-foreground">还没有改动文件</p>}
           {diff?.state === 'ready' && diff.files.length > 0 && (

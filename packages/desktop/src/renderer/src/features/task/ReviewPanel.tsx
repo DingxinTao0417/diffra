@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Undo2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileDiff as FileDiffIcon, GitBranch, Undo2 } from 'lucide-react'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DiffCounts } from '@/features/session/DiffView'
 import { DiffLines } from '@/features/session/DiffLines'
 import type { FileDiff } from '@/lib/unified-diff'
@@ -31,18 +33,22 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
       title="审阅"
       controls={
         <>
-          <select
-            aria-label="审阅范围"
-            className="h-7 min-w-0 rounded-md border bg-background px-2 text-sm"
-            value={sinceTurnId ?? ''}
-            onChange={(event) => setSince(event.target.value)}
-          >
-            {task.turns.map((turn, index) => (
-              <option key={turn.id} value={turn.id}>
-                {index === 0 ? `整个任务（${task.turns.length} 轮）` : `第 ${index + 1} 轮起`}
-              </option>
-            ))}
-          </select>
+          {task.turns.length > 1 && sinceTurnId ? (
+            <Select value={sinceTurnId} onValueChange={setSince}>
+              <SelectTrigger size="sm" aria-label="审阅范围" className="min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                {task.turns.map((turn, index) => (
+                  <SelectItem key={turn.id} value={turn.id}>
+                    {index === 0 ? `全部改动（${task.turns.length} 轮）` : `从第 ${index + 1} 轮起`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span className="shrink-0 text-sm text-muted-foreground">全部改动</span>
+          )}
           {diff?.state === 'ready' && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground @lg:flex">
               {files.length} 个文件 <DiffCounts added={added} removed={removed} />
@@ -73,12 +79,34 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
 }
 
 function ReviewBody({ task, diff, files }: { task: LiveTask; diff: TaskDiff | null; files: FileDiff[] }) {
-  if (!task.info.checkpoints) return <p className="text-sm text-muted-foreground">检查点不可用（需要 Git），没法汇总改动。</p>
-  if (task.turns.length === 0) return <p className="text-sm text-muted-foreground">任务还没开始。</p>
-  if (!diff || diff.state === 'loading') return <p className="text-sm text-muted-foreground">正在读取改动…</p>
+  if (!task.info.checkpoints) return <EmptyState icon={GitBranch} title="项目不是 Git 仓库，没法汇总改动和撤销" />
+  if (task.turns.length === 0) return <EmptyState icon={FileDiffIcon} title="任务还没开始" />
+  if (!diff || diff.state === 'loading') return <FileCardsSkeleton />
   if (diff.state === 'error') return <p className="text-sm text-destructive">{diff.message}</p>
-  if (files.length === 0) return <p className="text-sm text-muted-foreground">这段时间没有文件改动。</p>
+  if (files.length === 0) return <EmptyState icon={FileDiffIcon} title="这段时间没有文件改动" description="智能体改过的文件会在这里逐个列出" />
   return files.map((file) => <FileCard key={file.path} file={file} />)
+}
+
+// 只在第一次读取时出现；之后刷新都先显示旧数据
+function FileCardsSkeleton() {
+  return (
+    <div role="status" aria-label="正在读取改动" className="space-y-3 motion-safe:animate-pulse">
+      {[['w-40', 'w-3/4'], ['w-28', 'w-1/2'], ['w-48', 'w-2/3']].map(([path, line], index) => (
+        <div key={index} aria-hidden className="overflow-hidden rounded-lg border">
+          <div className="flex h-8 items-center gap-2 border-b bg-muted/50 px-2 dark:bg-muted">
+            <div className="size-3.5 rounded-sm bg-muted-foreground/15" />
+            <div className={cn('h-3 rounded-sm bg-muted-foreground/15', path)} />
+            <div className="ml-auto h-3 w-10 rounded-sm bg-muted-foreground/15" />
+          </div>
+          <div className="space-y-2 px-3 py-3">
+            <div className={cn('h-3 rounded-sm bg-muted', line)} />
+            <div className="h-3 w-5/6 rounded-sm bg-muted" />
+            <div className="h-3 w-2/5 rounded-sm bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const STATUS_BADGES: Record<FileDiff['status'], React.ReactNode> = {

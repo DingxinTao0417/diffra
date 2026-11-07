@@ -4,22 +4,21 @@ import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, Pan
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
 import { BrowserPanel } from '@/features/browser/BrowserPanel'
 import { PermissionCard } from '@/features/session/PermissionCard'
 import { RestoreDialog } from '@/features/session/RestoreDialog'
-import type { Usage } from '@/features/session/transcript'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
-import { folderName, formatTokens } from '@/lib/format'
+import { folderName } from '@/lib/format'
 import { type TaskStatus, taskStatus } from '@/lib/task-status'
 import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
+import { ContextUsage } from './ContextUsage'
 import { Conversation } from './Conversation'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReviewPanel } from './ReviewPanel'
@@ -126,7 +125,10 @@ function TaskPage({ task }: { task: LiveTask }) {
 
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
-          <Conversation task={task} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
+          {/* 终端在对话列底部，右侧面板保持全高；对话区留出最小高度，终端拉高时由 flex 压缩终端而不是对话 */}
+          <div className="flex min-h-40 flex-1 flex-col">
+            <Conversation task={task} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
+          </div>
           <div className="px-8 pb-3.5">
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {/* 固定在输入框上方，用户往上翻着看改动时也能看到；多行命令只让命令区滚动，否则卡片会把对话挤没，按钮也不能随之滚出视野 */}
@@ -176,16 +178,16 @@ function TaskPage({ task }: { task: LiveTask }) {
                   </span>
                 )}
                 <div className="flex-1" />
-                {task.usage && <UsageMeter usage={task.usage} />}
+                {task.usage && <ContextUsage sessionId={task.sessionId} usage={task.usage} running={task.running} />}
               </div>
             </div>
           </div>
+          {terminalOpen && <TerminalPanel cwd={task.project} />}
         </section>
         {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && <BrowserPanel sessionId={task.sessionId} />}
       </div>
-      {terminalOpen && <TerminalPanel cwd={task.project} />}
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
       <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
@@ -248,56 +250,5 @@ function PanelButton({ label, active, onClick, children }: { label: string; acti
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  )
-}
-
-const USAGE_PARTS = [
-  { key: 'system', label: '系统提示词', className: 'bg-primary' },
-  { key: 'tools', label: '工具定义', className: 'bg-primary/75' },
-  { key: 'rules', label: '编码规范和项目规则', className: 'bg-primary/50' },
-  { key: 'messages', label: '对话和工具结果', className: 'bg-primary/25' },
-] as const
-
-function UsageMeter({ usage }: { usage: Usage }) {
-  const percent = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0
-  const breakdown = usage.breakdown
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button type="button" className="flex items-center gap-1.5 hover:text-foreground" data-testid="context-usage">
-          <span className="flex h-1 w-12 overflow-hidden rounded-full bg-accent">
-            <span className={cn('rounded-full', percent >= 80 ? 'bg-warning' : 'bg-primary')} style={{ width: `${percent}%` }} />
-          </span>
-          上下文 {percent}%
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-3 text-sm">
-        <div className="flex items-center">
-          <span className="font-medium">上下文</span>
-          <span className="ml-auto text-muted-foreground">
-            {formatTokens(usage.used)} / {formatTokens(usage.size)} · {percent}%
-          </span>
-        </div>
-        {breakdown && (
-          <>
-            <span className="flex h-1.5 overflow-hidden rounded-full bg-accent">
-              {USAGE_PARTS.map((part) => (
-                <span key={part.key} className={part.className} style={{ width: `${usage.size > 0 ? (breakdown[part.key] / usage.size) * 100 : 0}%` }} />
-              ))}
-            </span>
-            <div className="space-y-1.5">
-              {USAGE_PARTS.map((part) => (
-                <div key={part.key} className="flex items-center gap-2">
-                  <span className={cn('size-2 rounded-sm', part.className)} />
-                  <span className="flex-1">{part.label}</span>
-                  <span className="text-muted-foreground">{formatTokens(breakdown[part.key])}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-        <p className="text-xs leading-relaxed text-muted-foreground">分项按字数估算，总数以模型返回的用量为准。</p>
-      </PopoverContent>
-    </Popover>
   )
 }

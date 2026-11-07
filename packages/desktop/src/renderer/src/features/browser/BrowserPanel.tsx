@@ -1,6 +1,9 @@
 import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ExternalLink, Globe, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ExternalLink, Globe, Info, RotateCw, X } from 'lucide-react'
+import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SidePanel } from '@/features/task/SidePanel'
 import { errorMessage } from '@/lib/errors'
 import { showToast, store, useAppState } from '@/state/store'
@@ -10,6 +13,7 @@ import { showToast, store, useAppState } from '@/state/store'
 export function BrowserPanel({ sessionId }: { sessionId: string }) {
   const state = useAppState((app) => app.browsers[sessionId] ?? null)
   const body = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLInputElement>(null)
   const [address, setAddress] = useState('')
   const [editing, setEditing] = useState(false)
 
@@ -58,29 +62,47 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
     }
   }
 
+  const openExample = async () => {
+    setAddress('localhost:5173')
+    try {
+      await window.diffra.browserNavigate(sessionId, 'localhost:5173')
+    } catch (error) {
+      showToast(errorMessage(error))
+    }
+  }
+
+  const hasPage = Boolean(state?.url)
+
   return (
     <SidePanel
       width="wide"
       testId="browser-panel"
       controls={
         <div className="flex min-w-0 flex-1 items-center gap-0.5">
-          <ToolButton label="后退" disabled={!state?.canGoBack} onClick={() => window.diffra.browserCommand(sessionId, 'back')}>
-            <ArrowLeft className="size-4" />
-          </ToolButton>
-          <ToolButton label="前进" disabled={!state?.canGoForward} onClick={() => window.diffra.browserCommand(sessionId, 'forward')}>
-            <ArrowRight className="size-4" />
-          </ToolButton>
+          {hasPage && (
+            <>
+              <ToolButton label="后退" disabled={!state?.canGoBack} onClick={() => window.diffra.browserCommand(sessionId, 'back')}>
+                <ArrowLeft className="size-4" />
+              </ToolButton>
+              <ToolButton label="前进" disabled={!state?.canGoForward} onClick={() => window.diffra.browserCommand(sessionId, 'forward')}>
+                <ArrowRight className="size-4" />
+              </ToolButton>
+            </>
+          )}
           {state?.loading ? (
             <ToolButton label="停止加载" onClick={() => window.diffra.browserCommand(sessionId, 'stop')}>
               <X className="size-4" />
             </ToolButton>
           ) : (
-            <ToolButton label="刷新" disabled={!state?.url} onClick={() => window.diffra.browserCommand(sessionId, 'reload')}>
-              <RotateCw className="size-3.5" />
-            </ToolButton>
+            hasPage && (
+              <ToolButton label="刷新" onClick={() => window.diffra.browserCommand(sessionId, 'reload')}>
+                <RotateCw className="size-4" />
+              </ToolButton>
+            )
           )}
-          <form onSubmit={open} className="mx-1 min-w-0 flex-1">
+          <form onSubmit={open} className={cn('mr-1 min-w-0 flex-1', hasPage && 'ml-1')}>
             <input
+              ref={input}
               aria-label="网址"
               value={address}
               placeholder="输入网址，比如 localhost:5173"
@@ -97,17 +119,46 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
       }
       // 和关闭按钮之间有分隔线，免得想在系统浏览器里打开时误关面板
       actions={
-        <ToolButton label="在系统浏览器里打开" disabled={!state?.url} onClick={() => window.diffra.browserCommand(sessionId, 'external')}>
-          <ExternalLink className="size-3.5" />
-        </ToolButton>
+        hasPage && (
+          <ToolButton label="在系统浏览器里打开" onClick={() => window.diffra.browserCommand(sessionId, 'external')}>
+            <ExternalLink className="size-4" />
+          </ToolButton>
+        )
       }
     >
+      {/* 网页区域被原生视图盖住，进度条只能画在它上面：零高度的定位层，进度条向上压住顶栏底边，不挤动网页区域 */}
+      {state?.loading && (
+        <div className="relative h-0 shrink-0">
+          <div role="progressbar" aria-label="正在加载网页" className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-primary/15">
+            <div className="h-full w-1/3 -translate-x-full animate-out bg-primary ease-in-out repeat-infinite slide-out-to-right-[400%] animation-duration-[1.2s] motion-reduce:w-full motion-reduce:translate-x-0 motion-reduce:animate-none" />
+          </div>
+        </div>
+      )}
       <div ref={body} className="relative min-h-0 flex-1 bg-background" data-testid="browser-viewport">
-        {!state?.url && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-sm text-muted-foreground">
-            <Globe className="size-8 text-muted-foreground/60" />
-            <p>在上面输入网址，或者让智能体打开网页。</p>
-            <p className="max-w-md text-xs text-balance">本地开发服务器（localhost）直接打开；其他网站，智能体打开前会先问你。浏览器的登录状态和你自己的浏览器分开。</p>
+        {!hasPage && (
+          <div className="flex h-full items-center justify-center px-6">
+            <EmptyState
+              icon={Globe}
+              title="在上面输入网址，或者让智能体打开网页"
+              description={
+                <span className="inline-flex items-center gap-1">
+                  本地地址直接打开，外部网站会先征求你同意
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" aria-label="登录状态说明" className="rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+                        <Info className="size-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>内置浏览器的登录状态和你自己的浏览器分开</TooltipContent>
+                  </Tooltip>
+                </span>
+              }
+              className="bg-transparent py-0"
+            >
+              <Button variant="outline" size="sm" onClick={() => void openExample()}>
+                打开 localhost:5173
+              </Button>
+            </EmptyState>
           </div>
         )}
       </div>

@@ -103,7 +103,8 @@
   --diff-del-bg: #fdeeec;
   --chart-1: var(--primary);
   --chart-2: #4f7cac;
-  --chart-3: var(--warning);
+  /* 不用 warning：用量接近上限时总量条才用 warning，同一个弹层里同一种颜色不能有两个意思 */
+  --chart-3: #8b6db3;
   --chart-4: #9a9992;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.18);
@@ -162,6 +163,7 @@
   --diff-add-bg: #15291f;
   --diff-del-bg: #2f1a18;
   --chart-2: #7ea6d6;
+  --chart-3: #b49ad8;
   --chart-4: #8a8983;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.4);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.55);
