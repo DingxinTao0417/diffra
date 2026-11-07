@@ -7,20 +7,21 @@ import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { RulePack, SessionChecks, SessionSecurity } from '../src/protocol.js'
+import type { RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
 
-type Step = { toolCalls: Array<{ name: string; input: unknown }> } | { text: string }
+// inputTokens 是这次调用报给 Diffra 的输入 token 数，默认 1000
+type Step = ({ toolCalls: Array<{ name: string; input: unknown }> } | { text: string }) & { inputTokens?: number }
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
 type StreamPart = StreamResult['stream'] extends ReadableStream<infer Part> ? Part : never
 
-const usage = {
-  inputTokens: { total: 1000, noCache: 1000, cacheRead: 0, cacheWrite: 0 },
+const usageOf = (inputTokens = 1000) => ({
+  inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 10, text: 10, reasoning: 0 },
-}
+})
 
 // 按剧本一步一步返回：每次模型调用对应数组里的一项
 function scriptedModel(steps: Step[]): MockLanguageModelV4 {
@@ -34,7 +35,7 @@ function scriptedModel(steps: Step[]): MockLanguageModelV4 {
                 { type: 'text-start' as const, id: 't' },
                 { type: 'text-delta' as const, id: 't', delta: step.text },
                 { type: 'text-end' as const, id: 't' },
-                { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: undefined }, usage },
+                { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: undefined }, usage: usageOf(step.inputTokens) },
               ]
             : [
                 { type: 'stream-start' as const, warnings: [] },
@@ -44,7 +45,7 @@ function scriptedModel(steps: Step[]): MockLanguageModelV4 {
                   toolName: call.name,
                   input: JSON.stringify(call.input),
                 })),
-                { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage },
+                { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: usageOf(step.inputTokens) },
               ],
       }),
     })),
@@ -95,6 +96,7 @@ async function makeSession(
   readOnlyPaths: string[] = [],
   review?: { packs: RulePack[]; model: MockLanguageModelV4 },
   security: SessionSecurity = { staticCheck: false, lightScan: false },
+  limits: SessionLimits = { compactAtPercent: 70, maxSteps: 100 },
 ) {
   const bashPath = await findBash()
   const rules = review ? { packs: review.packs, review: true } : NO_RULES
@@ -108,6 +110,7 @@ async function makeSession(
       rules,
       permissionMode: 'ask',
       security,
+      limits,
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
@@ -516,5 +519,174 @@ describe('完成前的轻量安全扫描', () => {
     await runTurn(session, { id: 't1', text: '加一个计算函数' }, io)
     expect(reviewer.doStreamCalls).toHaveLength(1)
     expect(scanCards(io)).toHaveLength(1)
+  })
+})
+
+describe('上下文压缩', () => {
+  // 每个文件约 18000 字，读出来的输出足够大，可以被省略
+  const writeBigFiles = (count: number) => {
+    for (let index = 1; index <= count; index++) {
+      writeFileSync(join(project, `f${index}.txt`), `${Array.from({ length: 300 }, (_, line) => `file ${index} line ${line} ${'x'.repeat(40)}`).join('\n')}\n`)
+    }
+  }
+  const reads = (count: number, inputTokens: (index: number) => number): Step[] =>
+    Array.from({ length: count }, (_, index) => ({ toolCalls: [{ name: 'read_file', input: { path: `f${index + 1}.txt` } }], inputTokens: inputTokens(index) }))
+  // 输出都很短、省不出地方的步骤
+  const searches = (count: number, inputTokens: (index: number) => number): Step[] =>
+    Array.from({ length: count }, (_, index) => ({ toolCalls: [{ name: 'search', input: { pattern: `nothing-${index}` } }], inputTokens: inputTokens(index) }))
+  const compactionCards = (io: { updates: SessionUpdate[] }) =>
+    io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '上下文压缩')
+  const cardText = (io: { updates: SessionUpdate[] }) =>
+    io.updates
+      .filter((update) => update.sessionUpdate === 'tool_call_update')
+      .flatMap((update) => (update.content ?? []).flatMap((item) => (item.type === 'content' && item.content.type === 'text' ? [item.content.text] : [])))
+      .join('\n')
+  const notices = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+
+  test('超过触发点时先省略较早的工具输出，够了就不调模型写摘要', async () => {
+    writeBigFiles(6)
+    // 窗口 10 万、触发点 70%：第 6 次调用报 7.5 万，加上刚读进来的文件，下一次调用前估算超过 7 万
+    const model = scriptedModel([...reads(6, (index) => (index === 5 ? 75_000 : 1000)), { text: '看完了' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '读这些文件' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(7)
+    expect(compactionCards(io)).toHaveLength(1)
+    expect(cardText(io)).toContain('省略了 2 个较早的工具输出')
+    expect(session.compaction).toBeNull()
+    // 最早两步的输出换成了占位，最近四步原样保留
+    const lastPrompt = JSON.stringify(model.doStreamCalls[6]?.prompt)
+    expect(lastPrompt.match(/Output omitted by Diffra/g)).toHaveLength(2)
+    expect(lastPrompt).not.toContain('file 1 line 0')
+    expect(lastPrompt).toContain('file 3 line 0')
+    expect(lastPrompt).toContain('file 6 line 0')
+  })
+
+  test('省略不够时写摘要：之后发的是摘要加最近四步，提问原文保留；存档恢复后一样；重新生成到压缩点之前时摘要作废', async () => {
+    const model = scriptedModel([...searches(6, (index) => (index === 5 ? 90_000 : 1000)), { text: '摘要：搜了六次都没找到。' }, { text: '没找到' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    session.startTurn('turn-1', '找一找 TODO 在哪')
+
+    await expect(runTurn(session, { id: 'turn-1', text: '找一找 TODO 在哪' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(8)
+    // 第 7 次调用是写摘要：带着压缩点之前的对话和写摘要的要求，不让调工具
+    const summaryCall = model.doStreamCalls[6]
+    expect(JSON.stringify(summaryCall?.prompt)).toContain('too long for the context window')
+    expect(summaryCall?.toolChoice).toEqual({ type: 'none' })
+    expect(io.usage).toHaveLength(8)
+    expect(cardText(io)).toContain('摘要：搜了六次都没找到。')
+
+    const compaction = session.compaction
+    expect(compaction).not.toBeNull()
+    const lastPrompt = model.doStreamCalls[7]?.prompt ?? []
+    const promptText = JSON.stringify(lastPrompt)
+    expect(promptText).toContain('Earlier parts of this conversation were compacted')
+    expect(promptText).toContain('摘要：搜了六次都没找到。')
+    expect(promptText).toContain('找一找 TODO 在哪')
+    expect(promptText).not.toContain('nothing-0')
+    expect(promptText).toContain('nothing-5')
+    expect(lastPrompt.filter((message) => message.role === 'assistant')).toHaveLength(4)
+    // 原文都还在
+    expect(JSON.stringify(session.messages)).toContain('nothing-0')
+
+    const restored = new Session({
+      cwd: project,
+      config: session.config,
+      environment: session.environment,
+      checkpoints: null,
+      rulePacks: [],
+      systemPrompt: session.systemPrompt,
+      model,
+      record: JSON.parse(JSON.stringify(session.toRecord())),
+    })
+    expect(restored.compaction).toEqual(compaction)
+    expect(restored.contextMessages()).toEqual(JSON.parse(JSON.stringify(session.contextMessages())))
+
+    await session.rewind('turn-1')
+    expect(session.compaction).toBeNull()
+  })
+
+  test('写摘要失败时停下并说明', async () => {
+    const model = scriptedModel([...searches(6, (index) => (index === 5 ? 90_000 : 1000)), { text: '' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '找一找' }, io)).resolves.toBe('max_tokens')
+    expect(notices(io)).toEqual(['上下文压缩失败，已停止'])
+    expect(cardText(io)).toContain('压缩失败')
+    expect(session.compaction).toBeNull()
+  })
+
+  test('最近几步本身就太大、没法压时停下', async () => {
+    writeBigFiles(1)
+    const model = scriptedModel([{ toolCalls: [{ name: 'read_file', input: { path: 'f1.txt' } }], inputTokens: 97_000 }, { text: '不会走到这里' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_tokens')
+    expect(model.doStreamCalls).toHaveLength(1)
+    expect(notices(io)).toEqual(['上下文压缩后仍然太大，已停止'])
+  })
+
+  test('触发点按设置来：设成 90% 时 7.5 万不压缩', async () => {
+    writeBigFiles(6)
+    const model = scriptedModel([...reads(6, (index) => (index === 5 ? 75_000 : 1000)), { text: '看完了' }])
+    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 90, maxSteps: 100 })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '读这些文件' }, io)).resolves.toBe('end_turn')
+    expect(compactionCards(io)).toHaveLength(0)
+  })
+})
+
+describe('卡死检测和步数上限', () => {
+  const readB: Step = { toolCalls: [{ name: 'read_file', input: { path: 'b.txt' } }] }
+  const notices = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+
+  test('同一个调用连续三次结果一样时先提醒，提醒后再重复就停下', async () => {
+    writeFileSync(join(project, 'b.txt'), 'b\n')
+    const model = scriptedModel([readB, readB, readB, readB, readB, readB, { text: '不会走到这里' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '看看 b.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(6)
+    // 第三次之后提醒了模型，第四次请求里带着提醒
+    expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('same call 3 times')
+    expect(notices(io)).toEqual(['智能体在重复同样的操作，已停止'])
+  })
+
+  test('中间有成功的编辑时重新计数', async () => {
+    writeFileSync(join(project, 'a.txt'), 'one\n')
+    writeFileSync(join(project, 'b.txt'), 'b\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      readB,
+      readB,
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'one', new_string: 'two' } }] },
+      readB,
+      readB,
+      { toolCalls: [{ name: 'finish', input: { summary: '好了' } }] },
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '改 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(JSON.stringify(session.messages)).not.toContain('same call 3 times')
+    expect(notices(io)).toEqual([])
+  })
+
+  test('步数上限按设置来，到了就停下并说明怎么继续', async () => {
+    for (const name of ['a', 'b', 'c', 'd']) writeFileSync(join(project, `${name}.txt`), `${name}\n`)
+    const steps: Step[] = ['a', 'b', 'c', 'd'].map((name) => ({ toolCalls: [{ name: 'read_file', input: { path: `${name}.txt` } }] }))
+    const model = scriptedModel([...steps, { text: '不会走到这里' }])
+    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 70, maxSteps: 3 })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_turn_requests')
+    expect(model.doStreamCalls).toHaveLength(3)
+    expect(notices(io)).toEqual(['已达到单次任务的步数上限（3 步），已停止'])
   })
 })

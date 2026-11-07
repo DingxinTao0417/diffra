@@ -65,6 +65,12 @@ export interface SessionSecurity {
   lightScan: boolean
 }
 
+// 单次任务的上限：上下文用到窗口的百分之多少时压缩；最多跑多少步，null 不限（靠卡死检测兜底）
+export interface SessionLimits {
+  compactAtPercent: number
+  maxSteps: number | null
+}
+
 // session/new 的 _meta.diffra
 export interface SessionConfig {
   model: { endpoint: ModelEndpoint; modelId: string; contextWindow: number | null; provider: ModelProvider | null }
@@ -76,6 +82,7 @@ export interface SessionConfig {
   rules: SessionRules
   permissionMode: PermissionMode
   security: SessionSecurity
+  limits: SessionLimits
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }

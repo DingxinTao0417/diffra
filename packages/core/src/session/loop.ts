@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { toModelError } from '../models/errors.js'
@@ -21,13 +21,16 @@ import { auditDependencies, dependenciesChanged } from '../security/deps.js'
 import { buildLightScanRequest, parseLightScanOutput } from '../security/light.js'
 import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityFinding } from '../security/types.js'
 import type { ModelCallUsage } from '../usage/log.js'
+import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, parseFinishInput, TOOL_KINDS, TOOLS } from './tools.js'
 
-const MAX_STEPS = 50
 // 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
 const MAX_CHECK_FAILURES = 3
 const MAX_GATE_ATTEMPTS = 3
+// 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
+const STUCK_REPEATS = 3
+// 深度扫描用：上下文用到这个比例时要求交报告
 export const CONTEXT_STOP_RATIO = 0.8
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const CHECK_TIMEOUT_SECONDS = 300
@@ -60,18 +63,37 @@ export async function runTurn(session: Session, turn: { id: string; text: string
   session.activeTurn = controller
   const { signal } = controller
   const contextWindow = session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  const maxSteps = session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY
 
   try {
     await takeCheckpoint(session, turn.id, io)
+    const requestIndex = session.messages.length
     session.messages.push({ role: 'user', content: turn.text })
 
     let editedThisTurn = false
     let checkFailures = 0
     let gateAttempts = 0
+    const compaction: CompactionState = { cooldownUntil: 0 }
+    // 调用签名 → 自上次成功编辑以来出现的次数
+    const repeats = new Map<string, number>()
+    let warnedStuck = false
 
-    for (let step = 0; step < MAX_STEPS; step++) {
+    for (let step = 0; step < maxSteps; step++) {
+      const compacted = await compactIfNeeded(session, { window: contextWindow, requestIndex, step, state: compaction }, signal, io)
+      if (compacted.kind === 'cancelled') return 'cancelled'
+      if (compacted.kind === 'too-large') {
+        await notice(io, 'warning', '上下文压缩后仍然太大，已停止', '最近几步的内容太多（比如一次读了很大的文件）。可以开一个新会话继续，或缩小任务范围。')
+        return 'max_tokens'
+      }
+      if (compacted.kind === 'failed') {
+        await notice(io, 'warning', '上下文压缩失败，已停止', compacted.message)
+        return 'max_tokens'
+      }
+
+      const sentChars = contextChars(session)
       const { toolCalls, inputTokens, answered } = await streamStep(session, signal, io)
       if (inputTokens > 0) {
+        session.lastContext = { inputTokens, chars: sentChars }
         await io.update({
           sessionUpdate: 'usage_update',
           used: inputTokens,
@@ -96,6 +118,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       const results: ToolResultPart[] = []
       let editedThisStep = false
       let finished = false
+      let repeated: StepToolCall | null = null
       for (const call of toolCalls) {
         // 参数不合法的调用，AI SDK 已经在返回消息里补了错误结果；再补一条会让同一调用出现两个结果
         if (answered.has(call.toolCallId)) {
@@ -118,12 +141,38 @@ export async function runTurn(session: Session, turn: { id: string; text: string
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
+          repeats.clear()
+        } else {
+          const key = callSignature(call, outcome.result)
+          const count = (repeats.get(key) ?? 0) + 1
+          repeats.set(key, count)
+          if (count >= STUCK_REPEATS) repeated = call
         }
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
 
       if (finished) return 'end_turn'
       if (signal.aborted) return 'cancelled'
+
+      if (repeated) {
+        if (warnedStuck) {
+          await notice(
+            io,
+            'warning',
+            '智能体在重复同样的操作，已停止',
+            `${describeCall(repeated)}：提醒过后又连续 ${STUCK_REPEATS} 次得到同样的结果。可以补充说明后让它继续。`,
+          )
+          return 'end_turn'
+        }
+        warnedStuck = true
+        repeats.clear()
+        session.messages.push({
+          role: 'user',
+          content:
+            `[Diffra] You made the same call ${STUCK_REPEATS} times and got the same result each time, without changing any file in between. ` +
+            'Stop repeating it: try a different approach, or call finish and explain what is blocking you.',
+        })
+      }
 
       const afterEdit = session.config.checks.afterEdit
       if (editedThisStep && afterEdit) {
@@ -147,12 +196,8 @@ export async function runTurn(session: Session, turn: { id: string; text: string
         await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
         return 'end_turn'
       }
-      if (inputTokens > contextWindow * CONTEXT_STOP_RATIO) {
-        await notice(io, 'warning', '上下文已用到 80%，已停止', '上下文压缩还没做，请开一个新会话继续。')
-        return 'max_tokens'
-      }
     }
-    await notice(io, 'warning', `已达到单次任务的步数上限（${MAX_STEPS} 步），已停止`)
+    await notice(io, 'warning', `已达到单次任务的步数上限（${maxSteps} 步），已停止`, '发消息让它继续，或在「设置 → 任务执行」里调整上限。')
     return 'max_turn_requests'
   } catch (error) {
     if (signal.aborted) return 'cancelled'
@@ -175,36 +220,47 @@ export async function takeCheckpoint(session: Session, turnId: string, io: TurnI
   }
 }
 
-function streamStep(session: Session, signal: AbortSignal, io: TurnIO) {
-  return streamModelStep(
+async function streamStep(session: Session, signal: AbortSignal, io: TurnIO) {
+  const step = await streamModelStep(
     {
       model: session.model,
       system: session.systemPrompt,
-      messages: session.messages,
+      messages: session.contextMessages(),
       tools: TOOLS,
       usage: { role: 'coder', provider: session.config.model.provider, modelId: session.config.model.modelId },
     },
     signal,
     io,
   )
+  session.messages.push(...step.responseMessages)
+  return step
+}
+
+// 同一个工具、同样的参数、同样的结果算同一个调用；结果可能很长，取哈希
+function callSignature(call: StepToolCall, result: ToolResultPart): string {
+  return createHash('sha256').update(JSON.stringify([call.toolName, call.input, result.output])).digest('hex')
+}
+
+function describeCall(call: StepToolCall): string {
+  const input = JSON.stringify(call.input)
+  return `${call.toolName} ${input.length > 120 ? `${input.slice(0, 120)}…` : input}`
 }
 
 export interface StepSettings {
   model: LanguageModel
   system: string
-  // 本次调用的回复会追加到这个数组里
   messages: ModelMessage[]
   tools: ToolSet
   toolChoice?: ToolChoice<ToolSet>
   usage: Omit<ModelCallUsage, 'usage'>
 }
 
-// 调一次模型：文字和思考实时推给界面，收集工具调用，记用量
+// 调一次模型：文字和思考实时推给界面，收集工具调用，记用量；回复的消息由调用方追加到对话里
 export async function streamModelStep(
   settings: StepSettings,
   signal: AbortSignal,
   io: TurnIO,
-): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; answered: Set<string> }> {
+): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; answered: Set<string>; responseMessages: ModelMessage[] }> {
   const result = streamText({
     model: settings.model,
     system: settings.system,
@@ -242,13 +298,12 @@ export async function streamModelStep(
     }
   }
   const responseMessages = await result.responseMessages
-  settings.messages.push(...responseMessages)
   const answered = new Set(
     responseMessages.flatMap((message) =>
       message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
     ),
   )
-  return { toolCalls, inputTokens, answered }
+  return { toolCalls, inputTokens, answered, responseMessages }
 }
 
 export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> {

@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { extname, join } from 'node:path'
-import { Lang, parse, registerDynamicLanguage, type SgRoot } from '@ast-grep/napi'
-import python from '@ast-grep/lang-python'
+import { join } from 'node:path'
+import { Lang, parse, type SgRoot } from '@ast-grep/napi'
+import { type Language, languageOf, vueScripts } from '../syntax.js'
 import { JS_RULES, JSX_RULES, PYTHON_RULES, type StaticRule } from './rules.js'
 import { scanSecrets } from './secrets.js'
 import type { AddedLines, SecurityFinding } from './types.js'
@@ -11,66 +10,6 @@ const MAX_FILE_BYTES = 1_000_000
 const MAX_FINDINGS = 40
 // 写在出问题的那一行或上一行：// diffra-allow SEC-INJ-1: 理由
 const ALLOW_COMMENT = /diffra-allow\s+(SEC-[A-Z]+-\d+)\s*[:：]\s*(\S.*?)\s*(?:\*\/|-->)?\s*$/
-
-type Language = Lang | 'python'
-
-// Python 语法是动态加载的解析器，整个进程只能注册一次；加载不了时 Python 文件只查密钥。
-// 打包后包在 app.asar 里，解析器文件被解到 app.asar.unpacked，ast-grep 用自己的原生代码加载、不认 asar 路径，
-// 找不到文件时会直接让进程崩溃（Rust panic，try/catch 接不住），所以先换成真实路径并确认文件存在
-let pythonReady: boolean | null = null
-function pythonAvailable(): boolean {
-  if (pythonReady === null) {
-    const libraryPath = python.libraryPath.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
-    if (!existsSync(libraryPath)) {
-      console.error(`[security] 找不到 Python 语法的解析器（${libraryPath}），Python 文件跳过结构检查`)
-      pythonReady = false
-      return false
-    }
-    try {
-      registerDynamicLanguage({ python: { ...python, libraryPath } })
-      pythonReady = true
-    } catch (error) {
-      console.error('[security] Python 语法加载失败，Python 文件跳过结构检查', error)
-      pythonReady = false
-    }
-  }
-  return pythonReady
-}
-
-function languageOf(path: string): Language | 'vue' | null {
-  switch (extname(path).toLowerCase()) {
-    case '.ts':
-    case '.mts':
-    case '.cts':
-      return Lang.TypeScript
-    case '.tsx':
-    case '.jsx':
-      return Lang.Tsx
-    case '.js':
-    case '.mjs':
-    case '.cjs':
-      return Lang.JavaScript
-    case '.vue':
-      return 'vue'
-    case '.py':
-      return pythonAvailable() ? 'python' : null
-    default:
-      return null
-  }
-}
-
-// Vue 单文件组件只检查 <script> 部分；记下它在文件里从哪一行开始
-function vueScripts(source: string): Array<{ code: string; lang: Language; lineOffset: number }> {
-  const blocks: Array<{ code: string; lang: Language; lineOffset: number }> = []
-  for (const match of source.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
-    const attrs = match[1] ?? ''
-    const code = match[2] ?? ''
-    const start = (match.index ?? 0) + match[0].indexOf(code)
-    const lang = /lang=["']tsx["']/.test(attrs) ? Lang.Tsx : /lang=["']ts["']/.test(attrs) ? Lang.TypeScript : Lang.JavaScript
-    blocks.push({ code, lang, lineOffset: source.slice(0, start).split('\n').length - 1 })
-  }
-  return blocks
-}
 
 function rulesFor(language: Language): StaticRule[] {
   if (language === 'python') return PYTHON_RULES

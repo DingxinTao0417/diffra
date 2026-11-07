@@ -204,6 +204,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         rules,
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
         security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan },
+        limits: { compactAtPercent: settings.get().execution.compactAtPercent, maxSteps: settings.get().execution.maxSteps },
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,

@@ -26,6 +26,7 @@ export async function buildSystemPrompt(
     '',
     'How to work:',
     '- Explore before you edit: use list_files, search and read_file. Never guess what a file contains.',
+    '- For an overview of a directory or a large file (its functions, classes and their line numbers), use outline before reading files one by one.',
     '- Read a file before editing it. Make small, focused edits with edit_file, copying old_string exactly from read_file output (without line numbers).',
     '- Only change files inside the project directory.',
     '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: you cannot read, search or edit them. If you need something from them, ask the user.',

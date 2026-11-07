@@ -16,7 +16,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'finish'; item: ToolItem }
+  | { type: 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'finish'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -29,8 +29,9 @@ const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 
 const SECURITY_TITLES = ['安全检查', '安全扫描']
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'finish' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'finish' | null {
   if (item.title === '完成') return 'finish'
+  if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
   if (SECURITY_TITLES.includes(item.title)) return 'security'
@@ -39,7 +40,7 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security'
   return null
 }
 
-// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、完成单独显示
+// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、完成单独显示
 function toBlocks(items: TranscriptItem[]): Block[] {
   const blocks: Block[] = []
   for (const item of items) {
@@ -68,6 +69,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   read_file: '读取',
   list_files: '列出',
   search: '搜索',
+  outline: '大纲',
   edit_file: '编辑',
   run_command: '执行',
 }
@@ -218,6 +220,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             return <SecurityBlock key={block.item.id} item={block.item} />
           case 'deep-scan':
             return <DeepScanReport key={block.item.id} item={block.item} task={task} />
+          case 'compaction':
+            return <CompactionRow key={block.item.id} item={block.item} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={changedFiles} projectPath={task.project} />
         }
@@ -366,6 +370,25 @@ function ToolStep({ item }: { item: ToolItem }) {
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
       </button>
       {open && output && <pre className="mt-1.5 ml-5.5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+    </div>
+  )
+}
+
+// 上下文压缩：第一行是省略和压缩的说明，展开看摘要全文
+function CompactionRow({ item }: { item: ToolItem }) {
+  const [open, setOpen] = useState(false)
+  const text = textOf(item)
+  const [headline = '', ...rest] = text.split('\n')
+  const detail = rest.join('\n').trim()
+  return (
+    <div className="text-[0.93rem]" data-testid="tool-call" data-kind="compaction" data-status={item.status}>
+      <button type="button" className="flex max-w-full items-start gap-2 text-left text-foreground/85" onClick={() => setOpen(!open)} disabled={!detail}>
+        <StatusIcon status={item.status} className="mt-1" />
+        <span className="shrink-0 text-muted-foreground">上下文压缩</span>
+        <span className="min-w-0 text-muted-foreground">{item.status === 'completed' || item.status === 'failed' ? headline : '正在压缩…'}</span>
+        {detail && (open ? <ChevronDown className="mt-1 size-3 shrink-0" /> : <ChevronRight className="mt-1 size-3 shrink-0" />)}
+      </button>
+      {open && detail && <div className="mt-1.5 ml-5.5 max-h-96 overflow-auto rounded-md bg-muted p-2.5 leading-relaxed whitespace-pre-wrap">{detail}</div>}
     </div>
   )
 }

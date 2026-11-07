@@ -111,7 +111,7 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
     for (let step = 0; step < MAX_STEPS; step++) {
       // 最后一步或上下文快满时，要求模型直接交报告
       const forceReport = step === MAX_STEPS - 1 || nearLimit
-      const { toolCalls, inputTokens, answered } = await streamModelStep(
+      const { toolCalls, inputTokens, answered, responseMessages } = await streamModelStep(
         {
           model: session.reviewModel,
           system: AUDITOR_PROMPT,
@@ -123,6 +123,7 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
         signal,
         io,
       )
+      messages.push(...responseMessages)
       nearLimit = inputTokens > contextWindow * CONTEXT_STOP_RATIO
       if (signal.aborted) return 'cancelled'
       if (toolCalls.length === 0) {

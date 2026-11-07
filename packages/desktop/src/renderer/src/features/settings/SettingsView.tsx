@@ -2,7 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
 import { ArrowLeft, Ellipsis } from 'lucide-react'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
-import { type Appearance, CONTENT_WIDTHS, FONT_SIZES, PALETTES, type SecuritySettings, THEME_MODES } from '../../../../shared/settings'
+import {
+  type Appearance,
+  COMPACT_AT_PERCENTS,
+  CONTENT_WIDTHS,
+  type ExecutionSettings,
+  FONT_SIZES,
+  MAX_STEP_OPTIONS,
+  PALETTES,
+  type SecuritySettings,
+  THEME_MODES,
+} from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { ModelSettings } from '@/features/models/ModelSettings'
@@ -31,6 +41,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'rules', label: '规范', keywords: '规则包 编码规范 审查' },
       { id: 'permissions', label: '命令权限', keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
+      { id: 'execution', label: '任务执行', keywords: '上下文 压缩 摘要 步数 上限 卡死 重复' },
     ],
   },
   {
@@ -105,6 +116,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <PermissionsSection />
     case 'security':
       return <SecuritySection />
+    case 'execution':
+      return <ExecutionSection />
     case 'storage':
       return <StorageSection />
     case 'usage':
@@ -361,6 +374,51 @@ function SecuritySection() {
       <p className="mt-4 text-sm text-muted-foreground">
         这些检查能拦下常见的问题，但不能保证没有漏洞；规则抓不到的业务逻辑问题，还要靠测试和你的审阅。
       </p>
+    </>
+  )
+}
+
+const COMPACT_OPTIONS = COMPACT_AT_PERCENTS.map((value) => ({ value: String(value), label: `${value}%` }))
+const NO_STEP_LIMIT = 'none'
+const STEP_OPTIONS = [...MAX_STEP_OPTIONS.map((value) => ({ value: String(value), label: `${value} 步` })), { value: NO_STEP_LIMIT, label: '无上限' }]
+
+function ExecutionSection() {
+  const execution = useAppState((state) => state.settings?.execution ?? null)
+  if (!execution) return null
+
+  const change = async (next: Partial<ExecutionSettings>) => {
+    const updated = { ...execution, ...next }
+    store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, execution: updated } } : state))
+    try {
+      const settings = await window.diffra.savePreferences({ execution: updated })
+      store.set((state) => ({ ...state, settings }))
+    } catch (error) {
+      store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, execution } } : state))
+      showToast(`保存失败：${errorMessage(error)}`)
+    }
+  }
+  const changeCompactAt = (value: string) => {
+    const percent = COMPACT_AT_PERCENTS.find((item) => String(item) === value)
+    if (percent) void change({ compactAtPercent: percent })
+  }
+  const changeMaxSteps = (value: string) => {
+    if (value === NO_STEP_LIMIT) return void change({ maxSteps: null })
+    const steps = MAX_STEP_OPTIONS.find((item) => String(item) === value)
+    if (steps) void change({ maxSteps: steps })
+  }
+
+  return (
+    <>
+      <Heading title="任务执行" description="所有项目共用；新建或重新打开的任务生效。" />
+      <SettingRow
+        label="上下文压缩"
+        hint="上下文用到模型窗口的这个比例时，先省略较早的工具输出，还不够再把早期对话压成摘要，然后接着做。比例越低越省 token，越高保留的原文越多。"
+      >
+        <Segmented label="上下文压缩" value={String(execution.compactAtPercent)} options={COMPACT_OPTIONS} onChange={changeCompactAt} />
+      </SettingRow>
+      <SettingRow label="单次任务步数上限" hint="模型每回复一次算一步，到了上限就停下等你发话。智能体反复做同样的操作时，不管有没有上限都会自动停下。">
+        <Segmented label="单次任务步数上限" value={execution.maxSteps === null ? NO_STEP_LIMIT : String(execution.maxSteps)} options={STEP_OPTIONS} onChange={changeMaxSteps} />
+      </SettingRow>
     </>
   )
 }

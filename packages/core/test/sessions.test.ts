@@ -63,6 +63,7 @@ function config(baseUrl: string): SessionConfig {
     rules: { packs: [], review: false },
     permissionMode: 'ask',
     security: { staticCheck: false, lightScan: false },
+    limits: { compactAtPercent: 70, maxSteps: 100 },
     checkpointDir: join(dataDir, 'checkpoints'),
   }
 }
@@ -134,6 +135,7 @@ describe('会话存储', () => {
     archived: false,
     turns: [],
     messages: [],
+    compaction: null,
   })
 
   test('索引丢了或坏了时从会话文件重建，按最近更新排序，可按项目过滤', async () => {

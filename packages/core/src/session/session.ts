@@ -5,7 +5,7 @@ import type { Checkpoints } from '../checkpoint.js'
 import { createLanguageModel } from '../models/operations.js'
 import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
-import type { SessionRecord } from './store.js'
+import type { Compaction, SessionRecord } from './store.js'
 import { TOOL_DEFINITION_CHARS } from './tools.js'
 
 // 会话标题默认取第一条提问的开头
@@ -56,6 +56,10 @@ export class Session {
   readonly turnCheckpoints = new Map<string, string>()
   // turnId → 这一轮的提问在 messages 里的位置，重新生成时从这里截断对话
   readonly messageStarts = new Map<string, number>()
+  // 上下文压缩的位置和摘要；messages 保留原文，重新生成、撤销照常按位置截断
+  compaction: Compaction | null = null
+  // 上一次模型调用的输入 token 数和当时发出去的字数，用来估算下一次调用有多大
+  lastContext: { inputTokens: number; chars: number } | null = null
   activeTurn: AbortController | null = null
 
   constructor(options: SessionOptions) {
@@ -66,6 +70,7 @@ export class Session {
     this.archived = record?.archived ?? false
     if (record) {
       this.messages.push(...record.messages)
+      this.compaction = record.compaction
       for (const { checkpoint, messageStart, ...turn } of record.turns) {
         this.turns.push(turn)
         if (checkpoint) this.turnCheckpoints.set(turn.id, checkpoint)
@@ -95,6 +100,12 @@ export class Session {
 
   get running(): boolean {
     return this.activeTurn !== null
+  }
+
+  // 发给编码模型的对话：压缩过的话，摘要代替压缩点之前的部分
+  contextMessages(): ModelMessage[] {
+    if (!this.compaction) return this.messages
+    return [{ role: 'user', content: this.compaction.summary }, ...this.messages.slice(this.compaction.upTo)]
   }
 
   get trustedCommands(): string[] {
@@ -157,6 +168,7 @@ export class Session {
         messageStart: this.messageStarts.get(turn.id) ?? null,
       })),
       messages: this.messages,
+      compaction: this.compaction,
     }
   }
 
@@ -167,7 +179,7 @@ export class Session {
       system: prompt.base,
       rules: prompt.rules,
       tools: TOOL_DEFINITION_CHARS,
-      messages: JSON.stringify(this.messages).length,
+      messages: JSON.stringify(this.contextMessages()).length,
     }
     const total = chars.system + chars.rules + chars.tools + chars.messages
     const share = (value: number) => (total > 0 ? Math.round((value / total) * used) : 0)
@@ -196,6 +208,8 @@ export class Session {
       filesRestored = true
     }
     this.messages.splice(start)
+    // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
+    if (this.compaction && this.compaction.upTo > start) this.compaction = null
     for (const turn of this.turns.splice(index)) {
       this.turnCheckpoints.delete(turn.id)
       this.messageStarts.delete(turn.id)

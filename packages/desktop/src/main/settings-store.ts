@@ -1,7 +1,18 @@
 import { join } from 'node:path'
 import { PROTOCOLS } from '@diffra/core/types'
 import { z } from 'zod'
-import { CONTENT_WIDTHS, DEFAULT_APPEARANCE, DEFAULT_SECURITY, FONT_SIZES, PALETTES, type Settings, THEME_MODES } from '../shared/settings'
+import {
+  COMPACT_AT_PERCENTS,
+  CONTENT_WIDTHS,
+  DEFAULT_APPEARANCE,
+  DEFAULT_EXECUTION,
+  DEFAULT_SECURITY,
+  FONT_SIZES,
+  MAX_STEP_OPTIONS,
+  PALETTES,
+  type Settings,
+  THEME_MODES,
+} from '../shared/settings'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
 export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1) })
@@ -60,6 +71,8 @@ export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
 export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean() })
 
+export const executionSchema = z.object({ compactAtPercent: z.literal(COMPACT_AT_PERCENTS), maxSteps: z.literal(MAX_STEP_OPTIONS).nullable() })
+
 // projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
   version: z.literal(1),
@@ -77,6 +90,8 @@ const settingsSchema = z.object({
   defaultPermissionMode: permissionModeSchema.default('ask'),
   // 第 14 步加的
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),
+  // 第 7 步加的
+  execution: executionSchema.default(() => ({ ...DEFAULT_EXECUTION })),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -88,6 +103,7 @@ const EMPTY_SETTINGS: Settings = {
   appearance: DEFAULT_APPEARANCE,
   defaultPermissionMode: 'ask',
   security: DEFAULT_SECURITY,
+  execution: DEFAULT_EXECUTION,
 }
 
 export class SettingsStore {

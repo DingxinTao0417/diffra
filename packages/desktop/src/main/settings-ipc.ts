@@ -7,7 +7,7 @@ import { type ModelRef, ROLES, type Settings, type SettingsView } from '../share
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import type { SecretStore } from './secret-store'
-import { appearanceSchema, modelRefSchema, permissionModeSchema, providerFieldsSchema, securitySchema, type SettingsStore } from './settings-store'
+import { appearanceSchema, executionSchema, modelRefSchema, permissionModeSchema, providerFieldsSchema, securitySchema, type SettingsStore } from './settings-store'
 
 const providerInputSchema = providerFieldsSchema.extend({
   id: z.string().min(1).optional(),
@@ -28,7 +28,7 @@ export async function providerEndpoint(
 
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
-    const { providers, roles, appearance, defaultPermissionMode, security } = settings.get()
+    const { providers, roles, appearance, defaultPermissionMode, security, execution } = settings.get()
     return {
       providers: await Promise.all(
         providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -37,6 +37,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       appearance,
       defaultPermissionMode,
       security,
+      execution,
       loadError: settings.loadError ?? secrets.loadError,
     }
   }
@@ -47,7 +48,12 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
 
   ipcMain.handle(IPC_CHANNELS.preferencesSave, async (_event, raw: unknown) => {
     const change = parse(
-      z.object({ appearance: appearanceSchema.optional(), defaultPermissionMode: permissionModeSchema.optional(), security: securitySchema.optional() }),
+      z.object({
+        appearance: appearanceSchema.optional(),
+        defaultPermissionMode: permissionModeSchema.optional(),
+        security: securitySchema.optional(),
+        execution: executionSchema.optional(),
+      }),
       raw,
     )
     await settings.update((current) => ({ ...current, ...change }))

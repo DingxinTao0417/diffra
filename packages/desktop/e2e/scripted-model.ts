@@ -1,10 +1,11 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-// 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复
+// 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复；
+// promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满
 export type ScriptStep =
-  | { toolCalls: Array<{ name: string; input: unknown }>; text?: string; delayMs?: number }
-  | { text: string; delayMs?: number }
+  | { toolCalls: Array<{ name: string; input: unknown }>; text?: string; delayMs?: number; promptTokens?: number }
+  | { text: string; delayMs?: number; promptTokens?: number }
 
 export interface ScriptedModel {
   baseUrl: string
@@ -63,7 +64,8 @@ export async function startScriptedModel(steps: ScriptStep[], options: { securit
 
 function chunksFor(step: ScriptStep, index: number): unknown[] {
   const base = { id: `chatcmpl-${index}`, object: 'chat.completion.chunk', created: 1, model: 'scripted' }
-  const usage = { prompt_tokens: 1200, completion_tokens: 20, total_tokens: 1220 }
+  const promptTokens = step.promptTokens ?? 1200
+  const usage = { prompt_tokens: promptTokens, completion_tokens: 20, total_tokens: promptTokens + 20 }
   const textChunks = step.text ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: step.text }, finish_reason: null }] }] : []
   if (!('toolCalls' in step)) {
     return [...textChunks, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]

@@ -3,6 +3,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import { runCommandTool } from '../tools/command.js'
 import { editFileTool, listFilesTool, readFileTool, searchTool } from '../tools/files.js'
+import { outlineTool } from '../tools/outline.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 
 const pathField = z.string().describe('Path relative to the project directory')
@@ -13,6 +14,7 @@ const readFileInput = z.object({
   limit: z.number().int().positive().optional().describe('Maximum number of lines to return (default 400)'),
 })
 const listFilesInput = z.object({ path: pathField.optional().describe('Directory to list (default: project root)') })
+const outlineInput = z.object({ path: pathField.optional().describe('File or directory to outline (default: project root)') })
 const searchInput = z.object({
   pattern: z.string().describe('Regular expression to search for (plain text when literal is true)'),
   path: pathField.optional().describe('File or directory to search in (default: project root)'),
@@ -44,6 +46,12 @@ export const TOOLS = {
     description: 'Search file contents with ripgrep. Returns matching lines with file paths and line numbers.',
     inputSchema: searchInput,
   }),
+  outline: tool({
+    description:
+      'List the functions, classes, methods, interfaces and types defined in a file, or in every source file under a directory, ' +
+      'with line numbers. Supports TypeScript, JavaScript, Vue and Python. Use it for an overview before reading files one by one.',
+    inputSchema: outlineInput,
+  }),
   edit_file: tool({
     description:
       'Replace text in a file, or create a new file by passing an empty old_string. old_string must match exactly one place ' +
@@ -68,6 +76,7 @@ export const TOOL_KINDS: Record<ToolName, ToolKind> = {
   read_file: 'read',
   list_files: 'search',
   search: 'search',
+  outline: 'read',
   edit_file: 'edit',
   run_command: 'execute',
   finish: 'other',
@@ -86,6 +95,8 @@ export function executeTool(name: Exclude<ToolName, 'finish'>, input: unknown, c
       return listFilesTool(context, parseInput(listFilesInput, input))
     case 'search':
       return searchTool(context, parseInput(searchInput, input))
+    case 'outline':
+      return outlineTool(context, parseInput(outlineInput, input))
     case 'edit_file':
       return editFileTool(context, parseInput(editFileInput, input))
     case 'run_command':

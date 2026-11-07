@@ -18,7 +18,7 @@ import type {
   UsageQuery,
   UsageSummary,
 } from '@diffra/core/types'
-import type { Appearance, ModelRef, ProjectRuleSettings, ProviderInput, Role, SecuritySettings, SettingsView } from './settings'
+import type { Appearance, ExecutionSettings, ModelRef, ProjectRuleSettings, ProviderInput, Role, SecuritySettings, SettingsView } from './settings'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -180,7 +180,12 @@ export interface DiffraApi {
   killTerminal(id: string): Promise<void>
   onTerminalData(listener: (event: { id: string; data: string }) => void): () => void
   onTerminalExit(listener: (event: { id: string; exitCode: number }) => void): () => void
-  savePreferences(change: { appearance?: Appearance; defaultPermissionMode?: PermissionMode; security?: SecuritySettings }): Promise<SettingsView>
+  savePreferences(change: {
+    appearance?: Appearance
+    defaultPermissionMode?: PermissionMode
+    security?: SecuritySettings
+    execution?: ExecutionSettings
+  }): Promise<SettingsView>
   // 只打开 http(s) 链接
   openExternal(url: string): Promise<void>
   // 不给项目就列出所有项目的任务

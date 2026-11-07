@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { SessionUpdate } from '@diffra/core/types'
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
-const CARD_TITLES = new Set(['完成', '规范审查', '安全检查', '安全扫描', '深度扫描报告'])
+const CARD_TITLES = new Set(['完成', '规范审查', '安全检查', '安全扫描', '深度扫描报告', '上下文压缩'])
 // 安全卡片、深度扫描报告的一行：级别  规则号  路径:行号  说明
 const FINDING_LINE = /^(高危|提醒|已放行) {2}(\S+) {2}(\S+):(\d+) {2}(.+)$/
 
@@ -17,7 +17,7 @@ export interface Finding {
 }
 
 export interface TurnMetrics {
-  // 智能体自己调用的工具（读、搜、改、命令），不含检查和各种卡片
+  // 智能体自己调用的工具（读、搜、改、命令），不含检查和各种卡片（包括上下文压缩）
   toolCalls: number
   // 「完成」被门禁打回的次数
   gateRejections: number

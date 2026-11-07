@@ -67,6 +67,8 @@ export function sessionConfig(
     // 评测里没人点确认：普通命令自动执行，剩下要确认的按题目的权限策略答
     permissionMode: 'auto',
     security: options.security,
+    // 和应用设置的默认值一致
+    limits: { compactAtPercent: 70, maxSteps: 100 },
     checkpointDir: options.checkpointDir,
   }
 }

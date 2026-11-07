@@ -17,6 +17,12 @@ export interface StoredTurnRecord extends StoredTurn {
   messageStart: number | null
 }
 
+// 上下文压缩：发给模型的是 summary 这条消息加上 messages[upTo..]，messages 本身保留原文
+export interface Compaction {
+  upTo: number
+  summary: string
+}
+
 // 一个会话一个文件，每轮开始和结束时整体重写。不存模型接入点和密钥，加载时用当时的设置
 export interface SessionRecord {
   version: 1
@@ -28,6 +34,7 @@ export interface SessionRecord {
   archived: boolean
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
+  compaction: Compaction | null
 }
 
 export interface SessionIndexEntry {
@@ -74,6 +81,8 @@ const recordSchema = z.object({
     }),
   ),
   messages: z.array(z.unknown()),
+  // 第 7 步加的，旧记录没有压缩过
+  compaction: z.object({ upTo: z.number().int().nonnegative(), summary: z.string() }).nullable().default(null),
 })
 
 const sameDir = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)

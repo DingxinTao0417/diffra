@@ -4,7 +4,7 @@ import type { PermissionRequestEvent } from '../../../shared/ipc'
 import type { SettingsView } from '../../../shared/settings'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'rules' | 'permissions' | 'security' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'rules' | 'permissions' | 'security' | 'execution' | 'storage' | 'usage' | 'about'
 
 export type Route =
   | { name: 'home'; project: string | null }
