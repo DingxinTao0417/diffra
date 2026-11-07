@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
 import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
+import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
@@ -88,24 +90,38 @@ function TaskPage({ task }: { task: LiveTask }) {
           {task.title}
         </span>
         <TaskMenu sessionId={task.sessionId} title={task.title} project={task.project} archived={archived}>
-          <button type="button" aria-label="任务菜单" className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
+          <Button variant="ghost" size="icon-sm" aria-label="任务菜单" className="text-muted-foreground">
             <Ellipsis className="size-4" />
-          </button>
+          </Button>
         </TaskMenu>
         <StatusLabel status={status} />
         <div className="flex-1" />
-        <IconButton label="终端 Ctrl+`" active={terminalOpen} onClick={() => toggleTerminalPanel(task.project)}>
-          <SquareTerminal className="size-4" />
-        </IconButton>
-        <IconButton label="浏览器" active={panel === 'browser'} onClick={() => togglePanel('browser')}>
-          <Globe className="size-4" />
-        </IconButton>
-        <IconButton label="审阅改动" active={panel === 'review'} onClick={() => togglePanel('review')}>
-          <FileDiff className="size-4" />
-        </IconButton>
-        <IconButton label="任务监控" active={panel === 'monitor'} onClick={() => togglePanel('monitor')}>
-          <PanelRight className="size-4" />
-        </IconButton>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="终端 Ctrl+`"
+              aria-pressed={terminalOpen}
+              className={cn('text-muted-foreground', terminalOpen && 'bg-accent text-foreground hover:bg-accent dark:hover:bg-accent')}
+              onClick={() => toggleTerminalPanel(task.project)}
+            >
+              <SquareTerminal className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            终端 <Kbd>Ctrl+`</Kbd>
+          </TooltipContent>
+        </Tooltip>
+        <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+        {/* 三个右侧面板互斥，做成一组；终端是独立开关，放在分隔线另一侧 */}
+        <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
+          {PANEL_BUTTONS.map((item) => (
+            <PanelButton key={item.panel} label={item.label} active={panel === item.panel} onClick={() => togglePanel(item.panel)}>
+              <item.icon className="size-4" />
+            </PanelButton>
+          ))}
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -209,19 +225,26 @@ function StatusIndicator({ tone }: { tone: TaskStatus['tone'] }) {
   return dot && <span className={cn('shrink-0 rounded-full', dot)} />
 }
 
-function IconButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick(): void; children: React.ReactNode }) {
+const PANEL_BUTTONS = [
+  { panel: 'browser', label: '浏览器', icon: Globe },
+  { panel: 'review', label: '审阅改动', icon: FileDiff },
+  { panel: 'monitor', label: '任务监控', icon: PanelRight },
+] as const
+
+function PanelButton({ label, active, onClick, children }: { label: string; active: boolean; onClick(): void; children: React.ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label={label}
           aria-pressed={active}
           onClick={onClick}
-          className={cn('flex size-7.5 items-center justify-center rounded-md text-foreground/80 hover:bg-muted', active && 'bg-accent text-foreground')}
+          className={cn('rounded-sm', active ? 'bg-background text-foreground shadow-xs ring-1 ring-border hover:bg-background dark:bg-accent dark:hover:bg-accent' : 'text-muted-foreground hover:bg-transparent dark:hover:bg-transparent')}
         >
           {children}
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

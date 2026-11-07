@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Undo2 } from 'lucide-react'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DiffCounts } from '@/features/session/DiffView'
 import { DiffLines } from '@/features/session/DiffLines'
 import type { FileDiff } from '@/lib/unified-diff'
-import { type LiveTask, store } from '@/state/store'
+import type { LiveTask } from '@/state/store'
+import { SidePanel } from './SidePanel'
 import { type TaskDiff, useTaskDiff } from './useTaskDiff'
 
 interface ReviewPanelProps {
@@ -24,43 +25,50 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
 
   return (
-    <aside className="flex w-[min(52%,760px)] min-w-96 shrink-0 flex-col border-l" data-testid="review-panel">
-      <div className="flex flex-wrap items-center gap-2.5 border-b px-4 py-2.5 text-sm">
-        <span className="font-semibold">审阅</span>
-        <select
-          aria-label="审阅范围"
-          className="h-7 rounded-md border bg-background px-2 text-sm"
-          value={sinceTurnId ?? ''}
-          onChange={(event) => setSince(event.target.value)}
+    <SidePanel
+      width="wide"
+      testId="review-panel"
+      title="审阅"
+      controls={
+        <>
+          <select
+            aria-label="审阅范围"
+            className="h-7 min-w-0 rounded-md border bg-background px-2 text-sm"
+            value={sinceTurnId ?? ''}
+            onChange={(event) => setSince(event.target.value)}
+          >
+            {task.turns.map((turn, index) => (
+              <option key={turn.id} value={turn.id}>
+                {index === 0 ? `整个任务（${task.turns.length} 轮）` : `第 ${index + 1} 轮起`}
+              </option>
+            ))}
+          </select>
+          {diff?.state === 'ready' && (
+            <span className="hidden shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground @lg:flex">
+              {files.length} 个文件 <DiffCounts added={added} removed={removed} />
+            </span>
+          )}
+        </>
+      }
+      actions={
+        <Button
+          size="sm"
+          variant="ghost"
+          title="撤销这些改动"
+          className="text-destructive hover:bg-destructive-soft hover:text-destructive disabled:text-muted-foreground"
+          disabled={task.running || files.length === 0 || !sinceTurnId}
+          onClick={() => sinceTurnId && onRestore(sinceTurnId)}
         >
-          {task.turns.map((turn, index) => (
-            <option key={turn.id} value={turn.id}>
-              {index === 0 ? `整个任务（${task.turns.length} 轮）` : `第 ${index + 1} 轮起`}
-            </option>
-          ))}
-        </select>
-        {diff?.state === 'ready' && (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            {files.length} 个文件 <DiffCounts added={added} removed={removed} />
-          </span>
-        )}
-        <div className="flex-1" />
-        <Button size="sm" variant="outline" disabled={task.running || files.length === 0 || !sinceTurnId} onClick={() => sinceTurnId && onRestore(sinceTurnId)}>
-          撤销这些改动
+          <Undo2 />
+          {/* 面板最窄时只留图标，可访问名称不变 */}
+          <span className="sr-only @md:not-sr-only">撤销这些改动</span>
         </Button>
-        <button
-          type="button"
-          aria-label="关闭审阅"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-          onClick={() => store.set((state) => ({ ...state, panel: 'monitor' }))}
-        >
-          <X className="size-4" />
-        </button>
-      </div>
+      }
+    >
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <ReviewBody task={task} diff={diff} files={files} />
       </div>
-    </aside>
+    </SidePanel>
   )
 }
 

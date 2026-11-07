@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ArrowUpRight, ChevronRight, CircleCheck, CircleDashed, CircleX, Info } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { DiffCounts } from '@/features/session/DiffView'
@@ -6,9 +7,11 @@ import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { taskStatus } from '@/lib/task-status'
 import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
+import { SidePanel } from './SidePanel'
 import type { TaskDiff } from './useTaskDiff'
 
 const COLLAPSED_CHANGED_FILE_LIMIT = 10
@@ -25,139 +28,217 @@ interface MonitorPanelProps {
 
 export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan }: MonitorPanelProps) {
   const [editing, setEditing] = useState(false)
+  const [configOpen, setConfigOpen] = useState(false)
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const mcp = useMcpStatus({ sessionId: task.sessionId })
   const status = taskStatus(task).label
   const checks = project?.checks
+  const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
+  const mcpFailed = mcp.statuses?.some((server) => server.state === 'failed') ?? false
+  const configProblems = [mcpFailed ? 'MCP 连接失败' : null, task.info.bashPath ? null : '没找到 Git Bash'].filter((item) => item !== null)
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col gap-4.5 overflow-y-auto border-l bg-sidebar/50 p-4 text-sm" data-testid="monitor-panel">
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">任务监控</span>
-        <span className="text-xs text-muted-foreground">
+    <SidePanel
+      width="narrow"
+      testId="monitor-panel"
+      title="任务监控"
+      controls={
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
           {task.turns.length} 轮 · {status}
         </span>
-      </div>
-
-      {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
-      {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
-        <Section title="完成条件">
-          {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
-          {task.progress.requirements.map((item) => (
-            <Row key={item.id} dot={item.receiptId ? 'ok' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
-          ))}
-        </Section>
-      )}
-
-      <Section title="模型">
-        <Row label="编码" value={task.modelLabel} />
-        <Row label="规划" value={task.planLabel ?? '同编码模型'} />
-        <Row label="兜底" value={task.fallbackLabel ?? '未设置'} />
-        <LinkButton onClick={() => openSettings('models')}>模型与角色</LinkButton>
-      </Section>
-
-      <Section title="检查">
-        {checks && (
-          <>
-            <Row dot={checks.afterEdit ? 'ok' : 'off'} label="快速检查" value={checks.afterEdit ?? '未配置'} mono={!!checks.afterEdit} />
-            <Row
-              dot={checks.beforeFinish || checks.afterEdit ? 'ok' : 'off'}
-              label="完成检查"
-              value={checks.beforeFinish ?? (checks.afterEdit ? '同快速检查' : '未配置')}
-              mono={!!checks.beforeFinish}
-            />
-          </>
+      }
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-sm [scrollbar-gutter:stable] [&>section+section]:border-t [&>section+section]:pt-3">
+        {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
+        {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
+          <Section title="完成条件">
+            {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
+            {task.progress.requirements.map((item) => (
+              <Row key={item.id} status={item.receiptId ? 'ok' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
+            ))}
+          </Section>
         )}
-        <LinkButton onClick={() => setEditing(true)}>编辑检查命令</LinkButton>
-      </Section>
 
-      <Section
-        title={diff?.state === 'ready' ? `本任务改动 · ${diff.files.length} 个文件` : '本任务改动'}
-        action={task.info.checkpoints ? <LinkButton onClick={() => store.set((state) => ({ ...state, panel: 'review' }))}>审阅</LinkButton> : undefined}
-      >
-        {!task.info.checkpoints && <p className="text-muted-foreground">检查点不可用（需要 Git），看不到改动汇总</p>}
-        {diff?.state === 'loading' && <p className="text-muted-foreground">正在读取…</p>}
-        {diff?.state === 'error' && <p className="text-destructive">{diff.message}</p>}
-        {diff?.state === 'ready' && diff.files.length === 0 && <p className="text-muted-foreground">还没有改动文件</p>}
-        {diff?.state === 'ready' &&
-          diff.files.slice(0, filesExpanded ? diff.files.length : COLLAPSED_CHANGED_FILE_LIMIT).map((file) => (
-            <div key={file.path} className="flex items-center gap-2" data-testid="monitor-file">
-              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.path}>
-                {file.path}
-              </span>
-              {file.binary ? <span className="text-xs text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
+        <Section
+          title={diff?.state === 'ready' ? `本任务改动 · ${diff.files.length} 个文件` : '本任务改动'}
+          action={task.info.checkpoints ? <SectionAction onClick={openReview}>审阅</SectionAction> : undefined}
+        >
+          {!task.info.checkpoints && <p className="text-muted-foreground">检查点不可用（需要 Git），看不到改动汇总</p>}
+          {diff?.state === 'loading' && <p className="text-muted-foreground">正在读取…</p>}
+          {diff?.state === 'error' && <p className="text-destructive">{diff.message}</p>}
+          {diff?.state === 'ready' && diff.files.length === 0 && <p className="text-muted-foreground">还没有改动文件</p>}
+          {diff?.state === 'ready' && diff.files.length > 0 && (
+            <div className="flex flex-col">
+              {diff.files.slice(0, filesExpanded ? diff.files.length : COLLAPSED_CHANGED_FILE_LIMIT).map((file) => {
+                const nameStart = file.path.lastIndexOf('/') + 1
+                return (
+                  <button
+                    key={file.path}
+                    type="button"
+                    title={file.path}
+                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="monitor-file"
+                    onClick={openReview}
+                  >
+                    <span className="flex min-w-0 flex-1">
+                      {/* 目录从左侧截断，文件名始终可见；bdi 防止 rtl 把末尾的斜杠挪到左边 */}
+                      <span className="min-w-0 truncate text-muted-foreground [direction:rtl]">
+                        <bdi dir="ltr">{file.path.slice(0, nameStart)}</bdi>
+                      </span>
+                      <span className="max-w-full shrink-0 truncate text-foreground">{file.path.slice(nameStart)}</span>
+                    </span>
+                    {file.binary ? <span className="shrink-0 text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
+                  </button>
+                )
+              })}
             </div>
-          ))}
-        {diff?.state === 'ready' && diff.files.length > COLLAPSED_CHANGED_FILE_LIMIT && (
+          )}
+          {diff?.state === 'ready' && diff.files.length > COLLAPSED_CHANGED_FILE_LIMIT && (
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-expanded={filesExpanded}
+              className="-mx-2 self-start text-muted-foreground"
+              onClick={() => setExpandedSessionId(filesExpanded ? null : task.sessionId)}
+            >
+              {filesExpanded ? '收起改动列表' : `展开全部（剩余 ${diff.files.length - COLLAPSED_CHANGED_FILE_LIMIT} 个）`}
+            </Button>
+          )}
+        </Section>
+
+        <Section title="检查" action={<SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
+          {checks && (
+            <>
+              <Row status={checks.afterEdit ? 'ok' : 'off'} label="快速检查" value={checks.afterEdit ?? '未配置'} mono={!!checks.afterEdit} />
+              <Row
+                status={checks.beforeFinish || checks.afterEdit ? 'ok' : 'off'}
+                label="完成检查"
+                value={checks.beforeFinish ?? (checks.afterEdit ? '同快速检查' : '未配置')}
+                mono={!!checks.beforeFinish}
+              />
+            </>
+          )}
+        </Section>
+
+        <Section
+          title="安全"
+          action={
+            <SectionAction settings onClick={() => openSettings('security')}>
+              安全设置
+            </SectionAction>
+          }
+        >
+          <Row status={task.info.security.staticCheck ? 'ok' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
+          <Row status={task.info.security.lightScan ? 'ok' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
+        </Section>
+
+        <Section title="规范">
+          <Row status="ok" label="完成前规范审查已开" />
+          <div className="flex gap-2">
+            <span className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
+              {task.info.rulePacks.length > 0 ? task.info.rulePacks.join('、') : '没有选中的规则包'}
+            </span>
+          </div>
+        </Section>
+
+        {deepScanEnabled && (
+          <Section
+            title="深度扫描"
+            hint="只读地跨文件追踪数据流，出一份报告，勾选后交给智能体修复。"
+            action={
+              <>
+                <SectionAction disabled={task.running || task.turns.length === 0} onClick={() => onDeepScan('task')}>
+                  扫描本任务改动
+                </SectionAction>
+                <SectionAction disabled={task.running} onClick={() => onDeepScan('project')}>
+                  扫描整个项目
+                </SectionAction>
+              </>
+            }
+          />
+        )}
+
+        <section className="flex flex-col gap-3">
           <button
             type="button"
-            aria-expanded={filesExpanded}
-            className="self-start text-xs text-primary hover:underline"
-            onClick={() => setExpandedSessionId(filesExpanded ? null : task.sessionId)}
+            aria-expanded={configOpen}
+            className="-mx-1.5 flex flex-col gap-1 rounded-md px-1.5 py-1 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setConfigOpen(!configOpen)}
           >
-            {filesExpanded ? '收起改动列表' : `展开全部（剩余 ${diff.files.length - COLLAPSED_CHANGED_FILE_LIMIT} 个）`}
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', configOpen && 'rotate-90')} />
+              任务配置
+            </span>
+            {!configOpen && (
+              <span className="truncate pl-5.5 text-muted-foreground">
+                {task.modelLabel} · {branch ?? '不是 Git 仓库'}
+                {configProblems.map((problem) => (
+                  <span key={problem} className="text-destructive">
+                    {' · '}
+                    {problem}
+                  </span>
+                ))}
+              </span>
+            )}
           </button>
-        )}
-      </Section>
 
-      <Section title="规范">
-        <div data-testid="monitor-rule-packs">{task.info.rulePacks.length > 0 ? task.info.rulePacks.join('、') : '没有选中的规则包'}</div>
-        <Row dot="ok" label="完成前规范审查已开" />
-      </Section>
+          {/* 折叠只用 CSS 隐藏，内容留在 DOM 里，e2e 的 toContainText 仍能读到 */}
+          <div className={cn('flex flex-col gap-4', !configOpen && 'hidden')}>
+            <Section
+              title="模型"
+              action={
+                <SectionAction settings onClick={() => openSettings('models')}>
+                  模型与角色
+                </SectionAction>
+              }
+            >
+              <Row label="编码" value={task.modelLabel} />
+              <Row label="规划" value={task.planLabel ?? '同编码模型'} />
+              <Row label="兜底" value={task.fallbackLabel ?? '未设置'} />
+            </Section>
 
-      <Section title="安全">
-        <Row dot={task.info.security.staticCheck ? 'ok' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
-        <Row dot={task.info.security.lightScan ? 'ok' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
-        <LinkButton onClick={() => openSettings('security')}>安全设置</LinkButton>
-      </Section>
+            {mcp.statuses && mcp.statuses.length > 0 && (
+              <Section
+                title="MCP"
+                action={
+                  <>
+                    {mcpFailed && <SectionAction onClick={mcp.retry}>重新连接</SectionAction>}
+                    <SectionAction settings onClick={() => openSettings('mcp')}>
+                      MCP 设置
+                    </SectionAction>
+                  </>
+                }
+              >
+                {mcp.statuses.map((server) => (
+                  <Row
+                    key={server.name}
+                    status={server.state === 'connected' ? 'ok' : 'bad'}
+                    label={server.name}
+                    value={server.state === 'connected' ? `${server.tools.length} 个工具` : '连接失败'}
+                  />
+                ))}
+              </Section>
+            )}
 
-      {mcp.statuses && mcp.statuses.length > 0 && (
-        <Section title="MCP">
-          {mcp.statuses.map((server) => (
-            <Row
-              key={server.name}
-              dot={server.state === 'connected' ? 'ok' : 'off'}
-              label={server.name}
-              value={server.state === 'connected' ? `${server.tools.length} 个工具` : '连接失败'}
-              tone={server.state === 'connected' ? undefined : 'bad'}
-            />
-          ))}
-          <div className="flex gap-3">
-            {mcp.statuses.some((server) => server.state === 'failed') && <LinkButton onClick={mcp.retry}>重新连接</LinkButton>}
-            <LinkButton onClick={() => openSettings('mcp')}>MCP 设置</LinkButton>
+            <Section title="项目保护">
+              <Row label="禁止修改的目录" value={project && project.readOnlyPaths.length > 0 ? project.readOnlyPaths.join(', ') : '无'} mono={!!project?.readOnlyPaths.length} />
+              <Row status="ok" label="密钥文件" value="不读进模型" title=".env、私钥等密钥文件不会读进模型" />
+            </Section>
+
+            <Section title="环境">
+              <Row label="分支" value={branch ?? '不是 Git 仓库'} />
+              <Row status={task.info.checkpoints ? 'ok' : 'bad'} label="检查点" value={task.info.checkpoints ? '可撤销' : '不可用（需要 Git）'} />
+              <Row status={task.info.bashPath ? 'ok' : 'bad'} label="命令执行" value={task.info.bashPath ? 'Git Bash' : '没找到 Git Bash'} />
+            </Section>
           </div>
-        </Section>
-      )}
+        </section>
 
-      {deepScanEnabled && (
-        <Section title="深度扫描">
-          <div className="text-xs leading-relaxed text-muted-foreground">只读地跨文件追踪数据流，出一份报告，勾选后交给智能体修复。</div>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={task.running || task.turns.length === 0} onClick={() => onDeepScan('task')}>
-              扫描本任务改动
-            </Button>
-            <Button size="sm" variant="outline" disabled={task.running} onClick={() => onDeepScan('project')}>
-              扫描整个项目
-            </Button>
-          </div>
-        </Section>
-      )}
-
-      <Section title="项目保护">
-        <Row label="禁止修改的目录" value={project && project.readOnlyPaths.length > 0 ? project.readOnlyPaths.join(', ') : '无'} mono={!!project?.readOnlyPaths.length} />
-        <div className="text-foreground/80">.env、私钥等密钥文件不会读进模型</div>
-      </Section>
-
-      <Section title="环境">
-        <Row label="分支" value={branch ?? '不是 Git 仓库'} />
-        <Row label="检查点" value={task.info.checkpoints ? '可撤销' : '不可用（需要 Git）'} tone={task.info.checkpoints ? 'ok' : 'bad'} />
-        <Row label="命令执行" value={task.info.bashPath ? 'Git Bash' : '没找到 Git Bash'} tone={task.info.bashPath ? undefined : 'bad'} />
-      </Section>
-
-      <ProjectSettingsDialog project={project} open={editing} onClose={() => setEditing(false)} onSaved={onProjectSaved} />
-    </aside>
+        <ProjectSettingsDialog project={project} open={editing} onClose={() => setEditing(false)} onSaved={onProjectSaved} />
+      </div>
+    </SidePanel>
   )
 }
 
@@ -190,32 +271,50 @@ export function DeepScanDialog({ sessionId, scope, onClose }: { sessionId: strin
   )
 }
 
-function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Section({ title, hint, action, children }: { title: string; hint?: string; action?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex items-center">
-        <span className="flex-1 text-xs text-muted-foreground">{title}</span>
-        {action}
+      <div className="flex min-h-6 items-center gap-1">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">{title}</span>
+        {hint && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`${title}说明`}
+                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Info className="size-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-60">{hint}</TooltipContent>
+          </Tooltip>
+        )}
+        <div className="-mr-2 ml-auto flex shrink-0 items-center">{action}</div>
       </div>
       {children}
     </section>
   )
 }
 
-function Row({ dot, label, value, mono, tone }: { dot?: 'ok' | 'off'; label: string; value?: string; mono?: boolean; tone?: 'ok' | 'bad' }) {
+const STATUS_ICONS = {
+  ok: <CircleCheck className="size-3.5 shrink-0 text-success" />,
+  off: <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />,
+  bad: <CircleX className="size-3.5 shrink-0 text-destructive" />,
+}
+
+// 每行都留 14px 图标槽，有无状态图标的行标签都对齐
+function Row({ status, label, value, mono, title }: { status?: keyof typeof STATUS_ICONS; label: string; value?: string; mono?: boolean; title?: string }) {
   return (
-    <div className="flex items-center gap-2">
-      {dot && <span className={cn('size-1.75 shrink-0 rounded-full', dot === 'ok' ? 'bg-success' : 'bg-muted-foreground/40')} />}
-      <span className="flex-1">{label}</span>
+    <div className="flex items-center gap-2" title={title}>
+      {status ? STATUS_ICONS[status] : <span className="size-3.5 shrink-0" />}
+      <span className="min-w-0 flex-1 truncate text-foreground/90" title={title ? undefined : label}>
+        {label}
+      </span>
       {value && (
         <span
-          className={cn(
-            'max-w-40 truncate',
-            mono ? 'font-mono text-xs' : 'text-muted-foreground',
-            tone === 'ok' && 'text-success',
-            tone === 'bad' && 'text-destructive',
-          )}
-          title={value}
+          className={cn('min-w-0 max-w-[60%] truncate text-right', mono ? 'font-mono text-xs' : 'text-muted-foreground', status === 'bad' && 'text-destructive')}
+          title={title ? undefined : value}
         >
           {value}
         </span>
@@ -224,10 +323,11 @@ function Row({ dot, label, value, mono, tone }: { dot?: 'ok' | 'off'; label: str
   )
 }
 
-function LinkButton({ onClick, children }: { onClick(): void; children: React.ReactNode }) {
+function SectionAction({ settings, disabled, onClick, children }: { settings?: boolean; disabled?: boolean; onClick(): void; children: React.ReactNode }) {
   return (
-    <button type="button" className="self-start text-xs text-primary hover:underline" onClick={onClick}>
+    <Button variant="ghost" size="xs" disabled={disabled} className="text-foreground/80 hover:text-foreground" onClick={onClick}>
       {children}
-    </button>
+      {settings && <ArrowUpRight data-icon="inline-end" />}
+    </Button>
   )
 }
