@@ -1,3 +1,4 @@
+import { redactTerminalOutput, TERMINAL_ATTACHMENT_MAX_CHARS, TERMINAL_DEFAULT_LINES } from '../../../../shared/terminal-output'
 import { FitAddon } from '@xterm/addon-fit'
 import { type ITheme, Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
@@ -83,6 +84,17 @@ export function attachTerminal(id: string, host: HTMLElement): void {
   }
   fitTerminal(id)
   view.term.focus()
+}
+
+export function terminalAttachment(id: string): string {
+  const term = views.get(id)?.term
+  if (!term) return ''
+  const selection = term.getSelection()
+  if (selection) return redactTerminalOutput(selection.slice(-TERMINAL_ATTACHMENT_MAX_CHARS))
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  for (let index = Math.max(0, buffer.length - TERMINAL_DEFAULT_LINES); index < buffer.length; index++) lines.push(buffer.getLine(index)?.translateToString(true) ?? '')
+  return redactTerminalOutput(lines.join('\n').trim().slice(-TERMINAL_ATTACHMENT_MAX_CHARS))
 }
 
 export function fitTerminal(id: string): void {

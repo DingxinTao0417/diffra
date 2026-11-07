@@ -20,7 +20,7 @@ import { imageUrl, MAX_PROMPT_IMAGES, prepareImage } from '@/lib/images'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
 import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
-import { showToast, useAppState } from '@/state/store'
+import { showToast, store, useAppState } from '@/state/store'
 
 // 斜杠菜单里由页面提供的命令，比如任务页的深度扫描
 export interface ComposerCommand {
@@ -114,6 +114,15 @@ export function Composer(props: ComposerProps) {
   const [dismissed, setDismissed] = useState<number | null>(null)
   const [active, setActive] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const attachment = useAppState((state) => state.terminalAttachment)
+  useEffect(() => {
+    if (!attachment) return
+    const target = props.mcpTarget && 'sessionId' in props.mcpTarget ? props.mcpTarget.sessionId : 'home'
+    if (attachment.target !== target) return
+    setDraft((current) => current + attachment.text)
+    store.set((state) => ({ ...state, terminalAttachment: undefined }))
+    textareaRef.current?.focus()
+  }, [attachment, props.mcpTarget])
   const listRef = useRef<HTMLDivElement>(null)
   // 选完菜单项后光标要放回的位置；输入框内容更新后立刻放，晚了会和接着输入的字抢
   const pendingCaret = useRef<number | null>(null)

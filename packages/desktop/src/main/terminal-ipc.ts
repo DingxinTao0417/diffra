@@ -7,6 +7,7 @@ import { type IPty, spawn } from 'node-pty'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { parse } from './ipc-input'
+import { redactTerminalOutput, TERMINAL_MAX_LINES } from '../shared/terminal-output'
 
 // 同时开着的终端上限，防止界面出错时不停地开进程
 const MAX_TERMINALS = 8
@@ -15,6 +16,7 @@ const sizeSchema = z.object({ cols: z.number().int().min(2).max(1000), rows: z.n
 const idSchema = z.string().min(1)
 
 interface TerminalEntry {
+  cwd: string
   pty: IPty
   owner: WebContents
   // 开发服务器的终端留着最近的输出（去掉颜色控制符），给智能体看
@@ -66,7 +68,6 @@ async function openTerminal(
   cwd: string,
   shell: { file: string; args: string[] },
   size: { cols: number; rows: number },
-  keepOutput: boolean,
 ): Promise<string> {
   if (!(await stat(cwd).catch(() => null))?.isDirectory()) throw new Error(`目录不存在：${cwd}`)
   if (terminals.size >= MAX_TERMINALS) throw new Error(`最多同时开 ${MAX_TERMINALS} 个终端，先关掉几个`)
@@ -80,7 +81,7 @@ async function openTerminal(
   }
   const pty = spawn(shell.file, shell.args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: process.env })
   const id = randomUUID()
-  const entry: TerminalEntry = { pty, owner, output: keepOutput ? '' : null, exited: false }
+  const entry: TerminalEntry = { cwd, pty, owner, output: '', exited: false }
   terminals.set(id, entry)
   pty.onData((data) => {
     if (entry.output !== null) entry.output = (entry.output + data.replace(ANSI, '')).slice(-MAX_OUTPUT_CHARS)
@@ -103,6 +104,17 @@ function localUrl(output: string): string | null {
 
 // 智能体起开发服务器：开一个终端标签页跑命令，等它打出本地地址（最多一分钟）
 export async function devServer(params: DevServerParams): Promise<DevServerResult> {
+  if (params.action === 'terminal-list' || params.action === 'terminal-read') {
+    const owner = BrowserWindow.getAllWindows()[0]?.webContents
+    if (!owner) throw new Error('应用窗口还没打开')
+    if (params.action === 'terminal-list') {
+      return { text: [...terminals].filter(([, entry]) => entry.owner === owner).map(([id, entry]) => `${id} · ${entry.cwd} · ${entry.exited ? '已退出' : '运行中'}`).join('\n') || '没有可读取的终端', url: null }
+    }
+    const lines = parse(z.number().int().min(1).max(TERMINAL_MAX_LINES), params.lines)
+    const entry = ownedEntry(parse(z.string().uuid(), params.terminalId), owner)
+    if (!entry) throw new Error('终端不存在或不属于当前窗口')
+    return { text: redactTerminalOutput((entry.output ?? '').split(/\r?\n/).slice(-lines).join('\n')) || '（暂无输出）', url: null }
+  }
   const running = devServers.get(params.sessionId)
   const entry = running ? terminals.get(running.terminalId) : undefined
   if (params.action === 'stop') {
@@ -126,7 +138,7 @@ export async function devServer(params: DevServerParams): Promise<DevServerResul
     process.platform === 'win32'
       ? { file: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-Command', params.command] }
       : { file: process.env.SHELL || '/bin/bash', args: ['-lc', params.command] }
-  const terminalId = await openTerminal(owner, params.cwd, shell, { cols: 120, rows: 30 }, true)
+  const terminalId = await openTerminal(owner, params.cwd, shell, { cols: 120, rows: 30 })
   devServers.set(params.sessionId, { terminalId, command: params.command })
   owner.send(IPC_CHANNELS.terminalOpened, { id: terminalId, cwd: params.cwd, shell: '开发服务器' })
   const started = Date.now()
@@ -153,7 +165,7 @@ export function registerTerminalIpc(): void {
     const cwd = parse(z.string().min(1), rawCwd)
     const size = parse(sizeSchema, rawSize)
     const shell = defaultShell()
-    const id = await openTerminal(event.sender, cwd, shell, size, false)
+    const id = await openTerminal(event.sender, cwd, shell, size)
     return { id, shell: basename(shell.file) }
   })
 

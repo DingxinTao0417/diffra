@@ -81,6 +81,9 @@ export interface TaskProgressView {
   requirements: Array<{ id: string; title: string; receiptId: string | null }>
 }
 
+export const TERMINAL_DEFAULT_LINES = 80
+export const TERMINAL_MAX_LINES = 200
+export const TERMINAL_READ_PERMISSION_PREFIX = 'terminal-read:'
 export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
 
 export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
@@ -210,6 +213,8 @@ export interface BrowserActionResult {
 
 // 开发服务器在客户端的终端里跑，用户看得见、能停；一个任务最多一个
 export type DevServerParams =
+  | { sessionId: string; action: 'terminal-list' }
+  | { sessionId: string; action: 'terminal-read'; terminalId: string; lines: number }
   | { sessionId: string; action: 'start'; command: string; cwd: string }
   | { sessionId: string; action: 'logs' }
   | { sessionId: string; action: 'stop' }

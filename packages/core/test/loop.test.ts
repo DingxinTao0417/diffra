@@ -146,6 +146,29 @@ function toolUpdates(io: { updates: SessionUpdate[] }, status: 'completed' | 'fa
 }
 
 describe('主循环', () => {
+  test('用户终端读取必须授权，拒绝不调用客户端，会话允许只对指定终端生效', async () => {
+    const terminalId = '11111111-1111-4111-8111-111111111111'
+    for (const choice of ['reject', 'allow_once', 'allow_always']) {
+      const model = scriptedModel([
+        { toolCalls: [{ name: 'terminal_read', input: { terminalId, lines: 10 } }] },
+        { toolCalls: [{ name: 'terminal_read', input: { terminalId, lines: 10 } }] },
+        { text: '分析完毕' },
+      ])
+      const session = await makeSession(model)
+      session.config.browser = true
+      session.permissionMode = 'full'
+      const io = recordingIO(choice)
+      let reads = 0
+      await runTurn(session, { id: choice, text: '检查终端输出' }, { ...io, devServer: async (params) => {
+        expect(params.action).toBe('terminal-read')
+        reads++
+        return { text: 'terminal result', url: null }
+      } })
+      expect(reads).toBe(choice === 'reject' ? 0 : 2)
+      expect(io.permissionRequests).toBe(choice === 'allow_always' ? 1 : 2)
+    }
+  }, 30_000)
+
   test('verify_changes 不结束任务；之后继续命令并满足证据条件才完成', async () => {
     const requirement = { id: 'delivery', title: '执行后续交付步骤', commandIncludes: 'printf', outputIncludes: 'delivered' }
     const model = scriptedModel([

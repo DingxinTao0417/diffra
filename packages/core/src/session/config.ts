@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROTOCOLS } from '../models/types.js'
-import { REASONING_EFFORTS, type SessionConfig } from '../protocol.js'
+import { REASONING_EFFORTS, TERMINAL_MAX_LINES, type SessionConfig } from '../protocol.js'
 
 export const endpointSchema = z.object({
   protocol: z.enum(PROTOCOLS),
@@ -73,6 +73,8 @@ export const browserActionParamsSchema = z.intersection(
 )
 
 export const devServerParamsSchema = z.discriminatedUnion('action', [
+  z.object({ sessionId: z.string().min(1), action: z.literal('terminal-list') }),
+  z.object({ sessionId: z.string().min(1), action: z.literal('terminal-read'), terminalId: z.string().uuid(), lines: z.number().int().min(1).max(TERMINAL_MAX_LINES) }),
   z.object({ sessionId: z.string().min(1), action: z.literal('start'), command: z.string().trim().min(1).max(2000), cwd: z.string().min(1) }),
   z.object({ sessionId: z.string().min(1), action: z.literal('logs') }),
   z.object({ sessionId: z.string().min(1), action: z.literal('stop') }),

@@ -31,6 +31,16 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     await expect(host).toContainText('term-ok-42', { timeout: 20_000 })
     await expect(host).toContainText(basename(project))
 
+    await window.getByRole('button', { name: '附加终端内容', exact: true }).click()
+    const preview = window.getByRole('textbox', { name: '终端内容预览' })
+    await expect(preview).toHaveValue(/term-ok-42/)
+    await preview.fill('term-ok-42（用户已检查敏感信息）')
+    await window.getByRole('button', { name: '放入输入框', exact: true }).click()
+    await expect(taskInput(window)).toHaveValue(/term-ok-42（用户已检查敏感信息）/)
+    expect(model.requests()).toBe(1)
+    await taskInput(window).fill('')
+    await host.click()
+
     // 焦点在终端里时 Ctrl+K 留给 shell，不弹搜索
     await window.keyboard.press('Control+k')
     await window.waitForTimeout(300)

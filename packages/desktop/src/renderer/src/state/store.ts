@@ -71,6 +71,7 @@ export interface AppState {
   searchOpen: boolean
   panel: SidePanel
   terminalOpen: boolean
+  terminalAttachment?: { target: string; text: string }
   terminals: TerminalTab[]
   activeTerminal: string | null
   toast: { id: number; text: string } | null
