@@ -14,6 +14,8 @@ export interface ToolContext {
   trustedCommands: string[]
   // 禁写目录（相对项目根目录）
   readOnlyPaths: string[]
+  // 项目外可以只读访问的目录（Skill 目录），读文件、列文件、搜索、大纲能用绝对路径访问
+  readRoots: string[]
 }
 
 export interface ToolOutput {

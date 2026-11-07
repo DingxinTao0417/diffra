@@ -20,6 +20,7 @@
     "@ai-sdk/openai-compatible": "^3.0.85",
     "@ast-grep/lang-python": "^0.0.6",
     "@ast-grep/napi": "^0.51.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.163",
     "shell-quote": "^1.12.0",

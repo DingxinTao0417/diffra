@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Ellipsis, FileDiff, GitBranch, PanelLeft, PanelRight, SquareTerminal } from 'lucide-react'
+import { Ellipsis, FileDiff, GitBranch, PanelLeft, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -14,9 +14,9 @@ import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
 import { cancelTask, dequeue, regenerate, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
-import { Composer } from './Composer'
+import { Composer, type ComposerCommand } from './Composer'
 import { Conversation } from './Conversation'
-import { MonitorPanel } from './MonitorPanel'
+import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReviewPanel } from './ReviewPanel'
 import { useTaskDiff } from './useTaskDiff'
 
@@ -33,10 +33,22 @@ function TaskPage({ task }: { task: LiveTask }) {
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
   const { project, setProject, branch } = useProject(task.project)
   const [confirm, setConfirm] = useState<{ mode: 'restore' | 'regenerate'; turnId: string; changes: CheckpointChange[] | null } | null>(null)
+  const [scanScope, setScanScope] = useState<'task' | 'project' | null>(null)
+  const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const firstTurn = task.turns[0]?.id ?? null
   const monitorDiff = useTaskDiff(task.sessionId, firstTurn, task.info.checkpoints && panel === 'monitor', task.changeVersion)
 
   const status = task.running ? '运行中' : task.turns.at(-1)?.error ? '出错' : task.turns.at(-1)?.stopReason === 'cancelled' ? '已停止' : task.turns.length > 0 ? '已完成' : '未开始'
+  // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
+  const commands: ComposerCommand[] =
+    deepScanEnabled && !task.running
+      ? [
+          ...(task.turns.length > 0
+            ? [{ id: 'deep-scan-task', label: '深度扫描 · 本任务改动', description: '只读地跨文件追踪这个任务改过的代码，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('task') }]
+            : []),
+          { id: 'deep-scan-project', label: '深度扫描 · 整个项目', description: '只读地扫描整个项目，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('project') },
+        ]
+      : []
   const togglePanel = (target: SidePanel) => store.set((state) => ({ ...state, panel: state.panel === target ? null : target }))
 
   const askRestore = async (mode: 'restore' | 'regenerate', turnId: string) => {
@@ -107,7 +119,7 @@ function TaskPage({ task }: { task: LiveTask }) {
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {task.queue.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 self-start rounded-lg border border-dashed bg-sidebar px-2.5 py-1.5 text-xs" data-testid="queued-message">
-                  <span className="text-muted-foreground">{item.plan ? '排队中 · 出计划' : '排队中'}</span>
+                  <span className="text-muted-foreground">{item.options.plan ? '排队中 · 出计划' : item.options.goal ? '排队中 · 目标' : '排队中'}</span>
                   <span className="max-w-96 truncate">{item.text}</span>
                   <button type="button" className="text-primary hover:underline" onClick={() => dequeue(task.sessionId, item.id)}>
                     撤回
@@ -116,7 +128,10 @@ function TaskPage({ task }: { task: LiveTask }) {
               ))}
               <Composer
                 size="normal"
-                placeholder="继续说明，Ctrl+Enter 发送；运行中发送会排队"
+                placeholder="继续说明，输入 / 用命令和 Skill；Ctrl+Enter 发送，运行中发送会排队"
+                projectPath={task.project}
+                mcpTarget={{ sessionId: task.sessionId }}
+                commands={commands}
                 running={task.running}
                 permissionMode={task.permissionMode}
                 onPermissionModeChange={(mode) => void setPermissionMode(task.sessionId, mode)}
@@ -125,8 +140,8 @@ function TaskPage({ task }: { task: LiveTask }) {
                 onModelChange={(ref) => void setTaskModel(task.sessionId, ref)}
                 planMode={task.planMode}
                 onPlanModeChange={(planMode) => setPlanMode(task.sessionId, planMode)}
-                onSend={(text) => {
-                  void sendMessage(task.sessionId, text, { plan: task.planMode })
+                onSend={(text, extras) => {
+                  void sendMessage(task.sessionId, text, { plan: task.planMode, ...extras })
                   return true
                 }}
                 onStop={() => cancelTask(task.sessionId)}
@@ -145,11 +160,12 @@ function TaskPage({ task }: { task: LiveTask }) {
             </div>
           </div>
         </section>
-        {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} />}
+        {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
       </div>
       {terminalOpen && <TerminalPanel cwd={task.project} />}
 
+      <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
       <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
     </div>
   )

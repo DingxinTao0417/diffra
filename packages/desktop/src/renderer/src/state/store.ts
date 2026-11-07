@@ -4,7 +4,7 @@ import type { PermissionRequestEvent } from '../../../shared/ipc'
 import type { SettingsView } from '../../../shared/settings'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'rules' | 'permissions' | 'security' | 'execution' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'rules' | 'permissions' | 'security' | 'execution' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
 
 export type Route =
   | { name: 'home'; project: string | null }
@@ -12,6 +12,13 @@ export type Route =
   | { name: 'settings'; section: SettingsSection }
 
 export type SidePanel = 'monitor' | 'review' | null
+
+// 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
+export interface MessageOptions {
+  plan: boolean
+  goal: boolean
+  skills: string[]
+}
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载
 export interface LiveTask {
@@ -30,7 +37,7 @@ export interface LiveTask {
   usage: Usage | null
   permission: PermissionRequestEvent | null
   // 运行中发的消息，这一轮结束后依次发出
-  queue: Array<{ id: string; text: string; plan: boolean }>
+  queue: Array<{ id: string; text: string; options: MessageOptions }>
   // 文件可能变了就加一，任务监控和审阅面板据此刷新
   changeVersion: number
 }

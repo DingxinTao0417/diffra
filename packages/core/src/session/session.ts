@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import type { SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
-import type { LanguageModel, ModelMessage } from 'ai'
+import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
+import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
 import type { CheckpointChange, PermissionMode, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import type { Compaction, SessionRecord } from './store.js'
-import { TOOL_DEFINITION_CHARS } from './tools.js'
+import { TOOL_DEFINITION_CHARS, TOOLS } from './tools.js'
 
 // 会话标题默认取第一条提问的开头
 const TITLE_CHARS = 40
@@ -24,6 +25,11 @@ export interface SessionOptions {
   // 按项目语言选中的规则包，写进了 systemPrompt，完成前的审查也用它
   rulePacks: RulePack[]
   systemPrompt: string
+  // 项目外可以只读访问的目录（Skill 目录）
+  readRoots?: string[]
+  // 客户端给的 MCP 服务器，连接放在 pool 里，各任务共用
+  mcpServers?: McpServer[]
+  mcpPool?: McpPool | null
   // 测试时注入模拟模型；正常运行按 config 创建
   model?: LanguageModel
   reviewModel?: LanguageModel
@@ -46,6 +52,11 @@ export class Session {
   readonly environment: SessionEnvironment
   readonly checkpoints: Checkpoints | null
   readonly rulePacks: RulePack[]
+  readonly readRoots: string[]
+  readonly mcpServers: McpServer[]
+  readonly mcpPool: McpPool | null
+  // 最近一轮开始时取到的 MCP 工具
+  mcpTools: McpTurnTools | null = null
   readonly systemPrompt: string
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
@@ -89,6 +100,9 @@ export class Session {
     this.environment = options.environment
     this.checkpoints = options.checkpoints
     this.rulePacks = options.rulePacks
+    this.readRoots = options.readRoots ?? []
+    this.mcpServers = options.mcpServers ?? []
+    this.mcpPool = options.mcpPool ?? null
     this.systemPrompt = options.systemPrompt
     this.model = options.model ?? createLanguageModel(options.config.model.endpoint, options.config.model.modelId)
     const review = options.config.reviewModel
@@ -126,13 +140,13 @@ export class Session {
     this.activeTurn?.abort()
   }
 
-  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt'): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = []): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [] })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
@@ -182,13 +196,22 @@ export class Session {
     }
   }
 
+  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具
+  toolSet(): ToolSet {
+    return this.mcpTools ? { ...TOOLS, ...this.mcpTools.tools } : TOOLS
+  }
+
+  toolChars(): number {
+    return TOOL_DEFINITION_CHARS + (this.mcpTools?.chars ?? 0)
+  }
+
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
   usageBreakdown(used: number): UsageBreakdown {
     const prompt = promptSections(this.systemPrompt)
     const chars = {
       system: prompt.base,
       rules: prompt.rules,
-      tools: TOOL_DEFINITION_CHARS,
+      tools: this.toolChars(),
       messages: JSON.stringify(this.contextMessages()).length,
     }
     const total = chars.system + chars.rules + chars.tools + chars.messages

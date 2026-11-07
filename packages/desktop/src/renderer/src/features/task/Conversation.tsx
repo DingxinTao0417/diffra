@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { StopReason } from '@diffra/core/types'
-import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Undo2, X } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronRight, Copy, File, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
@@ -190,7 +190,17 @@ interface TurnViewProps {
 
 function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnViewProps) {
   const blocks = useMemo(() => toBlocks(turn.items), [turn.items])
-  const changedFiles = useMemo(() => filesOf(turn.items), [turn.items])
+  // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动
+  const finishFiles = useMemo(() => {
+    const result = new Map<string, ChangedFile[]>()
+    let start = 0
+    turn.items.forEach((item, index) => {
+      if (item.kind !== 'tool' || toolBlockType(item) !== 'finish') return
+      result.set(item.id, filesOf(turn.items.slice(start, index + 1)))
+      start = index + 1
+    })
+    return result
+  }, [turn.items])
   const stopLabel = turn.stopReason ? STOP_LABELS[turn.stopReason] : undefined
 
   const copy = () => {
@@ -208,7 +218,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
-            return <ItemView key={block.item.id} item={block.item} />
+            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} />
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
           case 'edit':
@@ -226,7 +236,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={changedFiles} projectPath={task.project} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id) ?? []} projectPath={task.project} />
         }
       })}
       {active && task.permission && <PermissionCard request={task.permission} onRespond={(optionId) => respondPermission(task.sessionId, optionId)} />}
@@ -252,7 +262,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
               <Undo2 className="size-3.5" />
             </ActionButton>
           )}
-          {last && turn.kind === 'prompt' && (
+          {last && (turn.kind === 'prompt' || turn.kind === 'goal') && (
             <ActionButton label="重新生成" disabled={task.running} onClick={onRegenerate}>
               <RefreshCw className="size-3.5" />
             </ActionButton>
@@ -283,12 +293,36 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
   )
 }
 
-function ItemView({ item }: { item: Exclude<TranscriptItem, ToolItem> }) {
+// goal、skills 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill
+function ItemView({ item, goal, skills }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[] }) {
   switch (item.kind) {
     case 'user':
+      if (!goal && skills.length === 0) {
+        return (
+          <div className="max-w-[80%] self-end rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
+            {item.text}
+          </div>
+        )
+      }
       return (
-        <div className="max-w-[80%] self-end rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
-          {item.text}
+        <div className="flex max-w-[80%] flex-col items-end gap-1.5 self-end">
+          <div className="flex flex-wrap justify-end gap-1.5 text-xs text-muted-foreground" data-testid="message-tags">
+            {goal && (
+              <span className="flex items-center gap-1 rounded-md border px-1.5 py-0.5">
+                <Target className="size-3" />
+                目标
+              </span>
+            )}
+            {skills.map((name) => (
+              <span key={name} className="flex items-center gap-1 rounded-md border px-1.5 py-0.5">
+                <Sparkles className="size-3" />
+                {name}
+              </span>
+            ))}
+          </div>
+          <div className="rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
+            {item.text}
+          </div>
         </div>
       )
     case 'agent':

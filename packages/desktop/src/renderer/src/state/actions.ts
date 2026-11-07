@@ -4,7 +4,7 @@ import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, turnFromStored, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
-import { type LiveTask, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
 const TITLE_CHARS = 40
 
@@ -115,16 +115,16 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
   }
 }
 
-// planMode：首页输入框的「先出计划」开着时，第一条消息先出计划，新任务也保持开着
-export async function startTask(project: string, text: string, options: SessionOptions, planMode = false): Promise<void> {
+// 首页输入框的「先出计划」开着时，第一条消息先出计划，新任务也保持开着
+export async function startTask(project: string, text: string, options: SessionOptions, message: Partial<MessageOptions> = {}): Promise<void> {
   const handle = await window.diffra.createSession(project, options)
   store.set((state) => ({
     ...state,
     projects: addProject(state.projects, project),
-    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), planMode) },
+    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), message.plan ?? false) },
   }))
   navigate({ name: 'task', sessionId: handle.sessionId })
-  void sendMessage(handle.sessionId, text, { plan: planMode })
+  void sendMessage(handle.sessionId, text, message)
 }
 
 export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): Promise<void> {
@@ -146,17 +146,21 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
   }
 }
 
-// 运行中发的消息先排队，这一轮结束后再发；plan 为 true 时这一轮先出计划
-export async function sendMessage(sessionId: string, text: string, options: { plan?: boolean } = {}): Promise<void> {
+// 运行中发的消息先排队，这一轮结束后再发
+export async function sendMessage(sessionId: string, text: string, options: Partial<MessageOptions> = {}): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task) return
-  const plan = options.plan ?? false
+  const message: MessageOptions = { plan: false, goal: false, skills: [], ...options }
   if (task.running) {
-    updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text, plan }] }))
+    updateLive(sessionId, (current) => ({ ...current, queue: [...current.queue, { id: crypto.randomUUID(), text, options: message }] }))
     return
   }
-  if (plan) await runTurnOnCore(sessionId, text, 'plan', (turnId) => window.diffra.plan(sessionId, turnId, text))
-  else await runTurnOnCore(sessionId, text, 'prompt', (turnId) => window.diffra.sendPrompt(sessionId, turnId, text))
+  const { skills } = message
+  if (message.plan) await runTurnOnCore(sessionId, text, 'plan', skills, (turnId) => window.diffra.plan(sessionId, turnId, text, skills))
+  else
+    await runTurnOnCore(sessionId, text, message.goal ? 'goal' : 'prompt', skills, (turnId) =>
+      window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal }),
+    )
 }
 
 export function setPlanMode(sessionId: string, planMode: boolean): void {
@@ -169,12 +173,18 @@ const DEEP_SCAN_TITLES = { task: '深度安全扫描 · 本任务改动', projec
 export async function runDeepScan(sessionId: string, scope: 'task' | 'project'): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task || task.running) return
-  await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
+  await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
 }
 
-async function runTurnOnCore(sessionId: string, text: string, kind: TurnKind, run: (turnId: string) => Promise<StopReason>): Promise<void> {
+async function runTurnOnCore(
+  sessionId: string,
+  text: string,
+  kind: TurnKind,
+  skills: string[],
+  run: (turnId: string) => Promise<StopReason>,
+): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏
@@ -186,13 +196,13 @@ async function runTurnOnCore(sessionId: string, text: string, kind: TurnKind, ru
     patchTurn((turn) => ({ ...turn, error: errorMessage(error), endedAt: Date.now() }))
   } finally {
     clearTimeout(refresh)
-    let next: { id: string; text: string; plan: boolean } | undefined
+    let next: LiveTask['queue'][number] | undefined
     updateLive(sessionId, (current) => {
       next = current.queue[0]
       return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1 }
     })
     await refreshTasks()
-    if (next) void sendMessage(sessionId, next.text, { plan: next.plan })
+    if (next) void sendMessage(sessionId, next.text, next.options)
   }
 }
 
@@ -240,8 +250,8 @@ export async function restoreTurn(sessionId: string, turnId: string): Promise<vo
 export async function regenerate(sessionId: string, turnId: string): Promise<void> {
   const task = store.get().live[sessionId]
   const turn = task?.turns.find((item) => item.id === turnId)
-  // 深度扫描的那一轮没有「重新生成」，要重扫就再发起一次
-  if (!task || !turn || task.running || turn.kind !== 'prompt') return
+  // 深度扫描和出计划的那一轮没有「重新生成」，要重来就再发起一次
+  if (!task || !turn || task.running || (turn.kind !== 'prompt' && turn.kind !== 'goal')) return
   try {
     const { filesRestored } = await window.diffra.rewindSession(sessionId, turnId)
     if (!filesRestored) showToast('这一轮没有检查点，文件改动没有撤销，只重新生成了回答')
@@ -250,7 +260,7 @@ export async function regenerate(sessionId: string, turnId: string): Promise<voi
       changeVersion: current.changeVersion + 1,
       turns: current.turns.slice(0, current.turns.findIndex((item) => item.id === turnId)),
     }))
-    await sendMessage(sessionId, turn.prompt)
+    await sendMessage(sessionId, turn.prompt, { goal: turn.kind === 'goal', skills: turn.skills })
   } catch (error) {
     showToast(`重新生成失败：${errorMessage(error)}`)
   }

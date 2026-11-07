@@ -11,6 +11,8 @@ export interface ScriptedModel {
   baseUrl: string
   // 已经收到的对话请求数（不含轻量安全扫描）
   requests(): number
+  // 每次对话请求的原始请求体，按收到的顺序
+  bodies(): string[]
   // 收到的轻量安全扫描请求数
   securityReviews(): number
   close(): Promise<void>
@@ -23,6 +25,7 @@ const SECURITY_REVIEW_MARKER = 'You are a security reviewer'
 export async function startScriptedModel(steps: ScriptStep[], options: { securityReplies?: string[] } = {}): Promise<ScriptedModel> {
   let served = 0
   let reviews = 0
+  const bodies: string[] = []
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -39,6 +42,7 @@ export async function startScriptedModel(steps: ScriptStep[], options: { securit
         index = 1000 + reviews++
       } else {
         step = steps[served] ?? { text: '（剧本已结束）' }
+        bodies.push(body)
         index = served++
       }
       setTimeout(() => {
@@ -53,6 +57,7 @@ export async function startScriptedModel(steps: ScriptStep[], options: { securit
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests: () => served,
+    bodies: () => [...bodies],
     securityReviews: () => reviews,
     close: () =>
       new Promise<void>((resolve) => {

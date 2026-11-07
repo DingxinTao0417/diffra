@@ -8,6 +8,7 @@ import {
   CONTENT_WIDTHS,
   type ExecutionSettings,
   FONT_SIZES,
+  GOAL_ROUND_OPTIONS,
   MAX_STEP_OPTIONS,
   PALETTES,
   type SecuritySettings,
@@ -15,7 +16,10 @@ import {
 } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
+import { PluginSettings } from '@/features/plugins/PluginSettings'
 import { RulesView } from '@/features/rules/RulesView'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { UsageSection } from './UsageSection'
@@ -41,7 +45,9 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'rules', label: '规范', keywords: '规则包 编码规范 审查' },
       { id: 'permissions', label: '命令权限', keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
-      { id: 'execution', label: '任务执行', keywords: '上下文 压缩 摘要 步数 上限 卡死 重复' },
+      { id: 'execution', label: '任务执行', keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
+      { id: 'mcp', label: 'MCP 服务器', keywords: 'MCP 工具 prompt 外部工具' },
+      { id: 'plugins', label: '插件', keywords: '插件 自定义命令 斜杠 Skill MCP 安装 Git' },
     ],
   },
   {
@@ -118,6 +124,10 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <SecuritySection />
     case 'execution':
       return <ExecutionSection />
+    case 'mcp':
+      return <McpSettings />
+    case 'plugins':
+      return <PluginSettings />
     case 'storage':
       return <StorageSection />
     case 'usage':
@@ -381,6 +391,7 @@ function SecuritySection() {
 const COMPACT_OPTIONS = COMPACT_AT_PERCENTS.map((value) => ({ value: String(value), label: `${value}%` }))
 const NO_STEP_LIMIT = 'none'
 const STEP_OPTIONS = [...MAX_STEP_OPTIONS.map((value) => ({ value: String(value), label: `${value} 步` })), { value: NO_STEP_LIMIT, label: '无上限' }]
+const GOAL_ROUND_SEGMENTS = GOAL_ROUND_OPTIONS.map((value) => ({ value: String(value), label: `${value} 轮` }))
 
 function ExecutionSection() {
   const execution = useAppState((state) => state.settings?.execution ?? null)
@@ -406,6 +417,10 @@ function ExecutionSection() {
     const steps = MAX_STEP_OPTIONS.find((item) => String(item) === value)
     if (steps) void change({ maxSteps: steps })
   }
+  const changeGoalRounds = (value: string) => {
+    const rounds = GOAL_ROUND_OPTIONS.find((item) => String(item) === value)
+    if (rounds) void change({ goalMaxRounds: rounds })
+  }
 
   return (
     <>
@@ -419,22 +434,13 @@ function ExecutionSection() {
       <SettingRow label="单次任务步数上限" hint="模型每回复一次算一步，到了上限就停下等你发话。智能体反复做同样的操作时，不管有没有上限都会自动停下。">
         <Segmented label="单次任务步数上限" value={execution.maxSteps === null ? NO_STEP_LIMIT : String(execution.maxSteps)} options={STEP_OPTIONS} onChange={changeMaxSteps} />
       </SettingRow>
+      <SettingRow
+        label="目标模式轮数上限"
+        hint="输入框里用 /目标 发的任务，智能体每轮做完自己判断目标达成没有，没达成就接着做下一轮，到这个轮数还没完成就停下说明还差什么。每轮各有一份步数上限。"
+      >
+        <Segmented label="目标模式轮数上限" value={String(execution.goalMaxRounds)} options={GOAL_ROUND_SEGMENTS} onChange={changeGoalRounds} />
+      </SettingRow>
     </>
-  )
-}
-
-function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange(value: boolean): void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn('mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors', checked ? 'bg-primary' : 'bg-input')}
-    >
-      <span className={cn('size-4 rounded-full bg-background shadow-sm transition-transform', checked && 'translate-x-4')} />
-    </button>
   )
 }
 

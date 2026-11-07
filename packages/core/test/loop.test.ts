@@ -6,13 +6,15 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
+import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
 import type { RulePack, SessionChecks, SessionLimits, SessionSecurity } from '../src/protocol.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
-import { Session } from '../src/session/session.js'
+import { Session, type SessionOptions } from '../src/session/session.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
+import { testMcpServer } from './mcp-fixture.js'
 
 // inputTokens 是这次调用报给 Diffra 的输入 token 数，默认 1000
 type Step = ({ toolCalls: Array<{ name: string; input: unknown }> } | { text: string }) & { inputTokens?: number }
@@ -97,9 +99,10 @@ async function makeSession(
   readOnlyPaths: string[] = [],
   review?: { packs: RulePack[]; model: MockLanguageModelV4 },
   security: SessionSecurity = { staticCheck: false, lightScan: false },
-  limits: SessionLimits = { compactAtPercent: 70, maxSteps: 100 },
+  limits: SessionLimits = { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },
   // 规划、兜底角色的模拟模型；不给就是没配
   roles: { plan?: MockLanguageModelV4; fallback?: MockLanguageModelV4 } = {},
+  extra: Partial<SessionOptions> = {},
 ) {
   const bashPath = await findBash()
   const rules = review ? { packs: review.packs, review: true } : NO_RULES
@@ -122,6 +125,7 @@ async function makeSession(
       permissionMode: 'ask',
       security,
       limits,
+      plugins: [],
       checkpointDir,
     },
     environment: { bashPath, rgPath: await findRipgrep() },
@@ -132,6 +136,7 @@ async function makeSession(
     reviewModel: review?.model,
     planModel: roles.plan,
     fallbackModel: roles.fallback,
+    ...extra,
   })
 }
 
@@ -646,7 +651,7 @@ describe('上下文压缩', () => {
   test('触发点按设置来：设成 90% 时 7.5 万不压缩', async () => {
     writeBigFiles(6)
     const model = scriptedModel([...reads(6, (index) => (index === 5 ? 75_000 : 1000)), { text: '看完了' }])
-    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 90, maxSteps: 100 })
+    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 90, maxSteps: 100, goalMaxRounds: 5 })
     const io = recordingIO()
 
     await expect(runTurn(session, { id: 'turn-1', text: '读这些文件' }, io)).resolves.toBe('end_turn')
@@ -695,7 +700,7 @@ describe('卡死检测和步数上限', () => {
     for (const name of ['a', 'b', 'c', 'd']) writeFileSync(join(project, `${name}.txt`), `${name}\n`)
     const steps: Step[] = ['a', 'b', 'c', 'd'].map((name) => ({ toolCalls: [{ name: 'read_file', input: { path: `${name}.txt` } }] }))
     const model = scriptedModel([...steps, { text: '不会走到这里' }])
-    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 70, maxSteps: 3 })
+    const session = await makeSession(model, undefined, undefined, undefined, undefined, { compactAtPercent: 70, maxSteps: 3, goalMaxRounds: 5 })
     const io = recordingIO()
 
     await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_turn_requests')
@@ -832,5 +837,120 @@ describe('先出计划', () => {
     expect(prompt).toContain('修复 a.txt')
     expect(io.usage.map((call) => [call.role, call.modelId])).toEqual([['planner', 'mock']])
     expect(session.messages).toHaveLength(2)
+  })
+})
+
+describe('目标模式', () => {
+  const notices = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+  const finish = (summary: string, goalMet: boolean): Step => ({ toolCalls: [{ name: 'finish', input: { summary, goal_met: goalMet } }] })
+
+  test('没达成就自动开始下一轮，达成后结束；每轮都要过完成检查', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
+      finish('还差 b.txt', false),
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'two\n' } }] },
+      finish('都写好了', true),
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'test -f a.txt' })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '写出 a.txt 和 b.txt' }, io, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(4)
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('Goal mode. Work toward the goal below on your own over up to 3 rounds')
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain('round 2 of 3')
+    expect(notices(io)).toEqual(['目标模式第 2 轮', '目标已完成（用了 2 轮）'])
+    // 两轮各跑了一次完成检查
+    expect(io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title.startsWith('完成检查'))).toHaveLength(2)
+  })
+
+  test('轮数用完还没达成就停下说明；只回文字时拉回来让它调 finish', async () => {
+    const model = scriptedModel([{ text: '我想想' }, finish('第一轮做了一点', false), finish('第二轮还是没做完', false)])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '做完它' }, io, { goalMaxRounds: 2 })).resolves.toBe('end_turn')
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('call finish with goal_met')
+    expect(notices(io)).toEqual(['目标模式第 2 轮', '目标模式已用完 2 轮，目标还没完成'])
+  })
+
+  test('不是目标模式时 finish 照常结束，不看 goal_met', async () => {
+    const model = scriptedModel([finish('好了', false)])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '问个问题' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(1)
+    expect(notices(io)).toEqual([])
+  })
+})
+
+describe('MCP 工具', () => {
+  let pool: McpPool
+  beforeEach(() => {
+    pool = new McpPool()
+  })
+  afterEach(async () => {
+    await pool.closeAll()
+  })
+
+  const withMcp = (model: MockLanguageModelV4, servers = [testMcpServer()]) =>
+    makeSession(model, undefined, [], undefined, undefined, undefined, {}, { mcpPool: pool, mcpServers: servers })
+  const toolCallTitles = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
+
+  test('MCP 工具和内置工具一起发给模型；声明只读的直接调，其他的先问，选了始终允许后本会话不再问', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'mcp__demo__echo', input: { text: 'hi' } }] },
+      { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'first' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了' } }] },
+      { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'second' } }] },
+      { text: '又写了一遍' },
+    ])
+    const session = await withMcp(model)
+    const io = recordingIO('allow_always')
+
+    await expect(runTurn(session, { id: 'turn-1', text: '记一下' }, io)).resolves.toBe('end_turn')
+    const tools = model.doStreamCalls[0]?.tools?.map((item) => item.name) ?? []
+    expect(tools).toEqual(expect.arrayContaining(['read_file', 'finish', 'mcp__demo__echo', 'mcp__demo__write_note']))
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('echo: hi')
+    expect(io.permissionRequests).toBe(1)
+    expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('first\n')
+    expect(toolCallTitles(io)).toEqual(['MCP demo · echo', 'MCP demo · write_note', '完成'])
+
+    await runTurn(session, { id: 'turn-2', text: '再记一下' }, io)
+    expect(io.permissionRequests).toBe(1)
+    expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('second\n')
+    expect(session.usageBreakdown(1000).tools).toBeGreaterThan(0)
+  })
+
+  test('用户拒绝时不调，告诉模型别再试；完全放行模式不问；工具报错原样给模型', async () => {
+    const rejected = scriptedModel([{ toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'x' } }] }, { text: '好吧' }])
+    const io = recordingIO('reject')
+    await runTurn(await withMcp(rejected), { id: 'turn-1', text: '记一下' }, io)
+    expect(JSON.stringify(rejected.doStreamCalls[1]?.prompt)).toContain('The user rejected this tool call')
+    expect(() => readFileSync(join(project, 'note.txt'))).toThrow()
+
+    const full = scriptedModel([
+      { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'y' } }] },
+      { toolCalls: [{ name: 'mcp__demo__fail', input: {} }] },
+      { text: '完成' },
+    ])
+    const session = await withMcp(full)
+    session.permissionMode = 'full'
+    const fullIO = recordingIO('reject')
+    await runTurn(session, { id: 'turn-1', text: '记一下' }, fullIO)
+    expect(fullIO.permissionRequests).toBe(0)
+    expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('y\n')
+    expect(JSON.stringify(full.doStreamCalls[2]?.prompt)).toContain('something broke')
+    expect(toolUpdates(fullIO, 'failed')).toHaveLength(1)
+  })
+
+  test('连不上的服务器开始时提示一下，照常做', async () => {
+    const model = scriptedModel([{ text: '好' }])
+    const io = recordingIO()
+    await runTurn(await withMcp(model, [{ name: 'broken', command: 'diffra-no-such-command', args: [], env: [] }]), { id: 'turn-1', text: '你好' }, io)
+    const notices = io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+    expect(notices).toEqual(['MCP 服务器「broken」不可用，这一轮不用它的工具'])
+    expect(model.doStreamCalls).toHaveLength(1)
   })
 })

@@ -8,7 +8,9 @@ import {
   DEFAULT_EXECUTION,
   DEFAULT_SECURITY,
   FONT_SIZES,
+  GOAL_ROUND_OPTIONS,
   MAX_STEP_OPTIONS,
+  MCP_TRANSPORTS,
   PALETTES,
   type Settings,
   THEME_MODES,
@@ -71,7 +73,26 @@ export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
 export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean() })
 
-export const executionSchema = z.object({ compactAtPercent: z.literal(COMPACT_AT_PERCENTS), maxSteps: z.literal(MAX_STEP_OPTIONS).nullable() })
+// goalMaxRounds 是第 17 步加的，旧设置文件里没有
+export const executionSchema = z.object({
+  compactAtPercent: z.literal(COMPACT_AT_PERCENTS),
+  maxSteps: z.literal(MAX_STEP_OPTIONS).nullable(),
+  goalMaxRounds: z.literal(GOAL_ROUND_OPTIONS).default(DEFAULT_EXECUTION.goalMaxRounds),
+})
+
+export const MCP_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
+
+export const mcpServerConfigSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().regex(MCP_NAME_PATTERN),
+  enabled: z.boolean(),
+  transport: z.enum(MCP_TRANSPORTS),
+  command: z.string(),
+  args: z.array(z.string()),
+  envNames: z.array(z.string().min(1)),
+  url: z.string(),
+  headerNames: z.array(z.string().min(1)),
+})
 
 // projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
@@ -92,6 +113,21 @@ const settingsSchema = z.object({
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),
   // 第 7 步加的
   execution: executionSchema.default(() => ({ ...DEFAULT_EXECUTION })),
+  // 第 18 步加的
+  mcpServers: z.array(mcpServerConfigSchema).default([]),
+  // 第 19 步加的
+  plugins: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        dir: z.string().min(1),
+        source: z.enum(['folder', 'git']),
+        url: z.string().nullable(),
+        enabled: z.boolean(),
+      }),
+    )
+    .default([]),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -104,6 +140,8 @@ const EMPTY_SETTINGS: Settings = {
   defaultPermissionMode: 'ask',
   security: DEFAULT_SECURITY,
   execution: DEFAULT_EXECUTION,
+  mcpServers: [],
+  plugins: [],
 }
 
 export class SettingsStore {

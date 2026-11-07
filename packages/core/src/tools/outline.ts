@@ -5,7 +5,7 @@ import { runProcess } from '../process.js'
 import { type Language, languageOf, vueScripts } from '../syntax.js'
 import { isProtectedFile } from './protected.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
-import { resolveInWorkspace } from './workspace.js'
+import { resolveReadable } from './workspace.js'
 
 const SOURCE_GLOB = '*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,py}'
 const MAX_FILE_BYTES = 1_000_000
@@ -22,7 +22,7 @@ interface OutlineEntry {
 
 // 列出一个文件或一个目录下所有源文件里定义的函数、类和方法、接口和类型，带行号
 export async function outlineTool(context: ToolContext, input: { path?: string }): Promise<ToolOutput> {
-  const target = await resolveInWorkspace(context.cwd, input.path ?? '.')
+  const target = await resolveReadable(context.cwd, context.readRoots, input.path ?? '.')
   const info = await stat(target.absolute).catch(() => null)
   if (!info) throw new ToolError(`Not found: ${target.display}`)
   const title = `大纲 ${target.display}`

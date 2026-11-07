@@ -20,6 +20,7 @@ beforeEach(async () => {
     readHashes: new Map(),
     trustedCommands: [],
     readOnlyPaths: [],
+    readRoots: [],
     requestCommandPermission: async () => ({ allowed: true }),
   }
 })

@@ -5,6 +5,7 @@ import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
 import { truncateLines } from '../process.js'
+import type { McpToolRef } from '../mcp.js'
 import { PERMISSION_OPTIONS, type SessionModel } from '../protocol.js'
 import {
   annotateDiff,
@@ -23,7 +24,7 @@ import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityF
 import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import type { Session } from './session.js'
-import { executeTool, isToolName, parseFinishInput, TOOL_KINDS, TOOLS } from './tools.js'
+import { executeTool, isToolName, parseFinishInput, TOOL_KINDS } from './tools.js'
 
 // 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
 const MAX_CHECK_FAILURES = 3
@@ -67,12 +68,29 @@ export function modelLabel(model: SessionModel): string {
   return model.provider ? `${model.provider.name} / ${model.modelId}` : model.modelId
 }
 
-export async function runTurn(session: Session, turn: { id: string; text: string }, io: TurnIO): Promise<StopReason> {
+// goalMaxRounds：目标模式，模型每轮做完调 finish 并说明目标达成没有，没达成就自动开始下一轮，最多这么多轮
+export interface TurnOptions {
+  goalMaxRounds?: number
+}
+
+function goalRequest(text: string, maxRounds: number): string {
+  return [
+    `[Diffra] Goal mode. Work toward the goal below on your own over up to ${maxRounds} rounds; do not wait for the user between rounds.`,
+    'In each round make concrete progress, verify it, then call finish. In finish set goal_met to true only when the goal and its completion criteria are fully met and verified; otherwise set goal_met to false and say in the summary what remains.',
+    '',
+    'Goal:',
+    text,
+  ].join('\n')
+}
+
+export async function runTurn(session: Session, turn: { id: string; text: string }, io: TurnIO, options: TurnOptions = {}): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
   const controller = new AbortController()
   session.activeTurn = controller
   const { signal } = controller
-  const maxSteps = session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY
+  const goalMaxRounds = options.goalMaxRounds ?? null
+  // 目标模式每一轮都有一份步数上限
+  const maxSteps = (session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY) * (goalMaxRounds ?? 1)
   let active: ActiveModel = { language: session.model, config: session.config.model }
   const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let escalated = false
@@ -92,8 +110,10 @@ export async function runTurn(session: Session, turn: { id: string; text: string
 
   try {
     await takeCheckpoint(session, turn.id, io)
+    await prepareMcpTools(session, io)
     const requestIndex = session.messages.length
-    session.messages.push({ role: 'user', content: turn.text })
+    session.messages.push({ role: 'user', content: goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds) })
+    let round = 1
 
     let editedThisTurn = false
     let checkFailures = 0
@@ -128,12 +148,14 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       }
 
       if (toolCalls.length === 0) {
-        // 改了文件却没调 finish：拉回来走完成门禁
-        if (editedThisTurn && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
+        // 改了文件却没调 finish：拉回来走完成门禁；目标模式里只回了文字也要拉回来，让它说明目标达成没有
+        if ((editedThisTurn || goalMaxRounds !== null) && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
           gateAttempts++
           session.messages.push({
             role: 'user',
-            content: '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.',
+            content: editedThisTurn
+              ? '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
+              : '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.',
           })
           continue
         }
@@ -142,7 +164,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
 
       const results: ToolResultPart[] = []
       let editedThisStep = false
-      let finished = false
+      let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
       for (const call of toolCalls) {
         // 参数不合法的调用，AI SDK 已经在返回消息里补了错误结果；再补一条会让同一调用出现两个结果
@@ -157,7 +179,7 @@ export async function runTurn(session: Session, turn: { id: string; text: string
         if (call.toolName === 'finish' && !call.invalid) {
           const gate = await runFinishGate(session, call, turn.id, editedThisTurn, signal, io)
           results.push(gate.result)
-          if (gate.passed) finished = true
+          if (gate.passed) finished = { summary: gate.summary, goalMet: gate.goalMet }
           else gateAttempts++
           continue
         }
@@ -176,7 +198,29 @@ export async function runTurn(session: Session, turn: { id: string; text: string
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
 
-      if (finished) return 'end_turn'
+      if (finished && (goalMaxRounds === null || signal.aborted)) return 'end_turn'
+      if (finished && finished.goalMet) {
+        await notice(io, 'info', `目标已完成（用了 ${round} 轮）`)
+        return 'end_turn'
+      }
+      if (finished && round >= goalMaxRounds!) {
+        await notice(io, 'warning', `目标模式已用完 ${goalMaxRounds} 轮，目标还没完成`, `最后一轮的总结：${finished.summary}`)
+        return 'end_turn'
+      }
+      if (finished) {
+        round++
+        gateAttempts = 0
+        checkFailures = 0
+        editedThisTurn = false
+        warnedStuck = false
+        repeats.clear()
+        await notice(io, 'info', `目标模式第 ${round} 轮`, `上一轮还剩：${finished.summary}`)
+        session.messages.push({
+          role: 'user',
+          content: `[Diffra] Goal mode, round ${round} of ${goalMaxRounds}: the goal is not met yet. Continue toward it.`,
+        })
+        continue
+      }
       if (signal.aborted) return 'cancelled'
 
       if (repeated && warnedStuck) {
@@ -256,6 +300,13 @@ export async function runTurn(session: Session, turn: { id: string; text: string
   }
 }
 
+// 每轮开始时取一次 MCP 工具，这一轮里不变；连不上的服务器提示一下，照常开始
+async function prepareMcpTools(session: Session, io: TurnIO): Promise<void> {
+  if (!session.mcpPool || session.mcpServers.length === 0) return
+  session.mcpTools = await session.mcpPool.turnTools(session.cwd, session.mcpServers)
+  for (const failure of session.mcpTools.failures) await notice(io, 'warning', failure.title, failure.detail)
+}
+
 export async function takeCheckpoint(session: Session, turnId: string, io: TurnIO): Promise<void> {
   if (!session.checkpoints) return
   try {
@@ -272,7 +323,7 @@ async function streamStep(session: Session, active: ActiveModel, signal: AbortSi
       model: active.language,
       system: session.systemPrompt,
       messages: session.contextMessages(),
-      tools: TOOLS,
+      tools: session.toolSet(),
       usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
     },
     signal,
@@ -369,6 +420,8 @@ export async function runToolCall(
   io: TurnIO,
 ): Promise<{ result: ToolResultPart; edited: boolean }> {
   const name = call.toolName
+  const mcp = session.mcpTools?.byName.get(name)
+  if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
     sessionUpdate: 'tool_call',
@@ -390,6 +443,7 @@ export async function runToolCall(
       readHashes: session.readHashes,
       trustedCommands: session.trustedCommands,
       readOnlyPaths: session.config.readOnlyPaths,
+      readRoots: session.readRoots,
       requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
     }
     const output = await executeTool(name, call.input, context)
@@ -411,6 +465,54 @@ export async function runToolCall(
       content: [{ type: 'content', content: { type: 'text', text: message } }],
     })
     return { result: errorResult(call, message), edited: false }
+  }
+}
+
+// MCP 工具：完全放行模式、声明只读的工具、本会话里选过「始终允许」的直接调，其余先问用户
+async function runMcpToolCall(
+  session: Session,
+  call: StepToolCall,
+  ref: McpToolRef,
+  signal: AbortSignal,
+  io: TurnIO,
+): Promise<{ result: ToolResultPart; edited: boolean }> {
+  const title = `MCP ${ref.server} · ${ref.tool}`
+  await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title, kind: 'other', status: 'in_progress', rawInput: call.input })
+  const fail = async (message: string) => {
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: message } }],
+    })
+    return { result: errorResult(call, message), edited: false }
+  }
+  const allowKey = `mcp:${ref.server}:${ref.tool}`
+  if (session.permissionMode !== 'full' && !ref.readOnly && !session.alwaysAllowed.has(allowKey)) {
+    const choice = await io.requestPermission(
+      { toolCallId: call.toolCallId, title: `调用 ${title}`, kind: 'other', status: 'pending', rawInput: call.input },
+      PERMISSION_CHOICES,
+    )
+    if (choice === PERMISSION_OPTIONS.allowAlways) session.alwaysAllowed.add(allowKey)
+    if (choice !== PERMISSION_OPTIONS.allowOnce && choice !== PERMISSION_OPTIONS.allowAlways) {
+      return fail('The user rejected this tool call. Do not retry it; try another approach or ask the user.')
+    }
+  }
+  try {
+    const output = await session.mcpPool!.callTool(ref, call.input, signal)
+    if (output.isError) return fail(output.text)
+    await io.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: call.toolCallId,
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: output.text } }],
+    })
+    // 不知道 MCP 工具改没改文件，不算编辑：不触发快速检查，也不重置卡死检测
+    return { result: textResult(call, output.text), edited: false }
+  } catch (error) {
+    if (signal.aborted) return fail('Cancelled by the user.')
+    console.error(`[session] MCP 工具 ${title} 出错`, error)
+    return fail(`MCP tool failed: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -449,12 +551,15 @@ async function runFinishGate(
   editedThisTurn: boolean,
   signal: AbortSignal,
   io: TurnIO,
-): Promise<{ result: ToolResultPart; passed: boolean }> {
+): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean }> {
   let summary = ''
+  let goalMet = false
   try {
-    summary = parseFinishInput(call.input).summary
+    const input = parseFinishInput(call.input)
+    summary = input.summary
+    goalMet = input.goal_met ?? false
   } catch (error) {
-    return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false }
+    return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false, summary, goalMet }
   }
   // 先跑完成检查，检查有了结果再显示「完成」卡片，界面上的先后顺序和实际一致
   const showFinish = (status: 'completed' | 'failed', text: string) =>
@@ -470,7 +575,7 @@ async function runFinishGate(
 
   if (!editedThisTurn) {
     await showFinish('completed', summary)
-    return { result: textResult(call, 'Done.'), passed: true }
+    return { result: textResult(call, 'Done.'), passed: true, summary, goalMet }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
   if (command) {
@@ -480,13 +585,15 @@ async function runFinishGate(
       return {
         result: errorResult(call, `The check \`${command}\` failed, so the task is not finished:\n${check.output}\nFix the problems and call finish again.`),
         passed: false,
+        summary,
+        goalMet,
       }
     }
   }
   // 检查通过（或没配检查）之后再做安全检查和规范审查，免得对跑不通的代码提意见
   const diff = await turnDiff(session, turnId, io)
   const security = diff === null ? [] : await runSecurityChecks(session, diff, summary, signal, io)
-  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false }
+  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
   const blockers = blocking(security)
   if (blockers.length > 0) {
     await showFinish('failed', `安全检查发现 ${blockers.length} 处高危问题`)
@@ -500,10 +607,12 @@ async function runFinishGate(
           'for any other finding, explain in the finish summary why it is safe.',
       ),
       passed: false,
+      summary,
+      goalMet,
     }
   }
   const findings = diff === null ? [] : await runReview(session, diff, summary, signal, io)
-  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false }
+  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
   if (findings.length > 0) {
     await showFinish('failed', `规范审查发现 ${findings.length} 处问题`)
     const list = findings.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
@@ -514,14 +623,16 @@ async function runFinishGate(
           'Fix them and call finish again. If you are sure a finding is wrong, keep the code and explain why in the finish summary.',
       ),
       passed: false,
+      summary,
+      goalMet,
     }
   }
   if (!command) {
     await showFinish('completed', `${summary}\n\n未配置检查命令，改动未经自动验证。`)
-    return { result: textResult(call, 'Done. No project checks are configured, so the changes were not verified.'), passed: true }
+    return { result: textResult(call, 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet }
   }
   await showFinish('completed', summary)
-  return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true }
+  return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet }
 }
 
 // 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null

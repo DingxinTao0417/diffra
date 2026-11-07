@@ -2,13 +2,16 @@ import type {
   CheckDetection,
   CheckpointChange,
   CheckRunResult,
+  CommandInfo,
   ListModelsResult,
+  McpServerStatus,
   PermissionMode,
   PermissionOption,
   RequestPermissionRequest,
   RulePack,
   SessionChecks,
   SessionSearchResult,
+  SkillInfo,
   StoredSessionSummary,
   StoredTurn,
   SessionInfo,
@@ -18,7 +21,18 @@ import type {
   UsageQuery,
   UsageSummary,
 } from '@diffra/core/types'
-import type { Appearance, ExecutionSettings, ModelRef, ProjectRuleSettings, ProviderInput, Role, SecuritySettings, SettingsView } from './settings'
+import type {
+  Appearance,
+  ExecutionSettings,
+  McpServerInput,
+  ModelRef,
+  PluginView,
+  ProjectRuleSettings,
+  ProviderInput,
+  Role,
+  SecuritySettings,
+  SettingsView,
+} from './settings'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -67,6 +81,17 @@ export const IPC_CHANNELS = {
   sessionPrompt: 'session:prompt',
   sessionDeepScan: 'session:deep-scan',
   sessionPlan: 'session:plan',
+  skillsList: 'skills:list',
+  mcpSave: 'mcp:save',
+  mcpDelete: 'mcp:delete',
+  mcpStatus: 'mcp:status',
+  mcpPrompt: 'mcp:prompt',
+  commandsList: 'commands:list',
+  pluginsList: 'plugins:list',
+  pluginInstallFolder: 'plugins:install-folder',
+  pluginInstallGit: 'plugins:install-git',
+  pluginSetEnabled: 'plugins:set-enabled',
+  pluginDelete: 'plugins:delete',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -122,6 +147,15 @@ export interface SessionHandle {
 export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
+}
+
+// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）
+export type McpStatusTarget = { sessionId: string } | { projectPath: string | null }
+
+// 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
+export interface PromptOptions {
+  skills: string[]
+  goal: boolean
 }
 
 // 打开历史任务时多带标题和每轮的记录
@@ -198,11 +232,27 @@ export interface DiffraApi {
   loadSession(sessionId: string, projectPath: string): Promise<LoadedSessionHandle>
   updateSession(sessionId: string, change: { title?: string; archived?: boolean }): Promise<void>
   deleteSession(sessionId: string): Promise<void>
-  sendPrompt(sessionId: string, turnId: string, text: string): Promise<StopReason>
+  sendPrompt(sessionId: string, turnId: string, text: string, options: PromptOptions): Promise<StopReason>
   // 深度安全扫描作为一轮记进任务，像 sendPrompt 一样等它跑完
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
-  plan(sessionId: string, turnId: string, text: string): Promise<StopReason>
+  plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
+  // 项目、用户目录和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个
+  listSkills(projectPath: string): Promise<SkillInfo[]>
+  saveMcpServer(input: McpServerInput): Promise<SettingsView>
+  deleteMcpServer(serverId: string): Promise<SettingsView>
+  // retry 为 true 时连不上的马上重连
+  mcpStatus(target: McpStatusTarget, retry: boolean): Promise<McpServerStatus[]>
+  // 把 MCP prompt 展开成文字
+  mcpPrompt(target: McpStatusTarget, server: string, prompt: string, args: Record<string, string>): Promise<string>
+  // 项目、用户目录、开着的插件和兼容目录里的自定义命令
+  listCommands(projectPath: string): Promise<CommandInfo[]>
+  listPlugins(): Promise<PluginView[]>
+  // 弹出文件夹选择框；取消时返回 null
+  installPluginFromFolder(): Promise<PluginView[] | null>
+  installPluginFromGit(url: string): Promise<PluginView[]>
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginView[]>
+  deletePlugin(pluginId: string): Promise<PluginView[]>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void

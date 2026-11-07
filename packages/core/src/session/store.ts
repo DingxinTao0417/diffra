@@ -70,7 +70,7 @@ const recordSchema = z.object({
     z.object({
       id: z.string(),
       // 第 14 步加的，旧记录都是普通提问；第 15 步加了出计划
-      kind: z.enum(['prompt', 'deep-scan', 'plan']).default('prompt'),
+      kind: z.enum(['prompt', 'deep-scan', 'plan', 'goal']).default('prompt'),
       prompt: z.string(),
       startedAt: z.string(),
       endedAt: z.string().nullable(),
@@ -78,6 +78,8 @@ const recordSchema = z.object({
       updates: z.array(z.unknown()),
       checkpoint: z.string().nullable(),
       messageStart: z.number().int().nonnegative().nullable().default(null),
+      // 第 17 步加的
+      skills: z.array(z.string()).default([]),
     }),
   ),
   messages: z.array(z.unknown()),

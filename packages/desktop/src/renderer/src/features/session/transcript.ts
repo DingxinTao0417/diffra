@@ -18,6 +18,8 @@ export interface Turn {
   id: string
   kind: TurnKind
   prompt: string
+  // 这一轮带上的 Skill
+  skills: string[]
   items: TranscriptItem[]
   stopReason: StopReason | null
   error: string | null
@@ -31,8 +33,8 @@ export interface Usage {
   breakdown: UsageBreakdown | null
 }
 
-export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt'): Turn {
-  return { id, kind, prompt, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = []): Turn {
+  return { id, kind, prompt, skills, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -42,6 +44,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     id: turn.id,
     kind: turn.kind ?? 'prompt',
     prompt: turn.prompt,
+    skills: turn.skills ?? [],
     items,
     // 应用退出时没跑完的一轮记为已停止
     stopReason: turn.stopReason ?? 'cancelled',

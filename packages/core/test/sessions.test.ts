@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createAgent } from '../src/agent.js'
+import { McpPool } from '../src/mcp.js'
 import {
   checkpointDiff,
   configureSession,
@@ -14,7 +15,11 @@ import {
   deleteSession,
   handshake,
   listSessions,
+  listCommands,
+  listSkills,
   loadSession,
+  mcpPrompt,
+  mcpStatus,
   plan,
   previewCheckpoint,
   rewindSession,
@@ -24,6 +29,7 @@ import {
 } from '../src/client.js'
 import type { SessionConfig } from '../src/protocol.js'
 import { SessionStore } from '../src/session/store.js'
+import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
 
 let project: string
@@ -43,10 +49,10 @@ afterEach(async () => {
 })
 
 // 在同一个进程里起一个 core 和一个客户端；每调用一次相当于重启一次 core
-async function startCore() {
+async function startCore(mcpPool?: McpPool) {
   const toAgent = new PassThrough()
   const toClient = new PassThrough()
-  createAgent({ sessionsDir: join(dataDir, 'sessions') }).connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
+  createAgent({ sessionsDir: join(dataDir, 'sessions'), mcpPool }).connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
   const connection = connectToCore(toAgent, toClient, {
     onSessionUpdate: () => {},
     onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
@@ -66,7 +72,8 @@ function config(baseUrl: string): SessionConfig {
     rules: { packs: [], review: false },
     permissionMode: 'ask',
     security: { staticCheck: false, lightScan: false },
-    limits: { compactAtPercent: 70, maxSteps: 100 },
+    limits: { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },
+    plugins: [],
     checkpointDir: join(dataDir, 'checkpoints'),
   }
 }
@@ -291,5 +298,92 @@ describe('先出计划', () => {
     await sendPrompt(core, sessionId, 'turn-2', '按计划做')
     expect(server.bodies[2]).not.toContain('PLANNING MODE')
     expect(server.bodies[2]).not.toContain('value = broken')
+  })
+})
+
+describe('Skill 和目标模式', () => {
+  test('列出项目里的 Skill；带 Skill 的提问把说明发给模型并记在这一轮；找不到的 Skill 不开始；目标模式记成目标', async () => {
+    mkdirSync(join(project, '.diffra', 'skills', 'diffra-test-skill'), { recursive: true })
+    writeFileSync(join(project, '.diffra', 'skills', 'diffra-test-skill', 'SKILL.md'), '---\nname: diffra-test-skill\ndescription: 测试用\n---\n回答前先说 OK')
+    server = await startScriptedServer([{ text: 'OK，好的' }, { toolCalls: [{ name: 'finish', input: { summary: '完成', goal_met: true } }] }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+
+    const skills = await listSkills(core, project)
+    expect(skills.find((skill) => skill.name === 'diffra-test-skill')).toEqual({
+      name: 'diffra-test-skill',
+      description: '测试用',
+      source: 'project',
+      dir: join(project, '.diffra', 'skills', 'diffra-test-skill'),
+    })
+
+    await sendPrompt(core, sessionId, 'turn-1', '你好', { skills: ['diffra-test-skill'] })
+    expect(server.bodies[0]).toContain('回答前先说 OK')
+    await expect(sendPrompt(core, sessionId, 'turn-2', '你好', { skills: ['no-such-skill'] })).rejects.toThrow('找不到 Skill：no-such-skill')
+    await sendPrompt(core, sessionId, 'turn-3', '把事做完', { goal: true })
+    expect(server.bodies[1]).toContain('Goal mode')
+
+    const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns.map(({ id, kind, prompt, skills }) => ({ id, kind, prompt, skills }))).toEqual([
+      { id: 'turn-1', kind: 'prompt', prompt: '你好', skills: ['diffra-test-skill'] },
+      { id: 'turn-3', kind: 'goal', prompt: '把事做完', skills: [] },
+    ])
+  })
+})
+
+describe('MCP', () => {
+  test('建会话时带上 MCP 服务器：按任务或按配置查状态，展开 prompt，模型能用它的工具', async () => {
+    server = await startScriptedServer([{ toolCalls: [{ name: 'mcp__demo__echo', input: { text: 'ping' } }] }, { text: '收到' }])
+    // MCP 服务器的工作目录是项目目录，删目录前要先关掉
+    const pool = new McpPool()
+    try {
+      const core = await startCore(pool)
+      const { sessionId } = await createSession(core, project, config(server.baseUrl), [testMcpServer()])
+
+      const [status] = await mcpStatus(core, { sessionId })
+      expect(status).toMatchObject({ name: 'demo', transport: 'stdio', state: 'connected' })
+      expect(status?.prompts.map((prompt) => prompt.name)).toEqual(['review'])
+      expect(await mcpPrompt(core, { sessionId }, 'demo', 'review', { file: 'a.ts' })).toBe('Please review a.ts')
+      await expect(mcpPrompt(core, { sessionId }, 'other', 'review', {})).rejects.toThrow('没有名为「other」的 MCP 服务器')
+      const [byConfig] = await mcpStatus(core, { cwd: project, servers: [testMcpServer('demo2')] })
+      expect(byConfig?.state).toBe('connected')
+
+      await sendPrompt(core, sessionId, 'turn-1', '试试 MCP')
+      expect(server.bodies[0]).toContain('mcp__demo__echo')
+      expect(server.bodies[1]).toContain('echo: ping')
+    } finally {
+      await pool.closeAll()
+    }
+  })
+})
+
+describe('插件', () => {
+  test('开着的插件：Skill 能选、命令能列出、MCP 服务器跟着任务连上', async () => {
+    const plugin = join(dataDir, 'kit')
+    mkdirSync(join(plugin, '.claude-plugin'), { recursive: true })
+    writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'kit' }))
+    mkdirSync(join(plugin, 'skills', 'kit-style'), { recursive: true })
+    writeFileSync(join(plugin, 'skills', 'kit-style', 'SKILL.md'), '---\nname: kit-style\n---\n插件说明 KIT-OK')
+    mkdirSync(join(plugin, 'commands'))
+    writeFileSync(join(plugin, 'commands', 'greet.md'), '跟 $ARGUMENTS 打招呼')
+    writeFileSync(join(plugin, '.mcp.json'), JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [MCP_SERVER_SCRIPT] } } }))
+    server = await startScriptedServer([{ text: '好' }])
+    const pool = new McpPool()
+    try {
+      const core = await startCore(pool)
+      const plugins = [{ name: 'kit', dir: plugin }]
+      const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), plugins })
+
+      expect((await listSkills(core, project, plugins)).find((skill) => skill.name === 'kit-style')?.source).toBe('plugin')
+      expect((await listCommands(core, project, plugins)).find((command) => command.name === 'kit:greet')?.body).toBe('跟 $ARGUMENTS 打招呼')
+      const [status] = await mcpStatus(core, { sessionId })
+      expect(status).toMatchObject({ name: 'kit-demo', state: 'connected' })
+
+      await sendPrompt(core, sessionId, 'turn-1', '你好', { skills: ['kit-style'] })
+      expect(server.bodies[0]).toContain('插件说明 KIT-OK')
+      expect(server.bodies[0]).toContain('mcp__kit-demo__echo')
+    } finally {
+      await pool.closeAll()
+    }
   })
 })

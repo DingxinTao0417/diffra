@@ -31,7 +31,10 @@ const runCommandInput = z.object({
   command: z.string().describe('Bash command to run in the project directory'),
   timeout_seconds: z.number().int().positive().optional().describe('Default 120, maximum 600'),
 })
-const finishInput = z.object({ summary: z.string().describe('Short summary of what you did') })
+const finishInput = z.object({
+  summary: z.string().describe('Short summary of what you did'),
+  goal_met: z.boolean().optional().describe('Only in goal mode: true when the whole goal and its completion criteria are met and verified'),
+})
 
 export const TOOLS = {
   read_file: tool({
@@ -104,7 +107,7 @@ export function executeTool(name: Exclude<ToolName, 'finish'>, input: unknown, c
   }
 }
 
-export function parseFinishInput(input: unknown): { summary: string } {
+export function parseFinishInput(input: unknown): { summary: string; goal_met?: boolean } {
   return parseInput(finishInput, input)
 }
 

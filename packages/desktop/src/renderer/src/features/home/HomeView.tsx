@@ -57,11 +57,11 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     }
   }
 
-  const send = async (text: string) => {
+  const send = async (text: string, extras: { goal: boolean; skills: string[] }) => {
     if (!projectPath) return false
     setError(null)
     try {
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, planMode)
+      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, { plan: planMode, ...extras })
       return true
     } catch (caught) {
       setError(errorMessage(caught))
@@ -90,8 +90,10 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          placeholder={projectPath ? '描述任务，比如「修复登录页的报错」；Ctrl+Enter 发送' : '先在下面选择项目文件夹'}
+          placeholder={projectPath ? '描述任务，比如「修复登录页的报错」；输入 / 用命令和 Skill，Ctrl+Enter 发送' : '先在下面选择项目文件夹'}
           disabled={!projectPath}
+          projectPath={projectPath}
+          mcpTarget={projectPath ? { projectPath } : null}
           permissionMode={permissionMode}
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}

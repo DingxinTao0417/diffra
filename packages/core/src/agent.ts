@@ -9,9 +9,21 @@ import { EXT_METHODS } from './models/types.js'
 import { type LoadedSession, SESSION_EXT_METHODS, type SessionInfo, type StoredSessionMeta, type TurnKind } from './protocol.js'
 import { detectLanguages } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
-import { endpointSchema, modelConfigSchema, newSessionMetaSchema, promptMetaSchema } from './session/config.js'
+import { commandRoots, loadCommands } from './commands.js'
+import { McpPool } from './mcp.js'
+import { inspectPlugin, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import {
+  endpointSchema,
+  mcpServerSchema,
+  modelConfigSchema,
+  newSessionMetaSchema,
+  pluginRefSchema,
+  promptMetaSchema,
+} from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { runPlan } from './session/plan.js'
+import type { Session as SessionType } from './session/session.js'
+import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
 import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
 import { detectChecks } from './project/detect.js'
@@ -29,6 +41,8 @@ export interface AgentOptions {
   sessionsDir?: string | null
   // 用量记录存放的目录；不给就不记录，用量汇总不可用
   usageDir?: string | null
+  // 测试时注入，用完自己关掉；正常运行时 core 退出，stdio 服务器读到输入结束自行退出
+  mcpPool?: McpPool
 }
 
 const checkpointParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1) })
@@ -45,7 +59,17 @@ const sessionConfigureParams = z.object({
 })
 
 const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
-const planParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), prompt: z.string().trim().min(1) })
+const planParams = z.object({
+  sessionId: z.string().min(1),
+  turnId: z.string().min(1),
+  prompt: z.string().trim().min(1),
+  skills: z.array(z.string().min(1)).default([]),
+})
+
+const mcpTargetParams = z.union([
+  z.object({ sessionId: z.string().min(1) }),
+  z.object({ cwd: z.string().min(1), servers: z.array(mcpServerSchema), plugins: z.array(pluginRefSchema).default([]) }),
+])
 
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
 const MAX_USAGE_RANGE_MS = 400 * 86_400_000
@@ -56,11 +80,33 @@ const usageQueryParams = z
 
 const sameDir = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
 
+// 用户选的 Skill 按名字取出来；有一个找不到就不开始这一轮，免得悄悄少了说明
+async function selectedSkills(session: SessionType, names: string[]): Promise<Skill[]> {
+  if (names.length === 0) return []
+  const skills = await loadSkills(skillRoots(session.cwd, pluginSkillRoots(session.config.plugins)))
+  const missing = names.filter((name) => !skills.some((skill) => skill.name === name))
+  if (missing.length > 0) throw new Error(`找不到 Skill：${missing.join('、')}`)
+  return names.flatMap((name) => skills.filter((skill) => skill.name === name))
+}
+
 export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const sessions = new Map<string, Session>()
   const infos = new Map<string, SessionInfo>()
   const store = options.sessionsDir ? new SessionStore(options.sessionsDir) : null
   const usageLog = options.usageDir ? new UsageLog(options.usageDir) : null
+  const mcpPool = options.mcpPool ?? new McpPool()
+
+  // 只留还开着的任务用到的 MCP 连接
+  const retainMcp = () =>
+    mcpPool.retain([...sessions.values()].map((session) => ({ cwd: session.cwd, servers: session.mcpServers }))).catch((error: unknown) =>
+      console.error('[mcp] 清理连接失败', error),
+    )
+
+  const mcpTarget = async (params: z.infer<typeof mcpTargetParams>) => {
+    if (!('sessionId' in params)) return { cwd: params.cwd, servers: [...params.servers, ...(await pluginMcpServers(params.plugins))] }
+    const session = sessionOf(params.sessionId)
+    return { cwd: session.cwd, servers: session.mcpServers }
+  }
 
   const sessionOf = (sessionId: string): Session => {
     const session = sessions.get(sessionId)
@@ -74,7 +120,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   }
 
   // 新建和加载共用：设置每次都用调用方传来的（模型、检查、规范可能已经改过），对话历史来自记录
-  const openSession = async (cwd: string, rawMeta: unknown, record?: SessionRecord) => {
+  const openSession = async (cwd: string, rawMeta: unknown, mcpServers: acp.McpServer[], record?: SessionRecord) => {
     const meta = newSessionMetaSchema.safeParse(rawMeta)
     if (!meta.success) throw acp.RequestError.invalidParams(meta.error.issues, '缺少或无效的 _meta.diffra 会话配置')
     const dir = await stat(cwd).catch(() => null)
@@ -97,6 +143,9 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       checkpoints,
       rulePacks,
       systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks),
+      readRoots: skillRoots(cwd, pluginSkillRoots(config.plugins)).map((root) => root.dir),
+      mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
+      mcpPool,
       record,
     })
     const info: SessionInfo = {
@@ -107,6 +156,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     }
     sessions.set(session.id, session)
     infos.set(session.id, info)
+    void retainMcp()
+    mcpPool.warmUp(cwd, session.mcpServers)
     return { session, info }
   }
 
@@ -133,10 +184,11 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     turnId: string,
     text: string,
     kind: TurnKind,
+    skills: string[],
     run: (io: TurnIO) => Promise<acp.StopReason>,
   ): Promise<acp.StopReason> => {
     const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
-    session.startTurn(turnId, text, kind)
+    session.startTurn(turnId, text, kind, skills)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
     try {
@@ -183,11 +235,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       agentCapabilities: {
         loadSession: store !== null,
         sessionCapabilities: store ? { list: {}, delete: {} } : {},
+        mcpCapabilities: { http: true, sse: false },
       },
       agentInfo: { name: AGENT_NAME, version: CORE_VERSION },
     }))
     .onRequest(acp.methods.agent.session.new, async ({ params }) => {
-      const { session, info } = await openSession(params.cwd, params._meta)
+      const { session, info } = await openSession(params.cwd, params._meta, params.mcpServers)
       return { sessionId: session.id, _meta: { diffra: info } }
     })
     // Diffra 的界面一次拿到整段历史，所以历史放在响应的 _meta 里，不逐条回放 session/update
@@ -200,7 +253,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
-      const { session, info } = await openSession(record.cwd, params._meta, record)
+      const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
       const loaded: LoadedSession = { info, title: session.title, turns: session.turns }
       return { _meta: { diffra: loaded } }
     })
@@ -214,6 +267,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (sessions.get(params.sessionId)?.running) throw new Error('任务还在进行中，先停止再删除')
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
+      void retainMcp()
       await requireStore().remove(params.sessionId)
       return {}
     })
@@ -225,24 +279,51 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const text = params.prompt
         .map((block) => (block.type === 'text' ? block.text : `[${block.type} content is not supported yet]`))
         .join('\n')
-      const stopReason = await runRecordedTurn(session, client, turnId, text, 'prompt', (io) => runTurn(session, { id: turnId, text }, io))
+      const skillNames = meta.success ? meta.data.diffra.skills : []
+      const goal = meta.success && meta.data.diffra.goal
+      const skills = await selectedSkills(session, skillNames)
+      const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, (io) =>
+        runTurn(session, { id: turnId, text: withSkills(text, skills) }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
+      )
       return { stopReason }
     })
     // 深度安全扫描作为一轮记进会话：进度实时显示、能停止、存进历史
     .onRequest(SESSION_EXT_METHODS.deepScan, deepScanParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
-      const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', (io) =>
+      const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', [], (io) =>
         runDeepScan(session, { id: params.turnId }, params.scope, io),
       )
       return { stopReason }
     })
+    .onRequest(SESSION_EXT_METHODS.mcpStatus, z.object({ target: mcpTargetParams, retry: z.boolean().default(false) }), async ({ params }) => {
+      const { cwd, servers } = await mcpTarget(params.target)
+      return mcpPool.status(cwd, servers, params.retry)
+    })
+    .onRequest(
+      SESSION_EXT_METHODS.mcpPrompt,
+      z.object({ target: mcpTargetParams, server: z.string().min(1), prompt: z.string().min(1), arguments: z.record(z.string(), z.string()) }),
+      async ({ params }) => {
+        const { cwd, servers } = await mcpTarget(params.target)
+        const server = servers.find((item) => item.name === params.server)
+        if (!server) throw new Error(`没有名为「${params.server}」的 MCP 服务器`)
+        return mcpPool.promptText(cwd, server, params.prompt, params.arguments)
+      },
+    )
+    .onRequest(SESSION_EXT_METHODS.skillsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), async ({ params }) =>
+      (await loadSkills(skillRoots(params.cwd, pluginSkillRoots(params.plugins)))).map(({ body: _body, ...info }) => info),
+    )
+    .onRequest(SESSION_EXT_METHODS.commandsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), ({ params }) =>
+      loadCommands(commandRoots(params.cwd, params.plugins)),
+    )
+    .onRequest(SESSION_EXT_METHODS.pluginInspect, z.object({ dir: z.string().min(1) }), ({ params }) => inspectPlugin(params.dir))
     // 先出计划也作为一轮记进会话，和深度扫描一样
     .onRequest(SESSION_EXT_METHODS.plan, planParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
-      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', (io) =>
-        runPlan(session, { id: params.turnId, text: params.prompt }, io),
+      const skills = await selectedSkills(session, params.skills)
+      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', params.skills, (io) =>
+        runPlan(session, { id: params.turnId, text: withSkills(params.prompt, skills) }, io),
       )
       return { stopReason }
     })

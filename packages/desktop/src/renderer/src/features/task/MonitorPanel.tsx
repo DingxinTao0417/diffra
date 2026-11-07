@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { DiffCounts } from '@/features/session/DiffView'
+import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -15,12 +16,14 @@ interface MonitorPanelProps {
   branch: string | null
   diff: TaskDiff | null
   onProjectSaved(project: ProjectState): void
+  // 点了深度扫描，由任务页弹确认框
+  onDeepScan(scope: 'task' | 'project'): void
 }
 
-export function MonitorPanel({ task, project, branch, diff, onProjectSaved }: MonitorPanelProps) {
+export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan }: MonitorPanelProps) {
   const [editing, setEditing] = useState(false)
-  const [scanScope, setScanScope] = useState<'task' | 'project' | null>(null)
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
+  const mcp = useMcpStatus({ sessionId: task.sessionId })
   const status = task.running ? '运行中' : task.turns.length === 0 ? '未开始' : '空闲'
   const checks = project?.checks
 
@@ -86,14 +89,32 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved }: Mo
         <LinkButton onClick={() => openSettings('security')}>安全设置</LinkButton>
       </Section>
 
+      {mcp.statuses && mcp.statuses.length > 0 && (
+        <Section title="MCP">
+          {mcp.statuses.map((server) => (
+            <Row
+              key={server.name}
+              dot={server.state === 'connected' ? 'ok' : 'off'}
+              label={server.name}
+              value={server.state === 'connected' ? `${server.tools.length} 个工具` : '连接失败'}
+              tone={server.state === 'connected' ? undefined : 'bad'}
+            />
+          ))}
+          <div className="flex gap-3">
+            {mcp.statuses.some((server) => server.state === 'failed') && <LinkButton onClick={mcp.retry}>重新连接</LinkButton>}
+            <LinkButton onClick={() => openSettings('mcp')}>MCP 设置</LinkButton>
+          </div>
+        </Section>
+      )}
+
       {deepScanEnabled && (
         <Section title="深度扫描">
           <div className="text-xs leading-relaxed text-muted-foreground">只读地跨文件追踪数据流，出一份报告，勾选后交给智能体修复。</div>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={task.running || task.turns.length === 0} onClick={() => setScanScope('task')}>
+            <Button size="sm" variant="outline" disabled={task.running || task.turns.length === 0} onClick={() => onDeepScan('task')}>
               扫描本任务改动
             </Button>
-            <Button size="sm" variant="outline" disabled={task.running} onClick={() => setScanScope('project')}>
+            <Button size="sm" variant="outline" disabled={task.running} onClick={() => onDeepScan('project')}>
               扫描整个项目
             </Button>
           </div>
@@ -112,30 +133,36 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved }: Mo
       </Section>
 
       <ProjectSettingsDialog project={project} open={editing} onClose={() => setEditing(false)} onSaved={onProjectSaved} />
-      <Dialog open={scanScope !== null} onOpenChange={(open) => !open && setScanScope(null)}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>{scanScope === 'project' ? '深度扫描整个项目？' : '深度扫描本任务改动？'}</DialogTitle>
-            <DialogDescription>
-              评审模型会读代码、搜索，跨文件追踪数据流，通常要调用模型十几到几十次、几分钟，用量在「设置 → 用量」里能看到。扫描只读，不改文件、不执行命令。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setScanScope(null)}>
-              取消
-            </Button>
-            <Button
-              onClick={() => {
-                if (scanScope) void runDeepScan(task.sessionId, scanScope)
-                setScanScope(null)
-              }}
-            >
-              开始扫描
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </aside>
+  )
+}
+
+// 任务监控里的按钮和输入框的斜杠命令都从这里确认，扫描要花不少调用
+export function DeepScanDialog({ sessionId, scope, onClose }: { sessionId: string; scope: 'task' | 'project' | null; onClose(): void }) {
+  return (
+    <Dialog open={scope !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>{scope === 'project' ? '深度扫描整个项目？' : '深度扫描本任务改动？'}</DialogTitle>
+          <DialogDescription>
+            评审模型会读代码、搜索，跨文件追踪数据流，通常要调用模型十几到几十次、几分钟，用量在「设置 → 用量」里能看到。扫描只读，不改文件、不执行命令。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            onClick={() => {
+              if (scope) void runDeepScan(sessionId, scope)
+              onClose()
+            }}
+          >
+            开始扫描
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

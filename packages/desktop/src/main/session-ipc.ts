@@ -14,7 +14,11 @@ import {
   deleteSession,
   detectProjectChecks,
   listSessions,
+  listCommands,
+  listSkills,
   loadSession,
+  mcpPrompt,
+  mcpStatus,
   previewCheckpoint,
   restoreCheckpoint,
   rewindSession,
@@ -26,7 +30,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
   IPC_CHANNELS,
@@ -38,6 +42,8 @@ import {
 import type { ModelRef, ProjectRuleSettings } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
+import { mcpServersFor } from './mcp-servers'
+import { enabledPlugins } from './plugins-ipc'
 import { type RulePackStore, sessionRules } from './rule-packs'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint } from './settings-ipc'
@@ -56,6 +62,11 @@ const sessionOptionsSchema = z.object({
   model: modelRefSchema.optional(),
 })
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
+
+const skillNamesSchema = z.array(z.string().min(1).max(200)).max(20)
+const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean() })
+
+const mcpTargetSchema = z.union([z.object({ sessionId: z.string().min(1) }), z.object({ projectPath: z.string().min(1).nullable() })])
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 const DEFAULT_RULE_SETTINGS: ProjectRuleSettings = { disabledPacks: [], disabledRules: [], includeRecommended: false, review: false }
@@ -212,7 +223,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         rules,
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
         security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan },
-        limits: { compactAtPercent: settings.get().execution.compactAtPercent, maxSteps: settings.get().execution.maxSteps },
+        limits: {
+          compactAtPercent: settings.get().execution.compactAtPercent,
+          maxSteps: settings.get().execution.maxSteps,
+          goalMaxRounds: settings.get().execution.goalMaxRounds,
+        },
+        plugins: enabledPlugins(settings),
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
@@ -225,7 +241,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const path = parse(z.string().min(1), rawPath)
     const options = parse(sessionOptionsSchema, rawOptions ?? {})
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options)
-    const { sessionId, info } = await createSession(await coreConnection(), path, config)
+    const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
     return { sessionId, info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode }
   })
@@ -289,7 +305,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     const path = parse(z.string().min(1), rawPath)
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
-    const loaded = await loadSession(await coreConnection(), sessionId, path, config)
+    const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
     return { sessionId, info: loaded.info, modelLabel, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
   })
@@ -318,11 +334,11 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     await deleteSession(await coreConnection(), parse(z.string().min(1), rawSessionId))
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawOptions: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)
     const turnId = parse(z.string().min(1), rawTurnId)
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
-    const response = await sendPrompt(await coreConnection(), sessionId, turnId, text)
+    const response = await sendPrompt(await coreConnection(), sessionId, turnId, text, parse(promptOptionsSchema, rawOptions))
     return response.stopReason
   })
 
@@ -336,15 +352,49 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return response.stopReason
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawSkills: unknown) => {
     const response = await plan(
       await coreConnection(),
       parse(z.string().min(1), rawSessionId),
       parse(z.string().min(1), rawTurnId),
       parse(z.string().trim().min(1, '任务内容不能为空'), rawText),
+      parse(skillNamesSchema, rawSkills),
     )
     return response.stopReason
   })
+
+  // 任务用建任务时的配置；没有任务时按设置里开着的服务器，在最近的项目（没有就用户目录）里启动
+  const mcpTarget = async (raw: unknown) => {
+    const target = parse(mcpTargetSchema, raw)
+    if ('sessionId' in target) return target
+    return {
+      cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'),
+      servers: await mcpServersFor(settings, secrets),
+      plugins: enabledPlugins(settings),
+    }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.mcpStatus, async (_event, rawTarget: unknown, rawRetry: unknown) =>
+    mcpStatus(await coreConnection(), await mcpTarget(rawTarget), parse(z.boolean(), rawRetry)),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.mcpPrompt, async (_event, rawTarget: unknown, rawServer: unknown, rawPrompt: unknown, rawArgs: unknown) =>
+    mcpPrompt(
+      await coreConnection(),
+      await mcpTarget(rawTarget),
+      parse(z.string().min(1), rawServer),
+      parse(z.string().min(1), rawPrompt),
+      parse(z.record(z.string(), z.string().max(10_000)), rawArgs),
+    ),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawPath: unknown) =>
+    listSkills(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
+  )
+
+  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawPath: unknown) =>
+    listCommands(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
+  )
 
   ipcMain.handle(IPC_CHANNELS.sessionCancel, async (_event, rawSessionId: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)

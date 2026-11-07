@@ -3,16 +3,48 @@ import { type ModelEndpoint, type ModelError, requestListModels, requestTestMode
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
+import { MCP_TRANSPORTS, type McpServerConfig, type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
+import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
 import type { SecretStore } from './secret-store'
-import { appearanceSchema, executionSchema, modelRefSchema, permissionModeSchema, providerFieldsSchema, securitySchema, type SettingsStore } from './settings-store'
+import {
+  appearanceSchema,
+  executionSchema,
+  MCP_NAME_PATTERN,
+  modelRefSchema,
+  permissionModeSchema,
+  providerFieldsSchema,
+  securitySchema,
+  type SettingsStore,
+} from './settings-store'
 
 const providerInputSchema = providerFieldsSchema.extend({
   id: z.string().min(1).optional(),
   apiKey: z.string().trim().optional(),
 })
+
+const namedValue = (pattern: RegExp, label: string) =>
+  z.object({ name: z.string().trim().regex(pattern, `${label}名称不合法`), value: z.string().nullable() })
+
+const mcpInputSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    name: z.string().trim().regex(MCP_NAME_PATTERN, '名称只能用字母、数字、- 和 _，最多 32 个字符'),
+    enabled: z.boolean(),
+    transport: z.enum(MCP_TRANSPORTS),
+    command: z.string().trim(),
+    args: z.array(z.string().trim().min(1)).max(100),
+    url: z.string().trim(),
+    env: z.array(namedValue(/^[A-Za-z_][A-Za-z0-9_]*$/, '环境变量')).max(50),
+    headers: z.array(namedValue(/^[A-Za-z0-9-]+$/, '请求头')).max(50),
+  })
+  .superRefine((input, context) => {
+    if (input.transport === 'stdio' && !input.command) context.addIssue({ code: 'custom', message: '请填写启动命令' })
+    if (input.transport === 'http' && !/^https?:\/\/\S+$/.test(input.url)) context.addIssue({ code: 'custom', message: '地址要以 http:// 或 https:// 开头' })
+    const names = (input.transport === 'stdio' ? input.env : input.headers).map((item) => item.name.toLowerCase())
+    if (new Set(names).size !== names.length) context.addIssue({ code: 'custom', message: '有重名的环境变量或请求头' })
+  })
 
 export async function providerEndpoint(
   settings: SettingsStore,
@@ -28,7 +60,7 @@ export async function providerEndpoint(
 
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
-    const { providers, roles, appearance, defaultPermissionMode, security, execution } = settings.get()
+    const { providers, roles, appearance, defaultPermissionMode, security, execution, mcpServers } = settings.get()
     return {
       providers: await Promise.all(
         providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -38,6 +70,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       defaultPermissionMode,
       security,
       execution,
+      mcpServers,
       loadError: settings.loadError ?? secrets.loadError,
     }
   }
@@ -84,6 +117,52 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       pruneRoles({ ...current, providers: current.providers.filter((provider) => provider.id !== id) }),
     )
     await secrets.delete(id)
+    return view()
+  })
+
+  // 只保存当前类型用到的那组名字和值，另一组连同密钥一起删掉
+  ipcMain.handle(IPC_CHANNELS.mcpSave, async (_event, raw: unknown) => {
+    const input = parse(mcpInputSchema, raw)
+    const servers = settings.get().mcpServers
+    const previous = input.id ? servers.find((server) => server.id === input.id) : undefined
+    if (input.id && !previous) throw new Error('MCP 服务器不存在')
+    if (servers.some((server) => server.id !== input.id && server.name.toLowerCase() === input.name.toLowerCase())) {
+      throw new Error(`已经有名为「${input.name}」的 MCP 服务器`)
+    }
+    const id = previous?.id ?? randomUUID()
+    const kind = input.transport === 'stdio' ? 'env' : 'header'
+    const values = input.transport === 'stdio' ? input.env : input.headers
+    const savedNames = previous ? (kind === 'env' ? previous.envNames : previous.headerNames) : []
+    const missing = values.find((item) => item.value === null && !savedNames.includes(item.name))
+    if (missing) throw new Error(`「${missing.name}」还没有填值`)
+    // 先存密钥：加密失败时整个保存都不生效
+    for (const item of values) if (item.value !== null) await secrets.set(mcpSecretKey(id, kind, item.name), item.value)
+    const server: McpServerConfig = {
+      id,
+      name: input.name,
+      enabled: input.enabled,
+      transport: input.transport,
+      command: input.transport === 'stdio' ? input.command : '',
+      args: input.transport === 'stdio' ? input.args : [],
+      envNames: kind === 'env' ? values.map((item) => item.name) : [],
+      url: input.transport === 'http' ? input.url : '',
+      headerNames: kind === 'header' ? values.map((item) => item.name) : [],
+    }
+    await settings.update((current) => ({
+      ...current,
+      mcpServers: previous ? current.mcpServers.map((item) => (item.id === id ? server : item)) : [...current.mcpServers, server],
+    }))
+    const kept = new Set(mcpSecretKeys(server))
+    for (const key of previous ? mcpSecretKeys(previous) : []) if (!kept.has(key)) await secrets.delete(key)
+    return view()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.mcpDelete, async (_event, raw: unknown) => {
+    const id = parse(z.string().min(1), raw)
+    const server = settings.get().mcpServers.find((item) => item.id === id)
+    if (!server) return view()
+    await settings.update((current) => ({ ...current, mcpServers: current.mcpServers.filter((item) => item.id !== id) }))
+    for (const key of mcpSecretKeys(server)) await secrets.delete(key)
     return view()
   })
 

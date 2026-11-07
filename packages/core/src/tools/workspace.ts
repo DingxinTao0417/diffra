@@ -21,6 +21,22 @@ export async function resolveInWorkspace(root: string, input: string): Promise<W
   return { absolute, display: relative(root, absolute).split(sep).join('/') || '.' }
 }
 
+// 只读工具用：项目里的路径照常；项目外的绝对路径落在 readRoots 某个目录里也可以
+export async function resolveReadable(root: string, readRoots: string[], input: string): Promise<WorkspacePath> {
+  try {
+    return await resolveInWorkspace(root, input)
+  } catch (error) {
+    const absolute = resolve(root, fromMsysPath(input))
+    if (!(error instanceof ToolError) || !isAbsolute(fromMsysPath(input))) throw error
+    for (const readRoot of readRoots) {
+      const realRoot = await realpath(readRoot).catch(() => null)
+      if (!realRoot) continue
+      if (isInside(relative(realRoot, await realpathOfExisting(absolute)))) return { absolute, display: absolute.split(sep).join('/') }
+    }
+    throw error
+  }
+}
+
 export function contentHash(text: string): string {
   return createHash('sha256').update(text).digest('hex')
 }

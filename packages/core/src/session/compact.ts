@@ -4,7 +4,6 @@ import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import type { ActiveModel, TurnIO } from './loop.js'
 import type { Session } from './session.js'
-import { TOOL_DEFINITION_CHARS, TOOLS } from './tools.js'
 
 // 最近这么多步（模型的回复和它调用工具的结果）原样保留，压缩只动更早的部分
 export const KEEP_RECENT_STEPS = 4
@@ -36,7 +35,7 @@ export type CompactionOutcome = { kind: 'ok' } | { kind: 'too-large' } | { kind:
 
 // 发给编码模型的字数：系统提示词、工具定义和对话，用来按比例估算 token 数
 export function contextChars(session: Session): number {
-  return session.systemPrompt.length + TOOL_DEFINITION_CHARS + JSON.stringify(session.contextMessages()).length
+  return session.systemPrompt.length + session.toolChars() + JSON.stringify(session.contextMessages()).length
 }
 
 // 用上一次调用的实际输入 token 数，按字数比例估算下一次调用的大小；还没调用过时不知道
@@ -143,7 +142,7 @@ async function summarize(session: Session, model: ActiveModel, cut: number, sign
     model: model.language,
     system: session.systemPrompt,
     messages: [...context.slice(0, context.length - kept), { role: 'user', content: SUMMARY_REQUEST }],
-    tools: TOOLS,
+    tools: session.toolSet(),
     toolChoice: 'none',
     maxRetries: 2,
     abortSignal: signal,

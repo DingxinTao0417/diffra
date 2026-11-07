@@ -5,6 +5,7 @@ import { IPC_CHANNELS } from '../shared/ipc'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { RulePackStore } from './rule-packs'
+import { registerPluginsIpc } from './plugins-ipc'
 import { registerRulesIpc } from './rules-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
@@ -61,6 +62,7 @@ app
     registerSettingsIpc(settings, secrets)
     registerRulesIpc(rulePacks)
     registerSessionIpc(settings, secrets, userDataDir, rulePacks)
+    registerPluginsIpc(settings, userDataDir)
     registerTerminalIpc()
     setupUpdater()
     createWindow()

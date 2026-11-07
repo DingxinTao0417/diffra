@@ -140,7 +140,8 @@ describe('经过 agent 记录和汇总', () => {
         rules: { packs: [], review: false },
         permissionMode: 'ask',
         security: { staticCheck: false, lightScan: false },
-        limits: { compactAtPercent: 70, maxSteps: 100 },
+        limits: { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },
+        plugins: [],
         checkpointDir: null,
       })
       await sendPrompt(connection, sessionId, 'turn-1', '看看 a.txt')

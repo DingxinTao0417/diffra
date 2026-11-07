@@ -5,13 +5,20 @@ import {
   type CheckDetection,
   type CheckpointChange,
   type CheckRunResult,
+  type CommandInfo,
   type LoadedSession,
+  type McpServer,
+  type McpServerStatus,
+  type McpTarget,
+  type PluginInfo,
+  type PluginRef,
   type PermissionMode,
   SESSION_EXT_METHODS,
   type SessionConfig,
   type SessionInfo,
   type SessionSearchResult,
   type StoredSessionMeta,
+  type SkillInfo,
   type StoredSessionSummary,
   type UsageQuery,
   type UsageSummary,
@@ -50,26 +57,34 @@ export async function createSession(
   connection: acp.ClientConnection,
   cwd: string,
   config: SessionConfig,
+  mcpServers: McpServer[] = [],
 ): Promise<{ sessionId: string; info: SessionInfo }> {
   const response = await requestOf(connection)(
     acp.methods.agent.session.new,
-    { cwd, mcpServers: [], _meta: { diffra: config } },
+    { cwd, mcpServers, _meta: { diffra: config } },
     extRequestOptions(),
   )
   return { sessionId: response.sessionId, info: readSessionInfo(response._meta) }
 }
 
 // 一轮任务可能跑很久，不设超时；用 cancelSession 停止
+// skills：这一轮选的 Skill 名称；goal：目标模式，自主推进多轮
+export interface PromptOptions {
+  skills?: string[]
+  goal?: boolean
+}
+
 export function sendPrompt(
   connection: acp.ClientConnection,
   sessionId: string,
   turnId: string,
   text: string,
+  options: PromptOptions = {},
 ): Promise<acp.PromptResponse> {
   return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
     prompt: [{ type: 'text', text }],
-    _meta: { diffra: { turnId } },
+    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false } },
   })
 }
 
@@ -87,12 +102,54 @@ export function deepScan(
 }
 
 // 先出计划：和一轮任务一样可能跑很久，不设超时；用 cancelSession 停止
-export function plan(connection: acp.ClientConnection, sessionId: string, turnId: string, prompt: string): Promise<{ stopReason: acp.StopReason }> {
-  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string; prompt: string }>(SESSION_EXT_METHODS.plan, {
-    sessionId,
-    turnId,
-    prompt,
-  })
+export function plan(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  turnId: string,
+  prompt: string,
+  skills: string[] = [],
+): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string; prompt: string; skills: string[] }>(
+    SESSION_EXT_METHODS.plan,
+    { sessionId, turnId, prompt, skills },
+  )
+}
+
+export function listSkills(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<SkillInfo[]> {
+  return requestOf(connection)<SkillInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.skillsList, { cwd, plugins }, extRequestOptions())
+}
+
+export function listCommands(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<CommandInfo[]> {
+  return requestOf(connection)<CommandInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.commandsList, { cwd, plugins }, extRequestOptions())
+}
+
+export function inspectPlugin(connection: acp.ClientConnection, dir: string): Promise<PluginInfo> {
+  return requestOf(connection)<PluginInfo, { dir: string }>(SESSION_EXT_METHODS.pluginInspect, { dir }, extRequestOptions())
+}
+
+// 连 MCP 服务器（首次可能要下载）最多等 60 秒，再加上列 prompt
+const MCP_REQUEST_TIMEOUT_MS = 120_000
+
+export function mcpStatus(connection: acp.ClientConnection, target: McpTarget, retry = false): Promise<McpServerStatus[]> {
+  return requestOf(connection)<McpServerStatus[], { target: McpTarget; retry: boolean }>(
+    SESSION_EXT_METHODS.mcpStatus,
+    { target, retry },
+    { cancellationSignal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
+export function mcpPrompt(
+  connection: acp.ClientConnection,
+  target: McpTarget,
+  server: string,
+  prompt: string,
+  args: Record<string, string>,
+): Promise<string> {
+  return requestOf(connection)<string, { target: McpTarget; server: string; prompt: string; arguments: Record<string, string> }>(
+    SESSION_EXT_METHODS.mcpPrompt,
+    { target, server, prompt, arguments: args },
+    { cancellationSignal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
 }
 
 export function cancelSession(connection: acp.ClientConnection, sessionId: string): Promise<void> {
@@ -121,11 +178,12 @@ export async function loadSession(
   sessionId: string,
   cwd: string,
   config: SessionConfig,
+  mcpServers: McpServer[] = [],
 ): Promise<LoadedSession> {
   const response = await requestOf(connection)(acp.methods.agent.session.load, {
     sessionId,
     cwd,
-    mcpServers: [],
+    mcpServers,
     _meta: { diffra: config },
   })
   const diffra = response && typeof response._meta?.diffra === 'object' ? (response._meta.diffra as Partial<LoadedSession>) : null

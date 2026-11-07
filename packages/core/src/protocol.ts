@@ -1,9 +1,10 @@
 // core 与桌面端共用的纯类型和常量（桌面端界面也会引用，不能依赖 Node API）。
-import type { SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
+import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
 import type { ModelEndpoint } from './models/types.js'
 
 export * from './models/types.js'
 export type {
+  McpServer,
   PermissionOption,
   RequestPermissionRequest,
   SessionNotification,
@@ -69,6 +70,8 @@ export interface SessionSecurity {
 export interface SessionLimits {
   compactAtPercent: number
   maxSteps: number | null
+  // 目标模式最多自主推进几轮
+  goalMaxRounds: number
 }
 
 export interface SessionModel {
@@ -94,6 +97,8 @@ export interface SessionConfig {
   permissionMode: PermissionMode
   security: SessionSecurity
   limits: SessionLimits
+  // 开着的插件：它们的 Skill、命令和 MCP 服务器
+  plugins: PluginRef[]
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -124,7 +129,61 @@ export interface UsageBreakdown {
 
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
-export type TurnKind = 'prompt' | 'deep-scan' | 'plan'
+export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal'
+
+// Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，以及兼容读取的 Claude Code、Codex 的目录
+export type SkillSource = 'project' | 'user' | 'plugin' | 'claude' | 'codex'
+
+export interface SkillInfo {
+  name: string
+  description: string
+  source: SkillSource
+  dir: string
+}
+
+export interface PluginRef {
+  name: string
+  dir: string
+}
+
+// 插件里有什么；unsupported 是读到了但 Diffra 不支持的部分（agents、hooks 等）
+export interface PluginInfo {
+  name: string
+  version: string
+  description: string
+  commands: string[]
+  skills: string[]
+  mcpServers: string[]
+  unsupported: string[]
+}
+
+// 自定义命令：选了以后把正文（$ARGUMENTS 换成参数）放进输入框
+export interface CommandInfo {
+  name: string
+  description: string
+  argumentHint: string
+  source: SkillSource
+  body: string
+}
+
+export interface McpPromptInfo {
+  name: string
+  description: string
+  arguments: Array<{ name: string; description: string; required: boolean }>
+}
+
+// MCP 服务器连上没有、有哪些工具和 prompt；设置页、任务监控和斜杠菜单用
+export interface McpServerStatus {
+  name: string
+  transport: 'stdio' | 'http'
+  state: 'connected' | 'failed'
+  error: string | null
+  tools: Array<{ name: string; description: string }>
+  prompts: McpPromptInfo[]
+}
+
+// 查哪些 MCP 服务器：某个任务用的，或者给定项目和配置（首页、设置页还没有任务）
+export type McpTarget = { sessionId: string } | { cwd: string; servers: McpServer[]; plugins?: PluginRef[] }
 
 export interface StoredTurn {
   id: string
@@ -135,6 +194,8 @@ export interface StoredTurn {
   // 还没结束就被打断（比如应用退出）时为 null
   stopReason: StopReason | null
   updates: SessionUpdate[]
+  // 用户在输入框里给这一轮选的 Skill
+  skills: string[]
 }
 
 // session/load 响应的 _meta.diffra
@@ -259,6 +320,16 @@ export const SESSION_EXT_METHODS = {
   deepScan: '_diffra/security/deep-scan',
   // 先出计划：规划模型只读地看代码，交一份计划，不改文件
   plan: '_diffra/session/plan',
+  // 列出这个项目能用的 Skill
+  skillsList: '_diffra/skills/list',
+  // MCP 服务器状态；retry 为 true 时连不上的马上重连
+  mcpStatus: '_diffra/mcp/status',
+  // 把一个 MCP prompt 展开成文字
+  mcpPrompt: '_diffra/mcp/prompt',
+  // 列出这个项目能用的自定义命令
+  commandsList: '_diffra/commands/list',
+  // 读一个插件文件夹里有什么
+  pluginInspect: '_diffra/plugins/inspect',
 } as const
 
 export const PERMISSION_OPTIONS = {

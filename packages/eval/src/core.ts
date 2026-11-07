@@ -71,7 +71,8 @@ export function sessionConfig(
     permissionMode: 'auto',
     security: options.security,
     // 和应用设置的默认值一致
-    limits: { compactAtPercent: 70, maxSteps: 100 },
+    limits: { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },
+    plugins: [],
     checkpointDir: options.checkpointDir,
   }
 }
