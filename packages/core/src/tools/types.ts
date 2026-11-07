@@ -28,4 +28,5 @@ export interface ToolOutput {
   edited?: boolean
   // 命令的完整输出（已截断），界面上可展开查看
   terminalOutput?: string
+  commandSucceeded?: boolean
 }

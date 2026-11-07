@@ -24,7 +24,8 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const [editing, setEditing] = useState(false)
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const mcp = useMcpStatus({ sessionId: task.sessionId })
-  const status = task.running ? '运行中' : task.turns.length === 0 ? '未开始' : '空闲'
+  const progressLabels = { running: '执行中', waiting: '等待中', blocked: '受阻（未完成）', cancelled: '已取消', completed: '已完成' }
+  const status = task.permission ? '等待授权' : task.running ? '运行中' : task.progress ? progressLabels[task.progress.status === 'running' ? 'blocked' : task.progress.status] : task.turns.length === 0 ? '未开始' : '本轮已停止'
   const checks = project?.checks
 
   return (
@@ -35,6 +36,16 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           {task.turns.length} 轮 · {status}
         </span>
       </div>
+
+      {task.progress && (
+        <Section title="完成条件">
+          {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
+          {task.progress.requirements.map((item) => (
+            <Row key={item.id} dot={item.receiptId ? 'ok' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
+          ))}
+          {task.progress.requirements.length === 0 && <p className="text-muted-foreground">尚未定义多阶段完成条件；检查通过不等于任务完成。</p>}
+        </Section>
+      )}
 
       <Section title="模型">
         <Row label="编码" value={task.modelLabel} />

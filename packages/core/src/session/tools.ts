@@ -1,6 +1,7 @@
 import type { ToolKind } from '@agentclientprotocol/sdk'
 import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
+import { pauseTaskSchema, taskUpdateSchema } from './task-state.js'
 import { runCommandTool } from '../tools/command.js'
 import { editFileTool, listFilesTool, readFileTool, searchTool } from '../tools/files.js'
 import { outlineTool } from '../tools/outline.js'
@@ -66,9 +67,21 @@ export const TOOLS = {
       'Run a bash command in the project directory, e.g. tests or builds. Commands that may change things need the user\'s approval.',
     inputSchema: runCommandInput,
   }),
+  verify_changes: tool({
+    description: 'Run full project checks, security checks and rule review WITHOUT ending the task. Use before commit/push/build/publish. Continue working after success; validation is not task completion.',
+    inputSchema: finishInput,
+  }),
+  task_progress: tool({
+    description: 'Define immutable completion requirements before multi-stage work; satisfy them using receipt ids from successful run_command calls. Each requirement matches actual command AND output. Release contracts require ids commit, push, ci, publish with concrete SHA/version evidence. status returns saved progress and receipts.',
+    inputSchema: taskUpdateSchema,
+  }),
+  pause_task: tool({
+    description: 'Stop as waiting or blocked, NOT completed. Explain the missing permission, credentials, CI wait or other blocker. All unfinished requirements remain saved for resuming.',
+    inputSchema: pauseTaskSchema,
+  }),
   finish: tool({
     description:
-      'Call when the task is complete. If you changed files, the project checks run first; if they fail, fix the problems and call finish again.',
+      'TERMINAL: call ONLY when the entire user request is completed, including commit/push/CI/publication if requested. It ends the turn. For intermediate validation use verify_changes; for blockers use pause_task. Unsatisfied completion requirements reject finish.',
     inputSchema: finishInput,
   }),
 }
@@ -82,6 +95,9 @@ export const TOOL_KINDS: Record<ToolName, ToolKind> = {
   outline: 'read',
   edit_file: 'edit',
   run_command: 'execute',
+  verify_changes: 'other',
+  task_progress: 'other',
+  pause_task: 'other',
   finish: 'other',
 }
 
@@ -92,6 +108,10 @@ export function isToolName(name: string): name is ToolName {
 // AI SDK 已经按 inputSchema 校验过参数，这里再 parse 一次拿到准确的类型
 export function executeTool(name: Exclude<ToolName, 'finish'>, input: unknown, context: ToolContext): Promise<ToolOutput> {
   switch (name) {
+    case 'verify_changes':
+    case 'task_progress':
+    case 'pause_task':
+      throw new ToolError(`${name} must be handled by the session lifecycle.`)
     case 'read_file':
       return readFileTool(context, parseInput(readFileInput, input))
     case 'list_files':

@@ -6,6 +6,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
 import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
+import { newTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { browserTools } from './browser.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
@@ -94,6 +95,9 @@ export class Session {
   compaction: Compaction | null = null
   // 上一次模型调用的输入 token 数和当时发出去的字数，用来估算下一次调用有多大
   lastContext: { inputTokens: number; chars: number } | null = null
+  // 验证缓存仅存于内存，恢复后重新验证；Git 快照覆盖未跟踪文件。
+  verifiedSnapshot: string | null = null
+  taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
 
   constructor(options: SessionOptions) {
@@ -103,6 +107,8 @@ export class Session {
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
     if (record) {
+      this.taskState = record.taskState ?? newTaskState()
+      if (this.taskState.status === 'running') this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
       this.messages.push(...record.messages)
       this.compaction = record.compaction
       for (const { checkpoint, messageStart, ...turn } of record.turns) {
@@ -197,6 +203,7 @@ export class Session {
   toRecord(): SessionRecord {
     return {
       version: 1,
+      taskState: this.taskState,
       id: this.id,
       cwd: this.cwd,
       title: this.title,
@@ -265,6 +272,8 @@ export class Session {
       this.messageStarts.delete(turn.id)
     }
     this.readHashes.clear()
+    this.verifiedSnapshot = null
+    this.taskState = { ...newTaskState(), contractRequired: this.taskState.contractRequired, releaseVersion: this.taskState.releaseVersion }
     return { filesRestored }
   }
 
@@ -281,8 +290,10 @@ export class Session {
     if (!this.checkpoints || !commit) throw new Error('这一轮没有检查点，无法撤销')
     const changes = await this.checkpoints.changesSince(commit)
     await this.checkpoints.restore(commit, changes)
-    // 文件已经变了，之前读过的内容都作废，并告诉模型
+    // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
     this.readHashes.clear()
+    this.verifiedSnapshot = null
+    this.taskState = { ...this.taskState, status: 'blocked', needsVerification: true, reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
     this.messages.push({
       role: 'user',
       content:

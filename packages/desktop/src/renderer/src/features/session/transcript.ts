@@ -1,3 +1,4 @@
+import { TASK_PROGRESS_META_KEY, type TaskProgressView } from '@diffra/core/types'
 import type { PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -55,6 +56,25 @@ export function turnFromStored(turn: StoredTurn): Turn {
     startedAt: Date.parse(turn.startedAt) || null,
     endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
   }
+}
+
+export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
+  const meta: unknown = update._meta
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return null
+  const diffra = meta.diffra
+  if (typeof diffra !== 'object' || diffra === null || !(TASK_PROGRESS_META_KEY in diffra)) return null
+  const progress = diffra[TASK_PROGRESS_META_KEY]
+  if (typeof progress !== 'object' || progress === null || !('status' in progress) || !('reason' in progress) || !('requirements' in progress)) return null
+  const { status, reason, requirements } = progress
+  if (status !== 'running' && status !== 'waiting' && status !== 'blocked' && status !== 'cancelled' && status !== 'completed') return null
+  if (reason !== null && typeof reason !== 'string') return null
+  if (!Array.isArray(requirements)) return null
+  const validated: TaskProgressView['requirements'] = []
+  for (const item of requirements) {
+    if (typeof item !== 'object' || item === null || typeof item.id !== 'string' || typeof item.title !== 'string' || (item.receiptId !== null && typeof item.receiptId !== 'string')) return null
+    validated.push({ id: item.id, title: item.title, receiptId: item.receiptId })
+  }
+  return { status, reason, requirements: validated }
 }
 
 export function usageOf(update: SessionUpdate): Usage | null {

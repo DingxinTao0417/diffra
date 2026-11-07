@@ -73,6 +73,10 @@ export class Checkpoints {
     return store
   }
 
+  fingerprint(): Promise<string> {
+    return exclusive(this.gitDir, () => this.writeTree())
+  }
+
   snapshot(): Promise<string> {
     return exclusive(this.gitDir, async () => {
       const tree = await this.writeTree()

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { toModelError } from '../models/errors.js'
+import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { commandKeys, classifyCommand } from '../permissions.js'
 import { truncateLines } from '../process.js'
@@ -127,6 +128,8 @@ export async function runTurn(
   const controller = new AbortController()
   session.activeTurn = controller
   const { signal } = controller
+  if (session.taskState.status === 'completed') session.taskState = newTaskState()
+  session.taskState = { ...session.taskState, status: 'running', reason: null, contractRequired: session.taskState.contractRequired || requiresReleaseContract(turn.text), releaseVersion: session.taskState.releaseVersion ?? turn.text.match(/\bv?(\d+\.\d+\.\d+)\b/)?.[1] ?? null }
   const goalMaxRounds = options.goalMaxRounds ?? null
   // 目标模式每一轮都有一份步数上限
   const maxSteps = (session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY) * (goalMaxRounds ?? 1)
@@ -155,9 +158,14 @@ export async function runTurn(
       role: 'user',
       content: userContent(goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds), turn.images ?? []),
     } as ModelMessage)
+    await publishTaskState(session, io)
+    if (session.taskState.contractRequired || session.taskState.requirements.length > 0) {
+      session.messages.push({ role: 'user', content: `[Diffra] Saved completion contract: ${JSON.stringify(session.taskState)}. Define concrete completion requirements with task_progress before release work (ids commit, push, ci, publish). Continue unfinished stages; checks passing alone is not completion. Use pause_task for blockers.` })
+    }
     let round = 1
 
-    let editedThisTurn = false
+    session.verifiedSnapshot = null
+    let editedThisTurn = session.taskState.needsVerification
     let checkFailures = 0
     let gateAttempts = 0
     const compaction: CompactionState = { cooldownUntil: 0 }
@@ -191,13 +199,14 @@ export async function runTurn(
 
       if (toolCalls.length === 0) {
         // 改了文件却没调 finish：拉回来走完成门禁；目标模式里只回了文字也要拉回来，让它说明目标达成没有
-        if ((editedThisTurn || goalMaxRounds !== null) && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
+        if ((editedThisTurn || goalMaxRounds !== null || session.taskState.contractRequired || pendingRequirements(session.taskState).length > 0) && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
           gateAttempts++
           session.messages.push({
             role: 'user',
             content: editedThisTurn
               ? '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
-              : '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.',
+              : goalMaxRounds !== null ? '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.'
+              : '[Diffra] Completion requirements remain unfinished. Continue executing the saved stages and satisfy them using real receipts, or call pause_task with a specific blocker. Do not stop after checks pass.',
           })
           continue
         }
@@ -219,11 +228,35 @@ export async function runTurn(
           results.push(errorResult(call, 'Cancelled by the user.'))
           continue
         }
-        if (call.toolName === 'finish' && !call.invalid) {
-          const gate = await runFinishGate(session, call, turn.id, editedThisTurn, signal, io)
+        if (call.toolName === 'pause_task' && !call.invalid) {
+          const paused = pauseTaskSchema.safeParse(call.input)
+          if (!paused.success) { results.push(errorResult(call, paused.error.message)); continue }
+          session.taskState = { ...session.taskState, ...paused.data }
+          results.push(textResult(call, 'Task paused, NOT completed. Remaining requirements are saved.'))
+          const remaining = toolCalls.slice(toolCalls.indexOf(call) + 1).filter((item) => !answered.has(item.toolCallId))
+          results.push(...remaining.map((item) => errorResult(item, 'Task paused; this batched call was not executed.')))
+          session.messages.push({ role: 'tool', content: results })
+          await publishTaskState(session, io)
+          return signal.aborted ? 'cancelled' : 'end_turn'
+        }
+        if ((call.toolName === 'finish' || call.toolName === 'verify_changes') && !call.invalid) {
+          if (call.toolName === 'finish' && toolCalls.indexOf(call) < toolCalls.length - 1) {
+            results.push(errorResult(call, 'finish must be the final call in a batch. Execute all remaining actions, then finish separately.'))
+            continue
+          }
+          const verificationOnly = call.toolName === 'verify_changes'
+          const missing = pendingRequirements(session.taskState)
+          if (!verificationOnly && (missing.length > 0 || (session.taskState.contractRequired && session.taskState.requirements.length === 0))) {
+            results.push(errorResult(call, `Task is NOT complete. Define/satisfy task_progress requirements with real command receipts before finish. Remaining: ${missing.map((item) => item.title).join(', ') || 'commit, push, ci, publish'}. Use verify_changes for intermediate validation or pause_task for blockers.`))
+            gateAttempts++
+            continue
+          }
+          const evidenceProblem = verificationOnly ? null : releaseEvidenceProblem(session.taskState)
+          if (evidenceProblem) { results.push(errorResult(call, evidenceProblem)); gateAttempts++; continue }
+          const gate = await runFinishGate(session, call, turn.id, verificationOnly || editedThisTurn, signal, io, verificationOnly)
           results.push(gate.result)
-          if (gate.passed) finished = { summary: gate.summary, goalMet: gate.goalMet }
-          else gateAttempts++
+          if (gate.passed && !verificationOnly) finished = { summary: gate.summary, goalMet: gate.goalMet }
+          else if (!gate.passed) gateAttempts++
           continue
         }
         const outcome = await runToolCall(session, call, signal, io)
@@ -232,6 +265,7 @@ export async function runTurn(
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
+          session.taskState.needsVerification = true
           repeats.clear()
         } else {
           const key = callSignature(call, outcome.result)
@@ -241,10 +275,16 @@ export async function runTurn(
         }
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
+      if (editedThisStep) await publishTaskState(session, io)
       if (screenshots.length > 0) session.messages.push(screenshotMessage(screenshots))
 
-      if (finished && (goalMaxRounds === null || signal.aborted)) return 'end_turn'
+      if (signal.aborted) return 'cancelled'
+      if (finished && goalMaxRounds === null) {
+        session.taskState = { ...session.taskState, status: 'completed', needsVerification: false, reason: null }
+        return 'end_turn'
+      }
       if (finished && finished.goalMet) {
+        session.taskState = { ...session.taskState, status: 'completed', needsVerification: false, reason: null }
         await notice(io, 'info', `目标已完成（用了 ${round} 轮）`)
         return 'end_turn'
       }
@@ -260,6 +300,7 @@ export async function runTurn(
         warnedStuck = false
         repeats.clear()
         await notice(io, 'info', `目标模式第 ${round} 轮`, `上一轮还剩：${finished.summary}`)
+        session.taskState.needsVerification = false
         session.messages.push({
           role: 'user',
           content: `[Diffra] Goal mode, round ${round} of ${goalMaxRounds}: the goal is not met yet. Continue toward it.`,
@@ -341,7 +382,10 @@ export async function runTurn(
     await notice(io, 'error', '模型调用失败', detail.message)
     return 'end_turn'
   } finally {
+    if (signal.aborted) session.taskState = { ...session.taskState, status: 'cancelled', reason: '用户取消，任务并未完成。' }
+    else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '本轮已停止，未通过完整任务完成门禁；可继续执行剩余步骤。' }
     session.activeTurn = null
+    await publishTaskState(session, io)
   }
 }
 
@@ -515,7 +559,21 @@ export async function runToolCall(
         return choice === PERMISSION_OPTIONS.allowOnce || choice === PERMISSION_OPTIONS.allowAlways
       },
     }
+    if (name === 'edit_file' || name === 'run_command') session.verifiedSnapshot = null
+    if (name === 'edit_file') session.taskState.needsVerification = true
+    if (name === 'task_progress') {
+      session.taskState = updateTask(session.taskState, call.input)
+      await publishTaskState(session, io)
+      const text = JSON.stringify(session.taskState)
+      await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text } }] })
+      return { result: textResult(call, text), edited: false }
+    }
     const output = await executeTool(name, call.input, context)
+    if (name === 'run_command' && output.commandSucceeded && typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string') {
+      session.taskState = recordTaskReceipt(session.taskState, call.toolCallId, call.input.command, output.text)
+      output.text += `\nEvidence receipt id: ${call.toolCallId}`
+      await publishTaskState(session, io)
+    }
     await io.update({
       sessionUpdate: 'tool_call_update',
       toolCallId: call.toolCallId,
@@ -715,6 +773,7 @@ async function runFinishGate(
   editedThisTurn: boolean,
   signal: AbortSignal,
   io: TurnIO,
+  verificationOnly = false,
 ): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean }> {
   let summary = ''
   let goalMet = false
@@ -730,7 +789,7 @@ async function runFinishGate(
     io.update({
       sessionUpdate: 'tool_call',
       toolCallId: call.toolCallId,
-      title: '完成',
+      title: verificationOnly ? '验证改动（不结束任务）' : '完成',
       kind: 'other',
       status,
       rawInput: call.input,
@@ -740,6 +799,12 @@ async function runFinishGate(
   if (!editedThisTurn) {
     await showFinish('completed', summary)
     return { result: textResult(call, 'Done.'), passed: true, summary, goalMet }
+  }
+  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
+  const snapshot = session.checkpoints ? await session.checkpoints.fingerprint() : null
+  if (snapshot && session.verifiedSnapshot === snapshot) {
+    await showFinish('completed', verificationOnly ? '当前工作区已验证；继续剩余任务。' : summary)
+    return { result: textResult(call, 'Workspace validation reused. Only finish ends the task.'), passed: true, summary, goalMet }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
   if (command) {
@@ -791,12 +856,13 @@ async function runFinishGate(
       goalMet,
     }
   }
+  if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
   if (!command) {
     await showFinish('completed', `${summary}\n\n未配置检查命令，改动未经自动验证。`)
-    return { result: textResult(call, 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet }
+    return { result: textResult(call, verificationOnly ? 'No project checks configured. Review completed, but changes remain unverified. Continue the remaining task; do not claim validation passed.' : 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet }
   }
-  await showFinish('completed', summary)
-  return { result: textResult(call, `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet }
+  await showFinish('completed', verificationOnly ? `${summary}\n验证通过，不代表任务完成；继续执行提交、推送或发布等剩余步骤。` : summary)
+  return { result: textResult(call, verificationOnly ? `Verification passed: ${command}. Continue working; this is NOT task completion.` : `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet }
 }
 
 // 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
@@ -982,6 +1048,13 @@ export function textResult(call: StepToolCall, text: string): ToolResultPart {
 
 export function errorResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'error-text', value: text } }
+}
+
+async function publishTaskState(session: Session, io: TurnIO): Promise<void> {
+  await io.update({
+    sessionUpdate: 'session_info_update',
+    _meta: { diffra: { [TASK_STATE_META_KEY]: { status: session.taskState.status, reason: session.taskState.reason, requirements: session.taskState.requirements.map(({ id, title, receiptId }) => ({ id, title, receiptId })) } } },
+  })
 }
 
 export function notice(io: TurnIO, severity: 'info' | 'warning' | 'error', title: string, description?: string): Promise<void> {

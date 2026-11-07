@@ -218,6 +218,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         update: async (update) => {
           session.recordUpdate(update)
           await notify(update)
+          if (update.sessionUpdate === 'session_info_update' && update._meta && 'diffra' in update._meta) await persist(session, notify)
         },
         requestPermission: async (toolCall, options) => {
           try {

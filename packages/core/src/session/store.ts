@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
 import { PROMPT_IMAGE_TYPES, type SessionSearchResult, type StoredTurn } from '../protocol.js'
+import { taskStateSchema, type TaskState } from './task-state.js'
 
 // 会话 id 拼进文件名，只接受 UUID 这类字符，防止路径穿越
 const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/
@@ -25,6 +26,7 @@ export interface Compaction {
 
 // 一个会话一个文件，每轮开始和结束时整体重写。不存模型接入点和密钥，加载时用当时的设置
 export interface SessionRecord {
+  taskState?: TaskState
   version: 1
   id: string
   cwd: string
@@ -59,6 +61,7 @@ const indexEntrySchema = z.object({
 const indexSchema = z.object({ version: z.literal(1), sessions: z.array(indexEntrySchema) })
 // 消息和更新是 AI SDK / ACP 的结构，这里只检查外层，内容原样还给它们
 const recordSchema = z.object({
+  taskState: taskStateSchema.optional(),
   version: z.literal(1),
   id: z.string(),
   cwd: z.string(),

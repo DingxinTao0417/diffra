@@ -1,7 +1,7 @@
 import type { PermissionMode, PromptImage, StopReason, StoredSessionSummary, TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
-import { applyUpdate, lastUsage, newTurn, turnFromStored, usageOf } from '../features/session/transcript'
+import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
 import { type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
@@ -110,6 +110,7 @@ export function wireCoreEvents(): () => void {
       const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed'
       return {
         ...task,
+        progress: taskProgressOf(update) ?? task.progress,
         turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update) }],
         changeVersion: filesMayChange ? task.changeVersion + 1 : task.changeVersion,
       }
@@ -181,6 +182,7 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
     const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
     const live: LiveTask = {
       ...liveFrom(loaded, task.cwd, loaded.title),
+      progress: loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
       turns: loaded.turns.map(turnFromStored),
       usage: lastUsage(loaded.turns),
     }

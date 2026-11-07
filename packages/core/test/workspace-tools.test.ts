@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -80,7 +80,7 @@ describe('文件工具', () => {
       expect(readFileSync(target, 'utf8')).toBe('hello')
       expect((await readFileTool(context, { path: target })).text).toContain('hello')
       expect(requested.map((item) => item.access)).toEqual(['write', 'write', 'read'])
-      expect(requested.every((item) => item.path.toLowerCase() === target.toLowerCase())).toBe(true)
+      expect(requested.map((item) => item.path)).toEqual(Array(3).fill(realpathSync(target)))
       await expect(readFileTool(context, { path: join(external, '.env') })).rejects.toThrow('Protected')
       expect(requested).toHaveLength(3)
     } finally {

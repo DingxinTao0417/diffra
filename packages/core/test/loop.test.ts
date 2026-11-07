@@ -146,6 +146,83 @@ function toolUpdates(io: { updates: SessionUpdate[] }, status: 'completed' | 'fa
 }
 
 describe('主循环', () => {
+  test('verify_changes 不结束任务；之后继续命令并满足证据条件才完成', async () => {
+    const requirement = { id: 'delivery', title: '执行后续交付步骤', commandIncludes: 'printf', outputIncludes: 'delivered' }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [requirement] } }] },
+      { toolCalls: [{ name: 'verify_changes', input: { summary: '中间验证' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '过早完成' } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf delivered' } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'satisfy', id: 'delivery', receiptId: 'call-3-0' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '全部完成' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'true' })
+    const io = recordingIO()
+    expect(await runTurn(session, { id: 't', text: '完成多阶段交付' }, io)).toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(6)
+    expect(session.taskState.status).toBe('completed')
+    expect(session.taskState.requirements[0]?.receiptId).toBe('call-3-0')
+    expect(JSON.stringify(session.messages)).toContain('Task is NOT complete')
+    expect(io.updates.some((item) => item.sessionUpdate === 'tool_call' && item.title === '验证改动（不结束任务）')).toBe(true)
+  }, 30_000)
+
+  test('验证缓存匹配工作区指纹；后续编辑使缓存失效，取消不标记完成', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'cache.txt', old_string: '', new_string: 'one' } }] },
+      { toolCalls: [{ name: 'verify_changes', input: { summary: '验证' } }] },
+      { toolCalls: [{ name: 'verify_changes', input: { summary: '复用验证' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'cache.txt', old_string: 'one', new_string: 'two' } }] },
+      { toolCalls: [{ name: 'verify_changes', input: { summary: '编辑后重新验证' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'true' })
+    const io = recordingIO()
+    await runTurn(session, { id: 'cache', text: '测试验证缓存' }, io)
+    expect(io.updates.filter((item) => item.sessionUpdate === 'tool_call' && item.title.startsWith('完成检查'))).toHaveLength(2)
+    expect(session.taskState.status).toBe('completed')
+    const cancelled = await makeSession(scriptedModel([{ toolCalls: [{ name: 'verify_changes', input: { summary: '验证期间取消' } }] }]), { afterEdit: null, beforeFinish: 'true' })
+    const cancelIO = recordingIO()
+    const originalUpdate = cancelIO.update
+    cancelIO.update = async (update) => {
+      await originalUpdate(update)
+      if (update.sessionUpdate === 'tool_call' && update.title.startsWith('完成检查')) cancelled.cancel()
+    }
+    expect(await runTurn(cancelled, { id: 'cancel', text: '取消' }, cancelIO)).toBe('cancelled')
+    expect(cancelled.taskState.status).toBe('cancelled')
+  }, 30_000)
+
+  test('发布任务没定义完整契约不能提前结束；暂停保留受阻状态', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'finish', input: { summary: '测试通过，稍后发布' } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'waiting', reason: '等待 CI 完成' } }] },
+    ])
+    const session = await makeSession(model)
+    await runTurn(session, { id: 't', text: '提交推送打包发布 0.1.2' }, recordingIO())
+    expect(session.taskState.status).toBe('waiting')
+    expect(session.taskState.contractRequired).toBe(true)
+    expect(session.taskState.reason).toBe('等待 CI 完成')
+    expect(JSON.stringify(session.messages)).toContain('commit, push, ci, publish')
+  })
+
+  test('暂停后恢复保留清单及执行证据，不能凭模型文字完成', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [{ id: 'ci', title: 'CI 完成', commandIncludes: 'gh run view', outputIncludes: 'success' }] } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'blocked', reason: '缺少凭据' } }] },
+    ])
+    const session = await makeSession(model)
+    session.startTurn('t', '执行 CI')
+    await runTurn(session, { id: 't', text: '执行 CI' }, recordingIO())
+    session.endTurn('end_turn')
+    const restored = await makeSession(scriptedModel([
+      { toolCalls: [{ name: 'finish', input: { summary: '已完成' } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'blocked', reason: '仍缺凭据' } }] },
+    ]), undefined, [], undefined, undefined, undefined, {}, { record: session.toRecord() })
+    expect(restored.taskState.requirements).toEqual(session.taskState.requirements)
+    await runTurn(restored, { id: 'next', text: '继续' }, recordingIO())
+    expect(restored.taskState.status).toBe('blocked')
+    expect(restored.taskState.requirements[0]?.receiptId).toBeNull()
+  })
+
   test('读 → 改错 → 快速检查失败 → 改对 → finish 检查通过', async () => {
     writeFileSync(join(project, 'a.txt'), 'value = broken\n')
     const check = 'grep -q "value = fixed" a.txt'
@@ -178,7 +255,8 @@ describe('主循环', () => {
     expect(await session.checkpointChanges('turn-1')).toEqual([{ path: 'a.txt', change: 'modified' }])
     await session.restoreCheckpoint('turn-1')
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('value = broken\n')
-  })
+  // Windows CI 上此集成测试启动多次 Git/Bash 子进程，保留全部断言并预留启动时间。
+  }, 30_000)
 
   test('finish 检查不通过时打回，改好后再 finish', async () => {
     writeFileSync(join(project, 'a.txt'), 'x\n')

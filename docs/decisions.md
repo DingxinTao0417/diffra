@@ -127,7 +127,11 @@ v2：
   - 上限：步数上限和上下文压缩的触发点在「设置 → 任务执行」里调，见下面「长任务」；模型请求失败重试 2 次。
   - 参数不合法的工具调用，AI SDK 会自己在返回消息里补错误结果，主循环不再重复补，否则同一调用会有两个结果。
   - 系统提示词用英文，回复语言跟随用户；会读入项目根目录的 `AGENTS.md`、`CLAUDE.md`（合计最多 8000 字）。
-- 工具 7 个：read_file、list_files、search、outline、edit_file、run_command、finish。
+- 基础工具：read_file、list_files、search、outline、edit_file、run_command、verify_changes、task_progress、pause_task、finish。
+- 验证与结束分离：`verify_changes` 执行完整检查、安全扫描及规范审查但不结束任务；`finish` 是终结操作。原因：曾将中间检查成功当成发布完成，提前停止。
+- 多阶段任务通过 `task_progress` 定义不可删减的完成条件，引用 core 从成功命令生成的 receipt，匹配命令和实际输出。发布请求另强制 commit/push/ci/publish 四项，交叉核对提交 SHA、远端 SHA、CI completed/success 与正式发布脚本的线上验证结果；不是操作系统沙箱或对恶意模型的证明系统。
+- 状态 running/waiting/blocked/cancelled/completed 与 ACP stopReason 分离；`pause_task` 仅暂停，不冒充完成。状态、清单、证据在关键步骤落盘，重启可恢复，运行中断恢复为受阻；界面用 session_info_update 元数据展示状态，不把 end_turn 当成功。
+- 验证缓存仅在进程内保存，按独立检查点仓库的工作树指纹复用；编辑和命令执行使缓存失效，恢复会话不复用，撤销使完成证据作废。
   - outline 列出一个文件或一个目录下所有源文件里的函数、类和方法、接口和类型、模块级变量，带行号，不带函数体。支持 TS/JS、Vue 的 `<script>`、Python；用 core 已经依赖的 ast-grep 解析，和静态安全检查共用解析器的加载（`packages/core/src/syntax.ts`）。目录模式和 list_files 一样用 ripgrep 列文件（git 仓库里按 `.gitignore` 跳过），最多 200 个文件、3 万字。
   - 不做自动附带的项目大纲（每次请求都带会拖慢提示词缓存、多花 token），由模型按需调用；系统提示词里提示先用它看概览。
   - list_files 和 search 用 ripgrep（`@vscode/ripgrep`）。打进桌面端后它找不到自己的平台包，所以打包时把 rg.exe 放进 resources，由主进程通过 `DIFFRA_RG_PATH` 传给 core。

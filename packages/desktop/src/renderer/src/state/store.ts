@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary } from '@diffra/core/types'
+import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView } from '@diffra/core/types'
 import type { BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Turn, Usage } from '../features/session/transcript'
@@ -23,6 +23,7 @@ export interface MessageOptions {
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载
 export interface LiveTask {
+  progress?: TaskProgressView
   sessionId: string
   project: string
   title: string

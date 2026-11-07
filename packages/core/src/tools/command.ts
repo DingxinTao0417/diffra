@@ -40,5 +40,5 @@ export async function runCommandTool(
   const permission = await context.requestCommandPermission(input.command)
   if (!permission.allowed) throw new ToolError(permission.reason)
   const result = await runShell(context, input.command, timeout)
-  return { text: result.summary, title: `执行 ${input.command}`, terminalOutput: result.summary }
+  return { text: result.summary, title: `执行 ${input.command}`, terminalOutput: result.summary, commandSucceeded: result.exitCode === 0 && !result.timedOut && !result.aborted }
 }

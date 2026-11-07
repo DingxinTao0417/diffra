@@ -74,6 +74,13 @@ export interface SessionLimits {
   goalMaxRounds: number
 }
 
+export const TASK_PROGRESS_META_KEY = 'taskState'
+export interface TaskProgressView {
+  status: 'running' | 'waiting' | 'blocked' | 'cancelled' | 'completed'
+  reason: string | null
+  requirements: Array<{ id: string; title: string; receiptId: string | null }>
+}
+
 export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
 
 export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const

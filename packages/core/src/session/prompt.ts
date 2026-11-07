@@ -61,7 +61,11 @@ function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
 // 告诉模型哪些检查会自动跑，免得它自己再跑一遍、还多弹一次权限确认
 function checkLines(checks: SessionChecks): string[] {
   const finishCheck = checks.beforeFinish ?? checks.afterEdit
-  const lines: string[] = []
+  const lines: string[] = [
+    '- finish is TERMINAL, never an intermediate check. Use verify_changes to validate and CONTINUE with commit, push, CI and publication. Passing checks is not task completion.',
+    '- Before multi-stage work, define immutable task_progress completion requirements covering the whole user request. Release tasks require commit, push, ci, publish ids; match real command receipts and concrete expected SHA/version/output. Never fabricate evidence or use echo/printf as proof of external actions. Use read-only queries against Git, CI and the actual update source.',
+    '- Use pause_task with waiting/blocked and a reason for missing credentials, permissions or unfinished CI; do not call finish to report a blocker. Saved requirements persist across turns and restarts.',
+  ]
   if (checks.afterEdit) {
     lines.push(
       `- After every step in which you edit files, Diffra automatically runs \`${checks.afterEdit}\` and tells you if it fails. Do not run it yourself.`,
