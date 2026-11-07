@@ -12,7 +12,8 @@
     "build": "electron-vite build",
     "package": "electron-vite build && electron-builder --config electron-builder.config.ts --win --publish never",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "electron-vite build && playwright test"
+    "test": "electron-vite build && playwright test --project=dev",
+    "test:packaged": "pnpm run package && playwright test --project=packaged"
   },
   "devDependencies": {
     "@diffra/core": "workspace:*",

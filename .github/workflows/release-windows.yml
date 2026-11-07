@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    # 建草稿 Release、上传安装包要写权限
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -39,13 +42,23 @@ jobs:
 
       - run: pnpm --filter @diffra/desktop package
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: diffra-windows
-          path: |
-            packages/desktop/release/*.exe
-            packages/desktop/release/*.blockmap
-            packages/desktop/release/latest.yml
-          if-no-files-found: error
-          # 每次约 116MB，会占账号的 Actions 存储配额；正式产物以更新源上的为准
-          retention-days: 7
+      # 安装包放进 v<版本号> 的草稿 Release：仓库私有，只有有权限的人能下载；不占 Actions 的产物存储配额
+      # （之前用 upload-artifact，配额满了以后上传直接失败）。同名 Release 已存在时覆盖里面的文件。
+      # 正式发布以更新源上的文件为准
+      - name: 上传到草稿 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./packages/desktop/package.json').version")
+          tag="v$version"
+          files=(
+            "packages/desktop/release/Diffra-Setup-$version.exe"
+            "packages/desktop/release/Diffra-Setup-$version.exe.blockmap"
+            "packages/desktop/release/latest.yml"
+          )
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --draft --target "$GITHUB_SHA" --title "Diffra $version" --notes "CI 构建，提交 $GITHUB_SHA"
+          fi

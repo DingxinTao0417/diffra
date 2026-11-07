@@ -89,9 +89,18 @@ v2：
 - 发布流程（现阶段手动）：
   1. 改 `packages/desktop/package.json` 的 version；
   2. 提交后打 `vX.Y.Z` tag 并推送；
-  3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致，跑类型检查、测试并打包，产物作为 artifact 上传；
+  3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致，跑类型检查、测试并打包，产物传到 `v<版本号>` 的草稿 Release（已有就覆盖里面的文件）；
+     - 不用 Actions 的产物存储：账号的存储配额按月累计，满了以后上传直接失败（2026-11 的一次构建就卡在这一步）。仓库私有，草稿 Release 只有有权限的人能下载。
   4. 把 `Diffra-Setup-X.Y.Z.exe`、`.blockmap` 和 `latest.yml` 传到更新源。
   - 旧版本的 `.blockmap` 要留在更新源上，客户端靠它做差分下载；找不到时会退回整包下载（约 116MB）。
+- 打包版验收：`pnpm --filter @diffra/desktop test:packaged` 先打包，再把全部 e2e 跑在打包出来的 `release/win-unpacked/Diffra.exe` 上（Playwright 的 `packaged` 项目；`pnpm test` 只跑开发版）。
+  - 打包版只认正式数据目录，不看 `DIFFRA_USER_DATA_DIR`；测试用 Chromium 的 `--user-data-dir` 启动参数换成临时目录，实测生效，正式目录不受影响。
+  - 打包版启动就检查更新；更新源不通时「关于」里显示「检查更新失败：」加原始错误（比如 `net::ERR_NAME_NOT_RESOLVED`）。
+- 自动更新实测（2026-11-06，本机临时更新源，0.0.1 → 0.0.2，未签名）：
+  - 安装程序会把自己存一份到 `%LOCALAPPDATA%\diffra-updater\installer.exe`，所以装完后的第一次更新就能差分下载：实际只下了 7 段、约 1.0MB（整包 128MB）。
+  - 差分下载一次请求多段 Range，更新源要支持 `multipart/byteranges`（nginx 默认支持）。更新源上要保留旧版本的 `.blockmap`。
+  - 点「重启并更新」后静默安装、自动重新启动，新版本启动后照常检查更新。
+  - 卸载不删 `%APPDATA%\Diffra`（用户数据），也不删 `%LOCALAPPDATA%\diffra-updater`（更新缓存，约 250MB，里面是两份安装包）。
 - 代码签名：用支持云签名的 OV 证书。2024 年起 EV 证书也不再直接跳过 SmartScreen 的信誉积累，多花钱买 EV 意义不大。
   - 现在还没配签名。没有配置发布者名时，electron-updater 不校验更新包的签名。证书到位后，要同时配置签名和发布者名，客户端才会校验更新包。
 
