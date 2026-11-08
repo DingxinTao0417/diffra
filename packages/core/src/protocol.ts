@@ -129,6 +129,8 @@ export interface SessionConfig {
   plugins: PluginRef[]
   // 客户端有内置浏览器：给模型浏览器工具，操作由客户端执行
   browser?: boolean
+  // 设计任务：建会话时定下，存进会话记录；客户端在每轮开始前把设计面板的工具配置给它
+  design?: boolean
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -232,10 +234,39 @@ export interface DevServerResult {
   url: string | null
 }
 
+// 设计面板（OpenPencil 矢量编辑器）的工具，来自客户端的设计页：name 是 OpenPencil 的工具名，参数是 JSON Schema
+export interface DesignToolSpec {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  // 不改文档（读节点、导出图片等）
+  readOnly: boolean
+}
+
+// 用户打开设计面板后客户端配置给会话（SESSION_EXT_METHODS.sessionConfigure）：之后的轮次带上设计工具和这段说明
+export interface SessionDesign {
+  tools: DesignToolSpec[]
+  instructions: string
+}
+
+// 智能体调用设计工具，core 通过 CLIENT_EXT_METHODS.designAction 请求客户端在设计页里执行
+export interface DesignActionParams {
+  sessionId: string
+  tool: string
+  args: unknown
+}
+
+// text 给模型看；导出图片的工具带 image
+export interface DesignActionResult {
+  text: string
+  image: PromptImage | null
+}
+
 // core 请求客户端做的事
 export const CLIENT_EXT_METHODS = {
   browserAction: '_diffra/browser/action',
   devServer: '_diffra/devserver',
+  designAction: '_diffra/design/action',
 } as const
 
 export interface McpPromptInfo {
@@ -277,6 +308,7 @@ export interface LoadedSession {
   info: SessionInfo
   title: string
   turns: StoredTurn[]
+  design: boolean
 }
 
 // session/list 里每个会话 _meta.diffra 带的字段

@@ -10,6 +10,8 @@ import {
   type BrowserActionParams,
   type BrowserActionResult,
   CLIENT_EXT_METHODS,
+  type DesignActionParams,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   type LoadedSession,
@@ -33,6 +35,7 @@ import {
   newSessionMetaSchema,
   pluginRefSchema,
   promptMetaSchema,
+  sessionDesignSchema,
 } from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { runPlan } from './session/plan.js'
@@ -71,6 +74,8 @@ const sessionConfigureParams = z.object({
   sessionId: z.string().min(1),
   permissionMode: z.enum(['ask', 'auto', 'full']).optional(),
   model: modelConfigSchema.optional(),
+  // 设计面板的工具；null 是收回
+  design: sessionDesignSchema.nullable().optional(),
 })
 
 const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
@@ -259,6 +264,16 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
             }),
+        design: (tool, args, signal) =>
+          client
+            .request<DesignActionResult, DesignActionParams>(
+              CLIENT_EXT_METHODS.designAction,
+              { sessionId: session.id, tool, args },
+              { cancellationSignal: signal, stopWaitingOnCancel: true },
+            )
+            .catch((error: unknown) => {
+              throw new Error(clientErrorMessage(error))
+            }),
         // 用量只用于统计，写失败不打断任务
         recordUsage: async (call) => {
           if (!usageLog) return
@@ -296,13 +311,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
-        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns }
+        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, design: live.designTask }
         return { _meta: { diffra: loaded } }
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
-      const loaded: LoadedSession = { info, title: session.title, turns: session.turns }
+      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, design: session.designTask }
       return { _meta: { diffra: loaded } }
     })
     .onRequest(acp.methods.agent.session.list, async ({ params }) => ({
@@ -417,6 +432,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const session = sessionOf(params.sessionId)
       if (params.permissionMode) session.permissionMode = params.permissionMode
       if (params.model) session.setModel(params.model)
+      if (params.design !== undefined) session.design = params.design
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.sessionRewind, checkpointParams, async ({ params, client }) => {

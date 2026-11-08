@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { registerBrowserIpc } from './browser'
+import { designHost, registerDesignIpc } from './design'
 import { registerAttachmentIpc } from './attachments'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
@@ -39,6 +40,14 @@ function createWindow(): void {
     }, 1500),
   )
   watchAppCommands(window)
+  // 设计页叠在窗口上、随窗口销毁：还有没存的改动时先存完再关
+  let designFlushed = false
+  window.on('close', (event) => {
+    if (designFlushed || !designHost.hasUnsaved()) return
+    event.preventDefault()
+    designFlushed = true
+    void designHost.flushAll().finally(() => window.close())
+  })
   // 回复里的链接等不在应用窗口里打开，需要时走 openExternal 用系统浏览器
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => {
@@ -70,6 +79,7 @@ app
     registerSessionIpc(settings, secrets, userDataDir)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
+    registerDesignIpc()
     registerAttachmentIpc()
     registerTerminalIpc()
     setupUpdater()

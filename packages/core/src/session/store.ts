@@ -34,6 +34,8 @@ export interface SessionRecord {
   createdAt: string
   updatedAt: string
   archived: boolean
+  // 设计任务（见 SessionConfig.design）；旧记录没有
+  design?: boolean
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
   compaction: Compaction | null
@@ -69,6 +71,8 @@ const recordSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   archived: z.boolean(),
+  // 设计模式加的，旧记录都是普通任务
+  design: z.boolean().default(false),
   turns: z.array(
     z.object({
       id: z.string(),

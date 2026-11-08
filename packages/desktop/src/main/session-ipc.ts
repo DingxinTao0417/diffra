@@ -46,6 +46,7 @@ import { modelDisplayName, type ModelRef } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
+import { designHost } from './design'
 import { devServer, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
 import { mcpServersFor } from './mcp-servers'
@@ -65,6 +66,8 @@ const execFileAsync = promisify(execFile)
 const sessionOptionsSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
   model: modelRefSchema.optional(),
+  // 设计任务，只在新建时有效
+  design: z.boolean().optional(),
 })
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
@@ -126,6 +129,7 @@ export const coreClientHandlers: CoreClientHandlers = {
     }),
   onBrowserAction: (params) => browserHost.act(params),
   onDevServer: (params) => devServer(params),
+  onDesignAction: (params) => designHost.act(params),
 }
 
 function settlePermission(requestId: string, optionId: string | null): void {
@@ -250,6 +254,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         },
         plugins: enabledPlugins(settings),
         browser: true,
+        design: options.design ?? false,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
@@ -268,7 +273,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     })
     const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode }
+    if (config.design) designHost.enable(sessionId)
+    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, design: config.design ?? false }
   })
 
   // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
@@ -332,7 +338,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
+    if (loaded.design) designHost.enable(sessionId)
+    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns, design: loaded.design }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>
@@ -359,6 +366,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     await deleteSession(await coreConnection(), sessionId)
     browserHost.close(sessionId)
+    await designHost.remove(sessionId)
     stopDevServer(sessionId)
   })
 
@@ -366,6 +374,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     const turnId = parse(z.string().min(1), rawTurnId)
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
+    await designHost.prepare(sessionId)
     const response = await sendPrompt(await coreConnection(), sessionId, turnId, text, parse(promptOptionsSchema, rawOptions))
     return response.stopReason
   })
@@ -386,6 +395,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawSkills: unknown) => {
+    await designHost.prepare(parse(z.string().min(1), rawSessionId))
     const response = await plan(
       await coreConnection(),
       parse(z.string().min(1), rawSessionId),

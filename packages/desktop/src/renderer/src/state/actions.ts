@@ -156,11 +156,17 @@ export function wireCoreEvents(): () => void {
     const { route, panel } = store.get()
     if (route.name === 'task' && route.sessionId === sessionId && panel !== 'browser') store.set((current) => ({ ...current, panel: 'browser' }))
   })
+  // 智能体在用设计面板：同样在看这个任务时打开
+  const offDesignActivity = window.diffra.onDesignActivity(({ sessionId }) => {
+    const { route, panel } = store.get()
+    if (route.name === 'task' && route.sessionId === sessionId && panel !== 'design') store.set((current) => ({ ...current, panel: 'design' }))
+  })
   return () => {
     offUpdate()
     offPermission()
     offBrowserState()
     offBrowserActivity()
+    offDesignActivity()
   }
 }
 
@@ -174,6 +180,7 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
     planLabel: handle.planLabel,
     fallbackLabel: handle.fallbackLabel,
     permissionMode: handle.permissionMode,
+    design: handle.design,
     planMode,
     info: handle.info,
     turns: [],
@@ -193,13 +200,16 @@ export async function startTask(project: string, text: string, options: SessionO
     ...state,
     projects: addProject(state.projects, project),
     live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), message.plan ?? false) },
+    ...(handle.design ? { panel: 'design' as const } : {}),
   }))
   navigate({ name: 'task', sessionId: handle.sessionId })
   void sendMessage(handle.sessionId, text, message)
 }
 
 export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>, record = true): Promise<void> {
-  if (store.get().live[task.sessionId]) {
+  const existing = store.get().live[task.sessionId]
+  if (existing) {
+    if (existing.design) store.set((state) => ({ ...state, panel: 'design' }))
     navigate({ name: 'task', sessionId: task.sessionId }, record)
     return
   }
@@ -211,7 +221,7 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
       turns: loaded.turns.map(turnFromStored),
       usage: lastUsage(loaded.turns),
     }
-    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live } }))
+    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live }, ...(live.design ? { panel: 'design' as const } : {}) }))
     navigate({ name: 'task', sessionId: task.sessionId }, record)
   } catch (error) {
     showToast(`打不开这个任务：${errorMessage(error)}`)

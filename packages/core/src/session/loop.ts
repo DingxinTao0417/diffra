@@ -12,6 +12,7 @@ import { detectDevCommand } from '../project/detect.js'
 import {
   type BrowserAction,
   type BrowserActionResult,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   EXTERNAL_ACCESS_SCOPE,
@@ -31,6 +32,7 @@ import {
   screenshotMessage,
   toBrowserAction,
 } from './browser.js'
+import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -71,6 +73,8 @@ export interface TurnIO {
   browser?(action: BrowserAction, signal: AbortSignal): Promise<BrowserActionResult>
   // 在客户端的终端里起、看、停开发服务器
   devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
+  // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）
+  design?(tool: string, args: unknown, signal: AbortSignal): Promise<DesignActionResult>
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -413,7 +417,7 @@ async function streamStep(session: Session, active: ActiveModel, signal: AbortSi
   const step = await streamModelStep(
     {
       model: active.language,
-      system: session.systemPrompt,
+      system: session.systemPrompt + designInstructions(session),
       messages: session.contextMessages(),
       tools: session.toolSet(),
       usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
@@ -516,6 +520,7 @@ export async function runToolCall(
   if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
   if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
+  if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
     sessionUpdate: 'tool_call',

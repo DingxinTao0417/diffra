@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { store } from '@/state/store'
 
-// 审阅和浏览器共用一个宽度，两者互切时对话列不动
+// 审阅和浏览器共用一个宽度，两者互切时对话列不动；设计面板占满对话列以外的主区
 const WIDTHS = {
   narrow: 'w-[22rem]',
   wide: 'w-[min(50%,720px)] min-w-96',
+  fill: 'min-w-0 flex-1',
 }
 
 interface SidePanelProps {

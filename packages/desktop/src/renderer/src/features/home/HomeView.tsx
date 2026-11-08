@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PromptImage, StoredSessionSummary } from '@diffra/core/types'
-import { Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, LoaderCircle, ScrollText, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, LoaderCircle, PenTool, ScrollText, Settings2 } from 'lucide-react'
 import { decodeStartTaskError, type ProjectState, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -44,6 +44,8 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
+  // 设计任务：智能体从第一条消息起就能在设计面板的画布上画
+  const [design, setDesign] = useState(false)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
   const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
   const detectedCount = useDetectedChecks(project)
@@ -74,7 +76,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     }
     setError(null)
     try {
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, { plan: planMode, ...extras })
+      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...(design ? { design } : {}) }, { plan: planMode, ...extras })
       return true
     } catch (caught) {
       setError(decodeStartTaskError(errorMessage(caught)))
@@ -158,7 +160,25 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          leading={projectPath ? undefined : projectMenu}
+          leading={
+            <>
+              {projectPath ? null : projectMenu}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-pressed={design}
+                    onClick={() => setDesign((current) => !current)}
+                    className={cn(clickableChipClass, 'aria-pressed:bg-primary/10 aria-pressed:text-primary aria-pressed:hover:bg-primary/15 aria-pressed:hover:text-primary')}
+                  >
+                    <PenTool className="size-3.5" />
+                    设计
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>设计任务：智能体在设计面板的画布上画界面</TooltipContent>
+              </Tooltip>
+            </>
+          }
           projectPath={projectPath}
           mcpTarget={projectPath ? { projectPath } : null}
           permissionMode={permissionMode}

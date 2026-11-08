@@ -101,6 +101,11 @@ export const IPC_CHANNELS = {
   browserGetState: 'browser:get-state',
   browserState: 'browser:state',
   browserActivity: 'browser:activity',
+  designBounds: 'design:bounds',
+  designActivity: 'design:activity',
+  designChanged: 'design:changed',
+  designOpenFile: 'design:open-file',
+  designSaveFile: 'design:save-file',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -172,11 +177,14 @@ export interface SessionHandle {
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode
+  // 设计任务：任务页打开设计面板，画布占主区
+  design: boolean
 }
 
 export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
+  design?: boolean
 }
 
 // 新建任务失败的原因。ipcMain.handle 抛出的错误过 IPC 后只剩 message，所以原因写在 message 开头的「[code] 」里
@@ -307,6 +315,13 @@ export interface DiffraApi {
   onBrowserState(listener: (state: BrowserState) => void): () => void
   // 智能体在用某个任务的浏览器，界面把面板打开
   onBrowserActivity(listener: (event: { sessionId: string }) => void): () => void
+  // 设计面板：位置（null 表示不显示，和浏览器共用矩形类型）、打开和保存 .fig；取消时返回 null，否则返回文件路径
+  setDesignBounds(sessionId: string, rect: BrowserRect | null): void
+  designOpenFile(sessionId: string): Promise<string | null>
+  // 另存为 .fig，默认放在项目文件夹里
+  designSaveFile(sessionId: string, projectPath: string): Promise<string | null>
+  // 智能体在用某个任务的设计面板，界面把面板打开
+  onDesignActivity(listener: (event: { sessionId: string }) => void): () => void
   // 弹出文件夹选择框；取消时返回 null
   installPluginFromFolder(): Promise<PluginView[] | null>
   installPluginFromGit(url: string): Promise<PluginView[]>

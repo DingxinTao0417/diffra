@@ -1,12 +1,13 @@
 import { type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
 import { BrowserPanel } from '@/features/browser/BrowserPanel'
+import { DesignPanel } from '@/features/design/DesignPanel'
 import { PermissionCard } from '@/features/session/PermissionCard'
 import { RestoreDialog } from '@/features/session/RestoreDialog'
 import { TaskMenu } from '@/features/shell/TaskMenu'
@@ -124,7 +125,8 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <section ref={columnRef} className="@container flex min-w-0 flex-1 flex-col">
+        {/* 开着设计面板时画布占主区，对话列固定宽度放左边 */}
+        <section ref={columnRef} className={cn('@container flex min-w-0 flex-col', panel === 'design' ? 'w-[26rem] shrink-0' : 'flex-1')}>
           {/* 终端在对话列底部，右侧面板保持全高；对话区留出最小高度，终端拉高时由 flex 压缩终端而不是对话 */}
           {/* 对话列变窄时对话区和输入框一起收窄左右留白，两边才对齐；对话区的滚动层在 Conversation 里 */}
           <div className="flex min-h-40 flex-1 flex-col @max-[600px]:[&>div>.overflow-y-auto]:px-5">
@@ -188,6 +190,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
         {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && <BrowserPanel sessionId={task.sessionId} />}
+        {panel === 'design' && <DesignPanel sessionId={task.sessionId} project={task.project} />}
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
@@ -229,6 +232,7 @@ function StatusIndicator({ tone }: { tone: TaskStatus['tone'] }) {
 }
 
 const PANEL_BUTTONS = [
+  { panel: 'design', label: '设计', icon: PenTool },
   { panel: 'browser', label: '浏览器', icon: Globe },
   { panel: 'review', label: '审阅改动', icon: FileDiff },
   { panel: 'monitor', label: '任务监控', icon: PanelRight },

@@ -4,11 +4,12 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
+import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, SessionDesign, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { browserTools } from './browser.js'
+import { designChars, designTools } from './design.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
 
 // 会话标题默认取第一条提问的开头
@@ -63,6 +64,8 @@ export class Session {
   readonly createdAt: string
   title: string
   archived: boolean
+  // 设计任务：建会话时定下，存进记录
+  readonly designTask: boolean
   readonly turns: StoredTurn[] = []
   // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
   config: SessionConfig
@@ -75,6 +78,8 @@ export class Session {
   readonly mcpPool: McpPool | null
   // 最近一轮开始时取到的 MCP 工具
   mcpTools: McpTurnTools | null = null
+  // 客户端配置的设计面板工具；用户打开设计面板之前是 null
+  design: SessionDesign | null = null
   readonly systemPrompt: string
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
@@ -106,6 +111,7 @@ export class Session {
     this.createdAt = record?.createdAt ?? new Date().toISOString()
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
+    this.designTask = record?.design ?? options.config.design ?? false
     if (record) {
       this.taskState = record.taskState ?? newTaskState()
       if (this.taskState.status === 'running') this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
@@ -210,6 +216,7 @@ export class Session {
       createdAt: this.createdAt,
       updatedAt: new Date().toISOString(),
       archived: this.archived,
+      design: this.designTask,
       turns: this.turns.map((turn) => ({
         ...turn,
         checkpoint: this.turnCheckpoints.get(turn.id) ?? null,
@@ -220,13 +227,13 @@ export class Session {
     }
   }
 
-  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具
+  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，打开过设计面板时再加设计工具
   toolSet(): ToolSet {
-    return { ...TOOLS, ...browserTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数

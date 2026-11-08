@@ -11,7 +11,7 @@ export type Route =
   | { name: 'task'; sessionId: string }
   | { name: 'settings'; section: SettingsSection }
 
-export type SidePanel = 'monitor' | 'review' | 'browser' | null
+export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | null
 
 // 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
 export interface MessageOptions {
@@ -32,6 +32,8 @@ export interface LiveTask {
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode
+  // 设计任务：打开任务时切到设计面板
+  design: boolean
   // 输入框里「先出计划」开着：发的消息先由规划模型出计划
   planMode: boolean
   info: SessionInfo
@@ -140,7 +142,7 @@ export function useAppState<T>(selector: (state: AppState) => T): T {
 // 宽面板（浏览器、审阅）按主区一半取宽，收起侧栏省出的宽度一半让面板吃掉，对话列在默认 1200 窗口下也到不了阈值，
 // 收了只会让侧栏一开面板就消失，所以开着宽面板时不自动收起
 export function hasWidePanel(state: AppState): boolean {
-  return state.route.name === 'task' && (state.panel === 'browser' || state.panel === 'review')
+  return state.route.name === 'task' && (state.panel === 'browser' || state.panel === 'review' || state.panel === 'design')
 }
 
 export function isSidebarShown(state: AppState): boolean {

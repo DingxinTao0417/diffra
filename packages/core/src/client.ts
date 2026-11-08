@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import { browserActionParamsSchema, devServerParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema } from './session/config.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
   type CheckDetection,
@@ -10,6 +10,8 @@ import {
   type BrowserActionResult,
   CLIENT_EXT_METHODS,
   type CommandInfo,
+  type DesignActionParams,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   type LoadedSession,
@@ -22,6 +24,7 @@ import {
   type PermissionMode,
   SESSION_EXT_METHODS,
   type SessionConfig,
+  type SessionDesign,
   type SessionInfo,
   type SessionSearchResult,
   type StoredSessionMeta,
@@ -43,6 +46,8 @@ export interface CoreClientHandlers {
   // 智能体操作内置浏览器、起开发服务器；不提供时会话里不要开 browser
   onBrowserAction?(params: BrowserActionParams): Promise<BrowserActionResult>
   onDevServer?(params: DevServerParams): Promise<DevServerResult>
+  // 智能体调用设计面板的工具；不提供时不要给会话配置设计工具
+  onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -65,6 +70,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onBrowserAction) app.onRequest(CLIENT_EXT_METHODS.browserAction, browserActionParamsSchema, ({ params }) => onBrowserAction(params))
     const onDevServer = handlers.onDevServer
     if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
+    const onDesignAction = handlers.onDesignAction
+    if (onDesignAction) app.onRequest(CLIENT_EXT_METHODS.designAction, designActionParamsSchema, ({ params }) => onDesignAction(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
 }
@@ -210,7 +217,7 @@ export async function loadSession(
   })
   const diffra = response && typeof response._meta?.diffra === 'object' ? (response._meta.diffra as Partial<LoadedSession>) : null
   if (!diffra || !Array.isArray(diffra.turns)) throw new Error('core 的 session/load 响应缺少会话历史')
-  return { info: readSessionInfo({ diffra: diffra.info }), title: String(diffra.title ?? ''), turns: diffra.turns }
+  return { info: readSessionInfo({ diffra: diffra.info }), title: String(diffra.title ?? ''), turns: diffra.turns, design: diffra.design === true }
 }
 
 export async function listSessions(connection: acp.ClientConnection, cwd?: string): Promise<StoredSessionSummary[]> {
@@ -244,7 +251,7 @@ export function updateSession(
 export async function configureSession(
   connection: acp.ClientConnection,
   sessionId: string,
-  change: { permissionMode?: PermissionMode; model?: SessionConfig['model'] },
+  change: { permissionMode?: PermissionMode; model?: SessionConfig['model']; design?: SessionDesign | null },
 ): Promise<void> {
   await requestOf(connection)(SESSION_EXT_METHODS.sessionConfigure, { sessionId, ...change }, extRequestOptions())
 }
