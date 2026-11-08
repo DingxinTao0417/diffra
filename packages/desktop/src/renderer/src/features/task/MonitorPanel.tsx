@@ -81,7 +81,8 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           <Section title="完成条件">
             {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
             {task.progress.requirements.map((item) => (
-              <Row key={item.id} status={item.receiptId ? 'ok' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
+              // success-color-allow: 完成条件的证据已核对
+              <Row key={item.id} status={item.receiptId ? 'success' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
             ))}
           </Section>
         )}
@@ -337,7 +338,8 @@ function Section({ title, hint, action, children }: { title: string; hint?: stri
 }
 
 const STATUS_ICONS = {
-  ok: <CircleCheck className="size-3.5 shrink-0 text-success" />,
+  // success-color-allow: 只给完成条件的「证据已核对」，配置已开、连接正常用 on
+  success: <CircleCheck className="size-3.5 shrink-0 text-success" />,
   on: <CircleCheck className="size-3.5 shrink-0 text-muted-foreground" />,
   off: <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />,
   bad: <CircleX className="size-3.5 shrink-0 text-destructive" />,

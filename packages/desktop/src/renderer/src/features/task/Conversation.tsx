@@ -469,8 +469,9 @@ function Thought({ text }: { text: string }) {
   )
 }
 
-// 跑完只是过程，默认画中性；只有检查命令通过这类验证结果才传 tone="success"
+// success-color-allow: 跑完只是过程，默认画中性；只有检查命令通过这类验证结果才传 tone="success"
 function StatusIcon({ status, tone = 'muted', className }: { status: string; tone?: 'muted' | 'success'; className?: string }) {
+  // success-color-allow: 只有 CheckRow 传 tone="success"，检查命令通过才走到绿色
   if (status === 'completed') return <Check className={cn('size-3.5 shrink-0', tone === 'success' ? 'text-success' : 'text-muted-foreground', className)} strokeWidth={2.6} />
   if (status === 'failed') return <X className={cn('size-3.5 shrink-0 text-destructive', className)} strokeWidth={2.6} />
   if (status === 'command-failed') return <CircleAlert className={cn('size-3.5 shrink-0 text-warning', className)} />
@@ -681,6 +682,7 @@ function CheckGroup({ items }: { items: ToolItem[] }) {
   return (
     <div className="flex flex-col gap-1.5" data-testid="check-group">
       <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground/85">
+        {/* success-color-allow: 组里有检查命令且全部通过时才画绿色 */}
         <Check className={cn('size-3.5 shrink-0', verified ? 'text-success' : 'text-muted-foreground')} strokeWidth={2.6} />
         <span className="shrink-0 text-muted-foreground">{verified ? '自动检查通过' : '未发现问题'}</span>
         <span className="min-w-0 truncate">{names.join('、')}</span>
@@ -726,9 +728,11 @@ function CheckRow({ item }: { item: ToolItem }) {
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="check" data-status={item.status}>
       <DisclosureRow open={open} onToggle={output ? () => setOpen(!open) : undefined}>
+        {/* success-color-allow: 检查命令通过 */}
         <StatusIcon status={item.status} tone="success" />
         <span className="shrink-0 text-muted-foreground">{label}</span>
         <span className="min-w-0 truncate font-mono text-xs">{command}</span>
+        {/* success-color-allow: 检查命令通过 */}
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
       </DisclosureRow>
       {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
@@ -1017,6 +1021,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
       {verified && commandsFailed > 0 && !undone && <p className="text-sm text-muted-foreground">过程中有 {commandsFailed} 条命令失败（最终检查已通过）</p>}
       {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {/* success-color-allow: 完成条件的证据已核对 */}
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
       </div>}
       {passed && files.length > 0 && (

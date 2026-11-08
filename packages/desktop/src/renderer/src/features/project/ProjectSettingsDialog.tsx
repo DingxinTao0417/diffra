@@ -247,6 +247,7 @@ function CheckField({ id, label, hint, placeholder, value, onChange, projectPath
       {current?.state === 'running' && <p className="text-xs text-muted-foreground">正在运行，最长 5 分钟…</p>}
       {current?.state === 'done' && (
         <div className="text-xs" data-testid={`${id}-result`}>
+          {/* success-color-allow: 用户主动试运行检查命令的结果 */}
           <button type="button" className={cn('flex items-center gap-1', current.result.passed ? 'text-success' : 'text-destructive')} onClick={() => setShowOutput(!showOutput)}>
             {current.result.passed ? <Check className="size-3.5" /> : <X className="size-3.5" />}
             {current.result.passed ? '通过' : '没通过'}

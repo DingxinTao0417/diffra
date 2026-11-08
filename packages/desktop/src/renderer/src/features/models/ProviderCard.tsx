@@ -17,7 +17,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { errorMessage } from '@/lib/errors'
 import { cn } from 'cn'
 
-type TestState = { state: 'running' } | { state: 'ok' | 'warning' | 'error'; text: string; detail: string }
+// success-color-allow: success 只在用户主动点「测试连接」成功时写入（runTest）
+type TestState = { state: 'running' } | { state: 'success' | 'warning' | 'error'; text: string; detail: string }
 type FetchState = { state: 'running' } | { state: 'ok'; models: ListedModel[] } | { state: 'error'; text: string }
 
 interface Confirmation {
@@ -28,7 +29,8 @@ interface Confirmation {
   run(): void
 }
 
-const TEST_DOT = { ok: 'bg-success', warning: 'bg-warning', error: 'bg-destructive' } as const
+// success-color-allow: 只给用户主动点「测试连接」的结果，后台连接状态不用绿色
+const TEST_DOT = { success: 'bg-success', warning: 'bg-warning', error: 'bg-destructive' } as const
 
 interface ProviderCardProps {
   provider: ProviderView
@@ -84,7 +86,8 @@ export function ProviderCard({ provider, roles, onChange, onEdit }: ProviderCard
       } else {
         const reply = `${result.latencyMs}ms · 回复：${result.reply || '（没有文字输出）'}`
         next = result.tools.supported
-          ? { state: 'ok', text: `连接正常 · ${result.latencyMs}ms`, detail: `${reply} · 工具调用：支持` }
+          // success-color-allow: 用户主动点「测试连接」，连上且支持工具调用
+          ? { state: 'success', text: `连接正常 · ${result.latencyMs}ms`, detail: `${reply} · 工具调用：支持` }
           : { state: 'warning', text: '连接正常，但不支持工具调用', detail: `${reply} · 工具调用：不支持（${result.tools.detail ?? '原因未知'}）` }
       }
     } catch (caught) {
