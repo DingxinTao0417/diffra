@@ -26,6 +26,8 @@ function createWindow(): void {
     height: 820,
     show: false,
     title: 'Diffra',
+    // 安装版的任务栏图标取自 exe 内嵌的图标；开发模式跑的是 electron.exe，要单独指定
+    icon: app.isPackaged ? undefined : join(import.meta.dirname, '../../build/icon.ico'),
     ...titleBarOptions(),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),

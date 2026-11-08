@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diffra · 桌面端编程 agent</title>
 <meta name="description" content="Diffra 是 Windows 上的编程 agent：在你的项目里读代码、改代码、跑检查，做完给你看改动。用你自己的模型 API Key。">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232e6b57'/%3E%3Ctext x='16' y='22.5' font-family='Segoe UI,Arial,sans-serif' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3ED%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3ClinearGradient id='diffra-gradient' gradientUnits='userSpaceOnUse' x1='2' y1='1' x2='8.256' y2='15'%3E%3Cstop offset='0' stop-color='%233fd8c8'/%3E%3Cstop offset='0.5' stop-color='%2322ad7a'/%3E%3Cstop offset='1' stop-color='%23187a4e'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath fill='url(%23diffra-gradient)' d='M2 1H6.375A7 7 0 0 1 11.274 3H2ZM2 5H12.7A7 7 0 0 1 13.303 7H2ZM2 9H13.303A7 7 0 0 1 12.7 11H2ZM2 13H11.274A7 7 0 0 1 6.375 15H2Z'/%3E%3C/svg%3E">
 <style>
 :root {
   --background: #ffffff;
@@ -42,7 +42,7 @@ body {
 }
 .page { max-width: 760px; margin: 0 auto; padding: 0 20px; }
 header { display: flex; align-items: center; gap: 10px; padding: 22px 0; font-weight: 600; font-size: 17px; }
-.mark { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; background: var(--primary); color: var(--primary-foreground); font-weight: 700; }
+.mark { display: block; width: 30px; height: 30px; flex-shrink: 0; }
 .hero { padding: 64px 0 40px; }
 h1 { margin: 0 0 16px; font-size: clamp(30px, 6vw, 44px); line-height: 1.25; letter-spacing: -0.01em; }
 .lead { margin: 0 0 32px; color: var(--muted); font-size: 18px; }
@@ -69,7 +69,7 @@ footer { padding: 24px 0 40px; border-top: 1px solid var(--border); color: var(-
 <body>
 <div class="page">
   <header>
-    <span class="mark" aria-hidden="true">D</span>
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="diffra-gradient" gradientUnits="userSpaceOnUse" x1="5.44" y1="3" x2="17.059" y2="29"><stop offset="0" stop-color="#3fd8c8"/><stop offset="0.5" stop-color="#22ad7a"/><stop offset="1" stop-color="#187a4e"/></linearGradient></defs><path fill="url(#diffra-gradient)" d="M6.14 3H13.565A13 13 0 0 1 23.444 7.55H6.14Q5.44 7.55 5.44 6.85V3.7Q5.44 3 6.14 3ZM6.14 10.15H25.174A13 13 0 0 1 26.5 14.7H6.14Q5.44 14.7 5.44 14V10.85Q5.44 10.15 6.14 10.15ZM6.14 17.3H26.5A13 13 0 0 1 25.174 21.85H6.14Q5.44 21.85 5.44 21.15V18Q5.44 17.3 6.14 17.3ZM6.14 24.45H23.444A13 13 0 0 1 13.565 29H6.14Q5.44 29 5.44 28.3V25.15Q5.44 24.45 6.14 24.45Z"/></svg>
     Diffra
   </header>
 
