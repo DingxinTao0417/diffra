@@ -499,7 +499,9 @@ function AboutSection() {
     <>
       <Heading title="更新与关于" />
       <SettingRow label="版本">
-        <span className="text-sm text-muted-foreground">{version ?? '…'}</span>
+        <span className="text-sm text-muted-foreground" data-testid="app-version">
+          {version ?? '…'}
+        </span>
       </SettingRow>
       <SettingRow label="更新">
         <span className="text-sm text-muted-foreground" data-testid="update-status">

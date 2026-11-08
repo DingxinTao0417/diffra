@@ -6,15 +6,15 @@ import { desktopDir, isPackagedRun, launchApp, makeUserDataDir } from './launch'
 
 const { version } = JSON.parse(readFileSync(resolve(desktopDir, 'package.json'), 'utf8')) as { version: string }
 
-test('侧栏显示版本号；设置里显示 core 的 ACP 握手结果和更新状态', async () => {
+test('设置里显示 core 的 ACP 握手结果、版本号和更新状态', async () => {
   const userDataDir = makeUserDataDir()
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
-    await expect(window.getByTestId('app-version')).toHaveText(version)
     await window.getByTestId('sidebar').getByRole('button', { name: '设置' }).click()
     await expect(window.getByTestId('core-status')).toHaveText(/^已连接：diffra-core \S+ · ACP 协议 v\d+$/)
     await settingsNav(window).getByRole('button', { name: '更新与关于' }).click()
+    await expect(window.getByTestId('app-version')).toHaveText(version)
     if (isPackagedRun()) {
       // 打包版启动后就检查更新：更新源有新版本以外，检查完只会是这两种结果
       await expect(window.getByTestId('update-status')).toHaveText(/^(已是最新版本|检查更新失败：.+)$/, { timeout: 20_000 })

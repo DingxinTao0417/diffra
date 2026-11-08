@@ -100,7 +100,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
 
     // 任务里换权限模式，同时记成新任务的默认值
     await window.getByTestId('permission-mode').click()
-    await window.getByRole('menuitem', { name: /自动审批/ }).click()
+    await window.getByRole('menuitemradio', { name: /自动审批/ }).click()
     await expect(window.getByTestId('permission-mode')).toContainText('自动审批')
     await window.screenshot({ path: 'test-results/task-flow.png' })
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()

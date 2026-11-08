@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts } from '@/features/session/DiffView'
 import { DiffLines } from '@/features/session/DiffLines'
 import type { FileDiff } from '@/lib/unified-diff'
@@ -57,18 +58,22 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
         </>
       }
       actions={
-        <Button
-          size="sm"
-          variant="ghost"
-          title="撤销这些改动"
-          className="text-destructive hover:bg-destructive-soft hover:text-destructive disabled:text-muted-foreground"
-          disabled={task.running || files.length === 0 || !sinceTurnId}
-          onClick={() => sinceTurnId && onRestore(sinceTurnId)}
-        >
-          <Undo2 />
-          {/* 面板最窄时只留图标，可访问名称不变 */}
-          <span className="sr-only @md:not-sr-only">撤销这些改动</span>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:bg-destructive-soft hover:text-destructive disabled:text-muted-foreground"
+              disabled={task.running || files.length === 0 || !sinceTurnId}
+              onClick={() => sinceTurnId && onRestore(sinceTurnId)}
+            >
+              <Undo2 />
+              {/* 面板最窄时只留图标，可访问名称不变 */}
+              <span className="sr-only @md:not-sr-only">撤销这些改动</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>撤销这些改动</TooltipContent>
+        </Tooltip>
       }
     >
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">

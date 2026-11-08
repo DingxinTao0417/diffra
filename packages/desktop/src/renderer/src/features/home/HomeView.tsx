@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { PromptImage } from '@diffra/core/types'
-import { ChevronDown, Folder, FolderOpen, GitBranch, Settings2 } from 'lucide-react'
+import type { PromptImage, StoredSessionSummary } from '@diffra/core/types'
+import { Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, LoaderCircle, ScrollText, Settings2 } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { checksSummary, useProject } from '@/features/project/useProject'
 import { Composer } from '@/features/task/Composer'
@@ -20,6 +22,13 @@ import { openHome, openSettings, openTask, pickProject, setPermissionMode, start
 import { showToast, useAppState } from '@/state/store'
 
 const RECENT_LIMIT = 5
+
+const chipClass = 'flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
+const clickableChipClass = cn(chipClass, 'hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground')
+
+function parentPath(path: string): string {
+  return path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
+}
 
 function modelLabelOf(settings: SettingsView | null, ref: ModelRef | null): string | null {
   if (!settings || !ref) return null
@@ -58,7 +67,11 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   }
 
   const send = async (text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }) => {
-    if (!projectPath) return false
+    // 没选项目时先弹出选择框，草稿留在输入框里，选好再发
+    if (!projectPath) {
+      void choose()
+      return false
+    }
     setError(null)
     try {
       await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, { plan: planMode, ...extras })
@@ -69,17 +82,83 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     }
   }
 
+  const projectMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        {projectPath ? (
+          <button type="button" data-testid="project-path" title={projectPath} className={clickableChipClass}>
+            <Folder className="size-3.5 shrink-0" />
+            <span className="truncate">{folderName(projectPath)}</span>
+            {branch && (
+              <>
+                <GitBranch className="ml-1 size-3.5 shrink-0" />
+                <span className="max-w-40 truncate">{branch}</span>
+              </>
+            )}
+            <ChevronDown className="size-3 shrink-0" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="project-path"
+            className={cn(clickableChipClass, 'bg-primary/10 text-sm text-primary hover:bg-primary/15 hover:text-primary aria-expanded:bg-primary/15 aria-expanded:text-primary')}
+          >
+            <Folder className="size-3.5" />
+            选择项目
+            <ChevronDown className="size-3" />
+          </button>
+        )}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-72">
+        {projects.map((path) => (
+          <DropdownMenuItem key={path} title={path} onSelect={() => openHome(path)}>
+            <Folder />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{folderName(path)}</span>
+              <span className="truncate text-xs text-muted-foreground">{parentPath(path)}</span>
+            </span>
+            {path === projectPath && <Check className="text-primary" />}
+          </DropdownMenuItem>
+        ))}
+        {projects.length > 0 && <DropdownMenuSeparator />}
+        <DropdownMenuItem onSelect={() => void choose()}>
+          <FolderOpen />
+          选择文件夹…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
   return (
-    <div className="relative flex h-full flex-col items-center justify-center gap-7 overflow-y-auto px-6 py-12">
-      <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight">要做什么？</h1>
-        <p className="text-muted-foreground">描述任务，Diffra 会在项目里读代码、改代码、跑检查，做完给你看改动。</p>
+    <div className="relative flex h-full flex-col items-center overflow-y-auto px-6 pb-12">
+      {/* 标题区向上长，输入框的位置不随提示条、错误条、最近任务出现而跳动 */}
+      <div className="flex min-h-[36vh] w-full max-w-[720px] shrink-0 flex-col justify-end gap-5 pb-6">
+        <h1 className="flex min-w-0 justify-center text-2xl font-semibold tracking-tight">
+          {projectPath ? (
+            <>
+              <span className="shrink-0">在</span>
+              <span className="min-w-0 truncate px-[0.3em]">{folderName(projectPath)}</span>
+              <span className="shrink-0">里要做什么？</span>
+            </>
+          ) : (
+            '要做什么？'
+          )}
+        </h1>
+        {settings && !modelLabel && (
+          <div className="flex items-center gap-2 rounded-lg bg-warning-soft py-1.5 pr-1.5 pl-3 text-sm" data-testid="model-missing">
+            <CircleAlert className="size-4 shrink-0 text-warning" />
+            <span className="flex-1">还没有配置模型</span>
+            <Button variant="outline" size="xs" onClick={() => openSettings('models')}>
+              去设置
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          disabled={!projectPath}
+          leading={projectPath ? undefined : projectMenu}
           projectPath={projectPath}
           mcpTarget={projectPath ? { projectPath } : null}
           permissionMode={permissionMode}
@@ -99,69 +178,42 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             </button>
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-3.5 px-1.5 text-sm text-muted-foreground">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+        {projectPath && (
+          <div className="flex flex-wrap items-center gap-1 px-2.5 text-sm">
+            {projectMenu}
+            {project && (
               <button
                 type="button"
-                data-testid="project-path"
-                title={projectPath ?? undefined}
-                className={cn('flex h-7 items-center gap-1.5 rounded-lg bg-sidebar px-2 text-foreground/85 hover:bg-accent', !projectPath && 'text-primary')}
+                className={cn(clickableChipClass, detectedCount ? 'text-primary hover:text-primary' : '')}
+                onClick={() => setEditingProject({ detect: detectedCount !== null && detectedCount > 0 })}
               >
-                <Folder className="size-3.5" />
-                {projectPath ? folderName(projectPath) : '选择项目'}
-                <ChevronDown className="size-3" />
+                <span className="relative flex shrink-0">
+                  <Settings2 className="size-3.5" />
+                  {detectedCount ? <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary" /> : null}
+                </span>
+                <span className="truncate">{detectedCount ? `检测到 ${detectedCount} 个检查命令` : checksSummary(project)}</span>
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
-              {projects.map((path) => (
-                <DropdownMenuItem key={path} title={path} onSelect={() => openHome(path)}>
-                  <Folder />
-                  <span className="truncate">{folderName(path)}</span>
-                </DropdownMenuItem>
-              ))}
-              {projects.length > 0 && <DropdownMenuSeparator />}
-              <DropdownMenuItem onSelect={() => void choose()}>
-                <FolderOpen />
-                选择文件夹…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {branch && (
-            <span className="flex items-center gap-1.5">
-              <GitBranch className="size-3.5" />
-              {branch}
-            </span>
-          )}
-          {project && (
-            <button
-              type="button"
-              className={cn('flex items-center gap-1.5 hover:text-foreground', detectedCount ? 'text-primary' : '')}
-              onClick={() => setEditingProject({ detect: detectedCount !== null && detectedCount > 0 })}
-            >
-              <Settings2 className="size-3.5" />
-              {detectedCount ? `检测到 ${detectedCount} 个检查命令` : checksSummary(project)}
-            </button>
-          )}
-          {project && <span title="内置编码规范按项目语言全部生效，完成前按规范审查改动">规范：内置规则 · 完成前审查</span>}
-        </div>
+            )}
+            {project && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className={cn(chipClass, 'cursor-default')}>
+                    <ScrollText className="size-3.5 shrink-0" />
+                    <span className="truncate">规范：内置规则 · 完成前审查</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>内置编码规范按项目语言全部生效，完成前按规范审查改动</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
 
       {recent.length > 0 && (
-        <div className="w-full max-w-[720px] space-y-1">
-          <div className="px-2 pb-1 text-xs text-muted-foreground">最近的任务</div>
+        <div className="mt-7 w-full max-w-[720px]">
+          <div className="px-3 pb-1 text-xs text-muted-foreground">最近的任务</div>
           {recent.map((task) => (
-            <button
-              key={task.sessionId}
-              type="button"
-              className="flex w-full items-center gap-3 rounded-[10px] border border-border/70 px-3 py-2.5 text-left hover:bg-muted/60"
-              onClick={() => void openTask(task)}
-            >
-              <span className="size-2 shrink-0 rounded-full bg-primary" />
-              <span className="min-w-0 flex-1 truncate">{task.title}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
-              <span className="w-12 shrink-0 text-right text-xs text-muted-foreground">{formatTime(task.updatedAt)}</span>
-            </button>
+            <RecentTaskRow key={task.sessionId} task={task} />
           ))}
         </div>
       )}
@@ -174,6 +226,22 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
         onSaved={setProject}
       />
     </div>
+  )
+}
+
+function RecentTaskRow({ task }: { task: StoredSessionSummary }) {
+  const running = useAppState((state) => state.live[task.sessionId]?.running ?? false)
+  return (
+    <button
+      type="button"
+      className="flex h-9 w-full items-center gap-2 rounded-md px-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+      onClick={() => void openTask(task)}
+    >
+      <span className="min-w-0 truncate">{task.title}</span>
+      {running && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" aria-label="运行中" />}
+      <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
+      <span className="w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{formatTime(task.updatedAt)}</span>
+    </button>
   )
 }
 

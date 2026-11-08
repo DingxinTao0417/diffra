@@ -4,6 +4,8 @@ import { ChevronRight, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search,
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { openHome, openSettings, openTask, pickProject } from '@/state/actions'
@@ -69,10 +71,9 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-(--sidebar-w) shrink-0 flex-col bg-sidebar" data-testid="sidebar">
-      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
-        <div className="flex size-5.5 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">D</div>
+      <div className="flex h-10.5 items-center gap-2 px-4 pt-3 pb-2">
+        <BrandMark />
         <span className="font-semibold">Diffra</span>
-        <AppVersion />
       </div>
 
       <div className="space-y-0.5 px-2">
@@ -83,7 +84,7 @@ export function Sidebar() {
         <SidebarButton onClick={() => store.set((state) => ({ ...state, searchOpen: true }))}>
           <Search className="size-4" />
           <span className="flex-1">搜索</span>
-          <span className="text-xs text-muted-foreground">Ctrl K</span>
+          <Kbd>Ctrl+K</Kbd>
         </SidebarButton>
       </div>
 
@@ -132,15 +133,19 @@ export function Sidebar() {
                 <span className={cn(trailingClass, 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')}>
                   {group.tasks.length || ''}
                 </span>
-                <button
-                  type="button"
-                  aria-label={`在 ${folderName(group.path)} 新建任务`}
-                  title="在这个项目新建任务"
-                  className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
-                  onClick={() => openHome(group.path)}
-                >
-                  <Plus className="size-3.5" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`在 ${folderName(group.path)} 新建任务`}
+                      className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
+                      onClick={() => openHome(group.path)}
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>在这个项目新建任务</TooltipContent>
+                </Tooltip>
               </div>
               {!isCollapsed && (isExpanded ? group.tasks : recent).map((task) => <TaskRow key={task.sessionId} task={task} active={task.sessionId === activeSession} />)}
               {!isCollapsed && hiddenCount > 0 && (
@@ -252,16 +257,12 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
   )
 }
 
-function AppVersion() {
-  const [version, setVersion] = useState<string | null>(null)
-  useEffect(() => {
-    window.diffra.getAppVersion().then(setVersion, (error: unknown) => console.error('读取版本号失败', error))
-  }, [])
-  if (!version) return null
+function BrandMark() {
   return (
-    <span className="text-xs text-muted-foreground" data-testid="app-version">
-      {version}
-    </span>
+    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="size-4.5 shrink-0 text-primary" aria-hidden="true">
+      <path d="M2.5 6.5h8.5" />
+      <path d="M7 11.5h8.5" />
+    </svg>
   )
 }
 

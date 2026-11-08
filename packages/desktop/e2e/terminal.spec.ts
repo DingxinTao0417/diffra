@@ -44,7 +44,7 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     // 焦点在终端里时 Ctrl+K 留给 shell，不弹搜索
     await window.keyboard.press('Control+k')
     await window.waitForTimeout(300)
-    await expect(window.getByRole('textbox', { name: '搜索任务' })).toHaveCount(0)
+    await expect(window.getByRole('combobox', { name: '搜索任务' })).toHaveCount(0)
 
     await window.getByRole('button', { name: '新建终端' }).click()
     await expect(tabs).toHaveCount(2)
@@ -67,7 +67,7 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     // 焦点不在终端时 Ctrl+K 照常弹搜索
     await taskInput(window).click()
     await window.keyboard.press('Control+k')
-    await expect(window.getByRole('textbox', { name: '搜索任务' })).toBeVisible()
+    await expect(window.getByRole('combobox', { name: '搜索任务' })).toBeVisible()
   } finally {
     await app.close()
     await model.close()

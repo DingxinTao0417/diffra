@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { Archive, FolderOpen, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -45,7 +45,7 @@ export function TaskMenu({ sessionId, title, project, archived, open, onOpenChan
             onSelect={() => window.diffra.openProjectFolder(project).catch((error: unknown) => showToast(errorMessage(error)))}
           >
             <FolderOpen />
-            在资源管理器中打开项目
+            在资源管理器中打开
           </DropdownMenuItem>
           <DropdownMenuItem disabled={running} onSelect={() => void setArchived(sessionId, !archived)}>
             <Archive />
@@ -70,13 +70,13 @@ export function TaskMenu({ sessionId, title, project, archived, open, onOpenChan
               取消
             </Button>
             <Button
-              variant="destructive"
+              variant="destructive-solid"
               onClick={() => {
                 setDeleting(false)
                 void deleteTask(sessionId)
               }}
             >
-              删除
+              删除记录
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -95,7 +95,7 @@ interface RenameDialogProps {
 function RenameDialog({ open, title, onClose, onSave }: RenameDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <DialogContent showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>重命名任务</DialogTitle>
         </DialogHeader>
@@ -107,6 +107,10 @@ function RenameDialog({ open, title, onClose, onSave }: RenameDialogProps) {
 
 function RenameForm({ title, onClose, onSave }: Omit<RenameDialogProps, 'open'>) {
   const [value, setValue] = useState(title)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    inputRef.current?.select()
+  }, [])
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const next = value.trim()
@@ -116,7 +120,7 @@ function RenameForm({ title, onClose, onSave }: Omit<RenameDialogProps, 'open'>)
   }
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Input aria-label="任务名称" value={value} maxLength={100} autoFocus onChange={(event) => setValue(event.target.value)} />
+      <Input ref={inputRef} aria-label="任务名称" value={value} maxLength={100} autoFocus onChange={(event) => setValue(event.target.value)} />
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onClose}>
           取消

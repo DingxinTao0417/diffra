@@ -124,7 +124,8 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     await expect(option('diffra-fix')).toBeVisible()
     await input.fill('')
     await input.pressSequentially('/kit:')
-    await expect(menu).toBeHidden()
+    await expect(menu).toContainText('没有匹配的命令或 Skill')
+    await expect(menu.getByRole('option')).toHaveCount(0)
   } finally {
     await app.close()
     await model.close()

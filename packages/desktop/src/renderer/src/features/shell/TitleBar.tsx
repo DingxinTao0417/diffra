@@ -1,5 +1,7 @@
 import { type ReactNode, useRef } from 'react'
 import { ArrowLeft, ArrowRight, Menu, PanelLeft } from 'lucide-react'
+import { Kbd } from '@/components/ui/kbd'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { moveHistory } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
 
@@ -61,16 +63,23 @@ function BarButton({
   children: ReactNode
 }) {
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      aria-label={label}
-      title={shortcut ? `${label} ${shortcut}` : label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex size-[30px] items-center justify-center rounded-md hover:bg-accent hover:text-foreground disabled:opacity-35 disabled:hover:bg-transparent"
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          ref={buttonRef}
+          type="button"
+          aria-label={label}
+          disabled={disabled}
+          onClick={onClick}
+          className="flex size-[30px] items-center justify-center rounded-md hover:bg-accent hover:text-foreground disabled:opacity-35 disabled:hover:bg-transparent"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label}
+        {shortcut && <Kbd>{shortcut}</Kbd>}
+      </TooltipContent>
+    </Tooltip>
   )
 }
