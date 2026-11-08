@@ -202,7 +202,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
             >
               <Row label="编码" value={task.modelLabel} />
               <Row label="规划" value={task.planLabel ?? '同编码模型'} />
-              <Row label="兜底" value={task.fallbackLabel ?? '未设置'} />
+              <Row label="备用" value={task.fallbackLabel ?? '未设置'} />
             </Section>
 
             {mcp.statuses && mcp.statuses.length > 0 && (
@@ -259,7 +259,7 @@ export function DeepScanDialog({ sessionId, scope, onClose }: { sessionId: strin
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             取消
           </Button>
           <Button

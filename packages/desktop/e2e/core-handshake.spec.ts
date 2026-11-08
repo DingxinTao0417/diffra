@@ -12,7 +12,9 @@ test('设置里显示 core 的 ACP 握手结果、版本号和更新状态', asy
   try {
     const window = await app.firstWindow()
     await window.getByTestId('sidebar').getByRole('button', { name: '设置' }).click()
-    await expect(window.getByTestId('core-status')).toHaveText(/^已连接：diffra-core \S+ · ACP 协议 v\d+$/)
+    const coreStatus = window.getByTestId('core-status')
+    await expect(coreStatus.getByText('已连接', { exact: true })).toBeVisible()
+    await expect(coreStatus.getByText(/^diffra-core \S+ · ACP 协议 v\d+$/)).toBeVisible()
     await settingsNav(window).getByRole('button', { name: '更新与关于' }).click()
     await expect(window.getByTestId('app-version')).toHaveText(version)
     if (isPackagedRun()) {

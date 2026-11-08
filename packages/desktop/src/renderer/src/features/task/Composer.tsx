@@ -413,9 +413,9 @@ export function Composer(props: ComposerProps) {
   return (
     <div
       className={cn(
-        'relative flex flex-col border border-input bg-card focus-within:border-ring/60',
-        large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-[14px]',
-        dragging && 'border-primary/60 bg-primary/5',
+        'relative flex flex-col border border-input bg-card focus-within:border-ring/60 dark:border-input/50 dark:focus-within:border-ring',
+        large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-2xl',
+        dragging && 'border-primary/60 bg-primary/5 dark:border-primary/60',
       )}
       data-testid="composer"
       aria-busy={addingAttachments}
@@ -437,7 +437,7 @@ export function Composer(props: ComposerProps) {
       }}
       onDrop={onDrop}
     >
-      {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-card/95 text-sm font-medium text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
+      {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-card/95 text-sm text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
       {/* 处理附件的提示只给读屏，界面上由发送按钮转圈表示，不插新行，免得输入框跳高 */}
       {addingAttachments && <p role="status" className="sr-only">正在添加附件…</p>}
       {menuOpen && (
@@ -467,7 +467,7 @@ export function Composer(props: ComposerProps) {
                 onClick={() => choose(item)}
               >
                 <item.icon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="shrink-0 font-medium">{item.label}</span>
+                <span className="shrink-0">{item.label}</span>
                 <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{item.description}</span>
                 {item.badge && <span className="shrink-0 text-xs text-muted-foreground">{item.badge}</span>}
               </div>
@@ -545,7 +545,7 @@ export function Composer(props: ComposerProps) {
         }}
         className={cn(
           'max-h-[40vh] resize-none bg-transparent outline-none placeholder:text-muted-foreground',
-          large ? 'px-4.5 pt-4 pb-2 text-[1.07rem]' : 'px-3.5 pt-3 pb-1',
+          large ? 'px-4.5 pt-4 pb-2 text-base' : 'px-3.5 pt-3 pb-1',
         )}
       />
       {/* 底栏内边距加触发器的 px-2 等于输入框的 px，图标和占位符左缘对齐 */}

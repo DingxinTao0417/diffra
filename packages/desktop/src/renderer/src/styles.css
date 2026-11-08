@@ -153,7 +153,8 @@
   --destructive: #f2786d;
   --destructive-soft: #3a1d1a;
   --border: #2e2e2b;
-  --input: #3a3a36;
+  /* 控件边线（输入框、下拉、复选框、描边按钮）在主区、卡片、弹窗底色上都不低于 3:1。原语里 dark:bg-input/N 的填充透明度按这个亮度配，改值要一起调 */
+  --input: #70706c;
   --sidebar: #1b1b19;
   --sidebar-border: #2a2a27;
   --success: #5cc48c;

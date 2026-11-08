@@ -66,7 +66,7 @@ export function TaskMenu({ sessionId, title, project, archived, open, onOpenChan
             <DialogDescription>只删除「{title}」的对话记录，项目里的文件不受影响。删除后不能恢复。</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleting(false)}>
+            <Button variant="ghost" onClick={() => setDeleting(false)}>
               取消
             </Button>
             <Button
@@ -122,7 +122,7 @@ function RenameForm({ title, onClose, onSave }: Omit<RenameDialogProps, 'open'>)
     <form onSubmit={submit} className="space-y-4">
       <Input ref={inputRef} aria-label="任务名称" value={value} maxLength={100} autoFocus onChange={(event) => setValue(event.target.value)} />
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>
+        <Button type="button" variant="ghost" onClick={onClose}>
           取消
         </Button>
         <Button type="submit" disabled={!value.trim()}>

@@ -1,12 +1,12 @@
 import { type FormEvent, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
-import { cn } from 'cn'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Segmented } from '@/components/ui/segmented'
 import { Textarea } from '@/components/ui/textarea'
 import { Field } from '@/features/models/ProviderDialog'
 import { errorMessage } from '@/lib/errors'
@@ -41,15 +41,21 @@ export function McpServerDialog({ open, server, onOpenChange, onSaved }: McpServ
   )
 }
 
-// saved：已经存过值的名字，值留空表示不改
+// saved：已经存过值的名字，值留空表示不改；replacing：点了「更换」，显示输入框
 interface ValueRow {
   key: string
   name: string
   value: string
   saved: boolean
+  replacing: boolean
 }
 
-const rowsOf = (names: string[]): ValueRow[] => names.map((name) => ({ key: crypto.randomUUID(), name, value: '', saved: true }))
+const rowsOf = (names: string[]): ValueRow[] => names.map((name) => ({ key: crypto.randomUUID(), name, value: '', saved: true, replacing: false }))
+
+const TRANSPORT_OPTIONS: Array<{ value: McpServerConfig['transport']; label: string }> = [
+  { value: 'stdio', label: '本地命令' },
+  { value: 'http', label: '远程 HTTP' },
+]
 
 function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig | null; onSaved(view: SettingsView): void; onCancel(): void }) {
   const [name, setName] = useState(server?.name ?? '')
@@ -100,31 +106,14 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field id="mcp-name" label="名称" hint="只用字母、数字、- 和 _。模型看到的工具名是 mcp__名称__工具名。">
-        <Input id="mcp-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="github" required />
-      </Field>
+      {/* 连接方式决定后面的字段，放在第一项 */}
       <div className="space-y-1.5">
         <Label>连接方式</Label>
-        <div role="radiogroup" aria-label="连接方式" className="flex w-fit rounded-lg bg-muted p-0.5">
-          {(
-            [
-              ['stdio', '本地命令'],
-              ['http', '远程 HTTP'],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={transport === value}
-              className={cn('h-7 rounded-md px-3 text-sm', transport === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-              onClick={() => setTransport(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <Segmented label="连接方式" value={transport} options={TRANSPORT_OPTIONS} onChange={(value) => setTransport(value)} />
       </div>
+      <Field id="mcp-name" label="名称" hint="只能用字母、数字、- 和 _，会显示在工具名前">
+        <Input id="mcp-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="github" required />
+      </Field>
       {stdio ? (
         <>
           <Field id="mcp-command" label="命令" hint="在项目目录里运行，比如 npx、uvx、node。">
@@ -156,7 +145,7 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
         </Alert>
       )}
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button type="button" variant="ghost" onClick={onCancel}>
           取消
         </Button>
         <Button type="submit" disabled={saving}>
@@ -182,20 +171,38 @@ function ValueRows({ label, namePlaceholder, rows, onChange }: { label: string; 
             // 改了名字就是新的一项，要重新填值
             onChange={(event) => update(row.key, { name: event.target.value, saved: false })}
           />
-          <Input
-            aria-label={`${label}的值`}
-            type="password"
-            value={row.value}
-            placeholder={row.saved ? '已保存，不改就留空' : '值'}
-            className="flex-1"
-            onChange={(event) => update(row.key, { value: event.target.value })}
-          />
-          <Button type="button" size="icon" variant="ghost" aria-label={`删除${label} ${row.name}`} onClick={() => onChange(rows.filter((item) => item.key !== row.key))}>
-            <X className="size-4" />
+          {row.saved && !row.replacing ? (
+            // 已保存的值读不回来，只显示占位；点「更换」才出现输入框
+            <>
+              <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg bg-muted/60 px-2.5 text-sm text-muted-foreground">•••••• 已保存</div>
+              <Button type="button" size="sm" variant="ghost" aria-label={`更换${label} ${row.name} 的值`} onClick={() => update(row.key, { replacing: true })}>
+                更换
+              </Button>
+            </>
+          ) : (
+            <Input
+              aria-label={`${label}的值`}
+              type="password"
+              value={row.value}
+              placeholder={row.saved ? '新的值，留空则不改' : '值'}
+              className="flex-1"
+              autoFocus={row.replacing}
+              onChange={(event) => update(row.key, { value: event.target.value })}
+            />
+          )}
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`删除${label} ${row.name}`}
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => onChange(rows.filter((item) => item.key !== row.key))}
+          >
+            <Trash2 className="size-3.5" />
           </Button>
         </div>
       ))}
-      <Button type="button" size="sm" variant="outline" onClick={() => onChange([...rows, { key: crypto.randomUUID(), name: '', value: '', saved: false }])}>
+      <Button type="button" size="sm" variant="ghost" onClick={() => onChange([...rows, { key: crypto.randomUUID(), name: '', value: '', saved: false, replacing: false }])}>
         <Plus className="size-3.5" />
         添加{label}
       </Button>

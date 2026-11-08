@@ -4,7 +4,7 @@ import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
-import { type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
 const TITLE_CHARS = 40
 
@@ -74,6 +74,28 @@ export function openHome(project?: string | null): void {
   const current = store.get().route
   const fallback = current.name === 'task' ? (store.get().live[current.sessionId]?.project ?? null) : current.name === 'home' ? current.project : null
   navigate({ name: 'home', project: project === undefined ? fallback : project })
+}
+
+// Ctrl+B、菜单和顶栏开关共用；设置页没有侧栏
+export function toggleSidebar(): void {
+  store.set((state) => {
+    if (state.route.name === 'settings') return state
+    // 侧栏被窄窗口收起时是想看侧栏，直接展开，而不是把 sidebarOpen 关掉
+    if (state.sidebarOpen && !isSidebarShown(state)) return { ...state, sidebarKeepOpen: true }
+    const sidebarOpen = !state.sidebarOpen
+    // 开着宽面板时 sidebarNarrow 被压成 false，窗口其实可能是窄的；这时主动展开的也记下，关掉面板后不被自动收起。
+    // 窗口真的变宽后 setSidebarNarrow(false) 会清掉它
+    return { ...state, sidebarOpen, sidebarKeepOpen: sidebarOpen && (state.sidebarNarrow || hasWidePanel(state)) }
+  })
+}
+
+export function setSidebarNarrow(narrow: boolean): void {
+  store.set((state) => {
+    // 宽面板开着时不算窄，但保留 keepOpen：切回窄面板时用户展开过的侧栏不被收掉
+    const keepOpen = narrow || hasWidePanel(state) ? state.sidebarKeepOpen : false
+    if (state.sidebarNarrow === narrow && state.sidebarKeepOpen === keepOpen) return state
+    return { ...state, sidebarNarrow: narrow, sidebarKeepOpen: keepOpen }
+  })
 }
 
 export async function refreshTasks(): Promise<void> {

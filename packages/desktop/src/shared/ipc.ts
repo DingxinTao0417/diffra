@@ -179,6 +179,20 @@ export interface SessionOptions {
   model?: ModelRef
 }
 
+// 新建任务失败的原因。ipcMain.handle 抛出的错误过 IPC 后只剩 message，所以原因写在 message 开头的「[code] 」里
+export type StartTaskErrorCode = 'model-missing' | 'model-auth' | 'project-missing' | 'unknown'
+const START_TASK_ERROR_CODES = ['model-missing', 'model-auth', 'project-missing'] as const
+
+export function encodeStartTaskError(code: (typeof START_TASK_ERROR_CODES)[number], message: string): string {
+  return `[${code}] ${message}`
+}
+
+export function decodeStartTaskError(message: string): { code: StartTaskErrorCode; message: string } {
+  const match = /^\[([a-z-]+)\] /.exec(message)
+  const code = START_TASK_ERROR_CODES.find((item) => item === match?.[1])
+  return match && code ? { code, message: message.slice(match[0].length) } : { code: 'unknown', message }
+}
+
 // 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）
 export type McpStatusTarget = { sessionId: string } | { projectPath: string | null }
 

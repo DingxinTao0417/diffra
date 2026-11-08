@@ -12,6 +12,12 @@ export type TranscriptItem =
       toolKind: ToolKind | null
       status: ToolCallStatus
       content: ToolCallContent[]
+      // 只有命令带：退出码为 0 且没超时、没取消。旧记录没有这个字段
+      succeeded?: boolean
+      // 只有完成卡带：没配检查命令，改动未经自动验证。旧记录没有这个字段，那句话还在总结正文里
+      unverified?: boolean
+      // 收到开始的时刻，运行中的行据此显示已用时间。重放历史记录时不带，免得没跑完的旧调用从打开时开始计时
+      startedAt?: number
     }
   | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
 
@@ -42,7 +48,9 @@ export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', s
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
 export function turnFromStored(turn: StoredTurn): Turn {
-  const items = turn.updates.reduce(applyUpdate, [{ kind: 'user', id: `${turn.id}-user`, text: turn.prompt }] as TranscriptItem[])
+  const items = turn.updates
+    .reduce(applyUpdate, [{ kind: 'user', id: `${turn.id}-user`, text: turn.prompt }] as TranscriptItem[])
+    .map((item) => (item.kind === 'tool' ? { ...item, startedAt: undefined } : item))
   return {
     id: turn.id,
     kind: turn.kind ?? 'prompt',
@@ -75,6 +83,15 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
     validated.push({ id: item.id, title: item.title, receiptId: item.receiptId })
   }
   return { status, reason, requirements: validated }
+}
+
+function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverified'): boolean | undefined {
+  const meta: unknown = update._meta
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return undefined
+  const diffra = meta.diffra
+  if (typeof diffra !== 'object' || diffra === null) return undefined
+  const value: unknown = (diffra as Record<string, unknown>)[key]
+  return typeof value === 'boolean' ? value : undefined
 }
 
 export function usageOf(update: SessionUpdate): Usage | null {
@@ -112,8 +129,10 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         toolKind: update.kind ?? null,
         status: update.status ?? 'pending',
         content: update.content ?? [],
+        succeeded: diffraFlagOf(update, 'commandSucceeded'),
+        unverified: diffraFlagOf(update, 'unverified'),
       }
-      return upsertTool(items, update.toolCallId, () => item)
+      return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
     case 'tool_call_update':
       return upsertTool(items, update.toolCallId, (existing) => ({
@@ -123,6 +142,9 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         toolKind: update.kind ?? existing?.toolKind ?? null,
         status: update.status ?? existing?.status ?? 'pending',
         content: update.content ?? existing?.content ?? [],
+        succeeded: diffraFlagOf(update, 'commandSucceeded') ?? existing?.succeeded,
+        unverified: diffraFlagOf(update, 'unverified') ?? existing?.unverified,
+        startedAt: existing?.startedAt ?? Date.now(),
       }))
     case 'notice':
       return [

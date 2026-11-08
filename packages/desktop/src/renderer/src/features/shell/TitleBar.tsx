@@ -2,14 +2,14 @@ import { type ReactNode, useRef } from 'react'
 import { ArrowLeft, ArrowRight, Menu, PanelLeft } from 'lucide-react'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { moveHistory } from '@/state/actions'
-import { store, useAppState } from '@/state/store'
+import { moveHistory, toggleSidebar } from '@/state/actions'
+import { isSidebarShown, useAppState } from '@/state/store'
 
 // 顶栏：主菜单、侧栏开关、后退前进，其余地方可以拖动窗口；右边留给系统的窗口按钮。
 // 高度用 px 固定为 40，和主进程给系统按钮设的高度一致，不跟着字号缩放
 export function TitleBar() {
   const settingsOpen = useAppState((state) => state.route.name === 'settings')
-  const sidebarOpen = useAppState((state) => state.sidebarOpen)
+  const sidebarShown = useAppState(isSidebarShown)
   const canGoBack = useAppState((state) => state.route.name === 'settings' || state.historyIndex > 0)
   const canGoForward = useAppState((state) => state.route.name !== 'settings' && state.historyIndex < state.history.length - 1)
   const menuButton = useRef<HTMLButtonElement>(null)
@@ -29,11 +29,7 @@ export function TitleBar() {
       {settingsOpen ? (
         <span aria-hidden className="size-[30px] shrink-0" />
       ) : (
-        <BarButton
-          label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
-          shortcut="Ctrl+B"
-          onClick={() => store.set((state) => ({ ...state, sidebarOpen: !state.sidebarOpen }))}
-        >
+        <BarButton label={sidebarShown ? '收起侧栏' : '展开侧栏'} shortcut="Ctrl+B" onClick={toggleSidebar}>
           <PanelLeft className="size-[16px]" />
         </BarButton>
       )}
@@ -71,7 +67,7 @@ function BarButton({
           aria-label={label}
           disabled={disabled}
           onClick={onClick}
-          className="flex size-[30px] items-center justify-center rounded-md hover:bg-accent hover:text-foreground disabled:opacity-35 disabled:hover:bg-transparent"
+          className="flex size-[30px] items-center justify-center rounded-md hover:bg-accent hover:text-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent"
         >
           {children}
         </button>

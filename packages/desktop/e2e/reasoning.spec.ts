@@ -45,7 +45,7 @@ test('模型菜单支持用键盘调整思考滑条并在重新打开后保留',
     const card = providerCard(window, '思考模型')
     await card.getByRole('button', { name: '添加模型', exact: true }).click()
     const capabilityDialog = window.getByRole('dialog')
-    await capabilityDialog.getByLabel('Model ID', { exact: true }).fill('gpt-5.2')
+    await capabilityDialog.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
     await capabilityDialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
     await expect(capabilityDialog).toBeHidden()
     await expect(card.getByTestId('model-row-gpt-5.2')).toBeVisible()

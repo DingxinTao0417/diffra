@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PromptImage, StoredSessionSummary } from '@diffra/core/types'
 import { Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, LoaderCircle, ScrollText, Settings2 } from 'lucide-react'
-import type { ProjectState } from '../../../../shared/ipc'
+import { decodeStartTaskError, type ProjectState, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -44,7 +44,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
   const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
   const detectedCount = useDetectedChecks(project)
 
@@ -77,7 +77,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}) }, { plan: planMode, ...extras })
       return true
     } catch (caught) {
-      setError(errorMessage(caught))
+      setError(decodeStartTaskError(errorMessage(caught)))
       return false
     }
   }
@@ -171,11 +171,14 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
           onSend={send}
         />
         {error && (
-          <div className="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
-            <span className="flex-1">{error}</span>
-            <button type="button" className="shrink-0 underline underline-offset-2" onClick={() => openSettings('models')}>
-              去设置模型
-            </button>
+          <div className="flex min-h-9 items-center gap-2 rounded-lg bg-destructive-soft py-1.5 pr-1.5 pl-3 text-sm" role="alert" data-testid="start-error">
+            <CircleAlert className="size-4 shrink-0 text-destructive" />
+            <span className="flex-1">{error.message}</span>
+            {(error.code === 'model-missing' || error.code === 'model-auth') && (
+              <Button variant="outline" size="xs" className="shrink-0" onClick={() => openSettings('models')}>
+                去设置模型
+              </Button>
+            )}
           </div>
         )}
         {projectPath && (

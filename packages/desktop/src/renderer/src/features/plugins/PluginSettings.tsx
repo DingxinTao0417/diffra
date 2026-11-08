@@ -1,13 +1,19 @@
 import { type FormEvent, useEffect, useState } from 'react'
+import { Ellipsis, Folder, GitBranch, Info, Puzzle, Trash2, TriangleAlert } from 'lucide-react'
 import type { PluginView } from '../../../../shared/settings'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Field } from '@/features/models/ProviderDialog'
+import { SettingsHeader } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 
 export function PluginSettings() {
@@ -40,48 +46,73 @@ export function PluginSettings() {
     setInstalling(false)
   }
 
+  const empty = plugins !== null && plugins.length === 0
+  // 列表为空时安装按钮只放在空状态里，页头不重复
+  const installButtons = (
+    <>
+      <Button variant="outline" disabled={installing} onClick={() => void installFolder()}>
+        从文件夹安装
+      </Button>
+      <Button disabled={installing} onClick={() => setGitOpen(true)}>
+        从 Git 安装
+      </Button>
+    </>
+  )
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">插件</h1>
-          <p className="text-sm text-muted-foreground">
-            一个插件可以带自定义命令、Skill 和 MCP 服务器，兼容 Claude Code 插件的格式。插件里的 MCP 服务器会在本机运行命令，只装信任的来源。新建或重新打开的任务生效。
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button variant="outline" disabled={installing} onClick={() => void installFolder()}>
-            从文件夹安装
-          </Button>
-          <Button disabled={installing} onClick={() => setGitOpen(true)}>
-            从 Git 安装
-          </Button>
-        </div>
+    <>
+      <SettingsHeader
+        title="插件"
+        description="一个插件可以带自定义命令、Skill 和 MCP 服务器，兼容 Claude Code 插件的格式。插件里的 MCP 服务器会在本机运行命令，只装信任的来源。新建或重新打开的任务生效。"
+        actions={empty ? undefined : installButtons}
+      />
+
+      <div className="space-y-3">
+        {error && (
+          <Alert variant="destructive">
+            <AlertTitle>操作失败</AlertTitle>
+            <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {plugins === null ? (
+          <p className="text-sm text-muted-foreground">正在读取插件…</p>
+        ) : empty ? (
+          <EmptyState
+            icon={Puzzle}
+            className="border bg-card"
+            title="还没有插件"
+            description={
+              <span>
+                装上插件，就能在斜杠菜单里用它带来的命令和 Skill
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="不装插件的自定义命令"
+                      className="ml-1 inline-flex rounded-sm align-middle text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                    >
+                      <Info className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>项目的 .diffra/commands 和 ~/.diffra/commands 里的 markdown 文件不用装插件，也会出现在斜杠菜单里</TooltipContent>
+                </Tooltip>
+              </span>
+            }
+          >
+            {installButtons}
+          </EmptyState>
+        ) : (
+          plugins.map((plugin) => (
+            <PluginCard
+              key={plugin.id}
+              plugin={plugin}
+              onToggle={(enabled) => void run(() => window.diffra.setPluginEnabled(plugin.id, enabled))}
+              onDelete={() => void run(() => window.diffra.deletePlugin(plugin.id))}
+            />
+          ))
+        )}
       </div>
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>操作失败</AlertTitle>
-          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {plugins === null ? (
-        <p className="text-sm text-muted-foreground">正在读取插件…</p>
-      ) : plugins.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-          还没有插件。项目的 .diffra/commands 和用户目录的 ~/.diffra/commands 里的 markdown 文件不用装插件，也会出现在输入框的斜杠菜单里。
-        </p>
-      ) : (
-        plugins.map((plugin) => (
-          <PluginCard
-            key={plugin.id}
-            plugin={plugin}
-            onToggle={(enabled) => void run(() => window.diffra.setPluginEnabled(plugin.id, enabled))}
-            onDelete={() => void run(() => window.diffra.deletePlugin(plugin.id))}
-          />
-        ))
-      )}
 
       <GitInstallDialog
         open={gitOpen}
@@ -91,60 +122,109 @@ export function PluginSettings() {
           setError(null)
         }}
       />
-    </div>
+    </>
   )
 }
 
 function PluginCard({ plugin, onToggle, onDelete }: { plugin: PluginView; onToggle(enabled: boolean): void; onDelete(): void }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const info = plugin.info
-  const rows: Array<[string, string[]]> = info
-    ? [
-        ['命令', info.commands.map((name) => `/${name}`)],
-        ['Skill', info.skills],
-        ['MCP 服务器', info.mcpServers],
-      ]
+  // 空的类别不显示
+  const groups = info
+    ? (
+        [
+          ['个命令', info.commands.map((name) => `/${name}`)],
+          ['个 Skill', info.skills],
+          ['个 MCP 服务器', info.mcpServers],
+        ] as const
+      ).filter(([, names]) => names.length > 0)
     : []
+  const git = plugin.source === 'git'
+  const SourceIcon = git ? GitBranch : Folder
   return (
     <Card data-testid="plugin-card">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {plugin.name}
-          {info?.version && <Badge variant="outline">{info.version}</Badge>}
-          <Badge variant="secondary">{plugin.source === 'git' ? 'Git' : '本地文件夹'}</Badge>
+        <CardTitle className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{plugin.name}</span>
+          {info?.version && <span className="shrink-0 text-xs font-normal text-muted-foreground">v{info.version.replace(/^v/i, '')}</span>}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                className="inline-flex shrink-0 items-center gap-1 rounded-sm text-xs font-normal text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                <SourceIcon aria-hidden className="size-3.5" />
+                {git ? 'Git' : '本地文件夹'}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="break-all">{plugin.url ?? plugin.dir}</TooltipContent>
+          </Tooltip>
         </CardTitle>
-        <CardDescription className="space-y-1">
-          {info?.description && <span className="block">{info.description}</span>}
-          <span className="block font-mono text-xs break-all">{plugin.url ?? plugin.dir}</span>
-        </CardDescription>
+        {info?.description && <CardDescription>{info.description}</CardDescription>}
         <CardAction className="flex items-center gap-2">
           <Switch label={`启用 ${plugin.name}`} checked={plugin.enabled} onChange={onToggle} />
-          {confirmingDelete ? (
-            <>
-              <Button size="sm" variant="destructive" onClick={onDelete}>
-                确认删除
+          {/* 非模态：菜单关闭和对话框打开同时发生时，模态菜单会把页面留在不可点击的状态 */}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon-sm" variant="ghost" aria-label={`${plugin.name} 插件操作`}>
+                <Ellipsis className="size-4" />
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>
-                取消
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" variant="ghost" title={plugin.source === 'git' ? '连同克隆下来的文件一起删除' : '只是不再使用，文件夹不动'} onClick={() => setConfirmingDelete(true)}>
-              删除
-            </Button>
-          )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-auto min-w-36">
+              <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
+                <Trash2 />
+                删除
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </CardAction>
       </CardHeader>
-      <CardContent className="space-y-1.5 text-sm" data-testid="plugin-contents">
+      <CardContent className="space-y-2 text-sm" data-testid="plugin-contents">
         {plugin.error && <p className="text-destructive">读不了这个插件：{plugin.error}</p>}
-        {rows.map(([label, names]) => (
-          <div key={label} className="flex gap-2">
-            <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-            <span className="min-w-0 font-mono text-xs leading-5 break-all">{names.length > 0 ? names.join('  ') : '无'}</span>
+        {info && (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span>{groups.length > 0 ? groups.map(([unit, names]) => `${names.length} ${unit}`).join(' · ') : '没有可用的命令、Skill 或 MCP 服务器'}</span>
+            {groups.length > 0 && (
+              <Button size="xs" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+                {expanded ? '收起' : '查看'}
+              </Button>
+            )}
           </div>
-        ))}
-        {info && info.unsupported.length > 0 && <p className="text-xs text-muted-foreground">Diffra 暂不支持、已忽略：{info.unsupported.join('、')}</p>}
+        )}
+        {expanded && (
+          <div className="flex flex-wrap gap-1">
+            {groups.flatMap(([unit, names]) =>
+              names.map((name) => (
+                <Badge key={`${unit}:${name}`} variant="secondary" className="font-mono">
+                  {name}
+                </Badge>
+              )),
+            )}
+          </div>
+        )}
+        {info && info.unsupported.length > 0 && (
+          <p className="flex items-start gap-1.5 text-xs">
+            <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
+            <span>Diffra 暂不支持、已忽略：{info.unsupported.join('、')}</span>
+          </p>
+        )}
       </CardContent>
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除插件「{plugin.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>{git ? '会连同克隆下来的文件一起删除。' : '只是不再使用，文件夹保留不动。'}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction variant="destructive-solid" onClick={() => onDelete()}>
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }
@@ -196,7 +276,7 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel(): void; onInstall
         </Alert>
       )}
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button type="button" variant="ghost" onClick={onCancel}>
           取消
         </Button>
         <Button type="submit" disabled={installing}>

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -11,10 +11,13 @@ import { TaskView } from '@/features/task/TaskView'
 import { toggleTerminalPanel, wireTerminalEvents } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { INSET_PANEL } from '@/lib/shell'
-import { initialize, moveHistory, openHome, openSettings, pickProject, wireCoreEvents } from '@/state/actions'
-import { showToast, store, useAppState } from '@/state/store'
+import { initialize, moveHistory, openHome, openSettings, pickProject, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
+import { hasWidePanel, isSidebarShown, showToast, store, useAppState } from '@/state/store'
 
 const TOAST_MS = 3000
+// 主列（任务页的对话列，首页的 main）窄于这个宽度时自动收起侧栏。
+// 默认 1200 宽窗口在「大」字号下开着监控面板时对话列约 584px，阈值不能高过它，否则一打开任务侧栏就没了
+const NARROW_COLUMN_PX = 520
 
 // 快捷键和中文菜单共用
 function runCommand(command: MenuCommand): void {
@@ -30,8 +33,7 @@ function runCommand(command: MenuCommand): void {
     case 'settings':
       return openSettings()
     case 'toggle-sidebar':
-      if (store.get().route.name !== 'settings') store.set((state) => ({ ...state, sidebarOpen: !state.sidebarOpen }))
-      return
+      return toggleSidebar()
     case 'search':
       return store.set((state) => ({ ...state, searchOpen: !state.searchOpen }))
     case 'terminal': {
@@ -56,9 +58,28 @@ function runCommand(command: MenuCommand): void {
 
 const CTRL_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', '`': 'terminal' }
 
+function sidebarWidth(): number {
+  // --sidebar-w 用 rem 写，跟着「文字大小」缩放
+  const root = getComputedStyle(document.documentElement)
+  return parseFloat(root.getPropertyValue('--sidebar-w')) * parseFloat(root.fontSize)
+}
+
 export function App() {
   const route = useAppState((state) => state.route)
-  const sidebarOpen = useAppState((state) => state.sidebarOpen)
+  const sidebarShown = useAppState(isSidebarShown)
+
+  const columnRef = useCallback((element: HTMLElement | null) => {
+    if (!element) return
+    const observer = new ResizeObserver(() => {
+      const state = store.get()
+      if (hasWidePanel(state)) return setSidebarNarrow(false)
+      // 侧栏没显示时按显示后的宽度估算；减去侧栏全宽是偏保守的，侧栏出现后不会马上又被收起
+      const width = isSidebarShown(state) ? element.clientWidth : element.clientWidth - sidebarWidth()
+      setSidebarNarrow(width < NARROW_COLUMN_PX)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const unwire = wireCoreEvents()
@@ -104,10 +125,10 @@ export function App() {
             <SettingsView section={route.section} />
           ) : (
             <>
-              {sidebarOpen && <Sidebar />}
-              <main className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarOpen && 'rounded-tl-none border-l-0')}>
+              {sidebarShown && <Sidebar />}
+              <main ref={route.name === 'home' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0')}>
                 {route.name === 'home' && <HomeView projectPath={route.project} />}
-                {route.name === 'task' && <TaskView sessionId={route.sessionId} />}
+                {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
               </main>
             </>
           )}

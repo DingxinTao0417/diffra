@@ -292,9 +292,13 @@ describe('主循环', () => {
       { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
     ])
     const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final new.txt' })
-    await expect(runTurn(session, { id: 't', text: '写 new.txt' }, recordingIO())).resolves.toBe('end_turn')
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
     expect(readFileSync(join(project, 'new.txt'), 'utf8')).toBe('final\n')
     expect(model.doStreamCalls).toHaveLength(5)
+    const finish = io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
+    expect(finish).toMatchObject({ status: 'completed' })
+    expect(finish?._meta).toBeUndefined()
   })
 
   test('改了文件却没调 finish 时被拉回', async () => {
@@ -309,8 +313,23 @@ describe('主循环', () => {
     expect(model.doStreamCalls).toHaveLength(3)
     // 没配检查命令：finish 照样通过，但标注未经验证
     const finish = io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
-    expect(finish).toMatchObject({ status: 'completed' })
-    expect(JSON.stringify(finish)).toContain('未经自动验证')
+    expect(finish).toMatchObject({ status: 'completed', _meta: { diffra: { unverified: true } } })
+    // 未经验证是结构化字段，不再拼进模型写的总结
+    expect(finish).toMatchObject({ content: [{ type: 'content', content: { type: 'text', text: '完成' } }] })
+  })
+
+  test('没配检查命令时 verify_changes 卡片仍用文字说明未经验证', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'v.txt', old_string: '', new_string: 'v\n' } }] },
+      { toolCalls: [{ name: 'verify_changes', input: { summary: '中间验证' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+    ])
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '写 v.txt' }, io)).resolves.toBe('end_turn')
+    const verify = io.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '验证改动（不结束任务）')
+    // 验证卡片走通用工具步骤、不读 _meta，所以未经验证必须写在文本里
+    expect(verify).toMatchObject({ status: 'completed', content: [{ type: 'content', content: { type: 'text', text: '中间验证\n\n未配置检查命令，改动未经自动验证。' } }] })
+    expect(verify?._meta).toBeUndefined()
   })
 
   test('只回答问题、不改文件时不需要 finish', async () => {
@@ -346,6 +365,49 @@ describe('主循环', () => {
     await runTurn(await makeSession(model), { id: 't', text: '跑命令' }, io)
     expect(io.permissionRequests).toBe(0)
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('from-bash')
+  })
+
+  test('命令结果的 _meta 带上是否成功：退出码非 0 时工具调用仍是 completed，但 commandSucceeded 为 false', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'echo ok' } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'exit 3' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'missing.txt' } }] },
+      { text: '好' },
+    ])
+    const io = recordingIO()
+    await runTurn(await makeSession(model), { id: 't', text: '跑命令' }, io)
+    const metaOf = (toolCallId: string) => {
+      const update = io.updates.findLast((item) => item.sessionUpdate === 'tool_call_update' && item.toolCallId === toolCallId)
+      return update?.sessionUpdate === 'tool_call_update' ? { status: update.status, meta: update._meta } : null
+    }
+    expect(metaOf('call-0-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: true } } })
+    expect(metaOf('call-1-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: false } } })
+    // 不是命令的工具不带这个字段
+    expect(metaOf('call-2-0')?.meta).toBeUndefined()
+  })
+
+  test('工具开始时的标题就带上目标，跑完后换成工具返回的标题；失败的保留开始时的标题', async () => {
+    writeFileSync(join(project, 'a.txt'), 'hello\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'echo ok' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: './a.txt' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'missing.txt' } }] },
+      { toolCalls: [{ name: 'search', input: { pattern: 'hello' } }] },
+      { toolCalls: [{ name: 'list_files', input: {} }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'hello', new_string: 'hi' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+    ])
+    const io = recordingIO()
+    await runTurn(await makeSession(model), { id: 't', text: '看看' }, io)
+    const startTitles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title !== '完成' ?[update.title] : []))
+    expect(startTitles).toEqual(['执行 echo ok', '读取 ./a.txt', '读取 missing.txt', '搜索 hello', '列出 .', '新建 b.txt', '编辑 a.txt'])
+    const finalTitle = (toolCallId: string) => {
+      const update = io.updates.findLast((item) => item.sessionUpdate === 'tool_call_update' && item.toolCallId === toolCallId)
+      return update?.sessionUpdate === 'tool_call_update' ? { status: update.status, title: update.title } : null
+    }
+    expect(finalTitle('call-1-0')).toEqual({ status: 'completed', title: '读取 a.txt' })
+    expect(finalTitle('call-2-0')).toEqual({ status: 'failed', title: undefined })
   })
 
   test('参数不合法的工具调用返回错误，每个调用都有且只有一个结果', async () => {
@@ -935,7 +997,7 @@ describe('兜底模型', () => {
 
     await expect(runTurn(session, { id: 'turn-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('value = fixed\n')
-    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback'])
+    expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback'])
     expect(coder.doStreamCalls).toHaveLength(4)
     expect(fallback.doStreamCalls).toHaveLength(2)
     expect(JSON.stringify(fallback.doStreamCalls[0]?.prompt)).toContain('A different model takes over')
@@ -955,7 +1017,7 @@ describe('兜底模型', () => {
 
     await expect(runTurn(session, { id: 'turn-1', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
     expect(readFileSync(join(project, 'new.txt'), 'utf8')).toBe('final\n')
-    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback'])
+    expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback'])
   })
 
   test('卡死提醒后仍重复时换兜底模型；兜底模型也卡住就停下，每轮只换一次', async () => {
@@ -969,7 +1031,7 @@ describe('兜底模型', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '看看 b.txt' }, io)).resolves.toBe('end_turn')
     expect(coder.doStreamCalls).toHaveLength(6)
     expect(fallback.doStreamCalls).toHaveLength(6)
-    expect(notices(io)).toEqual(['已换用兜底模型 兜底供应商 / fallback', '智能体在重复同样的操作，已停止'])
+    expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback', '智能体在重复同样的操作，已停止'])
   })
 
   test('下一轮回到编码模型', async () => {

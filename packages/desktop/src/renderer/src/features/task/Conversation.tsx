@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PromptImage, StopReason, TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
-import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, ListChecks, LoaderCircle, RefreshCw, Sparkles, Target, Undo2, X } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
@@ -167,9 +168,16 @@ export function Conversation({ task, onRestore, onRegenerate }: ConversationProp
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto px-8 pt-6 pb-4">
-        <div className="mx-auto flex max-w-(--content-max) flex-col gap-7">
-          {task.turns.length === 0 && <p className="text-sm text-muted-foreground">描述你要做的事，比如「修复登录页的报错」或「给 utils 加单元测试」。</p>}
+      {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="h-full overflow-y-auto px-8 pt-6 pb-8 [scrollbar-gutter:stable_both-edges] [mask-image:linear-gradient(to_bottom,black_calc(100%_-_24px),transparent)]"
+      >
+        <div className="mx-auto flex min-h-full max-w-(--content-max) flex-col gap-7">
+          {task.turns.length === 0 && (
+            <EmptyState icon={MessageSquare} title="描述你要做的事" description="比如「修复登录页的报错」或「给 utils 加单元测试」。" className="my-auto bg-transparent" />
+          )}
           {task.turns.map((turn, index) => {
             const last = index === task.turns.length - 1
             return (
@@ -188,14 +196,9 @@ export function Conversation({ task, onRestore, onRegenerate }: ConversationProp
       </div>
       {task.turns.length > 1 && <Timeline turns={task.turns} activeTurn={activeTurn ?? task.turns.at(-1)?.id ?? null} onJump={scrollToTurn} />}
       {!atBottom && (
-        <button
-          type="button"
-          aria-label="回到底部"
-          className="absolute bottom-3 left-1/2 flex size-7.5 -translate-x-1/2 items-center justify-center rounded-full border bg-background shadow-sm hover:bg-muted"
-          onClick={scrollToBottom}
-        >
-          <ArrowDown className="size-3.5" />
-        </button>
+        <Button variant="outline" size="icon" aria-label="回到底部" className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full shadow-overlay" onClick={scrollToBottom}>
+          <ArrowDown />
+        </Button>
       )}
     </div>
   )
@@ -217,18 +220,21 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   const [showEditDetails, setShowEditDetails] = useState(false)
   // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
-  // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动
+  // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动和失败的命令
   const finishFiles = useMemo(() => {
-    const result = new Map<string, ChangedFile[]>()
+    const result = new Map<string, { files: ChangedFile[]; commandsFailed: number }>()
     let start = 0
     turn.items.forEach((item, index) => {
       if (item.kind !== 'tool' || toolBlockType(item) !== 'finish') return
-      result.set(item.id, filesOf(turn.items.slice(start, index + 1)))
+      const scope = turn.items.slice(start, index + 1)
+      result.set(item.id, { files: filesOf(scope), commandsFailed: scope.filter((entry) => entry.kind === 'tool' && entry.succeeded === false).length })
       start = index + 1
     })
     return result
   }, [turn.items])
   const stopLabel = turn.stopReason ? STOP_LABELS[turn.stopReason] : undefined
+  const canRegenerate = last && (turn.kind === 'prompt' || turn.kind === 'goal')
+  const canRestore = task.info.checkpoints && turn.kind !== 'compact'
 
   const copy = () => {
     const text = turn.items
@@ -241,7 +247,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   }
 
   return (
-    <section data-testid="turn" data-turn-id={turn.id} className="flex flex-col gap-3.5">
+    <section data-testid="turn" data-turn-id={turn.id} className="group/turn flex flex-col gap-3.5">
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
@@ -269,7 +275,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id) ?? []} projectPath={task.project} progress={last && block.item.id === [...finishFiles.keys()].at(-1) ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} progress={last && block.item.id === [...finishFiles.keys()].at(-1) ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -279,28 +285,50 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           进行中…
         </p>
       )}
-      {stopLabel && <p className="text-sm text-muted-foreground">{stopLabel}</p>}
-      {turn.error && (
-        <p className="text-sm text-destructive" role="alert">
-          {turn.error}
+      {stopLabel && (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Square className="size-3.5" />
+          {stopLabel}
         </p>
       )}
+      {turn.error && (
+        <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive-soft px-3.5 py-3 text-sm" role="alert" data-testid="turn-error">
+          <div className="flex items-center gap-2 font-semibold text-destructive">
+            <CircleAlert className="size-4 shrink-0" />
+            这一轮出错了
+          </div>
+          <p className="leading-relaxed break-words whitespace-pre-wrap">{turn.error}</p>
+          {canRegenerate && (
+            <Button variant="outline" size="sm" className="self-start" disabled={task.running} onClick={onRegenerate}>
+              重试
+            </Button>
+          )}
+        </div>
+      )}
+      {/* 只有最后一轮的操作栏常驻，其余轮悬停或键盘聚焦时才出现；用透明度隐藏，不占用也不改变布局 */}
       {!active && (
-        <div className="flex items-center gap-1 text-muted-foreground" data-testid="turn-actions">
+        <div
+          className={cn('flex items-center gap-1 text-muted-foreground transition-opacity', !last && 'opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100')}
+          data-testid="turn-actions"
+        >
           <ActionButton label="复制回复" onClick={copy}>
-            <Copy className="size-3.5" />
+            <Copy className="size-4" />
           </ActionButton>
-          {task.info.checkpoints && turn.kind !== 'compact' && (
-            <ActionButton label="撤销到这一轮之前" disabled={task.running} onClick={onRestore}>
-              <Undo2 className="size-3.5" />
-            </ActionButton>
-          )}
-          {last && (turn.kind === 'prompt' || turn.kind === 'goal') && (
+          {/* 出错卡片里已经有「重试」，同一个动作不再放第二个按钮 */}
+          {canRegenerate && !turn.error && (
             <ActionButton label="重新生成" disabled={task.running} onClick={onRegenerate}>
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="size-4" />
             </ActionButton>
           )}
-          {turn.startedAt && turn.endedAt && <span className="ml-auto text-xs">用时 {formatDuration(turn.endedAt - turn.startedAt)}</span>}
+          {canRestore && (
+            <>
+              <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
+              <ActionButton label="撤销到这一轮之前" disabled={task.running} onClick={onRestore}>
+                <Undo2 className="size-4" />
+              </ActionButton>
+            </>
+          )}
+          {turn.startedAt && turn.endedAt && <span className="ml-auto text-xs tabular-nums">用时 {formatDuration(turn.endedAt - turn.startedAt)}</span>}
         </div>
       )}
     </section>
@@ -346,15 +374,9 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-          className="flex size-7 items-center justify-center rounded-md hover:bg-muted hover:text-foreground disabled:opacity-40"
-        >
+        <Button variant="ghost" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick}>
           {children}
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
@@ -367,7 +389,7 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
     case 'user':
       if (!goal && skills.length === 0 && images.length === 0) {
         return (
-          <div className="max-w-[80%] self-end rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
+          <div className="max-w-[80%] self-end rounded-2xl bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
             {item.text}
           </div>
         )
@@ -395,7 +417,7 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
               </span>
             ))}
           </div>
-          <div className="rounded-[14px] bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
+          <div className="rounded-2xl bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
             {item.text}
           </div>
         </div>
@@ -414,12 +436,12 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
           data-testid="notice"
           role={item.severity === 'error' ? 'alert' : undefined}
           className={cn(
-            'rounded-[10px] border px-3 py-2 text-sm',
-            item.severity === 'error' && 'border-destructive/30 bg-destructive/5 text-destructive',
-            item.severity === 'warning' && 'border-warning/30 bg-warning/5',
+            'rounded-xl border px-3 py-2 text-sm',
+            item.severity === 'error' && 'border-destructive/30 bg-destructive-soft text-destructive',
+            item.severity === 'warning' && 'border-warning/30 bg-warning-soft',
           )}
         >
-          <div className="font-medium">{item.title}</div>
+          <div className="font-semibold">{item.title}</div>
           {item.description && <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.description}</div>}
         </div>
       )
@@ -443,20 +465,22 @@ function Thought({ text }: { text: string }) {
 function StatusIcon({ status, className }: { status: string; className?: string }) {
   if (status === 'completed') return <Check className={cn('size-3.5 shrink-0 text-success', className)} strokeWidth={2.6} />
   if (status === 'failed') return <X className={cn('size-3.5 shrink-0 text-destructive', className)} strokeWidth={2.6} />
+  if (status === 'command-failed') return <CircleAlert className={cn('size-3.5 shrink-0 text-warning', className)} />
   return <LoaderCircle className={cn('size-3.5 shrink-0 animate-spin text-muted-foreground', className)} />
 }
 
 function ToolGroup({ items }: { items: ToolItem[] }) {
   const busy = items.some((item) => item.status !== 'completed' && item.status !== 'failed')
   const failed = items.filter((item) => item.status === 'failed').length
+  const commandsFailed = items.filter((item) => item.succeeded === false).length
   const [open, setOpen] = useState<boolean | null>(null)
   if (items.length === 1 && items[0]) return <ToolStep item={items[0]} />
   const expanded = open ?? busy
   return (
     <div className="flex flex-col gap-1.5" data-testid="tool-group">
       <DisclosureRow open={expanded} onToggle={() => setOpen(!expanded)} className="text-muted-foreground hover:text-foreground">
-        <StatusIcon status={busy ? 'in_progress' : failed > 0 ? 'failed' : 'completed'} />
-        执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}
+        <StatusIcon status={busy ? 'in_progress' : failed > 0 ? 'failed' : commandsFailed > 0 ? 'command-failed' : 'completed'} />
+        执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}{commandsFailed > 0 ? ` · ${commandsFailed} 条命令失败` : ''}
       </DisclosureRow>
       {expanded && (
         <div className="flex flex-col gap-0.5 pl-5">
@@ -470,19 +494,36 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
 }
 
 function ToolStep({ item }: { item: ToolItem }) {
-  const [open, setOpen] = useState(false)
+  // 命令失败的结果是跑完之后才到的，所以默认展开要跟着 item 算，不能只在挂载时定
+  const [open, setOpen] = useState<boolean | null>(null)
+  const commandFailed = item.succeeded === false
+  const expanded = open ?? commandFailed
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
+  const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
   return (
-    <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status}>
-      <DisclosureRow open={open} onToggle={output ? () => setOpen(!open) : undefined} className="text-foreground/85">
-        <StatusIcon status={item.status} />
+    <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)}>
+      <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground/85">
+        <StatusIcon status={commandFailed ? 'command-failed' : item.status} />
         <span className="shrink-0 text-muted-foreground">{action}</span>
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
+        {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
       </DisclosureRow>
-      {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
   )
+}
+
+// 运行中每秒刷新一次；结束后不再计时，也不显示
+function useElapsed(startedAt: number | undefined, running: boolean): number | null {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running || startedAt === undefined) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [running, startedAt])
+  return running && startedAt !== undefined ? now - startedAt : null
 }
 
 // 对话里可以点开的一行。有内容可展开才是按钮，带箭头和 hover；没有时箭头位置留空，和相邻的行对齐
@@ -510,8 +551,8 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
   const [text, setText] = useState(original)
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
-    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
-      <div className="flex items-center gap-2 font-medium">
+    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
+      <div className="flex items-center gap-2 font-semibold">
         <ListChecks className="size-4 text-primary" />
         计划
       </div>
@@ -523,14 +564,9 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
         className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-ring/60"
       />
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={task.running || text.trim() === ''}
-          className="h-8 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-          onClick={execute}
-        >
+        <Button disabled={task.running || text.trim() === ''} className="px-3.5" onClick={execute}>
           按计划执行
-        </button>
+        </Button>
         {text !== original && (
           <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => setText(original)}>
             恢复原计划
@@ -718,8 +754,8 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   const findings = lines.map((line) => FINDING_PATTERN.exec(line))
   const count = findings.filter(Boolean).length
   return (
-    <div {...common} className="flex flex-col gap-1.5 rounded-[10px] border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-sm">
-      <div className="flex items-center gap-2 font-medium text-destructive">
+    <div {...common} className="flex flex-col gap-1.5 rounded-xl border border-destructive/25 bg-destructive-soft px-3 py-2.5 text-sm">
+      <div className="flex items-center gap-2 font-semibold text-destructive">
         <X className="size-3.5" strokeWidth={2.6} />
         {count > 0 ? `规范审查 · ${count} 处问题，已打回` : '规范审查'}
       </div>
@@ -781,11 +817,11 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     <div
       {...common}
       className={cn(
-        'flex flex-col gap-1.5 rounded-[10px] border px-3 py-2.5 text-sm',
-        high > 0 ? 'border-destructive/25 bg-destructive/5' : 'border-warning/25 bg-warning/5',
+        'flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm',
+        high > 0 ? 'border-destructive/25 bg-destructive-soft' : 'border-warning/25 bg-warning-soft',
       )}
     >
-      <div className={cn('flex items-center gap-2 font-medium', high > 0 && 'text-destructive')}>
+      <div className={cn('flex items-center gap-2 font-semibold', high > 0 && 'text-destructive')}>
         {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <Check className="size-3.5 text-success" strokeWidth={2.6} />}
         {high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
       </div>
@@ -857,8 +893,8 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
   }
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3 text-sm" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
-      <div className="font-medium">深度扫描报告</div>
+    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
+      <div className="font-semibold">深度扫描报告</div>
       <p className="text-muted-foreground">{summary}</p>
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
       {findings.map((finding, index) => (
@@ -877,14 +913,9 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
         </label>
       ))}
       {findings.length > 0 && (
-        <button
-          type="button"
-          disabled={selected.size === 0}
-          onClick={fix}
-          className="self-start rounded-lg bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-40"
-        >
+        <Button disabled={selected.size === 0} className="self-start" onClick={fix}>
           {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -909,21 +940,33 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
-function FinishCard({ item, files, projectPath, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; projectPath: string; onRestore?: () => void; progress?: TaskProgressView }) {
+function FinishCard({ item, files, commandsFailed, projectPath, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
+  const unverified = passed && item.unverified === true
+  const warnings = passed ? [unverified && '没有配置检查命令', commandsFailed > 0 && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false) : []
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status}>
-      <div className={cn('flex items-center gap-2 font-semibold', !passed && 'text-destructive')}>
-        <StatusIcon status={item.status} className="size-4" />
-        {passed ? '本轮交付' : '还没完成'}
+    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={unverified ? 'true' : undefined}>
+      <div className={cn('flex items-center gap-2 font-semibold', !passed && 'text-destructive', unverified && 'text-warning')}>
+        {unverified ? <CircleAlert className="size-4 shrink-0" /> : <StatusIcon status={item.status} className="size-4" />}
+        {unverified ? '已完成 · 未经自动验证' : passed ? '本轮交付' : '还没完成'}
         {passed && files.length > 0 && (
           <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
             {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
           </span>
         )}
       </div>
+      {warnings.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-sm" role="note" data-testid="finish-warnings">
+          <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+          <div className="flex flex-col gap-0.5">
+            {warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        </div>
+      )}
       {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
@@ -959,7 +1002,7 @@ function FinishCard({ item, files, projectPath, onRestore, progress }: { item: T
 
 function Timeline({ turns, activeTurn, onJump }: { turns: Turn[]; activeTurn: string | null; onJump(turnId: string): void }) {
   return (
-    <nav aria-label="对话时间线" className="absolute top-7 right-2.5 flex max-h-[70%] flex-col gap-1 overflow-hidden">
+    <nav aria-label="对话时间线" className="absolute top-7 right-5 flex max-h-[70%] flex-col gap-1 overflow-hidden">
       {turns.map((turn) => (
         <Tooltip key={turn.id}>
           <TooltipTrigger asChild>

@@ -58,7 +58,7 @@ export function Segmented<T extends string>({
               "rounded-md whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
               size === "sm" ? "h-6 px-2 text-xs" : "h-7 px-3 text-sm",
               checked
-                ? "bg-background font-medium text-foreground shadow-sm dark:bg-accent"
+                ? "bg-background text-foreground shadow-sm dark:bg-accent dark:inset-ring dark:inset-ring-input"
                 : "text-muted-foreground hover:text-foreground"
             )}
             onClick={() => onChange(option.value)}

@@ -2,12 +2,14 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import type { Protocol } from '@diffra/core/types'
 import { baseUrlHint, CUSTOM_PROTOCOLS, PROTOCOL_LABELS, PROVIDER_PRESETS } from '../../../../shared/presets'
 import { modelDisplayName, MAX_MODEL_ID_LENGTH, MAX_PROVIDER_MODELS, type ModelConfig, type ProviderInput, type ProviderView, type SettingsView } from '../../../../shared/settings'
-import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
-import { ModelCapabilities, validateModelCapabilities } from './ModelCapabilities'
+import { Check, ChevronRight, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { cn } from 'cn'
+import { capabilitySummary, ModelCapabilities, validateModelCapabilities } from './ModelCapabilities'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -40,9 +42,9 @@ interface ProviderDialogProps {
 export function ProviderDialog({ open, provider, onOpenChange, onSaved }: ProviderDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader className="pr-8">
-          <DialogTitle>{provider ? '编辑模型连接' : '添加模型'}</DialogTitle>
+          <DialogTitle>{provider ? '编辑模型服务' : '添加模型服务'}</DialogTitle>
           <DialogDescription>使用自己的 API Key，密钥加密保存在本机。</DialogDescription>
         </DialogHeader>
         {/* 表单放在 DialogContent 里，每次打开都会重新挂载，状态从 provider 重新初始化 */}
@@ -67,8 +69,10 @@ interface ProviderFormProps {
 
 function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
   const editing = provider !== null
-  const [presetId, setPresetId] = useState(provider?.presetId ?? CUSTOM)
+  // 新建时不预选，先让用户在预设里挑
+  const [presetId, setPresetId] = useState(provider ? provider.presetId ?? CUSTOM : '')
   const [step, setStep] = useState<'connection' | 'capabilities'>('connection')
+  const [expandedModel, setExpandedModel] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [models, setModels] = useState<Array<{ key: string; config: ModelConfig }>>(() =>
     (provider?.models.length ? provider.models : [{ id: '', contextWindow: null, images: false }]).map((config) => ({ key: crypto.randomUUID(), config })),
@@ -92,6 +96,10 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (presetId === '') {
+      setError('请选择供应商')
+      return
+    }
     if (!editing && !apiKey.trim()) {
       setError('请填写 API Key')
       return
@@ -117,9 +125,12 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
     }
   }
 
+  const updateModel = (key: string, config: ModelConfig) => setModels((current) => current.map((entry) => entry.key === key ? { ...entry, config } : entry))
+
   return (
-    <form onSubmit={submit} className="space-y-4">
-      <ol className="flex items-center gap-3 border-b pb-3 text-xs text-muted-foreground" aria-label="配置步骤"><li className={step === 'connection' ? 'font-medium text-primary' : ''}>1 · 连接信息</li><li aria-hidden="true">→</li><li className={step === 'capabilities' ? 'font-medium text-primary' : ''}>2 · 模型能力</li></ol>
+    <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col gap-4">
+      <StepIndicator current={step === 'connection' ? 0 : 1} />
+      <DialogBody>
       <fieldset disabled={saving} hidden={step !== 'connection'} className="space-y-4">
       <Field id="provider-preset" label="供应商">
           <Select value={presetId} onValueChange={choosePreset}>
@@ -144,7 +155,8 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
                 ))}
               </SelectGroup>
               <SelectGroup>
-                <SelectItem value={CUSTOM}>OpenAI Compatible（自定义）</SelectItem>
+                {/* 自定义还能选 Anthropic 兼容和 Gemini，名字里不写「OpenAI 兼容」 */}
+                <SelectItem value={CUSTOM}>自定义</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -158,7 +170,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
             </Alert>
           )}
           <Field id="provider-name" label="名称">
-            <Input id="provider-name" value={name} onChange={(event) => setName(event.target.value)} required />
+            <Input id="provider-name" placeholder="例如 DeepSeek" value={name} onChange={(event) => setName(event.target.value)} required />
           </Field>
           {presetId === CUSTOM ? (
             <Field id="provider-protocol" label="API 类型">
@@ -175,14 +187,14 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
                 <SelectContent>
                   {CUSTOM_PROTOCOLS.map((item) => (
                     <SelectItem key={item} value={item}>
-                      {item === 'openai-compatible' ? 'Chat Completions API' : item === 'openai-responses' ? 'Responses API' : PROTOCOL_LABELS[item]}
+                      {item === 'openai-compatible' ? 'OpenAI 兼容（Chat Completions）' : item === 'openai-responses' ? 'OpenAI 兼容（Responses）' : PROTOCOL_LABELS[item]}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </Field>
           ) : (
-            <p className="text-sm text-muted-foreground">协议：{PROTOCOL_LABELS[protocol]}</p>
+            <ReadonlyField label="API 类型" value={PROTOCOL_LABELS[protocol]} />
           )}
           <Field id="provider-base-url" label="地址" hint={baseUrlHint(protocol)}>
             <Input id="provider-base-url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required />
@@ -197,30 +209,79 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
               <button type="button" aria-label={showKey ? '隐藏 API Key' : '显示 API Key'} className="absolute inset-y-0 right-2 flex items-center text-muted-foreground" onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button>
             </div>
           </Field>
+          <div role="group" aria-labelledby="provider-models" className="space-y-1.5">
+            <div className="flex h-4 items-center justify-between">
+              <span id="provider-models" className="text-sm leading-none">模型 ID</span>
+              <Button type="button" size="xs" variant="link" className="h-auto px-0" disabled={models.length >= MAX_PROVIDER_MODELS} onClick={() => setModels((current) => [...current, { key: crypto.randomUUID(), config: { id: '', contextWindow: null, images: false } }])}><Plus />添加模型 ID</Button>
+            </div>
+            <div className="space-y-2">
+              {models.map((item, index) => <div key={item.key} className="flex items-center gap-2">
+                <Input aria-label={`模型 ID ${index + 1}`} placeholder="例如 qwen3.8-max" value={item.config.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => updateModel(item.key, { ...item.config, id: event.target.value })} />
+                <Button type="button" size="icon-sm" variant="ghost" aria-label={`移除模型 ID ${index + 1}`} disabled={models.length <= 1} onClick={() => setModels((current) => current.filter((entry) => entry.key !== item.key))}><Trash2 className="size-3.5" /></Button>
+              </div>)}
+            </div>
+          </div>
         </>
       )}
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between"><span className="text-sm font-medium">Model ID</span><Button type="button" size="sm" variant="ghost" disabled={models.length >= MAX_PROVIDER_MODELS} onClick={() => setModels((current) => [...current, { key: crypto.randomUUID(), config: { id: '', contextWindow: null, images: false } }])}><Plus className="size-3" />添加 Model ID</Button></div>
-        {models.map((item, index) => <div key={item.key} className="flex items-center gap-2">
-          <Input aria-label={`Model ID ${index + 1}`} placeholder="例如 qwen3.8-max" value={item.config.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => setModels((current) => current.map((entry) => entry.key === item.key ? { ...entry, config: { ...entry.config, id: event.target.value } } : entry))} />
-          <Button type="button" size="icon-sm" variant="ghost" aria-label={`移除 Model ID ${index + 1}`} disabled={models.length <= 1} onClick={() => setModels((current) => current.filter((entry) => entry.key !== item.key))}><Trash2 className="size-3.5" /></Button>
-        </div>)}
-      </div>
       </fieldset>
-      {step === 'capabilities' && <div className="space-y-3">
-        <h2 className="text-sm font-medium">配置模型能力</h2>
-        {models.map((item, index) => <details key={item.key} open={models.length === 1 || undefined} className="rounded-lg border p-2">
-          <summary className="cursor-pointer px-2 py-1 text-sm font-medium">{modelDisplayName(item.config)}</summary>
-          <ModelCapabilities model={item.config} protocol={protocol} index={index} onChange={(config) => setModels((current) => current.map((entry) => entry.key === item.key ? { ...entry, config } : entry))} />
-        </details>)}
-      </div>}
+      {step === 'capabilities' && <fieldset disabled={saving}>
+        {models.length === 1 ? (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">{modelDisplayName(models[0].config)}</p>
+            <ModelCapabilities model={models[0].config} protocol={protocol} idField="hidden" onChange={(config) => updateModel(models[0].key, config)} />
+          </div>
+        ) : (
+          <div className="divide-y rounded-lg border">
+            {models.map((item, index) => {
+              const expanded = expandedModel === item.key
+              return <div key={item.key}>
+                <button type="button" aria-expanded={expanded} aria-controls={`capability-panel-${index}`} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" onClick={() => setExpandedModel(expanded ? null : item.key)}>
+                  <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} />
+                  <span className="min-w-0 flex-1 truncate">{modelDisplayName(item.config)}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{capabilitySummary(item.config, protocol)}</span>
+                </button>
+                {expanded && <div id={`capability-panel-${index}`} className="px-3 pt-1 pb-4">
+                  <ModelCapabilities model={item.config} protocol={protocol} index={index} idField="hidden" onChange={(config) => updateModel(item.key, config)} />
+                </div>}
+              </div>
+            })}
+          </div>
+        )}
+      </fieldset>}
+      </DialogBody>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter className="border-t pt-3">
+      <DialogFooter>
         <Button type="button" variant="ghost" disabled={saving} onClick={step === 'capabilities' ? () => { setStep('connection'); setError(null) } : onCancel}>{step === 'capabilities' ? '返回' : '取消'}</Button>
-        <Button type="submit" disabled={saving}>{saving ? '校验中…' : step === 'connection' ? '下一步' : '校验并添加模型'}</Button>
+        <Button type="submit" disabled={saving}>{saving ? '正在校验…' : step === 'connection' ? '下一步' : editing ? '校验并保存' : '校验并添加模型'}</Button>
       </DialogFooter>
     </form>
+  )
+}
+
+const STEPS = ['连接信息', '模型能力']
+
+function StepIndicator({ current }: { current: number }) {
+  return (
+    <ol className="flex items-center gap-2 text-xs" aria-label="配置步骤">
+      {STEPS.map((label, index) => (
+        <li key={label} aria-current={index === current ? 'step' : undefined} className="flex items-center gap-2">
+          {index > 0 && <span aria-hidden="true" className="h-px w-8 bg-border" />}
+          <span aria-hidden="true" className={cn('flex size-5 items-center justify-center rounded-full border tabular-nums', index < current && 'border-transparent bg-muted text-foreground', index === current && 'border-primary/40 bg-soft text-primary', index > current && 'text-muted-foreground')}>
+            {index < current ? <Check className="size-3" /> : index + 1}
+          </span>
+          <span className={index === current ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+export function ReadonlyField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm leading-none">{label}</p>
+      <p className={cn('h-8 truncate rounded-lg bg-muted/60 px-2.5 text-sm leading-8', mono && 'font-mono')}>{value}</p>
+    </div>
   )
 }
 

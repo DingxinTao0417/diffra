@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
+import { CircleAlert, Ellipsis, Loader2, Pencil, Plug, Trash2 } from 'lucide-react'
 import type { McpServerStatus } from '@diffra/core/types'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { cn } from 'cn'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
+import { SettingsHeader } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 import { McpServerDialog } from './McpServerDialog'
 import { useMcpStatus } from './useMcpStatus'
@@ -36,49 +42,54 @@ export function McpSettings() {
     setView(next)
     setVersion((value) => value + 1)
   }
+  const empty = view.mcpServers.length === 0
+  // 列表为空时添加按钮只放在空状态里，页头不重复
+  const addButton = (
+    <Button onClick={() => setDialog({ open: true, server: null })} disabled={view.loadError !== null}>
+      添加服务器
+    </Button>
+  )
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">MCP 服务器</h1>
-          <p className="text-sm text-muted-foreground">给智能体接上外部工具和 prompt。本地命令在项目目录里启动，所有项目共用；新建或重新打开的任务生效。</p>
-        </div>
-        <Button onClick={() => setDialog({ open: true, server: null })} disabled={view.loadError !== null}>
-          添加服务器
-        </Button>
+    <>
+      <SettingsHeader
+        title="MCP 服务器"
+        description="给智能体接上外部工具和提示词模板。本地命令在项目目录里启动，所有项目共用；新建或重新打开的任务生效。"
+        actions={empty ? undefined : addButton}
+      />
+
+      <div className="space-y-3">
+        {view.loadError && (
+          <Alert variant="destructive">
+            <AlertTitle>设置暂时无法保存</AlertTitle>
+            <AlertDescription>{view.loadError}</AlertDescription>
+          </Alert>
+        )}
+        {status.error && (
+          <Alert variant="destructive">
+            <AlertTitle>读取 MCP 状态失败</AlertTitle>
+            <AlertDescription>{status.error}</AlertDescription>
+          </Alert>
+        )}
+
+        {empty ? (
+          <EmptyState icon={Plug} title="还没有 MCP 服务器" description="接上外部工具后，智能体可以在任务里直接调用它们。" className="border bg-card">
+            {addButton}
+          </EmptyState>
+        ) : (
+          view.mcpServers.map((server) => (
+            <McpServerCard
+              key={server.id}
+              server={server}
+              status={status.statuses?.find((item) => item.name === server.name) ?? null}
+              loading={status.loading}
+              onChange={changed}
+              onEdit={() => setDialog({ open: true, server })}
+              onRetry={status.retry}
+            />
+          ))
+        )}
       </div>
-
-      {view.loadError && (
-        <Alert variant="destructive">
-          <AlertTitle>设置暂时无法保存</AlertTitle>
-          <AlertDescription>{view.loadError}</AlertDescription>
-        </Alert>
-      )}
-      {status.error && (
-        <Alert variant="destructive">
-          <AlertTitle>读取 MCP 状态失败</AlertTitle>
-          <AlertDescription>{status.error}</AlertDescription>
-        </Alert>
-      )}
-
-      {view.mcpServers.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-          还没有 MCP 服务器。点「添加服务器」，填上 MCP 服务器说明里的启动命令或地址。
-        </p>
-      ) : (
-        view.mcpServers.map((server) => (
-          <McpServerCard
-            key={server.id}
-            server={server}
-            status={status.statuses?.find((item) => item.name === server.name) ?? null}
-            loading={status.loading}
-            onChange={changed}
-            onEdit={() => setDialog({ open: true, server })}
-            onRetry={status.retry}
-          />
-        ))
-      )}
 
       <McpServerDialog
         open={dialog.open}
@@ -86,7 +97,7 @@ export function McpSettings() {
         onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}
         onSaved={changed}
       />
-    </div>
+    </>
   )
 }
 
@@ -99,8 +110,19 @@ interface McpServerCardProps {
   onRetry(): void
 }
 
+type ConnectionState = 'disabled' | 'connected' | 'failed' | 'connecting' | 'idle'
+
+const CONNECTION_LABELS: Record<ConnectionState, string> = {
+  disabled: '已停用',
+  connected: '已连接',
+  failed: '连接失败',
+  connecting: '连接中',
+  idle: '未连接',
+}
+
 function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: McpServerCardProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [showTools, setShowTools] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const run = async (action: () => Promise<SettingsView>) => {
@@ -127,67 +149,127 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
       }),
     )
 
-  const names = server.transport === 'stdio' ? server.envNames : server.headerNames
+  const stdio = server.transport === 'stdio'
+  const names = stdio ? server.envNames : server.headerNames
+  const state: ConnectionState = !server.enabled ? 'disabled' : status ? status.state : loading ? 'connecting' : 'idle'
+  // 失败原因的第一行是摘要，后面是 stdio 服务器的 stderr
+  const [reason, ...log] = (status?.state === 'failed' ? (status.error ?? '') : '').split(/\r?\n/)
+  const fullLog = log.join('\n').trim()
   return (
     <Card data-testid="mcp-server-card">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {server.name}
-          <Badge variant="secondary">{server.transport === 'stdio' ? '本地命令' : 'HTTP'}</Badge>
+        <CardTitle className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{server.name}</span>
+          <span
+            data-testid="mcp-status"
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1.5 text-xs font-normal',
+              state === 'connected' ? 'text-success' : state === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+            )}
+          >
+            {state === 'connecting' ? (
+              <Loader2 aria-hidden className="size-3 animate-spin" />
+            ) : (
+              <span
+                aria-hidden
+                className={cn('size-2 rounded-full', state === 'connected' ? 'bg-success' : state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground/50')}
+              />
+            )}
+            {CONNECTION_LABELS[state]}
+          </span>
         </CardTitle>
-        <CardDescription className="font-mono text-xs break-all">
-          {server.transport === 'stdio' ? [server.command, ...server.args].join(' ') : server.url}
+        <CardDescription className="flex min-w-0 gap-1.5 text-xs">
+          <span className="shrink-0">{stdio ? '本地命令' : '远程 HTTP'}</span>
+          <span className="min-w-0 font-mono break-all">{stdio ? [server.command, ...server.args].join(' ') : server.url}</span>
         </CardDescription>
         <CardAction className="flex items-center gap-2">
           <Switch label={`启用 ${server.name}`} checked={server.enabled} onChange={(enabled) => void setEnabled(enabled)} />
-          <Button size="sm" variant="outline" onClick={onEdit}>
-            编辑
-          </Button>
-          {confirmingDelete ? (
-            <>
-              <Button size="sm" variant="destructive" onClick={() => void run(() => window.diffra.deleteMcpServer(server.id))}>
-                确认删除
+          {/* 非模态：菜单关闭和对话框打开同时发生时，模态菜单会把页面留在不可点击的状态 */}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon-sm" variant="ghost" aria-label={`${server.name} 服务器操作`}>
+                <Ellipsis className="size-4" />
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>
-                取消
-              </Button>
-            </>
-          ) : (
-            <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(true)}>
-              删除
-            </Button>
-          )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-auto min-w-36">
+              <DropdownMenuItem onSelect={onEdit}>
+                <Pencil />
+                编辑
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
+                <Trash2 />
+                删除
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         {names.length > 0 && (
           <div className="text-muted-foreground">
-            {server.transport === 'stdio' ? '环境变量' : '请求头'}：<span className="font-mono">{names.join('、')}</span>
+            {stdio ? '环境变量' : '请求头'}：<span className="font-mono">{names.join('、')}</span>
           </div>
         )}
-        <div data-testid="mcp-status">
-          {!server.enabled ? (
-            <span className="text-muted-foreground">已停用</span>
-          ) : !status ? (
-            <span className="text-muted-foreground">{loading ? '正在连接…' : '还没连接'}</span>
-          ) : status.state === 'connected' ? (
-            <div className="space-y-1">
-              <span className="text-primary">
-                已连接 · {status.tools.length} 个工具 · {status.prompts.length} 个 prompt
+        {state === 'connected' && status && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span data-testid="mcp-tools">
+                {status.tools.length} 个工具 · {status.prompts.length} 个提示词模板
               </span>
-              {status.tools.length > 0 && <div className="font-mono text-xs text-muted-foreground">{status.tools.map((item) => item.name).join('  ')}</div>}
+              {status.tools.length > 0 && (
+                <Button size="xs" variant="ghost" aria-expanded={showTools} onClick={() => setShowTools((value) => !value)}>
+                  {showTools ? '收起' : '查看'}
+                </Button>
+              )}
             </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap text-destructive">连接失败：{status.error}</div>
-              <Button size="sm" variant="outline" disabled={loading} onClick={onRetry}>
-                重新连接
+            {showTools && (
+              <div className="flex flex-wrap gap-1" data-testid="mcp-tool-list">
+                {status.tools.map((tool) => (
+                  <Badge key={tool.name} variant="secondary" className="font-mono" title={tool.description || undefined}>
+                    {tool.name}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {state === 'failed' && (
+          <Alert variant="destructive" data-testid="mcp-error" className="border-transparent bg-destructive-soft">
+            <CircleAlert />
+            <AlertTitle className="font-normal break-words">{reason || '连接失败'}</AlertTitle>
+            {fullLog && (
+              <AlertDescription>
+                <details>
+                  <summary className="cursor-pointer text-xs">完整日志</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">{fullLog}</pre>
+                </details>
+              </AlertDescription>
+            )}
+            <AlertAction>
+              <Button size="xs" variant="outline" disabled={loading} onClick={onRetry}>
+                重试
               </Button>
-            </div>
-          )}
-        </div>
+            </AlertAction>
+          </Alert>
+        )}
         {error && <p className="text-destructive">{error}</p>}
       </CardContent>
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 MCP 服务器「{server.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>保存的{stdio ? '环境变量' : '请求头'}的值会一起删除，新建或重新打开的任务不再带它的工具。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction variant="destructive-solid" onClick={() => void run(() => window.diffra.deleteMcpServer(server.id))}>
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

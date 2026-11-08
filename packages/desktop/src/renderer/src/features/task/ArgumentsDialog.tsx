@@ -1,8 +1,8 @@
 import { type FormEvent, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Field } from '@/features/models/ProviderDialog'
+import { Label } from '@/components/ui/label'
 
 export interface ArgumentsRequest {
   title: string
@@ -24,8 +24,8 @@ export function ArgumentsDialog({
     <Dialog open={request !== null} onOpenChange={(open) => !open && onCancel()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{request?.title}</DialogTitle>
-          <DialogDescription>{request?.description || '填好参数后放进输入框，看过再发送。'}</DialogDescription>
+          <DialogTitle className="font-mono">{request?.title}</DialogTitle>
+          <DialogDescription>{request?.description || '参数会填入输入框，发送前可以再修改。'}</DialogDescription>
         </DialogHeader>
         {request && <ArgumentsForm request={request} onCancel={onCancel} onSubmit={onSubmit} />}
       </DialogContent>
@@ -41,20 +41,43 @@ function ArgumentsForm({ request, onCancel, onSubmit }: { request: ArgumentsRequ
     onSubmit(Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim() !== '')))
   }
   return (
-    <form onSubmit={submit} className="space-y-4">
-      {request.arguments.map((arg, index) => (
-        <Field key={arg.name} id={`argument-${arg.name}`} label={arg.required ? `${arg.label}（必填）` : arg.label} hint={arg.hint || undefined}>
-          <Input
-            id={`argument-${arg.name}`}
-            autoFocus={index === 0}
-            required={arg.required}
-            value={values[arg.name] ?? ''}
-            onChange={(event) => setValues((current) => ({ ...current, [arg.name]: event.target.value }))}
-          />
-        </Field>
-      ))}
+    <form onSubmit={submit} className="flex min-h-0 flex-col gap-4">
+      {/* 滚动区会裁掉贴边控件的焦点环，上下留 4px 再用负边距抵消 */}
+      <DialogBody className="space-y-4">
+        {request.arguments.map((arg, index) => {
+          const id = `argument-${arg.name}`
+          return (
+            <div key={arg.name} className="space-y-1.5">
+              <Label htmlFor={id}>
+                <span>
+                  {arg.label}
+                  {/* 必填的语义由 input 的 required 传达，星号只给眼睛看 */}
+                  {arg.required && (
+                    <span aria-hidden="true" className="ml-0.5 text-destructive">
+                      *
+                    </span>
+                  )}
+                </span>
+              </Label>
+              <Input
+                id={id}
+                autoFocus={index === 0}
+                required={arg.required}
+                aria-describedby={arg.hint ? `${id}-hint` : undefined}
+                value={values[arg.name] ?? ''}
+                onChange={(event) => setValues((current) => ({ ...current, [arg.name]: event.target.value }))}
+              />
+              {arg.hint && (
+                <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+                  {arg.hint}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </DialogBody>
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button type="button" variant="ghost" onClick={onCancel}>
           取消
         </Button>
         <Button type="submit">放进输入框</Button>

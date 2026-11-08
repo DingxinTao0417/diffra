@@ -41,8 +41,8 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     await expect(detected.nth(0)).toContainText("console.log('types-ok')")
     await expect(window.getByTestId('check-detection')).toContainText('脚本 lint 会改文件')
     await window.getByRole('button', { name: '填入下面的检查命令' }).click()
-    await expect(window.getByLabel('快速检查（每步改动后）')).toHaveValue('npm run typecheck')
-    await expect(window.getByLabel('完成检查（完成时）')).toHaveValue('npm run typecheck && npm run test')
+    await expect(window.getByLabel('改动后检查', { exact: true })).toHaveValue('npm run typecheck')
+    await expect(window.getByLabel('完成前检查', { exact: true })).toHaveValue('npm run typecheck && npm run test')
 
     // 试运行：快速检查通过，完成检查里的测试失败
     const runButtons = window.getByRole('button', { name: '试运行' })
@@ -55,7 +55,7 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     await window.screenshot({ path: 'test-results/checks-detect.png' })
 
     // 去掉会失败的完成检查再保存
-    await window.getByLabel('完成检查（完成时）').fill('')
+    await window.getByLabel('完成前检查', { exact: true }).fill('')
     await window.getByRole('button', { name: '保存项目设置' }).click()
     await expect(window.getByRole('button', { name: '检查：npm run typecheck' })).toBeVisible()
 

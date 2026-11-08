@@ -35,6 +35,7 @@ import { PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
+  encodeStartTaskError,
   IPC_CHANNELS,
   type LoadedSessionHandle,
   type PermissionRequestEvent,
@@ -83,6 +84,17 @@ interface PendingPermission {
 }
 
 const pendingPermissions = new Map<string, PendingPermission>()
+
+// 模型配置导致的失败带上原因，新建任务时转成界面能识别的错误码；加载任务、换模型时照常只显示 message。
+// 不改 name：IPC 传过去的是「Error: message」，界面按这个前缀去掉
+class ModelConfigError extends Error {
+  constructor(
+    readonly code: 'model-missing' | 'model-auth',
+    message: string,
+  ) {
+    super(message)
+  }
+}
 
 function broadcast(channel: string, payload: unknown): number {
   const windows = BrowserWindow.getAllWindows()
@@ -143,13 +155,15 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   const resolveModel = async (ref: ModelRef, label: string) => {
     const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
-    if (!provider || !model) throw new Error(`${label}指向的模型不存在，请到「模型」页重新选择`)
-    if (model.enabled === false) throw new Error(`${label}已停用，请到「模型」页启用或重新选择`)
+    if (!provider || !model) throw new ModelConfigError('model-missing', `${label}指向的模型不存在，请到「模型」页重新选择`)
+    if (model.enabled === false) throw new ModelConfigError('model-missing', `${label}已停用，请到「模型」页启用或重新选择`)
     if (ref.reasoningEffort && !reasoningEffortsFor(provider, model).includes(ref.reasoningEffort)) {
-      throw new Error(`${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
+      throw new ModelConfigError('model-missing', `${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
     }
     const target = await providerEndpoint(settings, secrets, provider.id)
-    if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
+    if (!target.ok) {
+      throw new ModelConfigError(target.error.kind === 'auth' ? 'model-auth' : 'model-missing', `「${provider.name}」${target.error.message}`)
+    }
     return {
       label: `${provider.name} / ${modelDisplayName(model)}`,
       model: {
@@ -212,7 +226,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     options: SessionOptions = {},
   ): Promise<{ config: SessionConfig; modelLabel: string; planLabel: string | null; fallbackLabel: string | null }> => {
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
-    if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
+    if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「模型」页设置')
     const project = projectState(path)
     // 审查一直开着；没分配评审角色时 core 用编码模型审查
     const reviewer = await resolveRole('reviewer', '评审')
@@ -247,7 +261,11 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
     const path = parse(z.string().min(1), rawPath)
     const options = parse(sessionOptionsSchema, rawOptions ?? {})
-    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options)
+    const dir = await stat(path).catch(() => null)
+    if (!dir?.isDirectory()) throw new Error(encodeStartTaskError('project-missing', '项目文件夹不存在或已被移走，请重新选择项目'))
+    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options).catch((error: unknown) => {
+      throw error instanceof ModelConfigError ? new Error(encodeStartTaskError(error.code, error.message)) : error
+    })
     const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
     return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode }

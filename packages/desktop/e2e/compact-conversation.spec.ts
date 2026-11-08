@@ -37,7 +37,8 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await window.getByRole('button', { name: '收起代码详情', exact: true }).click()
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     const delivery = cards(window, 'finish')
-    await expect(delivery).toContainText('本轮交付')
+    // 临时项目没有检查命令，完成卡标成未经验证
+    await expect(delivery).toContainText('已完成 · 未经自动验证')
     await expect(delivery.getByTestId('finish-counts')).toHaveText('1 个文件 +1 −1')
     await expect(delivery).toContainText('+1')
     await expect(delivery).not.toContainText('+2')

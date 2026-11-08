@@ -48,7 +48,7 @@ import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityF
 import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import type { Session } from './session.js'
-import { executeTool, isToolName, parseFinishInput, TOOL_KINDS } from './tools.js'
+import { executeTool, isToolName, parseFinishInput, startTitle, TOOL_KINDS } from './tools.js'
 
 // 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
 const MAX_CHECK_FAILURES = 3
@@ -145,7 +145,7 @@ export async function runTurn(
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
     active = { language: session.fallbackModel, config: fallback }
-    await notice(io, 'info', `已换用兜底模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
+    await notice(io, 'info', `已换用备用模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
     session.messages.push({
       role: 'user',
       content: `[Diffra] ${note} A different model takes over this task from here. Read what was tried above, work out why it did not work, and take a different approach.`,
@@ -520,7 +520,7 @@ export async function runToolCall(
   await io.update({
     sessionUpdate: 'tool_call',
     toolCallId: call.toolCallId,
-    title: name,
+    title: call.invalid ? name : startTitle(name, call.input),
     kind,
     status: 'in_progress',
     rawInput: call.input,
@@ -583,6 +583,8 @@ export async function runToolCall(
       status: 'completed',
       title: output.title ?? name,
       content: toolContent(output),
+      // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
+      ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
     })
     return { result: textResult(call, output.text), edited: output.edited ?? false }
   } catch (error) {
@@ -806,7 +808,7 @@ async function runFinishGate(
     return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false, summary, goalMet }
   }
   // 先跑完成检查，检查有了结果再显示「完成」卡片，界面上的先后顺序和实际一致
-  const showFinish = (status: 'completed' | 'failed', text: string) =>
+  const showFinish = (status: 'completed' | 'failed', text: string, unverified = false) =>
     io.update({
       sessionUpdate: 'tool_call',
       toolCallId: call.toolCallId,
@@ -815,6 +817,8 @@ async function runFinishGate(
       status,
       rawInput: call.input,
       content: [{ type: 'content', content: { type: 'text', text } }],
+      // 没配检查命令时改动未经验证：界面靠这个字段画提示，不往模型写的总结里拼话
+      ...(unverified ? { _meta: { diffra: { unverified: true } } } : {}),
     })
 
   if (!editedThisTurn) {
@@ -879,7 +883,8 @@ async function runFinishGate(
   }
   if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
   if (!command) {
-    await showFinish('completed', `${summary}\n\n未配置检查命令，改动未经自动验证。`)
+    // verify_changes 卡片走通用工具步骤、不读 _meta，未验证只能靠文本说明
+    await showFinish('completed', verificationOnly ? `${summary}\n\n未配置检查命令，改动未经自动验证。` : summary, !verificationOnly)
     return { result: textResult(call, verificationOnly ? 'No project checks configured. Review completed, but changes remain unverified. Continue the remaining task; do not claim validation passed.' : 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet }
   }
   await showFinish('completed', verificationOnly ? `${summary}\n验证通过，不代表任务完成；继续执行提交、推送或发布等剩余步骤。` : summary)

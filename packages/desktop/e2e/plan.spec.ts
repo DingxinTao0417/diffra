@@ -85,12 +85,12 @@ test('兜底模型：编码模型卡住时换兜底模型接着做，对话里�
   try {
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: coder.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
-    await configureCoderModel(window, { name: '兜底供应商', baseUrl: fallback.baseUrl, apiKey: 'e2e-key-654321', modelId: 'fallback-model', role: '兜底' })
+    await configureCoderModel(window, { name: '兜底供应商', baseUrl: fallback.baseUrl, apiKey: 'e2e-key-654321', modelId: 'fallback-model', role: '备用' })
     await chooseProject(app, window, project)
     await startTask(window, '找 TODO')
     await waitTaskDone(window)
 
-    await expect(window.getByTestId('notice').filter({ hasText: '已换用兜底模型 兜底供应商 / fallback-model' })).toBeVisible()
+    await expect(window.getByTestId('notice').filter({ hasText: '已换用备用模型 兜底供应商 / fallback-model' })).toBeVisible()
     await expect(window.getByTestId('agent-message').last()).toContainText('兜底模型接手做完了')
     await expect(window.getByTestId('monitor-panel')).toContainText('兜底供应商 / fallback-model')
     expect(coder.requests()).toBe(6)

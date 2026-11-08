@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
 import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
@@ -24,13 +24,13 @@ import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReviewPanel } from './ReviewPanel'
 import { useTaskDiff } from './useTaskDiff'
 
-export function TaskView({ sessionId }: { sessionId: string }) {
+export function TaskView({ sessionId, columnRef }: { sessionId: string; columnRef?: Ref<HTMLElement> }) {
   const task = useAppState((state) => state.live[sessionId])
   if (!task) return <p className="p-6 text-sm text-muted-foreground">正在打开任务…</p>
-  return <TaskPage key={sessionId} task={task} />
+  return <TaskPage key={sessionId} task={task} columnRef={columnRef} />
 }
 
-function TaskPage({ task }: { task: LiveTask }) {
+function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLElement> }) {
   const panel = useAppState((state) => state.panel)
   const terminalOpen = useAppState((state) => state.terminalOpen)
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
@@ -85,7 +85,7 @@ function TaskPage({ task }: { task: LiveTask }) {
   return (
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
-        <span className="min-w-0 truncate font-medium" data-testid="task-title">
+        <span className="min-w-0 truncate" data-testid="task-title">
           {task.title}
         </span>
         <TaskMenu sessionId={task.sessionId} title={task.title} project={task.project} archived={archived}>
@@ -124,12 +124,13 @@ function TaskPage({ task }: { task: LiveTask }) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section ref={columnRef} className="@container flex min-w-0 flex-1 flex-col">
           {/* 终端在对话列底部，右侧面板保持全高；对话区留出最小高度，终端拉高时由 flex 压缩终端而不是对话 */}
-          <div className="flex min-h-40 flex-1 flex-col">
+          {/* 对话列变窄时对话区和输入框一起收窄左右留白，两边才对齐；对话区的滚动层在 Conversation 里 */}
+          <div className="flex min-h-40 flex-1 flex-col @max-[600px]:[&>div>.overflow-y-auto]:px-5">
             <Conversation task={task} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
           </div>
-          <div className="px-8 pb-3.5">
+          <div className="px-8 pb-3.5 @max-[600px]:px-5">
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {/* 固定在输入框上方，用户往上翻着看改动时也能看到；多行命令只让命令区滚动，否则卡片会把对话挤没，按钮也不能随之滚出视野 */}
               {task.permission && (
