@@ -245,7 +245,7 @@ function AppearanceSection() {
     } catch (error) {
       applyAppearance(appearance)
       store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, appearance } } : state))
-      showToast(`保存外观失败：${errorMessage(error)}`)
+      showToast(`保存失败：${errorMessage(error)}`)
     }
   }
 

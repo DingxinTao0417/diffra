@@ -221,6 +221,13 @@ export async function runTurn(
       }
 
       if (toolCalls.length === 0) {
+        // 命令或 MCP 工具改的文件平时到 finish 才比指纹，只回文字时也比一次，改了就和 edit_file 一样拉回来走完成门禁
+        // 待验证是带过来的时候 finish 不再比指纹，拉回时靠这次比较说清本轮改没改
+        const commandEdits = commandedThisTurn && !signal.aborted && (!editedThisTurn || editsCarried) && (await changesOutsideEdits(session, turnStartFingerprint, true)) === 'edited'
+        if (commandEdits) {
+          editedThisTurn = true
+          session.taskState.needsVerification = true
+        }
         // 改了文件却没调 finish：拉回来走完成门禁；目标模式里只回了文字也要拉回来，让它说明目标达成没有
         const finishExpected = editedThisTurn || goalMaxRounds !== null || session.taskState.contractRequired || pendingRequirements(session.taskState).length > 0
         if (finishExpected && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
@@ -229,7 +236,9 @@ export async function runTurn(
             role: 'user',
             content: editedThisTurn
               ? editsCarried
-                ? '[Diffra] File changes from earlier turns have not been verified yet. Verify them, then call finish.'
+                ? commandEdits
+                  ? '[Diffra] File changes from earlier turns, and the files your commands or MCP tools changed in this turn, have not been verified yet. Verify them, then call finish.'
+                  : '[Diffra] File changes from earlier turns have not been verified yet. Verify them, then call finish.'
                 : '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
               : goalMaxRounds !== null ? '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.'
               : '[Diffra] Completion requirements remain unfinished. Continue executing the saved stages and satisfy them using real receipts, or call pause_task with a specific blocker. Do not stop after checks pass.',

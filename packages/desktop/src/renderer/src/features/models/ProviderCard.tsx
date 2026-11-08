@@ -153,12 +153,12 @@ export function ProviderCard({ provider, roles, onChange, onEdit }: ProviderCard
   return (
     <Card data-testid="provider-card" className="gap-0 rounded-xl py-0 shadow-none">
       <div className="flex items-center gap-3 px-4 py-3">
-        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-semibold text-muted-foreground">
+        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-bold text-muted-foreground">
           {provider.name.trim().charAt(0).toUpperCase() || '?'}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-base font-semibold">{provider.name}</span>
+            <span className="truncate text-base font-bold">{provider.name}</span>
             <Badge variant="secondary">{PROTOCOL_LABELS[provider.protocol]}</Badge>
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">

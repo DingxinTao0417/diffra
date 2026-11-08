@@ -83,6 +83,7 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await expect(list).toContainText('hello.txt')
     await expect(list).toContainText('done.txt')
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
+    await expect(window.getByRole('dialog')).toContainText('不只是智能体改的')
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
     await waitTaskStatus(window, 'unfinished')

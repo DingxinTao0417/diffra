@@ -316,6 +316,9 @@ export interface McpServerStatus {
 // 查哪些 MCP 服务器：某个任务用的，或者给定项目和配置（首页、设置页还没有任务）
 export type McpTarget = { sessionId: string } | { cwd: string; servers: McpServer[]; plugins?: PluginRef[] }
 
+// 列 Skill 和自定义命令：某个任务建立时开着的插件，或者给定项目和插件（首页还没有任务）
+export type ListTarget = { sessionId: string } | { cwd: string; plugins?: PluginRef[] }
+
 export interface StoredTurn {
   id: string
   kind: TurnKind
@@ -459,13 +462,13 @@ export const SESSION_EXT_METHODS = {
   deepScan: '_diffra/security/deep-scan',
   // 先出计划：规划模型只读地看代码，交一份计划，不改文件
   plan: '_diffra/session/plan',
-  // 列出这个项目能用的 Skill
+  // 列出这个任务或项目能用的 Skill
   skillsList: '_diffra/skills/list',
   // MCP 服务器状态；retry 为 true 时连不上的马上重连
   mcpStatus: '_diffra/mcp/status',
   // 把一个 MCP prompt 展开成文字
   mcpPrompt: '_diffra/mcp/prompt',
-  // 列出这个项目能用的自定义命令
+  // 列出这个任务或项目能用的自定义命令
   commandsList: '_diffra/commands/list',
   // 读一个插件文件夹里有什么
   pluginInspect: '_diffra/plugins/inspect',

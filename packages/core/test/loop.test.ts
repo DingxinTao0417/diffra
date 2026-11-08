@@ -555,6 +555,98 @@ describe('主循环', () => {
     expect(JSON.stringify(session.messages)).not.toContain('earlier turns')
   })
 
+  test('没有检查点时重新生成不回滚文件，待验证保留重新生成前的值', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+    ])
+    const session = await makeSession(model, undefined, [], undefined, undefined, undefined, {}, { checkpoints: null })
+    session.startTurn('turn-1', '写 a.txt')
+    await runTurn(session, { id: 'turn-1', text: '写 a.txt' }, recordingIO())
+    session.endTurn('end_turn')
+    expect(session.taskState.needsVerification).toBe(true)
+    await expect(session.rewind('turn-1')).resolves.toEqual({ filesRestored: false })
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('a\n')
+    expect(session.taskState).toMatchObject({ status: 'running', needsVerification: true })
+  })
+
+  test('之前轮次留下没验证的改动、本轮只用命令改了文件：拉回时两者都说；命令没改文件时只说之前的', async () => {
+    const commanded = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf x > out.txt' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+    ])
+    const session = await makeSession(commanded)
+    session.taskState.needsVerification = true
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 out.txt' }, io)).resolves.toBe('end_turn')
+    const messages = JSON.stringify(session.messages)
+    expect(messages).toContain('File changes from earlier turns, and the files your commands or MCP tools changed in this turn, have not been verified yet')
+    expect(messages).not.toContain('File changes from earlier turns have not been verified yet')
+    expect(messages).not.toContain('You changed files')
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
+
+    const readOnly = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'ls' } }] },
+      { text: '看过了' },
+      { text: '看过了' },
+      { text: '看过了' },
+      { text: '看过了' },
+    ])
+    const readSession = await makeSession(readOnly)
+    readSession.taskState.needsVerification = true
+    await runTurn(readSession, { id: 't', text: '看看目录' }, recordingIO())
+    expect(JSON.stringify(readSession.messages)).toContain('File changes from earlier turns have not been verified yet')
+    expect(JSON.stringify(readSession.messages)).not.toContain('commands or MCP tools changed')
+  })
+
+  test('只用命令改了文件、没调 finish 就只回文字时被拉回，仍不调 finish 记 no-finish；命令没改文件时不拉回', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf draft > out.txt' } }] },
+      { text: '写好了' },
+      { text: '真的写好了' },
+      { text: '不用验证' },
+      { text: '结束' },
+    ])
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '写 out.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(5)
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain('You changed files but did not call finish')
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
+
+    const readOnly = scriptedModel([{ toolCalls: [{ name: 'run_command', input: { command: 'ls' } }] }, { text: '看过了' }])
+    const readIO = recordingIO()
+    await expect(runTurn(await makeSession(readOnly), { id: 't', text: '看看目录' }, readIO)).resolves.toBe('end_turn')
+    expect(readOnly.doStreamCalls).toHaveLength(2)
+    expect(turnOutcomes(readIO)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(readIO)).toMatchObject({ needsVerification: false })
+  })
+
+  test('撤销时有完成条件：证据作废，原因写要重新验证完成条件', async () => {
+    const session = await makeSession(scriptedModel([{ text: '好' }]))
+    session.startTurn('turn-1', '看看')
+    await runTurn(session, { id: 'turn-1', text: '看看' }, recordingIO())
+    session.endTurn('end_turn')
+    session.taskState = {
+      ...session.taskState,
+      requirements: [{ id: 'test', title: '测试通过', commandIncludes: 'pnpm test', outputIncludes: 'passed', receiptId: 'r1' }],
+      receipts: [{ id: 'r1', command: 'pnpm test', output: 'passed', at: '2026-01-01T00:00:00.000Z' }],
+    }
+    await session.restoreCheckpoint('turn-1')
+    expect(session.taskState).toMatchObject({ status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: [{ id: 'test', receiptId: null }] })
+
+    // 发布类任务还没定义完成条件时也一样：下一次 finish 仍要先定义
+    session.taskState = { ...session.taskState, requirements: [], contractRequired: true }
+    await session.restoreCheckpoint('turn-1')
+    expect(session.taskState).toMatchObject({ status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。' })
+  })
+
   test('edit_file 失败、没改到文件时，不要求 finish，也不标成需要验证', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'edit_file', input: { path: 'missing.txt', old_string: 'x', new_string: 'y' } }] },
@@ -1542,6 +1634,29 @@ describe('目标模式', () => {
     expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
   })
 
+  test('换轮后只用命令改了文件、finish 被完成检查打回后只回文字：按本轮改了文件拉回，停下时带着待验证', async () => {
+    const model = scriptedModel([
+      finish('第一轮先看看', false),
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf draft > out.txt' } }] },
+      finish('第二轮写了草稿', false),
+      { text: '写好了' },
+      { text: '真的写好了' },
+      { text: '结束' },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final out.txt' })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '写出 out.txt' }, io, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(6)
+    expect(verifications(io)).toEqual(['no-edits', 'failed'])
+    const messages = JSON.stringify(session.messages)
+    expect(messages).toContain('You changed files but did not call finish')
+    expect(messages).not.toContain('earlier turns')
+    expect(messages).not.toContain('Goal mode: keep working')
+    expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: 'no-finish' }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
+  })
+
   test('第 1 轮已验证、第 2 轮未经验证时结论是 unverified；第 2 轮没有改动时结论仍是 verified', async () => {
     const unverified = scriptedModel([
       { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
@@ -1606,6 +1721,7 @@ describe('MCP 工具', () => {
       { toolCalls: [{ name: 'finish', input: { summary: '写好了' } }] },
       { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'second' } }] },
       { text: '又写了一遍' },
+      { toolCalls: [{ name: 'finish', input: { summary: '又写好了' } }] },
     ])
     const session = await withMcp(model)
     const io = recordingIO('allow_always')
@@ -1623,6 +1739,9 @@ describe('MCP 工具', () => {
     await runTurn(session, { id: 'turn-2', text: '再记一下' }, io)
     expect(io.permissionRequests).toBe(1)
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('second\n')
+    // 只回了文字，write_note 改了文件，拉回来调 finish
+    expect(JSON.stringify(model.doStreamCalls[5]?.prompt)).toContain('You changed files but did not call finish')
+    expect(turnOutcomes(io).at(-1)).toEqual({ finish: 'unverified', stop: null })
     expect(session.usageBreakdown(1000).tools).toBeGreaterThan(0)
   })
 
@@ -1637,6 +1756,7 @@ describe('MCP 工具', () => {
       { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'y' } }] },
       { toolCalls: [{ name: 'mcp__demo__fail', input: {} }] },
       { text: '完成' },
+      { toolCalls: [{ name: 'finish', input: { summary: '记好了' } }] },
     ])
     const session = await withMcp(full)
     session.permissionMode = 'full'
@@ -1645,6 +1765,9 @@ describe('MCP 工具', () => {
     expect(fullIO.permissionRequests).toBe(0)
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('y\n')
     expect(JSON.stringify(full.doStreamCalls[2]?.prompt)).toContain('something broke')
+    // 只回了文字，write_note 改了文件，拉回来调 finish
+    expect(JSON.stringify(full.doStreamCalls[3]?.prompt)).toContain('You changed files but did not call finish')
+    expect(turnOutcomes(fullIO)).toEqual([{ finish: 'unverified', stop: null }])
     expect(toolUpdates(fullIO, 'failed')).toHaveLength(1)
   })
 

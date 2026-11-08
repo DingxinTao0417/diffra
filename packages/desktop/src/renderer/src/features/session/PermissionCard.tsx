@@ -46,7 +46,7 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
-      <div className="flex items-center gap-2 font-semibold">
+      <div className="flex items-center gap-2 font-bold">
         <ShieldAlert className="size-4 text-warning" />
         {titleOf(request.toolCall.kind, external)}
       </div>

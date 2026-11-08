@@ -202,7 +202,7 @@ export function decodeStartTaskError(message: string): { code: StartTaskErrorCod
   return match && code ? { code, message: message.slice(match[0].length) } : { code: 'unknown', message }
 }
 
-// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）
+// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）；也决定斜杠菜单列哪些 Skill 和命令
 export type McpStatusTarget = { sessionId: string } | { projectPath: string | null }
 
 // 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
@@ -293,16 +293,16 @@ export interface DiffraApi {
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
   compactSession(sessionId: string, turnId: string): Promise<StopReason>
-  // 项目、用户目录和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个
-  listSkills(projectPath: string): Promise<SkillInfo[]>
+  // 项目、用户目录、插件和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个；任务里按建任务时开着的插件，首页按设置里开着的插件
+  listSkills(target: McpStatusTarget): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>
   deleteMcpServer(serverId: string): Promise<SettingsView>
   // retry 为 true 时连不上的马上重连
   mcpStatus(target: McpStatusTarget, retry: boolean): Promise<McpServerStatus[]>
   // 把 MCP prompt 展开成文字
   mcpPrompt(target: McpStatusTarget, server: string, prompt: string, args: Record<string, string>): Promise<string>
-  // 项目、用户目录、开着的插件和兼容目录里的自定义命令
-  listCommands(projectPath: string): Promise<CommandInfo[]>
+  // 项目、用户目录、插件和兼容目录里的自定义命令；插件和 listSkills 一样按任务或设置
+  listCommands(target: McpStatusTarget): Promise<CommandInfo[]>
   listPlugins(): Promise<PluginView[]>
   // 页面套用外观后告诉主进程顶栏颜色和深浅色：Windows 的窗口按钮和原生菜单跟着变
   setWindowChrome(chrome: { color: string; symbolColor: string; theme: Appearance['theme'] }): Promise<void>

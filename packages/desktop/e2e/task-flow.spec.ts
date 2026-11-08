@@ -115,3 +115,46 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     rmSync(project, { recursive: true, force: true })
   }
 })
+
+test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底部', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-timeline-'))
+  for (let index = 0; index < 90; index++) writeFileSync(join(project, `f-${index}.txt`), `${index}\n`)
+  const model = await startScriptedModel([
+    // 一大段回答，第一轮的开头离底部很远
+    { text: Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 段说明`).join('\n\n') },
+    // 第二轮每隔几十毫秒来一批更新。每步读不同的文件，不算原地打转；加上最后一步共 91 步，在默认的 100 步上限以内。
+    // 每步先说一句，读文件就不收成一组：组只在有工具在跑时展开，两步之间会收起，对话高度会来回跳
+    ...Array.from({ length: 90 }, (_, index) => ({ text: `读第 ${index} 个文件`, toolCalls: [{ name: 'read_file', input: { path: `f-${index}.txt` } }], delayMs: 20 })),
+    { text: '都读完了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '第一轮')
+    await waitTaskDone(window)
+
+    await taskInput(window).fill('第二轮')
+    await window.keyboard.press('Control+Enter')
+    // 第二轮已经在持续更新，对话贴着底部
+    await expect.poll(() => model.requests()).toBeGreaterThan(3)
+    const firstPrompt = window.getByTestId('turn').first().getByTestId('user-message')
+    await expect(firstPrompt).not.toBeInViewport()
+    await window.getByRole('navigation', { name: '对话时间线' }).getByRole('button', { name: '跳到：第一轮', exact: true }).click()
+    const jumpedAt = model.requests()
+    await expect(firstPrompt).toBeInViewport()
+    // 跳过去之后又来了几批更新，仍停在第一轮
+    await expect.poll(() => model.requests()).toBeGreaterThan(jumpedAt + 5)
+    await expect(firstPrompt).toBeInViewport()
+    await expect(window.getByRole('button', { name: '回到底部' })).toBeVisible()
+    await waitTaskDone(window)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})

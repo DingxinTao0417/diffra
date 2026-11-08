@@ -142,6 +142,8 @@ test('改了文件后卡住停下，撤销这一轮：结论改成未完成，�
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
     await waitTaskStatus(window, 'unfinished')
+    // 撤到的是第一轮，开始时没有待验证的改动，也没有完成条件
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '文件已撤销，原来的结论不再算数。')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
 
     // 撤销记在会话里：重启后打开这个任务，结论和提示都还在
@@ -150,6 +152,7 @@ test('改了文件后卡住停下，撤销这一轮：结论改成未完成，�
     window = await app.firstWindow()
     await window.getByTestId('sidebar').getByRole('button', { name: '改一下 hello', exact: true }).click()
     await waitTaskStatus(window, 'unfinished')
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '文件已撤销，原来的结论不再算数。')
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
   } finally {
     await app.close()

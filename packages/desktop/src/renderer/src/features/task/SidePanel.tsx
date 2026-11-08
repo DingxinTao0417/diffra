@@ -27,7 +27,7 @@ export function SidePanel({ width, testId, title, controls, actions, children }:
   return (
     <aside className={cn('flex shrink-0 flex-col border-l border-border bg-background', WIDTHS[width])} data-testid={testId}>
       <div className="@container flex h-11 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-border pr-2.5 pl-4">
-        {title && <span className="shrink-0 text-sm font-semibold">{title}</span>}
+        {title && <span className="shrink-0 text-sm font-bold">{title}</span>}
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-2">{controls}</div>
         {actions && (
           <>

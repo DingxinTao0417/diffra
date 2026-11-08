@@ -76,3 +76,50 @@ test('本轮结论下列出失败的命令，点一下跳到对话里那一行�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+test('同一条命令反复失败只列一行，按最近一次排序、标次数，点一下跳到最近那次', async () => {
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-monitor-repeated-'))
+  const model = await startScriptedModel([
+    // 都在只读命令名单里，直接执行、都会失败；false 只重复两次，不到原地打转的三次
+    {
+      toolCalls: [
+        { name: 'run_command', input: { command: 'false' } },
+        { name: 'run_command', input: { command: 'cat a.txt' } },
+        { name: 'run_command', input: { command: 'false' } },
+        { name: 'run_command', input: { command: 'cat b.txt' } },
+        { name: 'run_command', input: { command: 'ls c' } },
+      ],
+    },
+    { text: Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 段说明`).join('\n\n') },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '监控测试', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '跑几条命令')
+    await waitTaskDone(window)
+    const panel = window.getByTestId('monitor-panel')
+    await expect(panel).toContainText('5 条命令失败')
+    const rows = panel.getByTestId('monitor-failed-command')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toHaveAccessibleName('跳到失败的命令：ls c')
+    await expect(rows.nth(1)).toHaveAccessibleName('跳到失败的命令：cat b.txt')
+    await expect(rows.nth(2)).toHaveAccessibleName('跳到失败 2 次的命令：false')
+    await expect(rows.nth(2)).toContainText('2 次')
+    // 没列出来的是 cat a.txt；按次数算，已显示的三行占了 4 次
+    await expect(panel).toContainText('还有 1 条命令失败')
+
+    const latest = window.locator('[data-testid="tool-call"][data-succeeded="false"]').nth(2)
+    await expect(latest).not.toBeInViewport()
+    await panel.getByRole('button', { name: '跳到失败 2 次的命令：false', exact: true }).click()
+    await expect(latest).toBeInViewport()
+    await expect(latest.getByRole('button')).toBeFocused()
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

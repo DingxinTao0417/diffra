@@ -6,7 +6,7 @@ import { EDITOR_KEY } from '@open-pencil/vue'
 import { createApp, reactive } from 'vue'
 import { installBridge } from './bridge'
 import DesignApp from './DesignApp.vue'
-import { requestLocalFonts, watchTextFonts } from './fonts'
+import { prepareFontsWhenVisible, requestLocalFonts, watchTextFonts } from './fonts'
 import { createLocalIcons } from './icons'
 import './design.css'
 
@@ -34,6 +34,7 @@ installBridge(editor)
 fontManager.setFallbackUserAgent(navigator.userAgent)
 requestLocalFonts().catch((error: unknown) => console.error('读取系统字体失败', error))
 watchTextFonts(editor)
+prepareFontsWhenVisible(editor)
 // 每次编辑（包括撤销、智能体的修改）都告诉主进程，由它攒一会儿再自动保存
 editor.onEditorEvent('history:changed', () => window.diffraDesignHost?.changed())
 

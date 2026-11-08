@@ -54,7 +54,7 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
                 strokeLinecap="round"
                 strokeDasharray={RING_LENGTH}
                 strokeDashoffset={RING_LENGTH * (1 - percent / 100)}
-                className={high ? 'stroke-warning' : 'stroke-primary'}
+                className={high ? 'stroke-warning' : 'stroke-muted-foreground'}
               />
             )}
           </svg>
@@ -73,7 +73,7 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
       >
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1">
-            <span className="font-semibold">上下文</span>
+            <span className="font-bold">上下文</span>
             {breakdown && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -93,7 +93,7 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
             </span>
           </div>
           <span className="flex h-1.5 overflow-hidden rounded-full bg-border">
-            <span className={cn('rounded-full', high ? 'bg-warning' : 'bg-primary')} style={{ width: `${percent}%` }} />
+            <span className={cn('rounded-full', high ? 'bg-warning' : 'bg-muted-foreground')} style={{ width: `${percent}%` }} />
           </span>
         </div>
         {breakdown && breakdownTotal > 0 && (

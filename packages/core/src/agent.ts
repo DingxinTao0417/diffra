@@ -91,6 +91,11 @@ const mcpTargetParams = z.union([
   z.object({ cwd: z.string().min(1), servers: z.array(mcpServerSchema), plugins: z.array(pluginRefSchema).default([]) }),
 ])
 
+const listTargetParams = z.union([
+  z.object({ sessionId: z.string().min(1) }),
+  z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }),
+])
+
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
 const MAX_USAGE_RANGE_MS = 400 * 86_400_000
 const usageQueryParams = z
@@ -134,6 +139,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     if (!('sessionId' in params)) return { cwd: params.cwd, servers: [...params.servers, ...(await pluginMcpServers(params.plugins))] }
     const session = sessionOf(params.sessionId)
     return { cwd: session.cwd, servers: session.mcpServers }
+  }
+
+  // 任务里按建任务时开着的插件列，和选 Skill 一致
+  const listTarget = (params: z.infer<typeof listTargetParams>) => {
+    if (!('sessionId' in params)) return params
+    const session = sessionOf(params.sessionId)
+    return { cwd: session.cwd, plugins: session.config.plugins }
   }
 
   const sessionOf = (sessionId: string): Session => {
@@ -391,12 +403,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         return mcpPool.promptText(cwd, server, params.prompt, params.arguments)
       },
     )
-    .onRequest(SESSION_EXT_METHODS.skillsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), async ({ params }) =>
-      (await loadSkills(skillRoots(params.cwd, pluginSkillRoots(params.plugins)))).map(({ body: _body, ...info }) => info),
-    )
-    .onRequest(SESSION_EXT_METHODS.commandsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), ({ params }) =>
-      loadCommands(commandRoots(params.cwd, params.plugins)),
-    )
+    .onRequest(SESSION_EXT_METHODS.skillsList, listTargetParams, async ({ params }) => {
+      const { cwd, plugins } = listTarget(params)
+      return (await loadSkills(skillRoots(cwd, pluginSkillRoots(plugins)))).map(({ body: _body, ...info }) => info)
+    })
+    .onRequest(SESSION_EXT_METHODS.commandsList, listTargetParams, ({ params }) => {
+      const { cwd, plugins } = listTarget(params)
+      return loadCommands(commandRoots(cwd, plugins))
+    })
     .onRequest(SESSION_EXT_METHODS.pluginInspect, z.object({ dir: z.string().min(1) }), ({ params }) => inspectPlugin(params.dir))
     // 先出计划也作为一轮记进会话，和深度扫描一样
     .onRequest(SESSION_EXT_METHODS.plan, planParams, async ({ params, client }) => {

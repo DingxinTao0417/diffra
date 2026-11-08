@@ -67,7 +67,7 @@ export function RestoreDialog({ open, changes, mode = 'restore', turnNumber, las
           <>
             <Alert className="border-transparent bg-warning-soft text-warning">
               <TriangleAlert />
-              <AlertDescription className="text-foreground">这段时间里你手动改过的这些文件，改动也会一起撤销。</AlertDescription>
+              <AlertDescription className="text-foreground">从{turn}开始有变化的文件都会撤销，不只是智能体改的，也包括你手动改的和同一项目其他任务改的。</AlertDescription>
             </Alert>
             <ul className="max-h-72 space-y-1 overflow-auto text-sm" data-testid="restore-list">
               {changes.map((change) => (

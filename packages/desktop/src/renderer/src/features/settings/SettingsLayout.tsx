@@ -52,7 +52,7 @@ export function SavedHint({ saved, note }: { saved: SavedFlash; note?: string })
 export function SettingsGroup({ title, className, children, ...props }: ComponentProps<'div'> & { title?: string }) {
   return (
     <section data-slot="settings-group" className="[[data-slot=settings-group]+&]:mt-8">
-      {title && <h2 className="mb-2 text-sm font-semibold">{title}</h2>}
+      {title && <h2 className="mb-2 text-sm font-bold">{title}</h2>}
       <div className={cn('divide-y rounded-xl border bg-card', className)} {...props}>
         {children}
       </div>

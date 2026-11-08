@@ -406,15 +406,17 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return response.stopReason
   })
 
-  // 任务用建任务时的配置；没有任务时按设置里开着的服务器，在最近的项目（没有就用户目录）里启动
-  const mcpTarget = async (raw: unknown) => {
+  // 任务用建任务时的配置；没有任务时按设置里开着的插件和服务器，在最近的项目（没有就用户目录）里启动
+  const listTarget = (raw: unknown) => {
     const target = parse(mcpTargetSchema, raw)
     if ('sessionId' in target) return target
-    return {
-      cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'),
-      servers: await mcpServersFor(settings, secrets),
-      plugins: enabledPlugins(settings),
-    }
+    return { cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'), plugins: enabledPlugins(settings) }
+  }
+
+  const mcpTarget = async (raw: unknown) => {
+    const target = listTarget(raw)
+    if ('sessionId' in target) return target
+    return { ...target, servers: await mcpServersFor(settings, secrets) }
   }
 
   ipcMain.handle(IPC_CHANNELS.mcpStatus, async (_event, rawTarget: unknown, rawRetry: unknown) =>
@@ -431,13 +433,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     ),
   )
 
-  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawPath: unknown) =>
-    listSkills(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
-  )
+  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawTarget: unknown) => listSkills(await coreConnection(), listTarget(rawTarget)))
 
-  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawPath: unknown) =>
-    listCommands(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
-  )
+  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawTarget: unknown) => listCommands(await coreConnection(), listTarget(rawTarget)))
 
   ipcMain.handle(IPC_CHANNELS.sessionCancel, async (_event, rawSessionId: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)

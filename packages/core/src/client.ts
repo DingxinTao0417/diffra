@@ -15,12 +15,12 @@ import {
   type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
+  type ListTarget,
   type LoadedSession,
   type McpServer,
   type McpServerStatus,
   type McpTarget,
   type PluginInfo,
-  type PluginRef,
   type PromptImage,
   type PermissionMode,
   SESSION_EXT_METHODS,
@@ -145,12 +145,12 @@ export function compactSession(connection: acp.ClientConnection, sessionId: stri
   return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string }>(SESSION_EXT_METHODS.compact, { sessionId, turnId }, { cancellationSignal: AbortSignal.timeout(CHECK_RUN_TIMEOUT_MS), stopWaitingOnCancel: true })
 }
 
-export function listSkills(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<SkillInfo[]> {
-  return requestOf(connection)<SkillInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.skillsList, { cwd, plugins }, extRequestOptions())
+export function listSkills(connection: acp.ClientConnection, target: ListTarget): Promise<SkillInfo[]> {
+  return requestOf(connection)<SkillInfo[], ListTarget>(SESSION_EXT_METHODS.skillsList, target, extRequestOptions())
 }
 
-export function listCommands(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<CommandInfo[]> {
-  return requestOf(connection)<CommandInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.commandsList, { cwd, plugins }, extRequestOptions())
+export function listCommands(connection: acp.ClientConnection, target: ListTarget): Promise<CommandInfo[]> {
+  return requestOf(connection)<CommandInfo[], ListTarget>(SESSION_EXT_METHODS.commandsList, target, extRequestOptions())
 }
 
 export function inspectPlugin(connection: acp.ClientConnection, dir: string): Promise<PluginInfo> {

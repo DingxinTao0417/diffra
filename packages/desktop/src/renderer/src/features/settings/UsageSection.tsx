@@ -198,7 +198,7 @@ function DailyChart({ days }: { days: UsageSummary['days'] }) {
 
   return (
     <section aria-label="每天的 token 用量" className="mt-8">
-      <h2 className="mb-2 text-sm font-semibold">每天</h2>
+      <h2 className="mb-2 text-sm font-bold">每天</h2>
       <div className="flex gap-2">
         <div className="relative min-w-0 flex-1">
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-36">

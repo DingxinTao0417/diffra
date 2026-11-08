@@ -114,7 +114,7 @@ function ProjectSettingsForm({
         <section className="space-y-4">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <h3 className="flex-1 text-sm font-semibold">检查命令</h3>
+              <h3 className="flex-1 text-sm font-bold">检查命令</h3>
               <Button type="button" size="sm" variant="outline" onClick={() => void detect()} disabled={detection?.state === 'loading'}>
                 {detection?.state === 'loading' ? <LoaderCircle className="animate-spin" /> : <ScanSearch />}
                 自动检测
@@ -164,7 +164,7 @@ function ProjectSettingsForm({
         </section>
         <section className="space-y-1.5 border-t pt-5">
           <h3>
-            <Label htmlFor="read-only-paths" className="font-semibold">
+            <Label htmlFor="read-only-paths" className="font-bold">
               禁止修改的目录
             </Label>
           </h3>

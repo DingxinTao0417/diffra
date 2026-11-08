@@ -44,8 +44,8 @@ const LEGACY_STOPPED: Partial<Record<StopReason, string>> = {
   refusal: '模型拒绝继续回答',
 }
 
-// 和 core 撤销时写进任务状态的原因相同
-const RESTORED_REASON = '文件已撤销，需要重新验证完成条件。'
+// core 撤销时按状态写原因；拿不到任务状态时不知道还要验证什么，只说原来的结论作废
+const RESTORED_REASON = '文件已撤销，原来的结论不再算数。'
 
 function verdict(tone: VerdictTone, reason: string | null = null): Verdict {
   return { label: LABELS[tone], tone, reason }

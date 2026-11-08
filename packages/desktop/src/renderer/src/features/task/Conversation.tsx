@@ -118,7 +118,7 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
   const scrollRef = useRef<HTMLDivElement>(null)
   // 用户停在底部时，新内容进来就跟着滚；往上翻了就不打扰
   const stickRef = useRef(true)
-  // 定位用的平滑滚动起步那几帧还在底部 80px 内，onScroll 会把贴底改回去，流式输出一到就被拉回底部；滚出这一带之前不改贴底
+  // 定位和时间线跳转用的平滑滚动起步那几帧还在底部 80px 内，onScroll 会把贴底改回去，流式输出一到就被拉回底部；滚出这一带之前不改贴底
   const locatingRef = useRef(false)
   const [atBottom, setAtBottom] = useState(true)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
@@ -189,7 +189,19 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
   const scrollToTurn = (turnId: string) => {
     const element = scrollRef.current
     const node = element?.querySelector<HTMLElement>(`[data-turn-id="${turnId}"]`)
-    if (element && node) element.scrollTo({ top: node.offsetTop - 16, behavior: 'smooth' })
+    if (!element || !node) return
+    const top = node.offsetTop - 16
+    const bottom = element.scrollHeight - element.clientHeight
+    // 要滚出底部这一带才停掉贴底；终点就在这一带（比如这一轮开头已在视口里、滚不动）时照常跟随，否则没有滚动事件，贴底一直关着，也不出「回到底部」
+    if (bottom - Math.max(top, 0) >= 80) {
+      stickRef.current = false
+      locatingRef.current = bottom - element.scrollTop < 80
+    } else {
+      // 上一次跳转刚起步时又点了这里：清掉它留下的 locatingRef，不然回到底部这一带后贴底也打不开
+      stickRef.current = true
+      locatingRef.current = false
+    }
+    element.scrollTo({ top, behavior: 'smooth' })
   }
 
   return (
@@ -327,7 +339,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
       )}
       {turn.error && (
         <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive-soft px-3.5 py-3 text-sm" role="alert" data-testid="turn-error">
-          <div className="flex items-center gap-2 font-semibold text-destructive">
+          <div className="flex items-center gap-2 font-bold text-destructive">
             <CircleAlert className="size-4 shrink-0" />
             这一轮出错了
           </div>
@@ -476,7 +488,7 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
             item.severity === 'warning' && 'border-warning/30 bg-warning-soft',
           )}
         >
-          <div className="font-semibold">{item.title}</div>
+          <div className="font-bold">{item.title}</div>
           {item.description && <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.description}</div>}
         </div>
       )
@@ -589,8 +601,8 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
-      <div className="flex items-center gap-2 font-semibold">
-        <ListChecks className="size-4 text-primary" />
+      <div className="flex items-center gap-2 font-bold">
+        <ListChecks className="size-4 text-muted-foreground" />
         计划
       </div>
       <textarea
@@ -811,7 +823,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
   const count = findings.filter(Boolean).length
   return (
     <div {...common} className="flex flex-col gap-1.5 rounded-xl border border-destructive/25 bg-destructive-soft px-3 py-2.5 text-sm">
-      <div className="flex items-center gap-2 font-semibold text-destructive">
+      <div className="flex items-center gap-2 font-bold text-destructive">
         <X className="size-3.5" strokeWidth={2.6} />
         {count > 0 ? `规范审查 · ${count} 处问题，已打回` : '规范审查'}
       </div>
@@ -880,7 +892,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
         high > 0 ? 'border-destructive/25 bg-destructive-soft' : 'border-warning/25 bg-warning-soft',
       )}
     >
-      <div className={cn('flex items-center gap-2 font-semibold', high > 0 && 'text-destructive')}>
+      <div className={cn('flex items-center gap-2 font-bold', high > 0 && 'text-destructive')}>
         {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <CircleAlert className="size-3.5 text-warning" />}
         {high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
       </div>
@@ -953,7 +965,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
 
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
-      <div className="font-semibold">深度扫描报告</div>
+      <div className="font-bold">深度扫描报告</div>
       <p className="text-muted-foreground">{summary}</p>
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
       {findings.map((finding, index) => (
@@ -1023,7 +1035,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
   )
   return (
     <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined} data-restored={undone ? 'true' : undefined}>
-      <div className={cn('flex items-center gap-2 font-semibold', !undone && verdict.tone === 'failed' && 'text-destructive', !undone && verdict.tone === 'unverified' && 'text-warning')}>
+      <div className={cn('flex items-center gap-2 font-bold', !undone && verdict.tone === 'failed' && 'text-destructive', !undone && verdict.tone === 'unverified' && 'text-warning')}>
         {undone ? (
           <StatusIcon status={item.status} className="size-4" />
         ) : verdict.tone === 'unverified' ? (
@@ -1109,7 +1121,7 @@ function Timeline({ turns, activeTurn, onJump }: { turns: Turn[]; activeTurn: st
         <Tooltip key={turn.id}>
           <TooltipTrigger asChild>
             <button type="button" aria-label={`跳到：${turn.prompt.slice(0, 30)}`} className="flex h-2.5 w-4 items-center justify-end" onClick={() => onJump(turn.id)}>
-              <span className={cn('h-0.5 rounded-full', turn.id === activeTurn ? 'w-3 bg-primary' : 'w-2 bg-muted-foreground/50')} />
+              <span className={cn('h-0.5 rounded-full', turn.id === activeTurn ? 'w-3 bg-foreground' : 'w-2 bg-muted-foreground/50')} />
             </button>
           </TooltipTrigger>
           <TooltipContent side="left" className="max-w-64 truncate">

@@ -46,9 +46,9 @@ interface ComposerProps {
   // 底栏最左边的控件，首页没选项目时放项目选择
   leading?: ReactNode
   running?: boolean
-  // 斜杠菜单从这个项目读 Skill
+  // 选好项目后把焦点放回输入框
   projectPath: string | null
-  // 斜杠菜单从这里读 MCP prompt
+  // 斜杠菜单从这里读 Skill、自定义命令和 MCP 提示词模板
   mcpTarget: McpStatusTarget | null
   commands?: ComposerCommand[]
   permissionMode: PermissionMode
@@ -152,11 +152,11 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (tokenStart === null) setDismissed(null)
   }, [tokenStart])
-  const available = useProjectList(menuOpen ? props.projectPath : null, (path) => window.diffra.listSkills(path), '读取 Skill 失败')
-  const commandList = useProjectList(menuOpen ? props.projectPath : null, (path) => window.diffra.listCommands(path), '读取自定义命令失败')
+  const available = useProjectList(menuOpen ? props.mcpTarget : null, (target) => window.diffra.listSkills(target), '读取 Skill 失败')
+  const commandList = useProjectList(menuOpen ? props.mcpTarget : null, (target) => window.diffra.listCommands(target), '读取自定义命令失败')
   const mcp = useMcpStatus(menuOpen ? props.mcpTarget : null)
   // 第一次打开时 Skill、自定义命令和 MCP prompt 还在读：先占一行，免得读完菜单突然变高、高亮项跟着跳
-  const listLoading = menuOpen && ((props.projectPath !== null && (available === null || commandList === null)) || (props.mcpTarget !== null && mcp.statuses === null && mcp.error === null))
+  const listLoading = menuOpen && props.mcpTarget !== null && (available === null || commandList === null || (mcp.statuses === null && mcp.error === null))
   // 有参数的 MCP prompt 和自定义命令先弹框填参数
   const [argumentsRequest, setArgumentsRequest] = useState<{ request: ArgumentsRequest; submit(args: Record<string, string>): void } | null>(null)
 
@@ -264,14 +264,14 @@ export function Composer(props: ComposerProps) {
         icon: Plug,
         matches: (query: string) => includes([`${server.name}:${prompt.name}`, prompt.description], query),
         select: (at: number) => {
-          if (prompt.arguments.length === 0) return void insertAt(at, mcpPrompt(server.name, prompt.name, {}), '展开 MCP prompt 失败')
+          if (prompt.arguments.length === 0) return void insertAt(at, mcpPrompt(server.name, prompt.name, {}), '展开提示词模板失败')
           setArgumentsRequest({
             request: {
               title: `${server.name}:${prompt.name}`,
               description: prompt.description,
               arguments: prompt.arguments.map((arg) => ({ name: arg.name, label: arg.name, hint: arg.description, required: arg.required })),
             },
-            submit: (args) => void insertAt(at, mcpPrompt(server.name, prompt.name, args), '展开 MCP prompt 失败'),
+            submit: (args) => void insertAt(at, mcpPrompt(server.name, prompt.name, args), '展开提示词模板失败'),
           })
         },
       })),
@@ -617,15 +617,16 @@ function Chip({ icon: Icon, label, removeLabel, onRemove }: { icon: LucideIcon; 
   )
 }
 
-// 菜单打开时读一次项目的 Skill 和自定义命令，文件改过下次打开就是新的
-function useProjectList<T>(projectPath: string | null, load: (path: string) => Promise<T[]>, failure: string): T[] | null {
+// 菜单打开时读一次任务或项目的 Skill 和自定义命令，文件改过下次打开就是新的
+function useProjectList<T>(target: McpStatusTarget | null, load: (target: McpStatusTarget) => Promise<T[]>, failure: string): T[] | null {
   const [items, setItems] = useState<T[] | null>(null)
   const loadRef = useRef(load)
   loadRef.current = load
+  const key = target ? JSON.stringify(target) : null
   useEffect(() => {
-    if (!projectPath) return
+    if (key === null) return
     let stale = false
-    loadRef.current(projectPath).then(
+    loadRef.current(JSON.parse(key) as McpStatusTarget).then(
       (list) => !stale && setItems(list),
       (error: unknown) => {
         console.error(failure, error)
@@ -636,7 +637,7 @@ function useProjectList<T>(projectPath: string | null, load: (path: string) => P
     return () => {
       stale = true
     }
-  }, [projectPath, failure])
+  }, [key, failure])
   return items
 }
 

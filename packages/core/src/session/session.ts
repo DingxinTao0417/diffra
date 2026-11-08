@@ -272,6 +272,8 @@ export class Session {
       await this.checkpoints.restore(commit, await this.checkpoints.changesSince(commit))
       filesRestored = true
     }
+    // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
+    const needsVerification = filesRestored ? needsVerificationBefore(this.turns, index) : this.taskState.needsVerification
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
@@ -281,7 +283,7 @@ export class Session {
     }
     this.readHashes.clear()
     this.verifiedSnapshot = null
-    this.taskState = { ...newTaskState(), contractRequired: this.taskState.contractRequired, releaseVersion: this.taskState.releaseVersion }
+    this.taskState = { ...newTaskState(), needsVerification, contractRequired: this.taskState.contractRequired, releaseVersion: this.taskState.releaseVersion }
     return { filesRestored }
   }
 
@@ -304,7 +306,8 @@ export class Session {
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
     const needsVerification = target ? needsVerificationBefore(this.turns, index) : false
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
+    const reason = this.taskState.requirements.length > 0 || this.taskState.contractRequired ?'文件已撤销，需要重新验证完成条件。' : needsVerification ? '文件已撤销，之前轮次的改动还没验证。' : '文件已撤销，原来的结论不再算数。'
+    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason, receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
     this.messages.push({
       role: 'user',
       content:
@@ -321,7 +324,7 @@ export class Session {
   }
 }
 
-// 撤销到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
+// 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
 // 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
 function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
   for (const update of turns[index]!.updates) {

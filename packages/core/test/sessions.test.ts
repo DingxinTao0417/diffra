@@ -32,7 +32,7 @@ import {
   sendPrompt,
   updateSession,
 } from '../src/client.js'
-import type { SessionConfig } from '../src/protocol.js'
+import type { ListTarget, SessionConfig } from '../src/protocol.js'
 import { SessionStore } from '../src/session/store.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
@@ -178,7 +178,7 @@ describe('会话持久化', () => {
 
     notifications = []
     expect(await restoreCheckpoint(second, sessionId, 'turn-1')).toEqual([{ path: 'a.txt', change: 'added' }])
-    const restored = { status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。', requirements: [], needsVerification: false }
+    const restored = { status: 'blocked', reason: '文件已撤销，原来的结论不再算数。', requirements: [], needsVerification: false }
     expect(lastTaskState(sessionId)).toEqual(restored)
 
     const third = await startCore()
@@ -210,7 +210,7 @@ describe('会话持久化', () => {
     const second = await startCore()
     await loadSession(second, sessionId, project, config(server.baseUrl))
     expect(await restoreCheckpoint(second, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
-    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true, reason: '文件已撤销，之前轮次的改动还没验证。' })
   })
 
   test('撤销到计划轮：取计划轮开始时的待验证，不取更早轮次的', async () => {
@@ -458,6 +458,37 @@ describe('重新生成、切换模型、整段 diff', () => {
     const [summary] = await listSessions(core)
     expect(summary?.turnCount).toBe(2)
   })
+
+  test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字会被拉回', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
+
+    notifications = []
+    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', needsVerification: true })
+    expect(existsSync(join(project, 'b.txt'))).toBe(false)
+
+    const requests = server.bodies.length
+    await sendPrompt(core, sessionId, 'turn-2b', '再写 b.txt')
+    expect(server.bodies.length - requests).toBe(4)
+    expect(server.bodies.at(-1)).toContain('File changes from earlier turns have not been verified yet')
+  })
 })
 
 describe('错误提示', () => {
@@ -559,7 +590,7 @@ describe('Skill 和目标模式', () => {
     const core = await startCore()
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
 
-    const skills = await listSkills(core, project)
+    const skills = await listSkills(core, { cwd: project })
     expect(skills.find((skill) => skill.name === 'diffra-test-skill')).toEqual({
       name: 'diffra-test-skill',
       description: '测试用',
@@ -624,8 +655,8 @@ describe('插件', () => {
       const plugins = [{ name: 'kit', dir: plugin }]
       const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), plugins })
 
-      expect((await listSkills(core, project, plugins)).find((skill) => skill.name === 'kit-style')?.source).toBe('plugin')
-      expect((await listCommands(core, project, plugins)).find((command) => command.name === 'kit:greet')?.body).toBe('跟 $ARGUMENTS 打招呼')
+      expect((await listSkills(core, { cwd: project, plugins })).find((skill) => skill.name === 'kit-style')?.source).toBe('plugin')
+      expect((await listCommands(core, { cwd: project, plugins })).find((command) => command.name === 'kit:greet')?.body).toBe('跟 $ARGUMENTS 打招呼')
       const [status] = await mcpStatus(core, { sessionId })
       expect(status).toMatchObject({ name: 'kit-demo', state: 'connected' })
 
@@ -635,6 +666,36 @@ describe('插件', () => {
     } finally {
       await pool.closeAll()
     }
+  })
+
+  test('任务里按建任务时开着的插件列 Skill 和命令，和选 Skill 一致', async () => {
+    const plugin = join(dataDir, 'kit')
+    mkdirSync(join(plugin, '.claude-plugin'), { recursive: true })
+    writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'kit' }))
+    mkdirSync(join(plugin, 'skills', 'kit-style'), { recursive: true })
+    writeFileSync(join(plugin, 'skills', 'kit-style', 'SKILL.md'), '---\nname: kit-style\n---\n插件说明 KIT-OK')
+    mkdirSync(join(plugin, 'commands'))
+    writeFileSync(join(plugin, 'commands', 'greet.md'), '跟 $ARGUMENTS 打招呼')
+    server = await startScriptedServer([{ text: '好' }])
+    const core = await startCore()
+    const plugins = [{ name: 'kit', dir: plugin }]
+    const without = await createSession(core, project, config(server.baseUrl))
+    const withKit = await createSession(core, project, { ...config(server.baseUrl), plugins })
+    const skillNames = async (target: ListTarget) => (await listSkills(core, target)).map((skill) => skill.name)
+    const commandNames = async (target: ListTarget) => (await listCommands(core, target)).map((command) => command.name)
+
+    expect(await skillNames({ cwd: project, plugins })).toContain('kit-style')
+
+    expect(await skillNames({ sessionId: without.sessionId })).not.toContain('kit-style')
+    expect(await commandNames({ sessionId: without.sessionId })).not.toContain('kit:greet')
+    await expect(sendPrompt(core, without.sessionId, 't1', '你好', { skills: ['kit-style'] })).rejects.toThrow('找不到 Skill：kit-style')
+
+    expect(await skillNames({ sessionId: withKit.sessionId })).toContain('kit-style')
+    expect(await commandNames({ sessionId: withKit.sessionId })).toContain('kit:greet')
+    await sendPrompt(core, withKit.sessionId, 't1', '你好', { skills: ['kit-style'] })
+    expect(server.bodies[0]).toContain('插件说明 KIT-OK')
+
+    await expect(listSkills(core, { sessionId: 'no-such' })).rejects.toThrow()
   })
 })
 

@@ -5,11 +5,11 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  /* 拉丁字母用 Segoe UI，中文回落到雅黑。雅黑只有 300、400、700：400、500 中英都按 400 画；600 时英文是 Semibold，中文会画成 Bold 700，字号大时看得出粗细不一，所以 xl 及以上的标题用 700 */
+  /* 拉丁字母用 Segoe UI，中文回落到雅黑。雅黑只有 300、400、700：400、500 中英都按 400 画；600 时英文是 Semibold，中文会画成 Bold 700，同一行里粗细不一，所以含中文的加粗文字用 700，只有拉丁字母和数字的才用 600 */
   --font-sans: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
   /*
-   * 字号阶梯（标准档根字号 14px 时）：12 辅助 / 13 控件 / 14 正文 / 16 卡片和弹窗标题 / 20 页标题 / 26 首页标题。
+   * 字号阶梯（标准档根字号 14px 时）：12 辅助 / 13 控件 / 14 正文 / 16 卡片和弹窗标题 / 20 页标题 / 26 首页标题和用量数字。
    * 仍按 rem 跟「文字大小」设置整体缩放，但中文最小不低于 12px，小字档也一样
    */
   --text-xs: max(12px, 0.857rem);
@@ -307,7 +307,7 @@ body[data-scroll-locked] .title-bar {
 .markdown h2,
 .markdown h3,
 .markdown h4 {
-  font-weight: 600;
+  font-weight: 700;
   margin-top: 1em;
 }
 .markdown h1 {

@@ -203,6 +203,55 @@ test('设计面板：系统字体列表晚到、或第一次被拒时，先写�
   }
 })
 
+// 面板关着、窗口最小化时设计页不可见，读系统字体会被当场拒绝（「Page needs to be visible.」，连单个字体文件也读不了）。
+// Playwright 给页面开了焦点模拟，页面在测试里一直算可见，所以这里模拟不可见和这种拒绝
+const SIMULATE_HIDDEN_PAGE = `if (location.href.includes('design.html')) {
+  const query = window.queryLocalFonts.bind(window)
+  let hidden = false
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') })
+  window.__setPageHidden = (value) => {
+    hidden = value
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+  window.queryLocalFonts = (options) => (hidden ? Promise.reject(new DOMException('Page needs to be visible.', 'SecurityError')) : query(options))
+}`
+
+test('设计面板：页面不可见时写进去的中文，回到可见后按系统字体重新排版', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-'))
+  const model = await startScriptedModel([{ text: '好的' }])
+  const app = await launchApp(userDataDir)
+  try {
+    await app.context().addInitScript(SIMULATE_HIDDEN_PAGE)
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '打开设计面板')
+    await waitTaskDone(window)
+    await window.getByRole('button', { name: '设计', exact: true }).click()
+    const design = await findDesignPage(app)
+
+    await design.evaluate('window.__setPageHidden(true)')
+    // 直接调设计页的工具（智能体调用时会先把面板打开）；新建文字层后攒着的那次准备字体也在不可见时跑完
+    await runTool(design, 'render', { jsx: '<Text name="问候" size={20}>你好你好你好</Text>' })
+    await design.waitForTimeout(1000)
+    const { nodes: texts } = JSON.parse((await runTool(design, 'find_nodes', { type: 'TEXT' })).text) as { nodes: Array<{ id: string }> }
+    const width = async () => (JSON.parse((await runTool(design, 'get_node', { id: texts[0]?.id ?? '', depth: 0 })).text) as { width: number }).width
+    // 六个汉字、字号 20：系统字体（微软雅黑）每个字一个字号宽，共约 120；读不到时按 Inter 的方框量，方框宽 1344/2048 个字号，共约 79。取中间的 100
+    expect(await width()).toBeLessThan(100)
+
+    await design.evaluate('window.__setPageHidden(false)')
+    await expect.poll(width, { timeout: 15_000 }).toBeGreaterThan(100)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
 const CARD_JSX = `<Frame name="登录卡片" w={320} h="hug" flex="col" gap={12} p={24} bg="#FFFFFF" rounded={12}>
   <Text name="标题" size={20} weight="bold" color="#111827">欢迎回来</Text>
   <Frame name="按钮" w="fill" h={40} bg="#2563EB" rounded={8} />

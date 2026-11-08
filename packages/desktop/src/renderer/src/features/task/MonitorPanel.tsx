@@ -39,6 +39,16 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const verdict = turnVerdict(task)
   const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
   const failedCommands = verdictTurn?.items.flatMap((item) => (item.kind === 'tool' && item.succeeded === false ? [item] : [])) ?? []
+  // 同一条命令失败多次只列一行，定位到最近一次；先删再加，Map 的顺序就是各命令最近一次失败的顺序
+  const failedRows = new Map<string, { command: string; id: string; count: number }>()
+  for (const item of failedCommands) {
+    const command = splitTitle(item.title).target
+    const count = (failedRows.get(command)?.count ?? 0) + 1
+    failedRows.delete(command)
+    failedRows.set(command, { command, id: item.id, count })
+  }
+  const shownFailed = [...failedRows.values()].reverse().slice(0, FAILED_COMMAND_LIMIT)
+  const hiddenFailed = failedCommands.length - shownFailed.reduce((total, row) => total + row.count, 0)
   // 有完成条件时下面的完成条件区已经写了这句原因，不重复
   const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
   const checks = task.info.checks ?? project?.checks
@@ -82,27 +92,25 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
             {verdictReason && <p className="text-muted-foreground">{verdictReason}</p>}
             {failedCommands.length > 0 && (
               <div className="flex flex-col">
-                {failedCommands.slice(-FAILED_COMMAND_LIMIT).reverse().map((item) => {
-                  const command = splitTitle(item.title).target
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      aria-label={`跳到失败的命令：${command}`}
-                      className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                      data-testid="monitor-failed-command"
-                      onClick={() => onLocate(item.id)}
-                    >
-                      <CircleAlert className={cn('size-3.5 shrink-0', verdict.tone === 'verified' ? 'text-muted-foreground' : 'text-warning')} />
-                      <span className="min-w-0 truncate" title={command}>
-                        {command}
-                      </span>
-                    </button>
-                  )
-                })}
+                {shownFailed.map((row) => (
+                  <button
+                    key={row.command}
+                    type="button"
+                    aria-label={row.count > 1 ? `跳到失败 ${row.count} 次的命令：${row.command}` : `跳到失败的命令：${row.command}`}
+                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="monitor-failed-command"
+                    onClick={() => onLocate(row.id)}
+                  >
+                    <CircleAlert className={cn('size-3.5 shrink-0', verdict.tone === 'verified' ? 'text-muted-foreground' : 'text-warning')} />
+                    <span className="min-w-0 truncate" title={row.command}>
+                      {row.command}
+                    </span>
+                    {row.count > 1 && <span className="ml-auto shrink-0 text-muted-foreground">{row.count} 次</span>}
+                  </button>
+                ))}
               </div>
             )}
-            {failedCommands.length > FAILED_COMMAND_LIMIT && <p className="text-muted-foreground">还有 {failedCommands.length - FAILED_COMMAND_LIMIT} 条命令失败</p>}
+            {hiddenFailed > 0 && <p className="text-muted-foreground">还有 {hiddenFailed} 条命令失败</p>}
           </Section>
         )}
 

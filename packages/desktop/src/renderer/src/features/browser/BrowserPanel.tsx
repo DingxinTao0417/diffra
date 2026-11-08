@@ -129,8 +129,8 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
       {/* 网页区域被原生视图盖住，进度条只能画在它上面：零高度的定位层，进度条向上压住顶栏底边，不挤动网页区域 */}
       {state?.loading && (
         <div className="relative h-0 shrink-0">
-          <div role="progressbar" aria-label="正在加载网页" className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-primary/15">
-            <div className="h-full w-1/3 -translate-x-full animate-out bg-primary ease-in-out repeat-infinite slide-out-to-right-[400%] animation-duration-[1.2s] motion-reduce:w-full motion-reduce:translate-x-0 motion-reduce:animate-none" />
+          <div role="progressbar" aria-label="正在加载网页" className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-muted-foreground/15">
+            <div className="h-full w-1/3 -translate-x-full animate-out bg-muted-foreground ease-in-out repeat-infinite slide-out-to-right-[400%] animation-duration-[1.2s] motion-reduce:w-full motion-reduce:translate-x-0 motion-reduce:animate-none" />
           </div>
         </div>
       )}
