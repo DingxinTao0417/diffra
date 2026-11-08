@@ -527,6 +527,34 @@ describe('主循环', () => {
     expect(lastTaskState(io)).toMatchObject({ needsVerification: false })
   })
 
+  test('之前轮次留下没验证的改动、本轮没改文件：拉回时说明是之前的改动，不说本轮改了文件', async () => {
+    const model = scriptedModel([{ text: '这个函数负责解析配置' }, { text: '补充一点' }, { text: '没有了' }, { text: '结束' }])
+    const session = await makeSession(model)
+    session.taskState.needsVerification = true
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '这个函数是做什么的' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(4)
+    expect(JSON.stringify(session.messages)).toContain('File changes from earlier turns have not been verified yet')
+    expect(JSON.stringify(session.messages)).not.toContain('You changed files')
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
+  })
+
+  test('之前轮次留下没验证的改动、本轮又改了文件：拉回时说本轮改了文件', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'c.txt', old_string: '', new_string: 'c\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+    ])
+    const session = await makeSession(model)
+    session.taskState.needsVerification = true
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 c.txt' }, io)).resolves.toBe('end_turn')
+    expect(JSON.stringify(session.messages)).toContain('You changed files but did not call finish')
+    expect(JSON.stringify(session.messages)).not.toContain('earlier turns')
+  })
+
   test('edit_file 失败、没改到文件时，不要求 finish，也不标成需要验证', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'edit_file', input: { path: 'missing.txt', old_string: 'x', new_string: 'y' } }] },
@@ -1484,6 +1512,20 @@ describe('目标模式', () => {
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('call finish with goal_met')
     expect(notices(io)).toEqual(['目标模式第 2 轮', '目标模式已用完 2 轮，目标还没完成'])
     expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: 'goal-exhausted' }])
+  })
+
+  test('最后一轮改了文件后 finish 被接受、轮数用完：门禁跑过了，不再留待验证', async () => {
+    const model = scriptedModel([
+      finish('第一轮先看看', false),
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
+      finish('第二轮写了一点', false),
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '做完它' }, io, { goalMaxRounds: 2 })).resolves.toBe('end_turn')
+    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: 'goal-exhausted' }])
+    expect(lastTaskState(io)).toMatchObject({ needsVerification: false })
   })
 
   test('第 1 轮的改动未经验证，第 2 轮没改文件就完成：本轮结论仍是 unverified', async () => {

@@ -184,6 +184,8 @@ export async function runTurn(
 
     session.verifiedSnapshot = null
     let editedThisTurn = session.taskState.needsVerification
+    // 待验证是从之前的轮次带过来的、本轮还没改过文件：拉回时不能说「本轮改了文件」
+    let editsCarried = editedThisTurn
     let commandedThisTurn = false
     let checkFailures = 0
     let gateAttempts = 0
@@ -226,7 +228,9 @@ export async function runTurn(
           session.messages.push({
             role: 'user',
             content: editedThisTurn
-              ? '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
+              ? editsCarried
+                ? '[Diffra] File changes from earlier turns have not been verified yet. Verify them, then call finish.'
+                : '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
               : goalMaxRounds !== null ? '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.'
               : '[Diffra] Completion requirements remain unfinished. Continue executing the saved stages and satisfy them using real receipts, or call pause_task with a specific blocker. Do not stop after checks pass.',
           })
@@ -304,6 +308,7 @@ export async function runTurn(
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
+          editsCarried = false
           session.taskState.needsVerification = true
           repeats.clear()
         } else {
@@ -328,6 +333,8 @@ export async function runTurn(
         return 'end_turn'
       }
       if (finished && round >= goalMaxRounds!) {
+        // 目标没达成，但这次 finish 已经过了完成门禁，改动不再算没验证的
+        session.taskState.needsVerification = false
         await notice(io, 'warning', `目标模式已用完 ${goalMaxRounds} 轮，目标还没完成`, `最后一轮的总结：${finished.summary}`)
         stop = 'goal-exhausted'
         return 'end_turn'
@@ -337,6 +344,7 @@ export async function runTurn(
         gateAttempts = 0
         checkFailures = 0
         editedThisTurn = false
+        editsCarried = false
         // 上一轮的改动已经过了那一轮的完成门禁，指纹从这一轮开始比
         commandedThisTurn = false
         turnStartFingerprint = await workspaceFingerprint(session)

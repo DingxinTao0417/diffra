@@ -6,7 +6,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
 import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
-import { newTaskState, type TaskState } from './task-state.js'
+import { newTaskState, recordedNeedsVerification, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { browserTools } from './browser.js'
 import { designChars, designTools } from './design.js'
@@ -301,20 +301,39 @@ export class Session {
     // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
     this.readHashes.clear()
     this.verifiedSnapshot = null
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification: true, reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
+    const index = this.turns.findIndex((turn) => turn.id === turnId)
+    const target = this.turns[index]
+    const needsVerification = target ? needsVerificationBefore(this.turns, index) : false
+    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
     this.messages.push({
       role: 'user',
       content:
         '[Note from Diffra] The user reverted all file changes made since an earlier point in this conversation. ' +
         'Files may differ from what you saw before; read them again before editing.',
     })
-    const target = this.turns.find((turn) => turn.id === turnId)
     if (target) {
       const restoredAt = new Date().toISOString()
-      for (const turn of this.turns.slice(this.turns.indexOf(target))) turn.restoredAt = restoredAt
+      for (const turn of this.turns.slice(index)) turn.restoredAt = restoredAt
       // 这一轮早已结束，recordUpdate 不再收，直接记进去
       target.updates.push({ sessionUpdate: 'notice', severity: 'info', ...restoreNotice(changes) })
     }
     return changes
   }
+}
+
+// 撤销到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
+// 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
+function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
+  for (const update of turns[index]!.updates) {
+    const value = recordedNeedsVerification(update._meta)
+    if (value !== null) return value
+  }
+  for (let i = index - 1; i >= 0; i--) {
+    const updates = turns[i]!.updates
+    for (let j = updates.length - 1; j >= 0; j--) {
+      const value = recordedNeedsVerification(updates[j]!._meta)
+      if (value !== null) return value
+    }
+  }
+  return false
 }

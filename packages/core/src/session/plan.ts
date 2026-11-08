@@ -2,7 +2,7 @@ import type { StopReason } from '@agentclientprotocol/sdk'
 import { tool } from 'ai'
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
-import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, type TurnIO } from './loop.js'
+import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, taskStateUpdate, type TurnIO } from './loop.js'
 import { runReadOnlyLoop } from './read-only.js'
 import type { Session } from './session.js'
 import { TOOLS } from './tools.js'
@@ -55,6 +55,8 @@ export async function runPlan(session: Session, turn: { id: string; text: string
   const planner = session.config.planModel ?? session.config.model
   try {
     await takeCheckpoint(session, turn.id, io)
+    // 撤销到这一轮时按这一份恢复待验证
+    await io.update(taskStateUpdate(session))
     const outcome = await runReadOnlyLoop(
       session,
       {

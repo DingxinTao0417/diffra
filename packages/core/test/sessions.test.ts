@@ -162,10 +162,11 @@ describe('会话持久化', () => {
     expect(existsSync(join(dataDir, 'sessions', `${sessionId}.json`))).toBe(false)
   })
 
-  test('加载带上 core 当前的任务状态；撤销之后发出待重新验证的状态，并且存盘', async () => {
+  test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值，下一轮只提问不被拉回', async () => {
     server = await startScriptedServer([
       { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
       { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+      { text: '刚才写了 a.txt，已经撤销了' },
     ])
     const first = await startCore()
     const { sessionId } = await createSession(first, project, config(server.baseUrl))
@@ -177,11 +178,65 @@ describe('会话持久化', () => {
 
     notifications = []
     expect(await restoreCheckpoint(second, sessionId, 'turn-1')).toEqual([{ path: 'a.txt', change: 'added' }])
-    const restored = { status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。', requirements: [], needsVerification: true }
+    const restored = { status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。', requirements: [], needsVerification: false }
     expect(lastTaskState(sessionId)).toEqual(restored)
 
     const third = await startCore()
     expect((await loadSession(third, sessionId, project, config(server.baseUrl))).taskState).toEqual(restored)
+
+    const requests = server.bodies.length
+    await sendPrompt(third, sessionId, 'turn-2', '刚才改了什么')
+    expect(server.bodies.length - requests).toBe(1)
+  })
+
+  test('撤销到的这一轮开始时就有没验证的改动：撤销后仍要验证', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
+    await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
+
+    // 从磁盘重新加载后撤销：开始时的待验证要从存下来的轮次里读
+    const second = await startCore()
+    await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(await restoreCheckpoint(second, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
+  })
+
+  test('撤销到计划轮：取计划轮开始时的待验证，不取更早轮次的', async () => {
+    const submit = { toolCalls: [{ name: 'submit_plan', input: { understanding: '再看看', steps: [{ title: '看 a.txt', detail: '读一遍', files: ['a.txt'] }], risks: [] } }] }
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      submit,
+      submit,
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    await plan(core, sessionId, 'plan-2', '接下来怎么做')
+    await restoreCheckpoint(core, sessionId, 'plan-2')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: true })
+
+    await restoreCheckpoint(core, sessionId, 'turn-1')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: false })
+    // 撤销后的状态没记进任何一轮；计划轮自己记下开始时的值，才不会取到第一轮结束时的 true
+    await plan(core, sessionId, 'plan-3', '接下来怎么做')
+    await restoreCheckpoint(core, sessionId, 'plan-3')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: false })
   })
 
   test('撤销给这一轮及之后的轮次记下撤销时刻，撤销了哪些文件记在这一轮末尾，重启后还在', async () => {

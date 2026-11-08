@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TASK_PROGRESS_META_KEY } from '../protocol.js'
 import { ToolError } from '../tools/types.js'
 
 export { TASK_PROGRESS_META_KEY as TASK_STATE_META_KEY } from '../protocol.js'
@@ -120,3 +121,10 @@ export function requiresReleaseContract(text: string): boolean {
   return /发布|上线|\brelease\b|\bdeploy\b/i.test(text) && /提交|推送|打包|版本|\bpush\b|\bpackage\b|\bv?\d+\.\d+\.\d+\b/i.test(text)
 }
 
+// 记进轮次里的任务状态更新（_meta.diffra.taskState）带的待验证；不是任务状态更新时为 null。旧记录没有这个字段，算 false
+const recordedTaskStateSchema = z.object({ diffra: z.object({ [TASK_PROGRESS_META_KEY]: z.object({ needsVerification: z.boolean().optional() }) }) })
+
+export function recordedNeedsVerification(meta: unknown): boolean | null {
+  const parsed = recordedTaskStateSchema.safeParse(meta)
+  return parsed.success ? (parsed.data.diffra[TASK_PROGRESS_META_KEY].needsVerification ?? false) : null
+}
