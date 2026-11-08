@@ -56,6 +56,8 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     for (const name of ['静态检查', '轻量扫描', '深度扫描']) await expect(levels.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'true')
     await levels.getByRole('switch', { name: '深度扫描' }).click()
     await expect(levels.getByRole('switch', { name: '深度扫描' })).toHaveAttribute('aria-checked', 'false')
+    // 深度扫描只控制入口，立即生效，提示里不带「新任务生效」
+    await expect(window.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存')
     await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).security.deepScan).toBe(false)
     await levels.getByRole('switch', { name: '深度扫描' }).click()
     await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).security.deepScan).toBe(true)

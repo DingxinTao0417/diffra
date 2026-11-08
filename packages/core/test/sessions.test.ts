@@ -647,7 +647,7 @@ describe('图片输入', () => {
     const core = await startCore()
     const plain = await createSession(core, project, config(server.baseUrl))
     await expect(sendPrompt(core, plain.sessionId, 'turn-1', '看看这张图', { images: [{ mimeType: 'image/png', data: PIXEL }] })).rejects.toThrow(
-      '没有打开图片输入',
+      '没有打开「视觉」',
     )
 
     const base = config(server.baseUrl)

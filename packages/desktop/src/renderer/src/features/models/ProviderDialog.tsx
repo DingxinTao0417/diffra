@@ -30,6 +30,8 @@ import {
 import { errorMessage } from '@/lib/errors'
 
 const CUSTOM = 'custom'
+// 选了供应商后两步共用的最小高度，切步骤、出现报错时底栏不动。39.75rem 取只有一个模型 ID 时第 1 步的最高实测值（三行说明的预设），min() 让矮窗口里弹窗不出现外层滚动
+const FORM_MIN_HEIGHT = 'min-h-[min(39.75rem,calc(85vh-7rem))]'
 
 interface ProviderDialogProps {
   open: boolean
@@ -42,7 +44,7 @@ interface ProviderDialogProps {
 export function ProviderDialog({ open, provider, onOpenChange, onSaved }: ProviderDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="top-[10vh] translate-y-0 sm:max-w-lg">
         <DialogHeader className="pr-8">
           <DialogTitle>{provider ? '编辑模型服务' : '添加模型服务'}</DialogTitle>
           <DialogDescription>使用自己的 API Key，密钥加密保存在本机。</DialogDescription>
@@ -128,7 +130,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
   const updateModel = (key: string, config: ModelConfig) => setModels((current) => current.map((entry) => entry.key === key ? { ...entry, config } : entry))
 
   return (
-    <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col gap-4">
+    <form onSubmit={submit} className={cn('flex min-h-0 flex-1 flex-col gap-4', presetId !== '' && FORM_MIN_HEIGHT)}>
       <StepIndicator current={step === 'connection' ? 0 : 1} />
       <DialogBody>
       <fieldset disabled={saving} hidden={step !== 'connection'} className="space-y-4">
@@ -202,7 +204,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
           <Field
             id="provider-api-key"
             label="API Key"
-            hint={editing ? `留空则不修改（当前：${provider.keyHint ?? '未设置'}）` : undefined}
+            hint={editing ? `留空则不修改（当前：${provider.keyHint ?? '未设置'}）。` : undefined}
           >
             <div className="relative">
               <Input id="provider-api-key" type={showKey ? 'text' : 'password'} autoComplete="off" value={apiKey} className="pr-9" onChange={(event) => setApiKey(event.target.value)} />
@@ -226,10 +228,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
       </fieldset>
       {step === 'capabilities' && <fieldset disabled={saving}>
         {models.length === 1 ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">{modelDisplayName(models[0].config)}</p>
-            <ModelCapabilities model={models[0].config} protocol={protocol} idField="hidden" onChange={(config) => updateModel(models[0].key, config)} />
-          </div>
+          <ModelCapabilities model={models[0].config} protocol={protocol} idField="readonly" onChange={(config) => updateModel(models[0].key, config)} />
         ) : (
           <div className="divide-y rounded-lg border">
             {models.map((item, index) => {
@@ -241,7 +240,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
                   <span className="shrink-0 text-xs text-muted-foreground">{capabilitySummary(item.config, protocol)}</span>
                 </button>
                 {expanded && <div id={`capability-panel-${index}`} className="px-3 pt-1 pb-4">
-                  <ModelCapabilities model={item.config} protocol={protocol} index={index} idField="hidden" onChange={(config) => updateModel(item.key, config)} />
+                  <ModelCapabilities model={item.config} protocol={protocol} index={index} idField="readonly" onChange={(config) => updateModel(item.key, config)} />
                 </div>}
               </div>
             })}

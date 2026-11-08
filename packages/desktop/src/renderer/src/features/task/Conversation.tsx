@@ -239,6 +239,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   const stopLabel = turn.stopReason ? STOP_LABELS[turn.stopReason] : undefined
   const canRegenerate = last && (turn.kind === 'prompt' || turn.kind === 'goal')
   const canRestore = task.info.checkpoints && turn.kind !== 'compact'
+  // 和 FinishCard 显示撤销按钮的条件一致：撤销过但判成没改动的卡照样留着按钮
+  const cardRestore = turn.items.some((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0 && (!turn.restoredAt || finishVerdict(item).tone === 'nochange'))
 
   const copy = () => {
     const text = turn.items
@@ -327,10 +329,11 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
               <RefreshCw className="size-4" />
             </ActionButton>
           )}
-          {canRestore && (
+          {/* 完成卡上已经有撤销按钮，同一个动作不再放第二个按钮 */}
+          {canRestore && !cardRestore && (
             <>
               <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
-              <ActionButton label="撤销到这一轮之前" disabled={task.running} onClick={onRestore}>
+              <ActionButton label="撤销这一轮及之后的改动" disabled={task.running} onClick={onRestore}>
                 <Undo2 className="size-4" />
               </ActionButton>
             </>
@@ -1055,7 +1058,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
       {passed && files.length > 0 && !undone && (
         <div className="flex items-center gap-2">
           <Button variant={latest ? 'default' : 'outline'} size="sm" onClick={openReview}>审阅改动</Button>
-          {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销本轮</Button>}
+          {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销改动</Button>}
         </div>
       )}
     </div>

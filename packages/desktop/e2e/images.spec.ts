@@ -66,18 +66,18 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
     // 模型没开图片：不发，说明去哪里开，输入框里的内容留着
     await input.fill('这两张图是什么')
     await window.getByRole('button', { name: '发送', exact: true }).click()
-    await expect(window.getByRole('status')).toContainText('没有打开图片输入')
+    await expect(window.getByRole('status')).toContainText('没有打开「视觉」')
     await expect(input).toHaveValue('这两张图是什么')
     await expect(thumbnails).toHaveCount(2)
     expect(model.requests()).toBe(0)
 
-    // 在模型设置里打开「图片」，回首页再发
+    // 在模型设置里打开「视觉」，回首页再发
     await openModelsPage(window)
     await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
     await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
     const capabilities = window.getByRole('dialog')
-    await capabilities.getByRole('button', { name: '视觉', exact: true }).click()
-    await expect(capabilities.getByRole('button', { name: '视觉', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
+    await expect(capabilities.getByRole('checkbox', { name: '视觉', exact: true })).toBeChecked()
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
     await expect(capabilities).toBeHidden()
     await window.getByRole('button', { name: '返回' }).click()

@@ -30,7 +30,7 @@ export function ModelCapabilityDialog({ provider, model, onClose, onSaved }: { p
     finally { setSaving(false) }
   }
   return <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose() }}>
-    <DialogContent className="sm:max-w-lg">
+    <DialogContent className="top-[10vh] translate-y-0 sm:max-w-lg">
       <DialogHeader className="pr-8"><DialogTitle>配置模型能力</DialogTitle><DialogDescription>{provider.name} · {model ? '调整现有模型，不改变已保存的 API Key。' : '为此连接添加模型，校验通过后保存。'}</DialogDescription></DialogHeader>
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col gap-4">
         <DialogBody>

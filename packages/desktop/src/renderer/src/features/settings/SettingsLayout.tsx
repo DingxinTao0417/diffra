@@ -1,4 +1,5 @@
-import type { ComponentProps, ReactNode } from 'react'
+import { type ComponentProps, type ReactNode, useEffect, useState } from 'react'
+import { Check } from 'lucide-react'
 import { cn } from 'cn'
 
 export function SettingsHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
@@ -10,6 +11,40 @@ export function SettingsHeader({ title, description, actions }: { title: string;
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>
+  )
+}
+
+export type SavedFlash = { shown: boolean; withNote: boolean }
+
+// 自动保存成功后在页头短暂提示；连续改动会重新计时
+export function useSavedFlash(): [SavedFlash, (withNote?: boolean) => void] {
+  const [flash, setFlash] = useState({ at: 0, withNote: false })
+  useEffect(() => {
+    if (flash.at === 0) return
+    // 隐藏时保留 withNote，附加说明跟着一起淡出
+    const timer = setTimeout(() => setFlash((current) => ({ ...current, at: 0 })), 3000)
+    return () => clearTimeout(timer)
+  }, [flash.at])
+  return [{ shown: flash.at !== 0, withNote: flash.withNote }, (withNote = false) => setFlash({ at: Date.now(), withNote })]
+}
+
+export function SavedHint({ saved, note }: { saved: SavedFlash; note?: string }) {
+  // 看得见的部分只做淡出；读屏靠单独的 status 区域在内容变化时播报。
+  // 附加说明一直占位，第一次出现时不挤动副标题
+  return (
+    <span className="flex h-8 items-center">
+      <span
+        aria-hidden="true"
+        className={cn('flex items-center gap-2 text-xs text-muted-foreground', saved.shown ? 'opacity-100' : 'opacity-0 transition-opacity duration-300 motion-reduce:transition-none')}
+      >
+        <span className="flex items-center gap-1">
+          <Check className="size-3.5" />
+          已保存
+        </span>
+        {note && <span className={cn(!saved.withNote && 'invisible')}>{note}</span>}
+      </span>
+      <span role="status" className="sr-only">{saved.shown ? (note && saved.withNote ? `已保存，${note}` : '已保存') : ''}</span>
+    </span>
   )
 }
 

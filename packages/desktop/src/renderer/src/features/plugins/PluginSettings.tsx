@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Field } from '@/features/models/ProviderDialog'
-import { SettingsHeader } from '@/features/settings/SettingsLayout'
+import { SavedHint, SettingsHeader, useSavedFlash } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 
 export function PluginSettings() {
@@ -21,6 +21,7 @@ export function PluginSettings() {
   const [error, setError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
+  const [saved, flashSaved] = useSavedFlash()
 
   // 安装按钮一开始就能点：装完的结果比最初的列表先回来时，不能被晚到的旧列表盖掉
   useEffect(() => {
@@ -34,7 +35,11 @@ export function PluginSettings() {
     setError(null)
     try {
       const next = await action()
-      if (next) setPlugins(next)
+      // 从文件夹安装时取消选择会返回 null，不算保存
+      if (next) {
+        setPlugins(next)
+        flashSaved(true)
+      }
     } catch (caught) {
       setError(errorMessage(caught))
     }
@@ -63,8 +68,13 @@ export function PluginSettings() {
     <>
       <SettingsHeader
         title="插件"
-        description="一个插件可以带自定义命令、Skill 和 MCP 服务器，兼容 Claude Code 插件的格式。插件里的 MCP 服务器会在本机运行命令，只装信任的来源。新建或重新打开的任务生效。"
-        actions={empty ? undefined : installButtons}
+        description="插件能带来命令、Skill 和 MCP 服务器，只装信任的来源。"
+        actions={
+          <>
+            <SavedHint saved={saved} note="新任务生效" />
+            {!empty && installButtons}
+          </>
+        }
       />
 
       <div className="space-y-3">
@@ -84,7 +94,7 @@ export function PluginSettings() {
             title="还没有插件"
             description={
               <span>
-                装上插件，就能在斜杠菜单里用它带来的命令和 Skill
+                装上插件，就能在斜杠菜单里用它带来的命令和 Skill。
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -95,7 +105,7 @@ export function PluginSettings() {
                       <Info className="size-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>项目的 .diffra/commands 和 ~/.diffra/commands 里的 markdown 文件不用装插件，也会出现在斜杠菜单里</TooltipContent>
+                  <TooltipContent>项目的 .diffra/commands 和 ~/.diffra/commands 里的 markdown 文件不用装插件，也会出现在斜杠菜单里。</TooltipContent>
                 </Tooltip>
               </span>
             }
@@ -113,6 +123,7 @@ export function PluginSettings() {
           ))
         )}
       </div>
+      <p className="mt-4 text-sm text-muted-foreground">兼容 Claude Code 插件的格式。插件里的 MCP 服务器会在本机运行命令。</p>
 
       <GitInstallDialog
         open={gitOpen}
@@ -120,6 +131,7 @@ export function PluginSettings() {
         onInstalled={(next) => {
           setPlugins(next)
           setError(null)
+          flashSaved(true)
         }}
       />
     </>

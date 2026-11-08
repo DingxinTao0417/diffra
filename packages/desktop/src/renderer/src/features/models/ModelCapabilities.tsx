@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { REASONING_EFFORTS, type Protocol, type ReasoningEffort } from '@diffra/core/types'
-import { Check, Eye, Sparkles } from 'lucide-react'
-import { cn } from 'cn'
 import { MAX_MODEL_ID_LENGTH, MAX_MODEL_DISPLAY_NAME_LENGTH, CONTEXT_WINDOW_OPTIONS, type ModelConfig } from '../../../../shared/settings'
 import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { Segmented } from '@/components/ui/segmented'
 import { formatTokens } from '@/lib/format'
 import { Field, ReadonlyField } from './ProviderDialog'
@@ -40,8 +40,8 @@ export function capabilitySummary(model: ModelConfig, protocol: Protocol): strin
   return parts.filter(Boolean).join(' · ')
 }
 
-// idField：hidden 用于向导第二步（第一步已填过）；readonly 用于编辑已保存的模型
-export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' | 'hidden' }) {
+// idField：readonly 用于向导第二步（第一步已填过）和编辑已保存的模型
+export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' }) {
   const [customContext, setCustomContext] = useState(() => model.contextWindow !== null && !isPresetContext(model.contextWindow))
   const supportsEffort = protocol === 'openai-compatible' || protocol === 'openai-responses'
   const efforts = reasoningEffortsFor({ protocol }, model).filter((value) => value !== 'default')
@@ -50,9 +50,9 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
   const prefix = `capability-${index}`
   return (
     <div className="space-y-5" data-testid={`capabilities-${index}`}>
+      {idField === 'readonly' && <ReadonlyField label="模型 ID" value={model.id} mono />}
       <Field id={`${prefix}-name`} label="显示名称"><Input id={`${prefix}-name`} value={model.displayName ?? model.id} maxLength={MAX_MODEL_DISPLAY_NAME_LENGTH} onChange={(event) => onChange({ ...model, displayName: event.target.value })} /></Field>
       {idField === 'editable' && <Field id={`${prefix}-id`} label="模型 ID"><Input id={`${prefix}-id`} value={model.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => onChange({ ...model, id: event.target.value })} /></Field>}
-      {idField === 'readonly' && <ReadonlyField label="模型 ID" value={model.id} mono />}
       <div className="space-y-1.5">
         <p aria-hidden="true" className="text-sm leading-none">上下文长度</p>
         <Segmented size="sm" label="上下文长度" value={contextChoice} options={CONTEXT_CHOICES} onChange={(value) => {
@@ -71,13 +71,19 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
         </div>}
         <p className="text-xs text-muted-foreground">选「自动」时使用应用默认值。</p>
       </div>
-      <fieldset className="space-y-2">
+      {/* 勾选框在 form 里会多渲染一个绝对定位的隐藏 input，所在行要 relative，否则内容区滚动时它会撑出弹窗外层的滚动条 */}
+      <fieldset className="space-y-3">
         <legend className="mb-2 text-sm leading-none">能力</legend>
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" aria-pressed={model.images} className={cn('flex h-8 items-center justify-center gap-2 rounded-md border text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50', model.images && 'border-primary/40 bg-soft text-primary hover:bg-soft')} onClick={() => onChange({ ...model, images: !model.images })}><Eye className="size-3.5" />视觉</button>
-          <button type="button" aria-pressed={reasoningEnabled} disabled={!supportsEffort} className={cn('flex h-8 items-center justify-center gap-2 rounded-md border text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50', reasoningEnabled && 'border-primary/40 bg-soft text-primary hover:bg-soft')} onClick={() => onChange({ ...model, reasoningEfforts: reasoningEnabled ? [] : [...DEFAULT_ENABLED_REASONING_EFFORTS] })}><Sparkles className="size-3.5" />思考模式</button>
+        <div className="relative grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <Checkbox id={`${prefix}-images`} aria-describedby={`${prefix}-images-hint`} checked={model.images} onCheckedChange={() => onChange({ ...model, images: !model.images })} />
+          <Label htmlFor={`${prefix}-images`}>视觉</Label>
+          <p id={`${prefix}-images-hint`} className="col-start-2 text-xs text-muted-foreground">勾选后，输入框里的图片和浏览器截图会发给这个模型。</p>
         </div>
-        {!supportsEffort && <p className="text-xs text-muted-foreground">此协议暂不支持发送思考强度参数。</p>}
+        <div className="relative grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <Checkbox id={`${prefix}-reasoning`} aria-describedby={`${prefix}-reasoning-hint`} checked={reasoningEnabled} disabled={!supportsEffort} onCheckedChange={() => onChange({ ...model, reasoningEfforts: reasoningEnabled ? [] : [...DEFAULT_ENABLED_REASONING_EFFORTS] })} />
+          <Label htmlFor={`${prefix}-reasoning`}>思考模式</Label>
+          <p id={`${prefix}-reasoning-hint`} className="col-start-2 text-xs text-muted-foreground">{supportsEffort ? '勾选后，输入框里可以调思考强度。' : '此协议暂不支持发送思考强度参数。'}</p>
+        </div>
       </fieldset>
       {supportsEffort && reasoningEnabled && <div role="group" aria-labelledby={`${prefix}-efforts`} className="space-y-2">
         <div className="flex h-6 items-center justify-between">
@@ -87,9 +93,11 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {REASONING_EFFORTS.filter((value) => value !== 'default').map((effort) => {
             const checked = efforts.includes(effort)
-            return <button key={effort} type="button" role="checkbox" aria-checked={checked} aria-label={`${model.id} 思考 ${effort}`} title={effort} className={cn('flex h-7 items-center justify-center gap-1 rounded-md border text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring', checked ? 'border-primary/40 bg-soft text-primary hover:bg-soft' : 'text-muted-foreground')} onClick={() => onChange({ ...model, reasoningEfforts: checked ? efforts.filter((value) => value !== effort) : [...efforts, effort] })}>
-              {checked && <Check className="size-3" />}{EFFORT_LABELS[effort]}
-            </button>
+            const id = `${prefix}-effort-${effort}`
+            return <div key={effort} className="relative flex h-7 items-center gap-2">
+              <Checkbox id={id} checked={checked} onCheckedChange={() => onChange({ ...model, reasoningEfforts: checked ? efforts.filter((value) => value !== effort) : [...efforts, effort] })} />
+              <Label htmlFor={id}>{EFFORT_LABELS[effort]}</Label>
+            </div>
           })}
         </div>
         <p className="text-xs text-muted-foreground">只勾选服务商文档里列出的档位，输入框的思考滑条只显示这里勾选的档位。</p>

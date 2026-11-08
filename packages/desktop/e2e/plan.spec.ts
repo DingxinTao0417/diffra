@@ -47,10 +47,10 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     expect(existsSync(join(project, 'README.md'))).toBe(false)
     await expect(window.getByTestId('turn-actions').getByRole('button', { name: '重新生成' })).toHaveCount(0)
     await expect(window.getByRole('button', { name: '移除计划', exact: true })).toBeVisible()
-    // 任务监控里写明规划、兜底用的模型
+    // 任务监控里写明规划、备用用的模型
     const monitor = window.getByTestId('monitor-panel')
-    await expect(monitor).toContainText('同编码模型')
-    await expect(monitor).toContainText('未设置')
+    await expect(monitor).toContainText('沿用编码模型')
+    await expect(monitor).toContainText('不使用')
 
     const content = planCard.getByLabel('计划内容')
     await expect(content).toHaveValue(/1\. 新建 README\.md/)

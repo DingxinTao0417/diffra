@@ -4,11 +4,11 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { errorMessage } from '@/lib/errors'
 import { SettingsGroup, SettingsRow } from '../settings/SettingsLayout'
 
-export const ROLE_INFO: Record<Role, { label: string; description: string; required: boolean }> = {
-  coder: { label: '编码', description: '读代码、改代码、跑命令的主力模型', required: true },
-  planner: { label: '规划', description: '拆解任务、制定计划；不选时沿用编码模型', required: false },
-  reviewer: { label: '评审', description: '用新的上下文审查改动；不选时沿用编码模型', required: false },
-  fallback: { label: '备用', description: '卡住或连续失败时升级使用；不选就不升级', required: false },
+export const ROLE_INFO: Record<Role, { label: string; description: string; required: boolean; none: string }> = {
+  coder: { label: '编码', description: '读代码、改代码、跑命令的主力模型。', required: true, none: '未选择' },
+  planner: { label: '规划', description: '拆解任务、制定计划。', required: false, none: '沿用编码模型' },
+  reviewer: { label: '评审', description: '用新的上下文审查改动。', required: false, none: '沿用编码模型' },
+  fallback: { label: '备用', description: '编码模型卡住或连续失败时换它接手。', required: false, none: '不使用' },
 }
 
 // Radix Select 不接受空字符串作为选项值
@@ -64,7 +64,7 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
           <SettingsRow
             key={role}
             label={info.label}
-            hint={missing ? <span className="text-destructive">必选：未设置时无法开始任务</span> : info.description}
+            hint={missing ? <span className="text-destructive">必选：未选择时无法开始任务</span> : info.description}
           >
             <Select value={selectedValue} onValueChange={(value) => assign(role, value)} disabled={options.length === 0}>
               <SelectTrigger id={`role-${role}`} aria-label={info.label} aria-invalid={missing || undefined} className="w-64 bg-background">
@@ -72,11 +72,11 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
                 <SelectValue>
                   {selectedGroup && selectedOption ? (
                     <span className="truncate"><span className="text-muted-foreground">{selectedGroup.name} / </span>{selectedOption.name}</span>
-                  ) : info.required ? '未选择' : '不使用'}
+                  ) : info.none}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NONE}>{info.required ? '未选择' : '不使用'}</SelectItem>
+                <SelectItem value={NONE}>{info.none}</SelectItem>
                 {groups.length > 0 && <SelectSeparator />}
                 {groups.map((group) => (
                   <SelectGroup key={group.id}>

@@ -89,6 +89,7 @@ test('添加供应商、拉模型、测试连接、分配角色，重启后保�
     await row.getByRole('switch', { name: 'mock-a 启用', exact: true }).click()
     await coder.click()
     await window.getByRole('group', { name: '本地测试', exact: true }).getByRole('option', { name: '本地编码模型', exact: true }).click()
+    await expect(window.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存，新任务生效')
     await window.screenshot({ path: 'test-results/model-settings.png', fullPage: true })
     await app.close()
 

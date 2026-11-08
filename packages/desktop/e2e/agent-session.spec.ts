@@ -76,8 +76,9 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await window.keyboard.press('Escape')
     await window.screenshot({ path: 'test-results/agent-session.png' })
 
-    // 撤销这一轮：先列出受影响的文件，确认后恢复
-    await window.getByTestId('turn').getByRole('button', { name: '撤销到这一轮之前' }).click()
+    // 撤销这一轮：完成卡上有撤销按钮，操作栏就不再放 ↶；先列出受影响的文件，确认后恢复
+    await expect(window.getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' })).toHaveCount(0)
+    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
     const list = window.getByTestId('restore-list')
     await expect(list).toContainText('hello.txt')
     await expect(list).toContainText('done.txt')

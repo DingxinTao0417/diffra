@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { errorMessage } from '@/lib/errors'
-import { SettingsHeader } from '../settings/SettingsLayout'
+import { SavedHint, SettingsHeader, useSavedFlash } from '../settings/SettingsLayout'
 import { ProviderCard } from './ProviderCard'
 import { ProviderDialog } from './ProviderDialog'
 import { RolesCard } from './RolesCard'
@@ -14,6 +14,7 @@ export function ModelSettings() {
   const [view, setView] = useState<SettingsView | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<{ open: boolean; provider: ProviderView | null }>({ open: false, provider: null })
+  const [saved, flashSaved] = useSavedFlash()
 
   useEffect(() => {
     window.diffra.getSettings().then(setView, (error: unknown) => setReadError(errorMessage(error)))
@@ -32,6 +33,10 @@ export function ModelSettings() {
   const empty = view.providers.length === 0
   const hasModels = view.providers.some((provider) => provider.models.length > 0)
   const addProvider = () => setDialog({ open: true, provider: null })
+  const changed = (next: SettingsView) => {
+    setView(next)
+    flashSaved(true)
+  }
 
   return (
     <div>
@@ -39,13 +44,16 @@ export function ModelSettings() {
         title="模型与角色"
         description="用 API Key 接入模型服务，再给各个角色分配模型。"
         actions={
-          // 列表为空时添加按钮只放在空状态里，页头不重复
-          !empty && (
-            <Button onClick={addProvider} disabled={view.loadError !== null}>
-              <Plus />
-              添加模型服务
-            </Button>
-          )
+          <>
+            <SavedHint saved={saved} note="新任务生效" />
+            {/* 列表为空时添加按钮只放在空状态里，页头不重复 */}
+            {!empty && (
+              <Button onClick={addProvider} disabled={view.loadError !== null}>
+                <Plus />
+                添加模型服务
+              </Button>
+            )}
+          </>
         }
       />
 
@@ -70,16 +78,16 @@ export function ModelSettings() {
               key={provider.id}
               provider={provider}
               roles={view.roles}
-              onChange={setView}
+              onChange={changed}
               onEdit={() => setDialog({ open: true, provider })}
             />
           ))
         )}
 
         {hasModels ? (
-          <RolesCard view={view} onChange={setView} />
+          <RolesCard view={view} onChange={changed} />
         ) : (
-          !empty && <p className="text-sm text-muted-foreground">添加模型后可以在这里分配角色</p>
+          !empty && <p className="text-sm text-muted-foreground">添加模型后可以在这里分配角色。</p>
         )}
       </div>
 
@@ -87,7 +95,7 @@ export function ModelSettings() {
         open={dialog.open}
         provider={dialog.provider}
         onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}
-        onSaved={setView}
+        onSaved={changed}
       />
     </div>
   )

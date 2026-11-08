@@ -25,7 +25,7 @@ export function McpServerDialog({ open, server, onOpenChange, onSaved }: McpServ
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{server ? '编辑 MCP 服务器' : '添加 MCP 服务器'}</DialogTitle>
-          <DialogDescription>环境变量和请求头的值加密保存在本机，保存后不再显示。新建或重新打开的任务生效。</DialogDescription>
+          <DialogDescription>环境变量和请求头的值加密保存在本机，保存后不再显示。</DialogDescription>
         </DialogHeader>
         {/* 表单每次打开重新挂载，状态从 server 重新初始化 */}
         <McpServerForm
@@ -111,7 +111,7 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
         <Label>连接方式</Label>
         <Segmented label="连接方式" value={transport} options={TRANSPORT_OPTIONS} onChange={(value) => setTransport(value)} />
       </div>
-      <Field id="mcp-name" label="名称" hint="只能用字母、数字、- 和 _，会显示在工具名前">
+      <Field id="mcp-name" label="名称" hint="只能用字母、数字、- 和 _，会显示在工具名前。">
         <Input id="mcp-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="github" required />
       </Field>
       {stdio ? (

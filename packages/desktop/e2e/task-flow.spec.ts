@@ -32,7 +32,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await window.getByRole('button', { name: '未配置检查' }).click()
-    await window.getByLabel('改动后检查', { exact: true }).fill('echo check-ok')
+    await window.getByLabel('快速检查', { exact: true }).fill('echo check-ok')
     await window.getByRole('button', { name: '保存项目设置' }).click()
     await expect(window.getByRole('button', { name: '检查：echo check-ok' })).toBeVisible()
 
@@ -90,7 +90,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     expect(model.requests()).toBe(8)
 
     // 撤销到第一轮之前：文件恢复，新建的文件删掉
-    await window.getByTestId('turn').first().getByRole('button', { name: '撤销到这一轮之前' }).click()
+    await window.getByTestId('turn').first().getByRole('button', { name: '撤销改动', exact: true }).click()
     await expect(window.getByTestId('restore-list')).toContainText('greet.js')
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
     await window.getByTestId('restore-confirm').click()

@@ -352,7 +352,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       })
       // 模型不支持图片时 API 会直接报错，先在这里说明去哪里改
       if (images.length > 0 && !session.config.model.supportsImages) {
-        throw new Error(`当前模型 ${session.config.model.modelId} 没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」`)
+        throw new Error(`这个任务用的模型 ${session.config.model.modelId} 没有打开「视觉」，发不了图片。确认模型支持视觉后，到「设置 → 模型与角色」里，在这个模型的「配置能力」中打开「视觉」。设置里改过的，要新建任务或在输入框里重新选一次这个模型才生效`)
       }
       const skillNames = meta.success ? meta.data.diffra.skills : []
       const goal = meta.success && meta.data.diffra.goal

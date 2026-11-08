@@ -112,7 +112,7 @@ export function Composer(props: ComposerProps) {
   const [addingAttachments, setAddingAttachments] = useState(false)
   const attachmentBusy = useRef(false)
   const dragDepth = useRef(0)
-  // 当前模型打开了「图片」没有；对不上设置里的模型时为 null，交给 core 判断
+  // 当前模型打开了「视觉」没有；对不上设置里的模型时为 null，交给 core 判断
   const imagesSupported = useAppState((state) => {
     const ref = props.modelRef
     if (!ref) return null
@@ -354,7 +354,7 @@ export function Composer(props: ComposerProps) {
   const send = async (raw = false) => {
     if (!(raw ? ready : canSend) || attachmentBusy.current) return
     if (props.planMode && images.length > 0) return showToast('出计划暂时不能带图片，请移除图片或计划标签后再发送')
-    if (images.length > 0 && imagesSupported === false) return showToast('当前模型没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」')
+    if (images.length > 0 && imagesSupported === false) return showToast('当前模型没有打开「视觉」，发不了图片。确认模型支持视觉后，到「设置 → 模型与角色」里，在这个模型的「配置能力」中打开「视觉」')
     setSending(true)
     try {
       const text = promptWithFileReferences(draft.trim(), fileReferences)
@@ -735,7 +735,7 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
               }}
             >
               <div className="flex items-center justify-between text-sm">
-                <span id={reasoningLabelId}>思考程度</span>
+                <span id={reasoningLabelId}>思考强度</span>
                 <span className="text-muted-foreground">{REASONING_LABELS[effort]}</span>
               </div>
               <Slider
@@ -758,10 +758,9 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
           </>
         )}
         <DropdownMenuSeparator />
-        {!supportsReasoning && modelRef && <p className="px-3 py-2 text-xs text-muted-foreground">未配置此模型的思考档位，可在模型管理中设置。</p>}
         <DropdownMenuItem onSelect={() => openSettings('models')}>
           <Settings2 />
-          模型管理…
+          模型与角色…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

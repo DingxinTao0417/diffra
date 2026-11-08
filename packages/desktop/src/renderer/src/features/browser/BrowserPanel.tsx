@@ -142,14 +142,14 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
               title="在上面输入网址，或者让智能体打开网页"
               description={
                 <span className="inline-flex items-center gap-1">
-                  本地地址直接打开，外部网站会先征求你同意
+                  本地地址直接打开，外部网站会先征求你同意。
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button type="button" aria-label="登录状态说明" className="rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
                         <Info className="size-3.5" />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent>内置浏览器的登录状态和你自己的浏览器分开</TooltipContent>
+                    <TooltipContent>内置浏览器的登录状态和你自己的浏览器分开。</TooltipContent>
                   </Tooltip>
                 </span>
               }

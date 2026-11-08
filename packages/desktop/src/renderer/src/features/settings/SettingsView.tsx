@@ -51,7 +51,7 @@ import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
 import { PluginSettings } from '@/features/plugins/PluginSettings'
 import { TaskMenu } from '@/features/shell/TaskMenu'
-import { SettingsGroup, SettingsHeader, SettingsRow } from './SettingsLayout'
+import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
 import { UsageSection } from './UsageSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -187,7 +187,7 @@ function GeneralSection() {
     <>
       <SettingsHeader title="常规" />
       <SettingsGroup title="连接">
-        <SettingsRow label="智能体服务" hint="在后台运行任务的本地进程">
+        <SettingsRow label="智能体服务" hint="在后台运行任务的本地进程。">
           <CoreStatusView status={status} />
         </SettingsRow>
       </SettingsGroup>
@@ -230,6 +230,7 @@ const WIDTH_LABELS: Record<Appearance['contentWidth'], string> = { standard: '�
 
 function AppearanceSection() {
   const appearance = useAppState((state) => state.settings?.appearance ?? null)
+  const [saved, flashSaved] = useSavedFlash()
   if (!appearance) return null
 
   // 先在界面上生效再保存；保存失败就退回原来的外观
@@ -240,6 +241,7 @@ function AppearanceSection() {
     try {
       const settings = await window.diffra.savePreferences({ appearance: updated })
       store.set((state) => ({ ...state, settings }))
+      flashSaved()
     } catch (error) {
       applyAppearance(appearance)
       store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, appearance } } : state))
@@ -249,7 +251,7 @@ function AppearanceSection() {
 
   return (
     <>
-      <SettingsHeader title="外观" />
+      <SettingsHeader title="外观" actions={<SavedHint saved={saved} />} />
       <SettingsGroup data-testid="appearance-settings">
         <SettingsRow label="主题" hint="浅色、深色或跟随系统。">
           <Select value={appearance.theme} onValueChange={(value) => { const theme = THEME_MODES.find((item) => item === value); if (theme) void change({ theme }) }}>
@@ -287,7 +289,7 @@ function AppearanceSection() {
             })}
           </div>
         </div>
-        <SettingsRow label="字体风格" hint="对话内容使用无衬线或衬线字体。">
+        <SettingsRow label="字体风格" hint="对话内容使用无衬线或衬线字体，终端保持等宽。">
           <Select value={appearance.fontStyle ?? 'sans'} onValueChange={(value) => { const fontStyle = FONT_STYLES.find((item) => item === value); if (fontStyle) void change({ fontStyle }) }}>
             <SelectTrigger aria-label="字体风格" className="w-32"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="sans">无衬线</SelectItem><SelectItem value="serif">衬线</SelectItem></SelectContent>
@@ -306,35 +308,7 @@ function AppearanceSection() {
           </Select>
         </SettingsRow>
       </SettingsGroup>
-      <p className="mt-3 text-xs text-muted-foreground">设置立即生效并自动保存，所有项目共用。终端保留等宽字体，不随对话字体改变。</p>
     </>
-  )
-}
-
-// 自动保存成功后在页头短暂提示；连续改动会重新计时
-function useSavedFlash(): [boolean, () => void] {
-  const [savedAt, setSavedAt] = useState(0)
-  useEffect(() => {
-    if (savedAt === 0) return
-    const timer = setTimeout(() => setSavedAt(0), 1500)
-    return () => clearTimeout(timer)
-  }, [savedAt])
-  return [savedAt !== 0, () => setSavedAt(Date.now())]
-}
-
-function SavedHint({ shown }: { shown: boolean }) {
-  // 看得见的部分只做淡出；读屏靠单独的 status 区域在内容变化时播报
-  return (
-    <span className="flex h-8 items-center">
-      <span
-        aria-hidden="true"
-        className={cn('flex items-center gap-1 text-xs text-muted-foreground', shown ? 'opacity-100' : 'opacity-0 transition-opacity duration-300 motion-reduce:transition-none')}
-      >
-        <Check className="size-3.5" />
-        已保存
-      </span>
-      <span role="status" className="sr-only">{shown ? '已保存' : ''}</span>
-    </span>
   )
 }
 
@@ -362,14 +336,14 @@ function PermissionsSection() {
     if (next === mode) return
     await setPermissionMode(null, next)
     // setPermissionMode 失败时只弹 toast、不改设置，按存下来的值判断是否成功
-    if (store.get().settings?.defaultPermissionMode === next) flashSaved()
+    if (store.get().settings?.defaultPermissionMode === next) flashSaved(true)
   }
   return (
     <>
       <SettingsHeader
         title="命令权限"
-        description="智能体执行命令前要不要先问你。新任务用这里的默认值；在输入框里换了模式也会记成默认值。"
-        actions={<SavedHint shown={saved} />}
+        description="智能体执行命令前要不要先问你。"
+        actions={<SavedHint saved={saved} note="新任务生效" />}
       />
       <SettingsGroup role="radiogroup" aria-label="默认权限模式">
         {PERMISSION_MODES.map((item) => {
@@ -403,7 +377,7 @@ function PermissionsSection() {
         })}
       </SettingsGroup>
       <p className="mt-4 text-sm text-muted-foreground">
-        不管哪种模式：危险命令清单直接拦截；读写 .env、私钥等密钥文件和改动禁写目录的命令总要先问你。
+        在输入框里换了模式，也会记成这里的默认值。不管哪种模式：危险命令清单直接拦截；读写 .env、私钥等密钥文件和改动禁写目录的命令总要先问你。
       </p>
     </>
   )
@@ -431,7 +405,7 @@ const SECURITY_LEVELS: Array<{ key: keyof SecuritySettings; label: string; trigg
     label: '深度扫描',
     trigger: '手动',
     cost: '多次模型调用',
-    description: '在任务页显示深度扫描入口',
+    description: '在任务页显示深度扫描入口。',
     detail: '从任务页发起后，只读地跨文件追踪数据流，从外部输入一路查到危险调用，出一份报告，勾选后交给智能体修复。',
   },
 ]
@@ -447,7 +421,8 @@ function SecuritySection() {
     try {
       const settings = await window.diffra.savePreferences({ security: updated })
       store.set((state) => ({ ...state, settings }))
-      flashSaved()
+      // 深度扫描只控制任务页的入口，改了立即生效
+      flashSaved(key !== 'deepScan')
     } catch (error) {
       store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, security } } : state))
       showToast(`保存失败：${errorMessage(error)}`)
@@ -458,8 +433,8 @@ function SecuritySection() {
     <>
       <SettingsHeader
         title="安全"
-        description="让智能体写出的代码在完成前过安全检查，问题打回给它修。所有项目共用；新建或重新打开的任务生效。"
-        actions={<SavedHint shown={saved} />}
+        description="让智能体写出的代码在完成前过安全检查，问题打回给它修。"
+        actions={<SavedHint saved={saved} note="新任务生效" />}
       />
       <SettingsGroup data-testid="security-levels">
         {SECURITY_LEVELS.map((level) => (
@@ -508,7 +483,7 @@ function ExecutionSection() {
     try {
       const settings = await window.diffra.savePreferences({ execution: updated })
       store.set((state) => ({ ...state, settings }))
-      flashSaved()
+      flashSaved(true)
     } catch (error) {
       store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, execution } } : state))
       showToast(`保存失败：${errorMessage(error)}`)
@@ -530,7 +505,7 @@ function ExecutionSection() {
 
   return (
     <>
-      <SettingsHeader title="任务执行" description="所有项目共用；新建或重新打开的任务生效。" actions={<SavedHint shown={saved} />} />
+      <SettingsHeader title="任务执行" description="上下文快满时怎么压缩，单次任务最多跑多少步，目标模式最多跑几轮。" actions={<SavedHint saved={saved} note="新任务生效" />} />
       <SettingsGroup>
         <SettingsRow
           label="上下文压缩"

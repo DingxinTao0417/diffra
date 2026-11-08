@@ -83,6 +83,8 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
     }
   }
 
+  const confirmIndex = confirm ? task.turns.findIndex((turn) => turn.id === confirm.turnId) : -1
+
   return (
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
@@ -194,7 +196,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
-      <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
+      <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} turnNumber={confirmIndex >= 0 ? confirmIndex + 1 : null} lastTurn={confirmIndex >= 0 && confirmIndex === task.turns.length - 1} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
     </div>
   )
 }

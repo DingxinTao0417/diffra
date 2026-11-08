@@ -175,7 +175,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
                     设计
                   </button>
                 </TooltipTrigger>
-                <TooltipContent>设计任务：智能体在设计面板的画布上画界面</TooltipContent>
+                <TooltipContent>设计任务：智能体在设计面板的画布上画界面。</TooltipContent>
               </Tooltip>
             </>
           }
@@ -225,7 +225,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
                     <span className="truncate">规范：内置规则 · 完成前审查</span>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent>内置编码规范按项目语言全部生效，完成前按规范审查改动</TooltipContent>
+                <TooltipContent>内置编码规范按项目语言全部生效，完成前按规范审查改动。</TooltipContent>
               </Tooltip>
             )}
           </div>

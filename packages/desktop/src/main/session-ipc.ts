@@ -159,10 +159,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   const resolveModel = async (ref: ModelRef, label: string) => {
     const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
-    if (!provider || !model) throw new ModelConfigError('model-missing', `${label}指向的模型不存在，请到「模型」页重新选择`)
-    if (model.enabled === false) throw new ModelConfigError('model-missing', `${label}已停用，请到「模型」页启用或重新选择`)
+    if (!provider || !model) throw new ModelConfigError('model-missing', `${label}不存在，请到「设置 → 模型与角色」里重新选择`)
+    if (model.enabled === false) throw new ModelConfigError('model-missing', `${label}已停用，请到「设置 → 模型与角色」里启用或重新选择`)
     if (ref.reasoningEffort && !reasoningEffortsFor(provider, model).includes(ref.reasoningEffort)) {
-      throw new ModelConfigError('model-missing', `${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
+      throw new ModelConfigError('model-missing', `${label}不支持选中的思考强度，请重新选择，或到「设置 → 模型与角色」里勾选支持的档位`)
     }
     const target = await providerEndpoint(settings, secrets, provider.id)
     if (!target.ok) {
@@ -183,7 +183,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   const resolveRole = async (role: 'coder' | 'reviewer' | 'planner' | 'fallback', label: string) => {
     const ref = settings.get().roles[role]
-    return ref ? resolveModel(ref, `「${label}」角色`) : null
+    return ref ? resolveModel(ref, `「${label}」角色的模型`) : null
   }
 
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
@@ -230,12 +230,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     options: SessionOptions = {},
   ): Promise<{ config: SessionConfig; modelLabel: string; planLabel: string | null; fallbackLabel: string | null }> => {
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
-    if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「模型」页设置')
+    if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
     // 审查一直开着；没分配评审角色时 core 用编码模型审查
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
-    const fallback = await resolveRole('fallback', '兜底')
+    const fallback = await resolveRole('fallback', '备用')
     return {
       config: {
         model: coder.model,

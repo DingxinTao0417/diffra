@@ -88,7 +88,7 @@ function ReviewBody({ task, diff, files }: { task: LiveTask; diff: TaskDiff | nu
   if (task.turns.length === 0) return <EmptyState icon={FileDiffIcon} title="任务还没开始" />
   if (!diff || diff.state === 'loading') return <FileCardsSkeleton />
   if (diff.state === 'error') return <p className="text-sm text-destructive">{diff.message}</p>
-  if (files.length === 0) return <EmptyState icon={FileDiffIcon} title="这段时间没有文件改动" description="智能体改过的文件会在这里逐个列出" />
+  if (files.length === 0) return <EmptyState icon={FileDiffIcon} title="这段时间没有文件改动" description="智能体改过的文件会在这里逐个列出。" />
   return files.map((file) => <FileCard key={file.path} file={file} />)
 }
 

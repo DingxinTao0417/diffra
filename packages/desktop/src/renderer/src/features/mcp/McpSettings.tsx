@@ -11,7 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
-import { SettingsHeader } from '@/features/settings/SettingsLayout'
+import { SavedHint, SettingsHeader, useSavedFlash } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 import { McpServerDialog } from './McpServerDialog'
 import { useMcpStatus } from './useMcpStatus'
@@ -23,6 +23,7 @@ export function McpSettings() {
   // 配置改了重新查状态
   const [version, setVersion] = useState(0)
   const status = useMcpStatus(view ? { projectPath: null } : null, version)
+  const [saved, flashSaved] = useSavedFlash()
 
   useEffect(() => {
     window.diffra.getSettings().then(setView, (error: unknown) => setReadError(errorMessage(error)))
@@ -41,6 +42,7 @@ export function McpSettings() {
   const changed = (next: SettingsView) => {
     setView(next)
     setVersion((value) => value + 1)
+    flashSaved(true)
   }
   const empty = view.mcpServers.length === 0
   // 列表为空时添加按钮只放在空状态里，页头不重复
@@ -54,8 +56,13 @@ export function McpSettings() {
     <>
       <SettingsHeader
         title="MCP 服务器"
-        description="给智能体接上外部工具和提示词模板。本地命令在项目目录里启动，所有项目共用；新建或重新打开的任务生效。"
-        actions={empty ? undefined : addButton}
+        description="给智能体接上外部工具和提示词模板。"
+        actions={
+          <>
+            <SavedHint saved={saved} note="新任务生效" />
+            {!empty && addButton}
+          </>
+        }
       />
 
       <div className="space-y-3">
@@ -260,7 +267,7 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除 MCP 服务器「{server.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>保存的{stdio ? '环境变量' : '请求头'}的值会一起删除，新建或重新打开的任务不再带它的工具。</AlertDialogDescription>
+            <AlertDialogDescription>保存的{stdio ? '环境变量' : '请求头'}的值会一起删除，新任务不再带它的工具。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>

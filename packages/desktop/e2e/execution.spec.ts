@@ -48,6 +48,7 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     await maxSteps.getByRole('radio', { name: '无上限' }).click()
     await expect(maxSteps.getByRole('radio', { name: '无上限' })).toHaveAttribute('aria-checked', 'true')
     await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 90, maxSteps: null, goalMaxRounds: 5 })
+    await expect(window.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存，新任务生效')
     await window.screenshot({ path: 'test-results/execution-settings.png' })
     await window.getByRole('button', { name: '返回' }).click()
 
@@ -136,7 +137,7 @@ test('改了文件后卡住停下，撤销这一轮：结论改成未完成，�
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
     expect(model.requests()).toBe(8)
 
-    await window.getByTestId('turn').getByRole('button', { name: '撤销到这一轮之前' }).click()
+    await window.getByTestId('turn').getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
