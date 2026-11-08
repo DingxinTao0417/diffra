@@ -164,7 +164,7 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
             data-testid="mcp-status"
             className={cn(
               'inline-flex shrink-0 items-center gap-1.5 text-xs font-normal',
-              state === 'connected' ? 'text-success' : state === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+              state === 'failed' ? 'text-destructive' : 'text-muted-foreground',
             )}
           >
             {state === 'connecting' ? (
@@ -172,7 +172,7 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
             ) : (
               <span
                 aria-hidden
-                className={cn('size-2 rounded-full', state === 'connected' ? 'bg-success' : state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground/50')}
+                className={cn('size-2 rounded-full', state === 'connected' ? 'bg-muted-foreground' : state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground/50')}
               />
             )}
             {CONNECTION_LABELS[state]}

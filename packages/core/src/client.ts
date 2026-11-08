@@ -1,6 +1,7 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema } from './session/config.js'
+import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
   type CheckDetection,
@@ -217,7 +218,14 @@ export async function loadSession(
   })
   const diffra = response && typeof response._meta?.diffra === 'object' ? (response._meta.diffra as Partial<LoadedSession>) : null
   if (!diffra || !Array.isArray(diffra.turns)) throw new Error('core 的 session/load 响应缺少会话历史')
-  return { info: readSessionInfo({ diffra: diffra.info }), title: String(diffra.title ?? ''), turns: diffra.turns, design: diffra.design === true }
+  const taskState = taskProgressViewSchema.safeParse(diffra.taskState)
+  return {
+    info: readSessionInfo({ diffra: diffra.info }),
+    title: String(diffra.title ?? ''),
+    turns: diffra.turns,
+    ...(taskState.success ? { taskState: taskState.data } : {}),
+    design: diffra.design === true,
+  }
 }
 
 export async function listSessions(connection: acp.ClientConnection, cwd?: string): Promise<StoredSessionSummary[]> {
@@ -300,6 +308,7 @@ function readSessionInfo(meta: unknown): SessionInfo {
   const checkpoints = 'checkpoints' in diffra && diffra.checkpoints === true
   const packs = 'rulePacks' in diffra && Array.isArray(diffra.rulePacks) ? diffra.rulePacks : []
   const security = 'security' in diffra && typeof diffra.security === 'object' && diffra.security !== null ? diffra.security : {}
+  const checks = 'checks' in diffra && typeof diffra.checks === 'object' && diffra.checks !== null ? diffra.checks : null
   return {
     bashPath,
     checkpoints,
@@ -307,6 +316,10 @@ function readSessionInfo(meta: unknown): SessionInfo {
     security: {
       staticCheck: 'staticCheck' in security && security.staticCheck === true,
       lightScan: 'lightScan' in security && security.lightScan === true,
+    },
+    checks: checks && {
+      afterEdit: 'afterEdit' in checks && typeof checks.afterEdit === 'string' ? checks.afterEdit : null,
+      beforeFinish: 'beforeFinish' in checks && typeof checks.beforeFinish === 'string' ? checks.beforeFinish : null,
     },
   }
 }

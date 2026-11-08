@@ -339,7 +339,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
     if (loaded.design) designHost.enable(sessionId)
-    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns, design: loaded.design }
+    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns, taskState: loaded.taskState, design: loaded.design }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>

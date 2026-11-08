@@ -251,6 +251,8 @@ describe('依赖审计', () => {
     ])
     expect(result.notes.join('\n')).toContain('项目原有 1 个依赖漏洞')
     expect(result.notes.join('\n')).toContain('锁文件没变')
+    // 新依赖没进锁文件，审计里没有它们，只算审计了一部分
+    expect(result).toMatchObject({ complete: false, existing: 1 })
   })
 
   test('npm：中危只提醒；yarn 项目说明暂不支持', async () => {
@@ -259,10 +261,43 @@ describe('依赖审计', () => {
     const added: AddedLines = new Map([['package.json', new Map([[3, '    "axios": "1.6.0"']])], ['package-lock.json', new Map([[1, '{']])]])
     const result = await auditDependencies(project, added, await findBash(), new AbortController().signal)
     expect(result.findings.map((item) => [item.severity, item.message.includes('axios@1.7.4')])).toEqual([['medium', true]])
+    expect(result).toMatchObject({ complete: true, existing: 0 })
 
     writeFileSync(join(project, 'yarn.lock'), '')
     rmSync(join(project, 'package-lock.json'), { force: true })
     const yarn = await auditDependencies(project, new Map([['package.json', new Map([[3, '    "axios": "1.6.0"']])]]), await findBash(), new AbortController().signal)
     expect(yarn.notes).toContain('yarn 项目暂不支持依赖审计')
+    expect(yarn.complete).toBe(false)
+  })
+
+  test('npm 输出 error 对象时（如没有锁文件）记为没跑完，不说没有漏洞', async () => {
+    fakeTool('npm', { error: { code: 'ENOLOCK', summary: 'This command requires an existing lockfile.', detail: 'Try creating one first with: npm i --package-lock-only' } })
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ dependencies: { axios: '1.6.0' } }, null, 2))
+    const added: AddedLines = new Map([['package.json', new Map([[3, '    "axios": "1.6.0"']])], ['package-lock.json', new Map([[1, '{']])]])
+    const result = await auditDependencies(project, added, await findBash(), new AbortController().signal)
+    expect(result).toMatchObject({ complete: false, existing: 0, findings: [] })
+    expect(result.notes).toEqual(['依赖审计没有完成，这次不拦截：This command requires an existing lockfile.'])
+  })
+
+  test('Python：没有虚拟环境时记为没跑完；有时本轮加的依赖打回，原有的只计数', async () => {
+    const added: AddedLines = new Map([['requirements.txt', new Map([[2, 'requests==2.19.0']])]])
+    const missing = await auditDependencies(project, added, await findBash(), new AbortController().signal)
+    expect(missing).toMatchObject({ complete: false, existing: 0, findings: [] })
+    expect(missing.notes).toEqual(['没找到项目的虚拟环境，跳过了 Python 依赖审计'])
+
+    const report = {
+      dependencies: [
+        { name: 'requests', version: '2.19.0', vulns: [{ id: 'PYSEC-2018-28', fix_versions: ['2.20.0'] }] },
+        { name: 'urllib3', version: '1.24.0', vulns: [{ id: 'PYSEC-2019-133', fix_versions: [] }] },
+      ],
+    }
+    mkdirSync(join(project, '.venv', 'bin'), { recursive: true })
+    writeFileSync(join(project, '.venv', 'bin', 'python'), `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(report)}\nJSON\nexit 1\n`, { mode: 0o755 })
+    const result = await auditDependencies(project, added, await findBash(), new AbortController().signal)
+    expect(result.findings).toEqual([
+      expect.objectContaining({ ruleId: 'DEP-VULN', severity: 'high', path: 'requirements.txt', line: 2, message: expect.stringContaining('升级到 2.20.0') }),
+    ])
+    expect(result).toMatchObject({ complete: true, existing: 1 })
+    expect(result.notes).toEqual(['项目原有 1 个 Python 依赖漏洞，和本轮改动无关，没有计入'])
   })
 })

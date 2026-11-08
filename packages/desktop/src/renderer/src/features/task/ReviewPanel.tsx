@@ -63,7 +63,7 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
             <Button
               size="sm"
               variant="ghost"
-              className="text-destructive hover:bg-destructive-soft hover:text-destructive disabled:text-muted-foreground"
+              className="text-muted-foreground hover:bg-destructive-soft hover:text-destructive dark:hover:bg-destructive-soft"
               disabled={task.running || files.length === 0 || !sinceTurnId}
               onClick={() => sinceTurnId && onRestore(sinceTurnId)}
             >
@@ -115,8 +115,8 @@ function FileCardsSkeleton() {
 }
 
 const STATUS_BADGES: Record<FileDiff['status'], React.ReactNode> = {
-  added: <Badge variant="success">新文件</Badge>,
-  deleted: <Badge variant="destructive">已删除</Badge>,
+  added: <Badge variant="outline">新文件</Badge>,
+  deleted: <Badge variant="outline">已删除</Badge>,
   modified: null,
 }
 

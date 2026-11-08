@@ -191,7 +191,7 @@ function highlightMatch(value: string, needle: string): ReactNode {
   while (at >= 0) {
     if (at > from) parts.push(value.slice(from, at))
     parts.push(
-      <mark key={at} className="rounded-sm bg-warning-soft px-0.5 text-foreground">
+      <mark key={at} className="rounded-sm bg-highlight px-0.5 text-foreground">
         {value.slice(at, at + target.length)}
       </mark>,
     )

@@ -79,6 +79,23 @@ export interface TaskProgressView {
   status: 'running' | 'waiting' | 'blocked' | 'cancelled' | 'completed'
   reason: string | null
   requirements: Array<{ id: string; title: string; receiptId: string | null }>
+  // 有改动还没经过完成门禁（撤销之后、或带着未验证的改动停下）
+  needsVerification?: boolean
+}
+
+// 检查命令、静态检查、轻量扫描、规范审查卡片结束时的 tool_call_update._meta.diffra.result。ACP 的 status 照旧：
+// warned 只有提醒或附注；partial 只看了一部分（改动被截断、依赖审计没跑完）；error 工具或评审模型出错，这次不拦截
+export type CheckResult = 'passed' | 'warned' | 'partial' | 'error' | 'failed'
+// 完成卡和 verify_changes 卡的 _meta.diffra.verification；reused 是复用了这份工作区已经通过的验证
+export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edits' | 'failed'
+// 一轮结束时的 session_info_update._meta.diffra.turnOutcome，和 taskState 在同一条更新里，每轮只发一次。
+// finish 是本轮所有被接受的 finish 合并后的值（unverified > verified > no-edits，reused 算 verified），没有被接受的 finish 为 null；
+// stop 是没走到「finish 被接受」就停下的原因，正常结束为 null
+export const TURN_OUTCOME_META_KEY = 'turnOutcome'
+export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted'
+export interface TurnOutcome {
+  finish: 'verified' | 'unverified' | 'no-edits' | null
+  stop: TurnStop | null
 }
 
 export const TERMINAL_DEFAULT_LINES = 80
@@ -143,6 +160,8 @@ export interface SessionInfo {
   rulePacks: string[]
   // 这个会话实际生效的安全检查开关（建会话时的设置）
   security: SessionSecurity
+  // 这个会话实际生效的检查命令（建会话时的设置）；旧版 core 没有这一项时为 null
+  checks?: SessionChecks | null
 }
 
 export interface CheckpointChange {
@@ -308,6 +327,8 @@ export interface LoadedSession {
   info: SessionInfo
   title: string
   turns: StoredTurn[]
+  // core 当前的任务状态，比最后一轮里的快照新（撤销、应用退出都会改它）
+  taskState?: TaskProgressView
   design: boolean
 }
 

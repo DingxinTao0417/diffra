@@ -116,9 +116,9 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         <Section title="检查" action={<SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
           {checks && (
             <>
-              <Row status={checks.afterEdit ? 'ok' : 'off'} label="快速检查" value={checks.afterEdit ?? '未配置'} mono={!!checks.afterEdit} />
+              <Row status={checks.afterEdit ? 'on' : 'off'} label="快速检查" value={checks.afterEdit ?? '未配置'} mono={!!checks.afterEdit} />
               <Row
-                status={checks.beforeFinish || checks.afterEdit ? 'ok' : 'off'}
+                status={checks.beforeFinish || checks.afterEdit ? 'on' : 'off'}
                 label="完成检查"
                 value={checks.beforeFinish ?? (checks.afterEdit ? '同快速检查' : '未配置')}
                 mono={!!checks.beforeFinish}
@@ -135,18 +135,20 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
             </SectionAction>
           }
         >
-          <Row status={task.info.security.staticCheck ? 'ok' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
-          <Row status={task.info.security.lightScan ? 'ok' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
+          <Row status={task.info.security.staticCheck ? 'on' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
+          <Row status={task.info.security.lightScan ? 'on' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
         </Section>
 
         <Section title="规范">
-          <Row status="ok" label="完成前规范审查已开" />
-          <div className="flex gap-2">
-            <span className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
-              {task.info.rulePacks.length > 0 ? task.info.rulePacks.join('、') : '没有选中的规则包'}
-            </span>
-          </div>
+          {task.info.rulePacks.length > 0 ? <Row status="on" label="完成前规范审查" value="已开" /> : <Row status="off" label="没有选中的规则包，不会审查" />}
+          {task.info.rulePacks.length > 0 && (
+            <div className="flex gap-2">
+              <span className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
+                {task.info.rulePacks.join('、')}
+              </span>
+            </div>
+          )}
         </Section>
 
         {deepScanEnabled && (
@@ -220,7 +222,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
                 {mcp.statuses.map((server) => (
                   <Row
                     key={server.name}
-                    status={server.state === 'connected' ? 'ok' : 'bad'}
+                    status={server.state === 'connected' ? 'on' : 'bad'}
                     label={server.name}
                     value={server.state === 'connected' ? `${server.tools.length} 个工具` : '连接失败'}
                   />
@@ -230,13 +232,13 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
 
             <Section title="项目保护">
               <Row label="禁止修改的目录" value={project && project.readOnlyPaths.length > 0 ? project.readOnlyPaths.join(', ') : '无'} mono={!!project?.readOnlyPaths.length} />
-              <Row status="ok" label="密钥文件" value="不读进模型" title=".env、私钥等密钥文件不会读进模型" />
+              <Row status="on" label="密钥文件" value="不读进模型" title=".env、私钥等密钥文件不会读进模型" />
             </Section>
 
             <Section title="环境">
               <Row label="分支" value={branch ?? '不是 Git 仓库'} />
-              <Row status={task.info.checkpoints ? 'ok' : 'bad'} label="检查点" value={task.info.checkpoints ? '可撤销' : '不可用（需要 Git）'} />
-              <Row status={task.info.bashPath ? 'ok' : 'bad'} label="命令执行" value={task.info.bashPath ? 'Git Bash' : '没找到 Git Bash'} />
+              <Row status={task.info.checkpoints ? 'on' : 'bad'} label="检查点" value={task.info.checkpoints ? '可撤销' : '不可用（需要 Git）'} />
+              <Row status={task.info.bashPath ? 'on' : 'bad'} label="命令执行" value={task.info.bashPath ? 'Git Bash' : '没找到 Git Bash'} />
             </Section>
           </div>
         </section>
@@ -304,6 +306,7 @@ function Section({ title, hint, action, children }: { title: string; hint?: stri
 
 const STATUS_ICONS = {
   ok: <CircleCheck className="size-3.5 shrink-0 text-success" />,
+  on: <CircleCheck className="size-3.5 shrink-0 text-muted-foreground" />,
   off: <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />,
   bad: <CircleX className="size-3.5 shrink-0 text-destructive" />,
 }

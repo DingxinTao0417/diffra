@@ -4,12 +4,12 @@ import type { DiffLine } from '@/lib/unified-diff'
 const MARKERS: Record<DiffLine['kind'], string> = { add: '+', remove: '−', context: '' }
 
 const ROW_CLASSES: Record<DiffLine['kind'], string> = {
-  add: 'bg-diff-add shadow-[inset_2px_0_0_var(--success)]',
-  remove: 'bg-diff-del shadow-[inset_2px_0_0_var(--destructive)]',
+  add: 'bg-diff-add shadow-[inset_2px_0_0_var(--diff-add-fg)]',
+  remove: 'bg-diff-del shadow-[inset_2px_0_0_var(--diff-del-fg)]',
   context: '',
 }
 
-const MARKER_CLASSES: Record<DiffLine['kind'], string> = { add: 'text-success', remove: 'text-destructive', context: '' }
+const MARKER_CLASSES: Record<DiffLine['kind'], string> = { add: 'text-diff-add-fg', remove: 'text-diff-del-fg', context: '' }
 
 // 对话里的改动卡片和审阅面板共用的代码区：旧行号 | 新行号 | 标记 | 代码。
 // 新建文件没有旧行号、删除文件没有新行号，那一列整列不画，把宽度留给代码

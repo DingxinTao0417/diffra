@@ -52,6 +52,9 @@
   --color-destructive-soft: var(--destructive-soft);
   --color-diff-add: var(--diff-add-bg);
   --color-diff-del: var(--diff-del-bg);
+  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-del-fg: var(--diff-del-fg);
+  --color-highlight: var(--highlight);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -99,8 +102,11 @@
   --success-soft: #e9f6ee;
   --warning: #b54708;
   --warning-soft: #fdf3e8;
-  --diff-add-bg: #e9f6ee;
+  --diff-add-bg: #def2eb;
   --diff-del-bg: #fdeeec;
+  --diff-add-fg: #17736a;
+  --diff-del-fg: #b3362b;
+  --highlight: #cfdcef;
   --chart-1: var(--primary);
   --chart-2: #4f7cac;
   /* 不用 warning：用量接近上限时总量条才用 warning，同一个弹层里同一种颜色不能有两个意思 */
@@ -161,8 +167,11 @@
   --success-soft: #15291f;
   --warning: #e3a35c;
   --warning-soft: #2f2416;
-  --diff-add-bg: #15291f;
+  --diff-add-bg: #132826;
   --diff-del-bg: #2f1a18;
+  --diff-add-fg: #5ebfae;
+  --diff-del-fg: #ee8278;
+  --highlight: #2c3a4f;
   --chart-2: #7ea6d6;
   --chart-3: #b49ad8;
   --chart-4: #8a8983;

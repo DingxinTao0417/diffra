@@ -217,7 +217,7 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
     const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
     const live: LiveTask = {
       ...liveFrom(loaded, task.cwd, loaded.title),
-      progress: loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
+      progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
       turns: loaded.turns.map(turnFromStored),
       usage: lastUsage(loaded.turns),
     }

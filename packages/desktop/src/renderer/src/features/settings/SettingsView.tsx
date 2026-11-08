@@ -209,7 +209,7 @@ function CoreStatusView({ status }: { status: CoreStatus | null }) {
   return (
     <div className="flex max-w-80 flex-col items-end gap-0.5 text-right" data-testid="core-status">
       <span className="flex items-center gap-1.5 text-sm">
-        <span className={cn('size-1.5 shrink-0 rounded-full', status === null ? 'animate-pulse bg-muted-foreground' : status.state === 'failed' ? 'bg-destructive' : 'bg-success')} />
+        <span className={cn('size-1.5 shrink-0 rounded-full', status === null ? 'animate-pulse bg-muted-foreground' : status.state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground')} />
         {headline}
       </span>
       {detail && <span className={cn('text-xs break-words select-text', status?.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>{detail}</span>}

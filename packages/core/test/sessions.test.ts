@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable, Writable } from 'node:stream'
@@ -7,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createAgent } from '../src/agent.js'
 import { McpPool } from '../src/mcp.js'
 import {
+  cancelSession,
   checkpointDiff,
   configureSession,
   compactSession,
@@ -23,6 +26,7 @@ import {
   mcpStatus,
   plan,
   previewCheckpoint,
+  restoreCheckpoint,
   rewindSession,
   searchSessions,
   sendPrompt,
@@ -36,10 +40,12 @@ import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
 let project: string
 let dataDir: string
 let server: ScriptedServer | null = null
+let notifications: acp.SessionNotification[] = []
 
 beforeEach(() => {
   project = mkdtempSync(join(tmpdir(), 'diffra-sessions-project-'))
   dataDir = mkdtempSync(join(tmpdir(), 'diffra-sessions-data-'))
+  notifications = []
 })
 
 afterEach(async () => {
@@ -55,11 +61,18 @@ async function startCore(mcpPool?: McpPool) {
   const toClient = new PassThrough()
   createAgent({ sessionsDir: join(dataDir, 'sessions'), mcpPool }).connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
   const connection = connectToCore(toAgent, toClient, {
-    onSessionUpdate: () => {},
+    onSessionUpdate: (notification) => notifications.push(notification),
     onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
   })
   await handshake(connection, 5000)
   return connection
+}
+
+function lastTaskState(sessionId: string): unknown {
+  const metas = notifications.flatMap(({ sessionId: id, update }) =>
+    id === sessionId && update.sessionUpdate === 'session_info_update' && update._meta ? [update._meta.diffra as Record<string, unknown>] : [],
+  )
+  return metas.filter((meta) => 'taskState' in meta).at(-1)?.taskState
 }
 
 function config(baseUrl: string): SessionConfig {
@@ -149,6 +162,115 @@ describe('会话持久化', () => {
     expect(existsSync(join(dataDir, 'sessions', `${sessionId}.json`))).toBe(false)
   })
 
+  test('加载带上 core 当前的任务状态；撤销之后发出待重新验证的状态，并且存盘', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+    ])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '写一个 a.txt')
+
+    const second = await startCore()
+    const loaded = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(loaded.taskState).toEqual({ status: 'completed', reason: null, requirements: [], needsVerification: false })
+
+    notifications = []
+    expect(await restoreCheckpoint(second, sessionId, 'turn-1')).toEqual([{ path: 'a.txt', change: 'added' }])
+    const restored = { status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。', requirements: [], needsVerification: true }
+    expect(lastTaskState(sessionId)).toEqual(restored)
+
+    const third = await startCore()
+    expect((await loadSession(third, sessionId, project, config(server.baseUrl))).taskState).toEqual(restored)
+  })
+
+  test('应用退出时停在运行中的任务，加载后是受阻', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '你好')
+    const file = join(dataDir, 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { taskState: { status: string }; turns: Array<{ endedAt: string | null; stopReason: string | null }> }
+    record.taskState.status = 'running'
+    record.turns[0]!.endedAt = null
+    record.turns[0]!.stopReason = null
+    writeFileSync(file, JSON.stringify(record))
+
+    const loaded = await loadSession(await startCore(), sessionId, project, config(server.baseUrl))
+    expect(loaded.taskState).toMatchObject({ status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' })
+  })
+
+  test('没有确定的任务状态时，加载不带任务状态，也不说应用退出过', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '你好')
+    const file = join(dataDir, 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { taskState?: { status: string } }
+
+    // 只跑过出计划、深度扫描、压缩，或者撤销后还没开始新一轮：存下来的是初始的 running
+    record.taskState!.status = 'running'
+    writeFileSync(file, JSON.stringify(record))
+    expect((await loadSession(await startCore(), sessionId, project, config(server.baseUrl))).taskState).toBeUndefined()
+
+    // 旧版记录没有 taskState
+    delete record.taskState
+    writeFileSync(file, JSON.stringify(record))
+    expect((await loadSession(await startCore(), sessionId, project, config(server.baseUrl))).taskState).toBeUndefined()
+  })
+
+  test('任务进行中加载，带上运行中的任务状态', async () => {
+    let received: () => void = () => {}
+    const requested = new Promise<void>((resolve) => (received = resolve))
+    const hanging = createServer((req) => {
+      req.resume()
+      received()
+    })
+    await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve))
+    const { port } = hanging.address() as AddressInfo
+    try {
+      const core = await startCore()
+      const { sessionId } = await createSession(core, project, config(`http://127.0.0.1:${port}/v1`))
+      const turn = sendPrompt(core, sessionId, 'turn-1', '你好')
+      await requested
+      const loaded = await loadSession(core, sessionId, project, config(`http://127.0.0.1:${port}/v1`))
+      expect(loaded.taskState).toEqual({ status: 'running', reason: null, requirements: [], needsVerification: false })
+      await cancelSession(core, sessionId)
+      expect((await turn).stopReason).toBe('cancelled')
+    } finally {
+      hanging.closeAllConnections()
+      await new Promise<void>((resolve) => hanging.close(() => resolve()))
+    }
+  })
+
+  test('core 返回不合法的任务状态时丢掉，缺检查命令时为 null', async () => {
+    const toAgent = new PassThrough()
+    const toClient = new PassThrough()
+    acp
+      .agent({ name: 'fake-core' })
+      .onRequest(acp.methods.agent.session.load, () => ({ _meta: { diffra: { info: {}, title: '旧任务', turns: [], taskState: { status: 'unknown' } } } }))
+      .connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
+    const connection = connectToCore(toAgent, toClient, {
+      onSessionUpdate: () => {},
+      onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
+    })
+    const loaded = await loadSession(connection, 'fake', project, config('http://127.0.0.1:1/v1'))
+    expect(loaded.title).toBe('旧任务')
+    expect(loaded.taskState).toBeUndefined()
+    expect(loaded.info.checks).toBeNull()
+  })
+
+  test('新建和加载都返回这个会话实际生效的检查命令', async () => {
+    server = await startScriptedServer([])
+    const core = await startCore()
+    const checks = { afterEdit: 'pnpm typecheck', beforeFinish: null }
+    const { sessionId, info } = await createSession(core, project, { ...config(server.baseUrl), checks })
+    expect(info.checks).toEqual(checks)
+    const changed = { afterEdit: null, beforeFinish: 'pnpm test' }
+    const loaded = await loadSession(core, sessionId, project, { ...config(server.baseUrl), checks: changed })
+    expect(loaded.info.checks).toEqual(changed)
+  })
+
   test('只建了会话、没发过任务时不留记录', async () => {
     server = await startScriptedServer([])
     const core = await startCore()
@@ -211,7 +333,9 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(diff).toContain('+++ b/b.txt')
     expect(diff).toContain('+++ b/c.txt')
 
+    notifications = []
     expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(lastTaskState(sessionId)).toEqual({ status: 'running', reason: null, requirements: [], needsVerification: false })
     expect(existsSync(join(project, 'c.txt'))).toBe(false)
     expect(readFileSync(join(project, 'b.txt'), 'utf8')).toBe('first\n')
 
