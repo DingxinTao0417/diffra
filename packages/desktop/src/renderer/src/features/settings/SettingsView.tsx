@@ -50,6 +50,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
 import { PluginSettings } from '@/features/plugins/PluginSettings'
+import { BrandMark } from '@/features/shell/BrandMark'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
 import { UsageSection } from './UsageSection'
@@ -635,13 +636,7 @@ function AboutSection() {
       <SettingsHeader title="更新与关于" />
       <SettingsGroup>
         <div className="flex items-center gap-3 px-4 py-4">
-          {/* primary-color-allow: 品牌标 */}
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-soft text-primary">
-            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="size-5" aria-hidden="true">
-              <path d="M2.5 6.5h8.5" />
-              <path d="M7 11.5h8.5" />
-            </svg>
-          </span>
+          <BrandMark className="size-10" />
           <div className="min-w-0">
             <div className="text-lg font-semibold">Diffra</div>
             <div className="text-sm text-muted-foreground tabular-nums">
