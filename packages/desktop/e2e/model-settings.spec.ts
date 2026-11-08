@@ -134,3 +134,37 @@ test('添加供应商、拉模型、测试连接、分配角色，重启后保�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+test('添加模型时工具调用探测：默认先思考的模型能加上；不调工具的模型说明原因', async () => {
+  const userDataDir = makeUserDataDir()
+  const mock = await startMockProvider()
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await openModelsPage(window)
+    const add = async (modelId: string) => {
+      await window.getByRole('button', { name: '添加模型服务', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      await dialog.getByRole('combobox', { name: '供应商', exact: true }).click()
+      await window.getByRole('option', { name: '自定义', exact: true }).click()
+      await dialog.getByLabel('名称', { exact: true }).fill(`服务 ${modelId}`)
+      await dialog.getByLabel('地址', { exact: true }).fill(`${mock.baseUrl}/openai/v1`)
+      await dialog.getByLabel('API Key', { exact: true }).fill(GOOD_KEY)
+      await dialog.getByRole('textbox', { name: '模型 ID 1', exact: true }).fill(modelId)
+      await dialog.getByRole('button', { name: '下一步', exact: true }).click()
+      await dialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
+      return dialog
+    }
+
+    const thinking = await add('mock-thinking')
+    await expect(thinking).toBeHidden()
+    await expect(providerCard(window, '服务 mock-thinking').getByTestId('model-row-mock-thinking')).toBeVisible()
+
+    const noTools = await add('mock-no-tools')
+    await expect(noTools).toContainText('mock-no-tools 不支持工具调用，暂时无法用于编程任务（模型没有按要求调用工具）')
+  } finally {
+    await app.close()
+    await mock.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

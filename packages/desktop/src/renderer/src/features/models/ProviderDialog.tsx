@@ -115,7 +115,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
       for (const model of configured.filter((item) => item.enabled !== false)) {
         const result = await window.diffra.validateProviderModel(input, model.id)
         if (!result.ok) { setError(`${model.id}：${result.error.message}`); return }
-        if (!result.tools.supported) { setError(`${model.id} 不支持工具调用，暂时无法用于编程任务`); return }
+        if (!result.tools.supported) { setError(`${model.id} 不支持工具调用，暂时无法用于编程任务（${result.tools.detail ?? '原因未知'}）`); return }
       }
       onSaved(await window.diffra.saveProvider(input))
     } catch (caught) {
