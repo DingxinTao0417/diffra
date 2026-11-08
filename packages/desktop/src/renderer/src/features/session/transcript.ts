@@ -1,5 +1,5 @@
-import { TASK_PROGRESS_META_KEY, type TaskProgressView } from '@diffra/core/types'
-import type { PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
+import { TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
+import type { CheckResult, FinishVerification, PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -16,6 +16,10 @@ export type TranscriptItem =
       succeeded?: boolean
       // 只有完成卡带：没配检查命令，改动未经自动验证。旧记录没有这个字段，那句话还在总结正文里
       unverified?: boolean
+      // 检查命令、静态检查、轻量扫描、规范审查卡带：检查结论。旧记录没有
+      result?: CheckResult
+      // 完成卡和 verify_changes 卡带：这次完成的验证方式。旧记录没有
+      verification?: FinishVerification
       // 收到开始的时刻，运行中的行据此显示已用时间。重放历史记录时不带，免得没跑完的旧调用从打开时开始计时
       startedAt?: number
     }
@@ -34,6 +38,8 @@ export interface Turn {
   error: string | null
   startedAt: number | null
   endedAt: number | null
+  // core 在一轮结束时给的结论；plan、deep-scan、compact 轮和旧记录没有
+  outcome?: TurnOutcome
 }
 
 export interface Usage {
@@ -63,6 +69,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     error: null,
     startedAt: Date.parse(turn.startedAt) || null,
     endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
+    outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
   }
 }
 
@@ -82,7 +89,31 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
     if (typeof item !== 'object' || item === null || typeof item.id !== 'string' || typeof item.title !== 'string' || (item.receiptId !== null && typeof item.receiptId !== 'string')) return null
     validated.push({ id: item.id, title: item.title, receiptId: item.receiptId })
   }
-  return { status, reason, requirements: validated }
+  const needsVerification = 'needsVerification' in progress ? progress.needsVerification : undefined
+  if (needsVerification !== undefined && typeof needsVerification !== 'boolean') return null
+  return { status, reason, requirements: validated, needsVerification }
+}
+
+const FINISH_OUTCOMES = ['verified', 'unverified', 'no-edits'] as const satisfies readonly NonNullable<TurnOutcome['finish']>[]
+const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted'] as const satisfies readonly TurnStop[]
+const CHECK_RESULTS = ['passed', 'warned', 'partial', 'error', 'failed'] as const satisfies readonly CheckResult[]
+const FINISH_VERIFICATIONS = ['verified', 'reused', 'unverified', 'no-edits', 'failed'] as const satisfies readonly FinishVerification[]
+
+function oneOf<T extends string>(values: readonly T[], value: unknown): value is T {
+  return (values as readonly unknown[]).includes(value)
+}
+
+export function turnOutcomeOf(update: SessionUpdate): TurnOutcome | null {
+  const meta: unknown = update._meta
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return null
+  const diffra = meta.diffra
+  if (typeof diffra !== 'object' || diffra === null || !(TURN_OUTCOME_META_KEY in diffra)) return null
+  const outcome = diffra[TURN_OUTCOME_META_KEY]
+  if (typeof outcome !== 'object' || outcome === null || !('finish' in outcome) || !('stop' in outcome)) return null
+  const { finish, stop } = outcome
+  if (finish !== null && !oneOf(FINISH_OUTCOMES, finish)) return null
+  if (stop !== null && !oneOf(TURN_STOPS, stop)) return null
+  return { finish, stop }
 }
 
 function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverified'): boolean | undefined {
@@ -92,6 +123,15 @@ function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverifi
   if (typeof diffra !== 'object' || diffra === null) return undefined
   const value: unknown = (diffra as Record<string, unknown>)[key]
   return typeof value === 'boolean' ? value : undefined
+}
+
+function diffraChoiceOf<T extends string>(update: SessionUpdate, key: 'result' | 'verification', values: readonly T[]): T | undefined {
+  const meta: unknown = update._meta
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return undefined
+  const diffra = meta.diffra
+  if (typeof diffra !== 'object' || diffra === null) return undefined
+  const value: unknown = (diffra as Record<string, unknown>)[key]
+  return oneOf(values, value) ? value : undefined
 }
 
 export function usageOf(update: SessionUpdate): Usage | null {
@@ -131,6 +171,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         content: update.content ?? [],
         succeeded: diffraFlagOf(update, 'commandSucceeded'),
         unverified: diffraFlagOf(update, 'unverified'),
+        result: diffraChoiceOf(update, 'result', CHECK_RESULTS),
+        verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS),
       }
       return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
@@ -144,6 +186,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         content: update.content ?? existing?.content ?? [],
         succeeded: diffraFlagOf(update, 'commandSucceeded') ?? existing?.succeeded,
         unverified: diffraFlagOf(update, 'unverified') ?? existing?.unverified,
+        result: diffraChoiceOf(update, 'result', CHECK_RESULTS) ?? existing?.result,
+        verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS) ?? existing?.verification,
         startedAt: existing?.startedAt ?? Date.now(),
       }))
     case 'notice':

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
+import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { openHome, openSettings, openTask, pickProject } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { TaskMenu } from './TaskMenu'
@@ -200,34 +201,46 @@ function SidebarButton({ active, onClick, children }: { active?: boolean; onClic
   )
 }
 
-type TaskStatus = 'waiting' | 'failed' | 'running' | 'unread' | null
-
-// 多个状态同时成立时只显示一个：等待确认 > 失败 > 运行中 > 完成未读
-function taskStatusOf(task: AppState['live'][string] | undefined): TaskStatus {
-  if (!task) return null
-  if (task.permission) return 'waiting'
-  if (task.turns.at(-1)?.error) return 'failed'
-  if (task.running) return 'running'
-  return task.unread ? 'unread' : null
+interface TaskStatus {
+  label: string
+  tone: Extract<VerdictTone, 'confirm' | 'error' | 'failed' | 'running' | 'blocked' | 'unfinished'> | 'unread'
 }
 
-function TaskStatusMarker({ status }: { status: Exclude<TaskStatus, null> }) {
-  if (status === 'running') return <LoaderCircle className="size-3.5 animate-spin text-primary" aria-label="运行中" />
-  const { label, dot } = {
-    // 浅色下 warning 和 destructive 色相接近，等待确认用空心圈、失败用实心点，靠形状区分
-    waiting: { label: '等待确认', dot: 'size-2 border-2 border-warning' },
-    failed: { label: '失败', dot: 'size-2 bg-destructive' },
-    unread: { label: '完成未读', dot: 'size-1.5 bg-primary' },
-  }[status]
+// 只标需要留意的结论，多个同时成立时只显示一个：等待确认 > 出错 > 验证未通过 > 运行中 > 受阻 / 未完成 > 未读。
+// 计划、压缩、深度扫描轮不改变结论，跑这些轮次时上一轮的出错和验证未通过照样标出来
+function taskStatusOf(task: AppState['live'][string] | undefined): TaskStatus | null {
+  if (!task) return null
+  const { label, tone } = turnVerdict({ ...task, running: false })
+  if (tone === 'confirm' || tone === 'error' || tone === 'failed') return { label, tone }
+  if (task.running) return { label: turnVerdict(task).label, tone: 'running' }
+  if (tone === 'blocked' || tone === 'unfinished') return { label, tone }
+  return task.unread ? { label: `${label}（未读）`, tone: 'unread' } : null
+}
+
+// 和顶栏同一套图标。浅色下 warning 和 destructive 色相接近，等待确认用空心圈、受阻用暂停、未完成用感叹号，和出错的实心点靠形状区分
+function TaskStatusMarker({ status: { label, tone } }: { status: TaskStatus }) {
+  if (tone === 'running') return <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label={label} />
+  const dot =
+    tone === 'unfinished' || tone === 'blocked'
+      ? null
+      : {
+          confirm: 'size-2 border-2 border-warning',
+          error: 'size-2 bg-destructive',
+          failed: 'size-2 bg-destructive',
+          unread: 'size-1.5 bg-foreground',
+        }[tone]
+  const Icon = tone === 'blocked' ? CirclePause : CircleAlert
   return (
     <span role="img" aria-label={label} title={label} className="flex size-3.5 items-center justify-center">
-      <span className={cn('rounded-full', dot)} />
+      {dot ? <span className={cn('rounded-full', dot)} /> : <Icon className="size-3.5 text-warning" />}
     </span>
   )
 }
 
 function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
-  const status = useAppState((state) => taskStatusOf(state.live[task.sessionId]))
+  // 选整个任务对象再算：结论每次都是新对象，直接从 useSyncExternalStore 的选择器返回会反复重渲染
+  const live = useAppState((state) => state.live[task.sessionId])
+  const status = taskStatusOf(live)
   const [menuOpen, setMenuOpen] = useState(false)
   return (
     <div

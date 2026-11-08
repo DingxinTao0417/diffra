@@ -1,6 +1,6 @@
 import { type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
-import { Archive, Check, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -15,7 +15,7 @@ import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { folderName } from '@/lib/format'
-import { type TaskStatus, taskStatus } from '@/lib/task-status'
+import { turnVerdict, type Verdict, type VerdictTone } from '@/lib/turn-verdict'
 import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
@@ -42,7 +42,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
   const firstTurn = task.turns[0]?.id ?? null
   const monitorDiff = useTaskDiff(task.sessionId, firstTurn, task.info.checkpoints && panel === 'monitor', task.changeVersion)
 
-  const status = taskStatus(task)
+  const status = turnVerdict(task)
   // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
   const commands: ComposerCommand[] = [
     ...(!task.running ? [{ id: 'compact', label: 'compact', description: '手动压缩早期上下文，保留最近内容和完整聊天历史', keywords: ['compact', '压缩', '上下文'], icon: Archive, run: () => { compactTask(task.sessionId).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`)) } }] : []),
@@ -199,14 +199,15 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
   )
 }
 
-function StatusLabel({ status }: { status: TaskStatus }) {
+function StatusLabel({ status }: { status: Verdict }) {
   return (
     <span
       className={cn(
         'flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground',
         status.tone === 'confirm' && 'text-warning',
-        status.tone === 'error' && 'text-destructive',
+        (status.tone === 'error' || status.tone === 'failed') && 'text-destructive',
       )}
+      title={status.reason ?? undefined}
       data-testid="task-status"
       data-tone={status.tone}
     >
@@ -216,16 +217,21 @@ function StatusLabel({ status }: { status: TaskStatus }) {
   )
 }
 
-// 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，出错实心点
-function StatusIndicator({ tone }: { tone: TaskStatus['tone'] }) {
+// 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，受阻暂停，未验证带感叹号，只有出错和验证未通过是实心点
+function StatusIndicator({ tone }: { tone: VerdictTone }) {
   if (tone === 'running') return <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-  if (tone === 'done') return <Check className="size-3" />
+  // success-color-allow: 全应用唯一表示状态的绿色，只在本轮被接受的 finish 经检查命令验证过时出现
+  if (tone === 'verified') return <Check className="size-3 text-success" />
+  if (tone === 'unverified' || tone === 'unfinished') return <CircleAlert className="size-3 text-warning" />
+  if (tone === 'blocked') return <CirclePause className="size-3 text-warning" />
   const dot = {
     confirm: 'size-2 border-2 border-warning',
     error: 'size-2 bg-destructive',
-    blocked: 'size-2 bg-warning',
+    failed: 'size-2 bg-destructive',
     waiting: 'size-2 border-2 border-muted-foreground/60',
     stopped: 'size-1.5 bg-muted-foreground/60',
+    nochange: null,
+    done: null,
     idle: null,
   }[tone]
   return dot && <span className={cn('shrink-0 rounded-full', dot)} />

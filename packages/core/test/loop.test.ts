@@ -527,6 +527,18 @@ describe('主循环', () => {
     expect(lastTaskState(io)).toMatchObject({ needsVerification: false })
   })
 
+  test('edit_file 失败、没改到文件时，不要求 finish，也不标成需要验证', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'missing.txt', old_string: 'x', new_string: 'y' } }] },
+      { text: '文件不存在，没有改动' },
+    ])
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '改 missing.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(io)).toMatchObject({ needsVerification: false })
+  })
+
   test('需要确认的命令被拒绝后，模型收到拒绝结果，文件没被写', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'run_command', input: { command: 'echo hi > out.txt' } }] },

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { cards, chooseProject, startTask, taskInput, waitTaskDone } from './flows'
+import { cards, chooseProject, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -95,6 +95,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'greet.js'))).toBe(false)
     await expect(window.getByTestId('monitor-panel')).toContainText('还没有改动文件')

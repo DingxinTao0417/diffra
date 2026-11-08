@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
-import { cards, chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
+import { cards, chooseProject, settingsNav, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { type ScriptStep, startScriptedModel } from './scripted-model'
@@ -95,7 +95,7 @@ test('智能体反复做同样的操作：先提醒，再重复就停下并说�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '找 TODO')
-    await waitTaskDone(window)
+    await waitTaskStatus(window, 'stopped')
 
     const notice = window.getByTestId('notice').filter({ hasText: '智能体在重复同样的操作，已停止' })
     await expect(notice).toBeVisible()

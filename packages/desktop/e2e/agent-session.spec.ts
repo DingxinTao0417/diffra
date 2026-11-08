@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { cards, chooseProject, startTask, waitTaskDone } from './flows'
+import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -84,6 +84,7 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'done.txt'))).toBe(false)
   } finally {

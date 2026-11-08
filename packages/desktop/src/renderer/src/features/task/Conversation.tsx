@@ -12,6 +12,7 @@ import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/sessio
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
+import { finishVerdict } from '@/lib/turn-verdict'
 import { sendMessage } from '@/state/actions'
 import { type LiveTask, showToast, store } from '@/state/store'
 import { Markdown } from './Markdown'
@@ -21,7 +22,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -40,8 +41,9 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | null {
   if (item.title === '完成') return 'finish'
+  if (item.title === '验证改动（不结束任务）') return 'verify'
   if (item.title === '计划') return 'plan'
   if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
@@ -52,7 +54,7 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security'
   return null
 }
 
-// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、完成单独显示
+// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、中途验证、完成单独显示
 function toBlocks(items: TranscriptItem[]): Block[] {
   const blocks: Block[] = []
   for (const item of items) {
@@ -276,6 +278,9 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             return <CompactionRow key={block.item.id} item={block.item} />
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
+          case 'verify':
+            // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开
+            return <ToolStep key={block.item.id} item={block.item} unverified={finishVerdict(block.item).tone === 'unverified'} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} progress={block.item.id === lastFinishId ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
@@ -496,18 +501,18 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
   )
 }
 
-function ToolStep({ item }: { item: ToolItem }) {
+function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: boolean }) {
   // 命令失败的结果是跑完之后才到的，所以默认展开要跟着 item 算，不能只在挂载时定
   const [open, setOpen] = useState<boolean | null>(null)
   const commandFailed = item.succeeded === false
-  const expanded = open ?? commandFailed
+  const expanded = open ?? (commandFailed || unverified)
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
   const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)}>
       <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground/85">
-        <StatusIcon status={commandFailed ? 'command-failed' : item.status} />
+        {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={commandFailed ? 'command-failed' : item.status} />}
         <span className="shrink-0 text-muted-foreground">{action}</span>
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
@@ -701,9 +706,11 @@ function checkName(item: ToolItem): string {
   return item.title.slice(0, item.title.indexOf('：'))
 }
 
-// 安全和审查的结果只有一行「没有发现…」才算干净通过；带提醒项或附注（只看了一部分、模型扫描没完成）的要单独显示
+// 有 result 时只有 passed 算干净通过，提醒、只看了一部分、工具出错都要单独显示。
+// 旧记录没有 result：安全和审查的结果只有一行「没有发现…」才算干净，带提醒项或附注的单独显示
 function checkPassed(item: ToolItem): boolean {
   if (item.status !== 'completed') return false
+  if (item.result) return item.result === 'passed'
   if (toolBlockType(item) === 'check') return true
   const lines = textOf(item).split('\n').filter(Boolean)
   return lines.length === 1 && !SECURITY_LINE.test(lines[0] ?? '')
@@ -744,11 +751,23 @@ function ReviewBlock({ item }: { item: ToolItem }) {
       </div>
     )
   }
+  // 评审模型出错不拦截完成，只提醒；core 的正文是「审查没有完成，这次不拦截：原因」，这里只留原因
+  if (item.result === 'error') {
+    return (
+      <div {...common}>
+        <DisclosureRow className="items-start">
+          <CircleAlert className="mt-1 size-3.5 shrink-0 text-warning" />
+          <span className="shrink-0">规范审查没有完成，这次不拦截</span>
+          <span className="whitespace-pre-wrap text-muted-foreground">{text.slice(text.indexOf('：') + 1)}</span>
+        </DisclosureRow>
+      </div>
+    )
+  }
   if (item.status === 'completed') {
     return (
       <div {...common}>
         <DisclosureRow className="items-start">
-          <StatusIcon status="completed" className="mt-1" />
+          {item.result === 'partial' ? <CircleAlert className="mt-1 size-3.5 shrink-0 text-warning" /> : <StatusIcon status="completed" className="mt-1" />}
           <span className="shrink-0 text-muted-foreground">规范审查</span>
           <span className="whitespace-pre-wrap">{text}</span>
         </DisclosureRow>
@@ -807,10 +826,13 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     .map((line) => ({ line, match: SECURITY_LINE.exec(line) }))
   const findings = rows.filter((row) => row.match)
   if (findings.length === 0) {
+    // 检查出错、只看了一部分、只有附注都不拦截，提醒留意；旧记录没有 result，出错时照旧按 failed 画
+    const attention = item.result === 'error' || item.result === 'partial' || item.result === 'warned'
+    const failed = item.status === 'failed' && !attention
     return (
       <div {...common}>
-        <DisclosureRow className={cn('items-start', item.status === 'failed' && 'text-muted-foreground')}>
-          <StatusIcon status={item.status === 'failed' ? 'failed' : 'completed'} className="mt-1" />
+        <DisclosureRow className={cn('items-start', failed && 'text-muted-foreground')}>
+          {attention ? <CircleAlert className="mt-1 size-3.5 shrink-0 text-warning" /> : <StatusIcon status={failed ? 'failed' : 'completed'} className="mt-1" />}
           <span className="shrink-0 text-muted-foreground">{title}</span>
           <span className="whitespace-pre-wrap">{text}</span>
         </DisclosureRow>
@@ -948,14 +970,28 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
 function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
-  const unverified = passed && item.unverified === true
-  const warnings = passed ? [unverified && '没有配置检查命令', commandsFailed > 0 && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false) : []
+  const verdict = finishVerdict(item)
+  const noChecks = passed && item.unverified === true
+  // 没有检查点时 core 判断不了命令或 MCP 工具改没改文件，直接放行、不跑检查；这条路径不带「没配检查命令」的标记
+  const unknownChanges = verdict.tone === 'unverified' && !noChecks
+  // 最终检查通过了，过程中失败的命令不再需要留意，只作说明
+  const verified = verdict.tone === 'verified'
+  const warnings = passed
+    ? [noChecks && '没有配置检查命令', unknownChanges && '没有检查点，无法判断命令或 MCP 工具是否改了文件，这次没有跑检查', commandsFailed > 0 && !verified && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false)
+    : []
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={unverified ? 'true' : undefined}>
-      <div className={cn('flex items-center gap-2 font-semibold', !passed && 'text-destructive', unverified && 'text-warning')}>
-        {unverified ? <CircleAlert className="size-4 shrink-0" /> : <StatusIcon status={item.status} className="size-4" />}
-        {unverified ? '已完成 · 未经自动验证' : passed ? '本轮交付' : '还没完成'}
+    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined}>
+      <div className={cn('flex items-center gap-2 font-semibold', verdict.tone === 'failed' && 'text-destructive', verdict.tone === 'unverified' && 'text-warning')}>
+        {verdict.tone === 'unverified' ? (
+          <CircleAlert className="size-4 shrink-0" />
+        ) : verified ? (
+          // success-color-allow: 完成卡只在经检查命令验证过（或复用已验证的工作区）时画绿色，旧卡没有 verification，不会走到这里
+          <Check className="size-4 shrink-0 text-success" strokeWidth={2.6} />
+        ) : (
+          <StatusIcon status={item.status} className="size-4" />
+        )}
+        {verdict.label}
         {passed && files.length > 0 && (
           <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
             {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
@@ -972,6 +1008,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
           </div>
         </div>
       )}
+      {verified && commandsFailed > 0 && <p className="text-sm text-muted-foreground">过程中有 {commandsFailed} 条命令失败（最终检查已通过）</p>}
       {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}

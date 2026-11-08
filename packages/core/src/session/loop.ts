@@ -634,7 +634,6 @@ export async function runToolCall(
       },
     }
     if (name === 'edit_file' || name === 'run_command') session.verifiedSnapshot = null
-    if (name === 'edit_file') session.taskState.needsVerification = true
     if (name === 'task_progress') {
       session.taskState = updateTask(session.taskState, call.input)
       await publishTaskState(session, io)

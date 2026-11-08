@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { cards, chooseProject, startTask, waitTaskDone } from './flows'
+import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -67,6 +67,7 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     await expect(checks.nth(0)).toContainText('npm run typecheck')
     await expect(checks.nth(0)).toContainText('通过')
     await expect(cards(window, 'finish')).toHaveAttribute('data-status', 'completed')
+    await waitTaskStatus(window, 'verified')
   } finally {
     await app.close()
     await model.close()

@@ -1,7 +1,7 @@
 import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
-import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, usageOf } from '../features/session/transcript'
+import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
 import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
@@ -135,7 +135,7 @@ export function wireCoreEvents(): () => void {
       return {
         ...task,
         progress: taskProgressOf(update) ?? task.progress,
-        turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update) }],
+        turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update), outcome: turnOutcomeOf(update) ?? last.outcome }],
         changeVersion: filesMayChange ? task.changeVersion + 1 : task.changeVersion,
       }
     })

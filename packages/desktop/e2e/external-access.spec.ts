@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { chooseProject, waitTaskDone } from './flows'
+import { chooseProject, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -40,13 +40,15 @@ test('Enter 发送、Shift+Enter 换行；项目外读写分别申请，本会�
     await permission.getByRole('button', { name: '本会话允许此路径的同类操作' }).click()
     await expect(permission).toContainText('项目外写入')
     await permission.getByRole('button', { name: '拒绝', exact: true }).click()
-    await waitTaskDone(window)
+    // 写入被拒、文件没动：纯回答，不要求验证
+    await waitTaskStatus(window, 'done')
     expect(readFileSync(target, 'utf8')).toBe('before')
     await input.fill('允许修改')
     await input.press('Enter')
     await expect(permission).toContainText('项目外写入')
     await permission.getByRole('button', { name: '仅允许本次操作' }).click()
-    await waitTaskDone(window)
+    // 改了文件没调 finish：拉回三次后停下，不冒充已完成
+    await waitTaskStatus(window, 'unfinished')
     expect(readFileSync(target, 'utf8')).toBe('approved')
   } finally {
     await app.close()

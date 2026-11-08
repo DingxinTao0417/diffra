@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpRight, ChevronRight, CircleCheck, CircleDashed, CircleX, Info } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { DiffCounts } from '@/features/session/DiffView'
@@ -8,7 +8,7 @@ import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { taskStatus } from '@/lib/task-status'
+import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
 import { SidePanel } from './SidePanel'
@@ -33,8 +33,14 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const mcp = useMcpStatus({ sessionId: task.sessionId })
-  const status = taskStatus(task).label
-  const checks = project?.checks
+  const verdict = turnVerdict(task)
+  const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
+  const commandsFailed = verdictTurn?.items.filter((item) => item.kind === 'tool' && item.succeeded === false).length ?? 0
+  // 有完成条件时下面的完成条件区已经写了这句原因，不重复
+  const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
+  const checks = task.info.checks ?? project?.checks
+  // 检查命令建会话时就定了，项目设置之后改过的要新任务才用上
+  const projectChecks = task.info.checks ? project?.checks : undefined
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   const mcpFailed = mcp.statuses?.some((server) => server.state === 'failed') ?? false
   const configProblems = [mcpFailed ? 'MCP 连接失败' : null, task.info.bashPath ? null : '没找到 Git Bash'].filter((item) => item !== null)
@@ -46,11 +52,30 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
       title="任务监控"
       controls={
         <span className="min-w-0 truncate text-xs text-muted-foreground">
-          {task.turns.length} 轮 · {status}
+          {task.turns.length} 轮 · {verdict.label}
         </span>
       }
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-sm [scrollbar-gutter:stable] [&>section+section]:border-t [&>section+section]:pt-3">
+        {verdict.tone !== 'idle' && (
+          <Section title="本轮结论">
+            <div className="flex items-center gap-2">
+              <VerdictIcon tone={verdict.tone} />
+              <span
+                className={cn(
+                  'min-w-0 flex-1 truncate text-foreground/90',
+                  verdict.tone === 'confirm' && 'text-warning',
+                  (verdict.tone === 'error' || verdict.tone === 'failed') && 'text-destructive',
+                )}
+              >
+                {verdict.label}
+              </span>
+              {commandsFailed > 0 && <span className="shrink-0 text-muted-foreground">{commandsFailed} 条命令失败</span>}
+            </div>
+            {verdictReason && <p className="text-muted-foreground">{verdictReason}</p>}
+          </Section>
+        )}
+
         {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
         {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
           <Section title="完成条件">
@@ -116,12 +141,19 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         <Section title="检查" action={<SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
           {checks && (
             <>
-              <Row status={checks.afterEdit ? 'on' : 'off'} label="快速检查" value={checks.afterEdit ?? '未配置'} mono={!!checks.afterEdit} />
+              <Row
+                status={checks.afterEdit ? 'on' : 'off'}
+                label="快速检查"
+                value={checks.afterEdit ?? '未配置'}
+                mono={!!checks.afterEdit}
+                note={projectChecks && projectChecks.afterEdit !== checks.afterEdit ? '新任务生效' : undefined}
+              />
               <Row
                 status={checks.beforeFinish || checks.afterEdit ? 'on' : 'off'}
                 label="完成检查"
                 value={checks.beforeFinish ?? (checks.afterEdit ? '同快速检查' : '未配置')}
                 mono={!!checks.beforeFinish}
+                note={projectChecks && (projectChecks.beforeFinish ?? projectChecks.afterEdit) !== (checks.beforeFinish ?? checks.afterEdit) ? '新任务生效' : undefined}
               />
             </>
           )}
@@ -311,8 +343,28 @@ const STATUS_ICONS = {
   bad: <CircleX className="size-3.5 shrink-0 text-destructive" />,
 }
 
+// 形状和颜色跟顶栏 TaskView 的 StatusIndicator 保持一致，放大到面板行的 14px 图标槽
+function VerdictIcon({ tone }: { tone: VerdictTone }) {
+  if (tone === 'running') return <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+  // success-color-allow: 和顶栏同一个结论，只在本轮被接受的 finish 经检查命令验证过时出现
+  if (tone === 'verified') return <Check className="size-3.5 shrink-0 text-success" />
+  if (tone === 'unverified' || tone === 'unfinished') return <CircleAlert className="size-3.5 shrink-0 text-warning" />
+  if (tone === 'blocked') return <CirclePause className="size-3.5 shrink-0 text-warning" />
+  const dot = {
+    confirm: 'size-2 border-2 border-warning',
+    error: 'size-2 bg-destructive',
+    failed: 'size-2 bg-destructive',
+    waiting: 'size-2 border-2 border-muted-foreground/60',
+    stopped: 'size-1.5 bg-muted-foreground/60',
+    nochange: null,
+    done: null,
+    idle: null,
+  }[tone]
+  return <span className="flex size-3.5 shrink-0 items-center justify-center">{dot && <span className={cn('rounded-full', dot)} />}</span>
+}
+
 // 每行都留 14px 图标槽，有无状态图标的行标签都对齐
-function Row({ status, label, value, mono, title }: { status?: keyof typeof STATUS_ICONS; label: string; value?: string; mono?: boolean; title?: string }) {
+function Row({ status, label, value, mono, note, title }: { status?: keyof typeof STATUS_ICONS; label: string; value?: string; mono?: boolean; note?: string; title?: string }) {
   return (
     <div className="flex items-center gap-2" title={title}>
       {status ? STATUS_ICONS[status] : <span className="size-3.5 shrink-0" />}
@@ -327,6 +379,7 @@ function Row({ status, label, value, mono, title }: { status?: keyof typeof STAT
           {value}
         </span>
       )}
+      {note && <span className="shrink-0 text-xs text-muted-foreground">{note}</span>}
     </div>
   )
 }
