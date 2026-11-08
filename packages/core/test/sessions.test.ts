@@ -162,6 +162,23 @@ describe('会话持久化', () => {
     expect(existsSync(join(dataDir, 'sessions', `${sessionId}.json`))).toBe(false)
   })
 
+  test('设计和无项目标记存进记录，list 和 load 都带回；普通会话为 false', async () => {
+    server = await startScriptedServer([{ text: '好的' }, { text: '好的' }])
+    const first = await startCore()
+    const plain = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, plain.sessionId, 'turn-1', '普通任务')
+    const marked = await createSession(first, project, { ...config(server.baseUrl), design: true, noProject: true })
+    await sendPrompt(first, marked.sessionId, 'turn-1', '无项目设计任务')
+
+    const second = await startCore()
+    const summaries = await listSessions(second)
+    expect(summaries.find((summary) => summary.sessionId === marked.sessionId)).toMatchObject({ design: true, noProject: true })
+    expect(summaries.find((summary) => summary.sessionId === plain.sessionId)).toMatchObject({ design: false, noProject: false })
+    const loaded = await loadSession(second, marked.sessionId, project, config(server.baseUrl))
+    expect(loaded).toMatchObject({ design: true, noProject: true })
+    expect(await loadSession(second, plain.sessionId, project, config(server.baseUrl))).toMatchObject({ design: false, noProject: false })
+  })
+
   test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值，下一轮只提问不被拉回', async () => {
     server = await startScriptedServer([
       { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
@@ -406,6 +423,37 @@ describe('会话存储', () => {
     const fresh = new SessionStore(dir)
     expect((await fresh.list()).map((entry) => entry.id)).toEqual(['s2', 's1'])
     expect((await fresh.list('D:\\a')).map((entry) => entry.id)).toEqual(['s1'])
+  })
+
+  test('旧格式索引（没有 design）读取时重建，带回设计和无项目标记', async () => {
+    const dir = join(dataDir, 'sessions')
+    const store = new SessionStore(dir)
+    await store.save({ ...record('s1', 'D:\\a', '一', '2026-01-01T00:00:00Z'), design: true })
+    await store.save(record('s2', 'D:\\b', '二', '2026-01-02T00:00:00Z'))
+    await store.save({ ...record('s3', 'D:\\c', '三', '2026-01-03T00:00:00Z'), noProject: true })
+    const oldIndex = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8')) as { sessions: Record<string, unknown>[] }
+    for (const entry of oldIndex.sessions) {
+      delete entry.design
+      delete entry.noProject
+    }
+    writeFileSync(join(dir, 'index.json'), JSON.stringify(oldIndex))
+    const fresh = new SessionStore(dir)
+    expect((await fresh.list()).map(({ id, design, noProject }) => ({ id, design, noProject }))).toEqual([
+      { id: 's3', design: false, noProject: true },
+      { id: 's2', design: false, noProject: false },
+      { id: 's1', design: true, noProject: false },
+    ])
+    const rebuilt = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8')) as { sessions: Record<string, unknown>[] }
+    expect(rebuilt.sessions.find((entry) => entry.id === 's1')).toMatchObject({ design: true, noProject: false })
+  })
+
+  test('旧会话记录没有 noProject 时按 false 读', async () => {
+    const dir = join(dataDir, 'sessions')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 's1.json'), JSON.stringify(record('s1', 'D:\\a', '一', '2026-01-01T00:00:00Z')))
+    const loaded = await new SessionStore(dir).load('s1')
+    expect(loaded.noProject).toBe(false)
+    expect(loaded.design).toBe(false)
   })
 
   test('拒绝带路径的会话 id；损坏的会话文件给出说明', async () => {
@@ -657,6 +705,45 @@ describe('MCP', () => {
       await sendPrompt(core, sessionId, 'turn-1', '试试 MCP')
       expect(server.bodies[0]).toContain('mcp__demo__echo')
       expect(server.bodies[1]).toContain('echo: ping')
+    } finally {
+      await pool.closeAll()
+    }
+  })
+
+  test('删除会话等它独占的 MCP 连接关掉再返回，之后项目目录能删', async () => {
+    server = await startScriptedServer([{ text: '好' }])
+    let released = false
+    class WatchedPool extends McpPool {
+      override async retain(keep: Parameters<McpPool['retain']>[0]): Promise<void> {
+        await super.retain(keep)
+        if (keep.length === 0) released = true
+      }
+    }
+    const pool = new WatchedPool()
+    try {
+      const core = await startCore(pool)
+      const { sessionId } = await createSession(core, project, config(server.baseUrl), [testMcpServer()])
+      expect((await mcpStatus(core, { sessionId }))[0]?.state).toBe('connected')
+
+      await deleteSession(core, sessionId)
+      expect(released).toBe(true)
+      // Windows 上还有进程把它当当前目录时会报 EBUSY
+      rmSync(project, { recursive: true })
+    } finally {
+      await pool.closeAll()
+    }
+  })
+
+  test('MCP 服务器还在连接时删除会话，等它连完关掉再返回，之后项目目录能删', async () => {
+    server = await startScriptedServer([{ text: '好' }])
+    const pool = new McpPool()
+    try {
+      const core = await startCore(pool)
+      const slow = testMcpServer('demo', 'secret-token', [{ name: 'DIFFRA_TEST_INIT_DELAY_MS', value: '1500' }])
+      const { sessionId } = await createSession(core, project, config(server.baseUrl), [slow])
+
+      await deleteSession(core, sessionId)
+      rmSync(project, { recursive: true })
     } finally {
       await pool.closeAll()
     }

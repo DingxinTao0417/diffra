@@ -131,6 +131,8 @@ const settingsSchema = z.object({
       }),
     )
     .default([]),
+  // 第 119 步加的
+  defaultWorkspace: z.string().nullable().default(null),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -145,6 +147,7 @@ const EMPTY_SETTINGS: Settings = {
   execution: DEFAULT_EXECUTION,
   mcpServers: [],
   plugins: [],
+  defaultWorkspace: null,
 }
 
 export class SettingsStore {

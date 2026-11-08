@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PromptImage, StoredSessionSummary } from '@diffra/core/types'
-import { Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, LoaderCircle, PenTool, ScrollText, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, GitBranch, LoaderCircle, PenTool, ScrollText, Settings2 } from 'lucide-react'
 import { decodeStartTaskError, type ProjectState, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -18,8 +18,8 @@ import { checksSummary, useProject } from '@/features/project/useProject'
 import { Composer } from '@/features/task/Composer'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
-import { openHome, openSettings, openTask, pickProject, setPermissionMode, startTask } from '@/state/actions'
-import { showToast, useAppState } from '@/state/store'
+import { openDesign, openHome, openSettings, openTask, pickProject, setPermissionMode, startTask } from '@/state/actions'
+import { type AppState, showToast, useAppState } from '@/state/store'
 
 const RECENT_LIMIT = 5
 
@@ -30,6 +30,17 @@ function parentPath(path: string): string {
   return path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
 }
 
+type ListedTask = Pick<StoredSessionSummary, 'sessionId' | 'cwd' | 'title' | 'updatedAt' | 'design' | 'noProject'>
+
+// 设计首页列出全部未归档的设计任务；刚建的在 core 存盘之前也要列出来
+function designTasksOf(tasks: StoredSessionSummary[], live: AppState['live']): ListedTask[] {
+  const known = new Set(tasks.map((task) => task.sessionId))
+  const pending = Object.values(live)
+    .filter((task) => task.design && task.turns.length > 0 && !known.has(task.sessionId))
+    .map((task) => ({ sessionId: task.sessionId, cwd: task.project, title: task.title, updatedAt: new Date().toISOString(), design: true, noProject: task.noProject }))
+  return [...tasks.filter((task) => task.design && !task.archived), ...pending].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
 function modelLabelOf(settings: SettingsView | null, ref: ModelRef | null): string | null {
   if (!settings || !ref) return null
   const provider = settings.providers.find((item) => item.id === ref.providerId)
@@ -37,46 +48,46 @@ function modelLabelOf(settings: SettingsView | null, ref: ModelRef | null): stri
   return provider && model ? `${provider.name} / ${modelDisplayName(model)}` : null
 }
 
-export function HomeView({ projectPath }: { projectPath: string | null }) {
+export function HomeView({ projectPath, design = false }: { projectPath: string | null; design?: boolean }) {
   const settings = useAppState((state) => state.settings)
   const projects = useAppState((state) => state.projects)
   const tasks = useAppState((state) => state.tasks)
+  const live = useAppState((state) => (design ? state.live : null))
   const { project, setProject, branch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
-  // 设计任务：智能体从第一条消息起就能在设计面板的画布上画
-  const [design, setDesign] = useState(false)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
   const [editingProject, setEditingProject] = useState<{ detect: boolean } | null>(null)
   const detectedCount = useDetectedChecks(project)
 
   useEffect(() => setError(null), [projectPath])
 
-  const recent = useMemo(
-    () => [...tasks].filter((task) => !task.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_LIMIT),
-    [tasks],
+  const listed = useMemo(
+    () =>
+      live
+        ? designTasksOf(tasks, live)
+        : [...tasks].filter((task) => !task.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_LIMIT),
+    [tasks, live],
   )
+  const openPage = design ? openDesign : openHome
   const modelLabel = modelLabelOf(settings, model ?? settings?.roles.coder ?? null)
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
+  const workspacePath = settings?.defaultWorkspace.path
 
   const choose = async () => {
     try {
       const picked = await pickProject()
-      if (picked) openHome(picked)
+      if (picked) openPage(picked)
     } catch (caught) {
       showToast(errorMessage(caught))
     }
   }
 
+  // 没选项目时建无项目任务，主进程在默认保存位置下替它建文件夹
   const send = async (text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }) => {
-    // 没选项目时先弹出选择框，草稿留在输入框里，选好再发
-    if (!projectPath) {
-      void choose()
-      return false
-    }
     setError(null)
     try {
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...(design ? { design } : {}) }, { plan: planMode, ...extras })
+      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...(design ? { design: true } : {}) }, { plan: planMode, ...extras })
       return true
     } catch (caught) {
       setError(decodeStartTaskError(errorMessage(caught)))
@@ -103,17 +114,27 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
           <button
             type="button"
             data-testid="project-path"
+            title={workspacePath}
             className={cn(clickableChipClass, 'border border-dashed border-muted-foreground/40 px-[7px] text-sm')}
           >
-            <Folder className="size-3.5" />
-            选择项目
+            <FolderDot className="size-3.5" />
+            无项目
             <ChevronDown className="size-3" />
           </button>
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
+        <DropdownMenuItem title={workspacePath} onSelect={() => openPage(null)}>
+          <FolderDot />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate">无项目</span>
+            <span className="truncate text-xs text-muted-foreground">{workspacePath ? `建在 ${workspacePath}` : '建在默认保存位置'}</span>
+          </span>
+          {/* primary-color-allow: 选中标记 */}
+          {!projectPath && <Check className="text-primary" />}
+        </DropdownMenuItem>
         {projects.map((path) => (
-          <DropdownMenuItem key={path} title={path} onSelect={() => openHome(path)}>
+          <DropdownMenuItem key={path} title={path} onSelect={() => openPage(path)}>
             <Folder />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate">{folderName(path)}</span>
@@ -123,7 +144,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             {path === projectPath && <Check className="text-primary" />}
           </DropdownMenuItem>
         ))}
-        {projects.length > 0 && <DropdownMenuSeparator />}
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void choose()}>
           <FolderOpen />
           选择文件夹…
@@ -141,8 +162,10 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             <>
               <span className="shrink-0">在</span>
               <span className="min-w-0 truncate px-[0.3em]">{folderName(projectPath)}</span>
-              <span className="shrink-0">里要做什么？</span>
+              <span className="shrink-0">{design ? '里要设计什么？' : '里要做什么？'}</span>
             </>
+          ) : design ? (
+            '要设计什么？'
           ) : (
             '要做什么？'
           )}
@@ -161,27 +184,9 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
           size="large"
-          leading={
-            <>
-              {projectPath ? null : projectMenu}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-pressed={design}
-                    onClick={() => setDesign((current) => !current)}
-                    className={cn(clickableChipClass, 'aria-pressed:bg-soft aria-pressed:text-foreground')}
-                  >
-                    <PenTool className="size-3.5" />
-                    设计
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>设计任务：智能体在设计面板的画布上画界面。</TooltipContent>
-              </Tooltip>
-            </>
-          }
+          leading={projectPath ? null : projectMenu}
           projectPath={projectPath}
-          mcpTarget={projectPath ? { projectPath } : null}
+          mcpTarget={projectPath ? { projectPath } : { noProject: true }}
           permissionMode={permissionMode}
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
@@ -198,6 +203,11 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             {(error.code === 'model-missing' || error.code === 'model-auth') && (
               <Button variant="outline" size="xs" className="shrink-0" onClick={() => openSettings('models')}>
                 去设置模型
+              </Button>
+            )}
+            {error.code === 'workspace-missing' && (
+              <Button variant="outline" size="xs" className="shrink-0" onClick={() => openSettings('storage')}>
+                去设置
               </Button>
             )}
           </div>
@@ -235,11 +245,11 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
         )}
       </div>
 
-      {recent.length > 0 && (
+      {listed.length > 0 && (
         <div className="mt-7 w-full max-w-[720px]">
-          <div className="px-3 pb-1 text-xs text-muted-foreground">最近的任务</div>
-          {recent.map((task) => (
-            <RecentTaskRow key={task.sessionId} task={task} />
+          <div className="px-3 pb-1 text-xs text-muted-foreground">{design ? '设计任务' : '最近的任务'}</div>
+          {listed.map((task) => (
+            <RecentTaskRow key={task.sessionId} task={task} marked={!design && task.design} />
           ))}
         </div>
       )}
@@ -255,7 +265,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
   )
 }
 
-function RecentTaskRow({ task }: { task: StoredSessionSummary }) {
+function RecentTaskRow({ task, marked }: { task: ListedTask; marked: boolean }) {
   const running = useAppState((state) => state.live[task.sessionId]?.running ?? false)
   return (
     <button
@@ -264,8 +274,15 @@ function RecentTaskRow({ task }: { task: StoredSessionSummary }) {
       onClick={() => void openTask(task)}
     >
       <span className="min-w-0 truncate">{task.title}</span>
+      {marked && (
+        <span role="img" aria-label="设计任务" title="设计任务" className="flex shrink-0 text-muted-foreground">
+          <PenTool className="size-3.5" />
+        </span>
+      )}
       {running && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="运行中" />}
-      <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
+      <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground" title={task.noProject ? task.cwd : undefined}>
+        {task.noProject ? '无项目' : folderName(task.cwd)}
+      </span>
       <span className="w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{formatTime(task.updatedAt)}</span>
     </button>
   )

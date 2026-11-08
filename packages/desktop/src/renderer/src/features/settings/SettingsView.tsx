@@ -60,7 +60,7 @@ import { folderName, formatBytes, formatTime } from '@/lib/format'
 import { INSET_PANEL } from '@/lib/shell'
 import { PERMISSION_MODES } from '@/lib/permission-modes'
 import { leaveSettings, openSettings, setArchived } from '@/state/actions'
-import { type SettingsSection, showToast, store, useAppState } from '@/state/store'
+import { type AppState, type SettingsSection, showToast, store, useAppState } from '@/state/store'
 
 const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: string; icon: LucideIcon; keywords: string }> }> = [
   {
@@ -84,7 +84,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
   {
     name: '数据',
     items: [
-      { id: 'storage', label: '会话与存储', icon: HardDrive, keywords: '归档 删除 磁盘 记录' },
+      { id: 'storage', label: '会话与存储', icon: HardDrive, keywords: '归档 删除 磁盘 记录 默认保存位置 无项目 文件夹' },
       { id: 'usage', label: '用量', icon: BarChart3, keywords: 'token 统计 模型调用 缓存' },
     ],
   },
@@ -587,6 +587,7 @@ function StorageSection() {
           <span className="text-sm text-muted-foreground tabular-nums">{storage ? (storage.bytes < 1024 ? '不到 1 KB' : formatBytes(storage.bytes)) : '…'}</span>
         </SettingsRow>
       </SettingsGroup>
+      <WorkspaceGroup />
       <SettingsGroup title="已归档的任务">
         {archived.length === 0 ? (
           <EmptyState icon={Archive} title="没有已归档的任务" description="在任务菜单里选择「归档」后，任务会出现在这里。" className="rounded-none bg-transparent py-8" />
@@ -598,16 +599,61 @@ function StorageSection() {
   )
 }
 
+function WorkspaceGroup() {
+  const workspace = useAppState((state) => state.settings?.defaultWorkspace ?? null)
+  const save = async (change: () => Promise<AppState['settings']>) => {
+    try {
+      const settings = await change()
+      if (settings) store.set((state) => ({ ...state, settings }))
+    } catch (error) {
+      showToast(errorMessage(error))
+    }
+  }
+  return (
+    <SettingsGroup title="无项目任务">
+      <SettingsRow
+        label="默认保存位置"
+        hint={
+          <>
+            {workspace && (
+              <span className="block truncate font-mono" title={workspace.path}>
+                {workspace.path}
+              </span>
+            )}
+            <span className="block">
+              不选项目时，每个任务在这里新建一个文件夹，只影响以后新建的任务。「文档」目录可能被 OneDrive 同步，任务里的依赖文件也会被同步。
+            </span>
+          </>
+        }
+      >
+        <Button variant="outline" onClick={() => void save(() => window.diffra.pickWorkspace())}>
+          更改…
+        </Button>
+        {workspace && !workspace.isDefault && (
+          <Button variant="outline" onClick={() => void save(() => window.diffra.resetWorkspace())}>
+            恢复默认
+          </Button>
+        )}
+        <Button variant="outline" onClick={() => window.diffra.openWorkspace().catch((error: unknown) => showToast(errorMessage(error)))}>
+          在资源管理器中打开
+        </Button>
+      </SettingsRow>
+    </SettingsGroup>
+  )
+}
+
 function ArchivedRow({ task }: { task: StoredSessionSummary }) {
   return (
     <div className="flex items-center gap-3 px-4 py-2 text-sm" data-testid="archived-task">
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
-      <span className="shrink-0 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
+      <span className="shrink-0 text-xs text-muted-foreground" title={task.noProject ? task.cwd : undefined}>
+        {task.noProject ? '无项目' : folderName(task.cwd)}
+      </span>
       <span className="w-12 shrink-0 text-right text-xs text-muted-foreground">{formatTime(task.updatedAt)}</span>
       <Button size="sm" variant="ghost" onClick={() => void setArchived(task.sessionId, false)}>
         取消归档
       </Button>
-      <TaskMenu sessionId={task.sessionId} title={task.title} project={task.cwd} archived align="end">
+      <TaskMenu sessionId={task.sessionId} title={task.title} project={task.cwd} noProject={task.noProject} archived align="end">
         <button type="button" aria-label="任务菜单" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
           <Ellipsis className="size-4" />
         </button>

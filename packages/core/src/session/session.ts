@@ -66,6 +66,8 @@ export class Session {
   archived: boolean
   // 设计任务：建会话时定下，存进记录
   readonly designTask: boolean
+  // 无项目任务：建会话时定下，存进记录
+  readonly noProject: boolean
   readonly turns: StoredTurn[] = []
   // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
   config: SessionConfig
@@ -78,7 +80,7 @@ export class Session {
   readonly mcpPool: McpPool | null
   // 最近一轮开始时取到的 MCP 工具
   mcpTools: McpTurnTools | null = null
-  // 客户端配置的设计面板工具；用户打开设计面板之前是 null
+  // 客户端配置的设计面板工具：设计任务每轮开始前由客户端配置，普通任务是 null
   design: SessionDesign | null = null
   readonly systemPrompt: string
   model: LanguageModel
@@ -112,6 +114,7 @@ export class Session {
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
     this.designTask = record?.design ?? options.config.design ?? false
+    this.noProject = record?.noProject ?? options.config.noProject ?? false
     if (record) {
       this.taskState = record.taskState ?? newTaskState()
       // 只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值
@@ -218,6 +221,7 @@ export class Session {
       updatedAt: new Date().toISOString(),
       archived: this.archived,
       design: this.designTask,
+      noProject: this.noProject,
       turns: this.turns.map((turn) => ({
         ...turn,
         checkpoint: this.turnCheckpoints.get(turn.id) ?? null,
@@ -228,7 +232,7 @@ export class Session {
     }
   }
 
-  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，打开过设计面板时再加设计工具
+  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
     return { ...TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }

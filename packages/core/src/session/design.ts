@@ -3,7 +3,7 @@ import type { PromptImage } from '../protocol.js'
 import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
 
-// 设计面板（OpenPencil 矢量编辑器）：工具定义来自客户端的设计页，用户打开设计面板后由客户端配置给会话（session.design），
+// 设计面板（OpenPencil 矢量编辑器）：工具定义来自客户端的设计页，设计任务每轮开始前由客户端配置给会话（session.design），
 // 调用时 core 通过 ACP 请求客户端在设计页里执行（见 TurnIO.design）。画布上的修改都能撤销，页面是沙箱、断网的，所以不逐次确认。
 // 工具名加 design_ 前缀，和 Diffra 自己的工具、MCP 工具分开
 const PREFIX = 'design_'
@@ -27,7 +27,7 @@ export function designChars(session: Session): number {
   return specs.reduce((sum, spec) => sum + PREFIX.length + spec.name.length + spec.description.length + JSON.stringify(spec.inputSchema).length, designInstructions(session).length)
 }
 
-// 说明跟着设计工具一起接在系统提示词后面，没打开设计面板的会话不带
+// 说明跟着设计工具一起接在系统提示词后面，没配置设计工具的会话不带
 export function designInstructions(session: Session): string {
   if (!session.design) return ''
   const lines = [

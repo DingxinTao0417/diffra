@@ -81,14 +81,15 @@ export class McpPool {
     const current = this.entries.get(key)
     if (current?.state === 'connecting') await current.promise
     else if (!current || (current.state === 'failed' && (retry || Date.now() - current.at > RETRY_AFTER_MS))) {
-      const promise = this.connect(key, cwd, server)
-      this.entries.set(key, { state: 'connecting', promise })
-      await promise
+      const entry: Entry = { state: 'connecting', promise: this.connect(key, cwd, server, () => this.entries.get(key) === entry) }
+      this.entries.set(key, entry)
+      await entry.promise
     }
     return this.entries.get(key) ?? { state: 'failed', error: '连接已关闭', at: Date.now() }
   }
 
-  private async connect(key: string, cwd: string, server: McpServer): Promise<void> {
+  // current：自己那个「连接中」还在不在；被 retain 移走或换成了新的连接就关掉，不写回
+  private async connect(key: string, cwd: string, server: McpServer, current: () => boolean): Promise<void> {
     const client = new Client({ name: 'diffra', version: CORE_VERSION })
     try {
       const kind = transportOf(server)
@@ -114,9 +115,12 @@ export class McpPool {
         const entry = this.entries.get(key)
         if (entry?.state === 'connected' && entry.client === client) this.entries.set(key, { state: 'failed', error: '连接已断开', at: 0 })
       }
-      this.entries.set(key, { state: 'connected', client, tools: await this.listTools(client) })
+      const tools = await this.listTools(client)
+      if (current()) this.entries.set(key, { state: 'connected', client, tools })
+      else await client.close().catch((error: unknown) => console.error('[mcp] 关闭连接失败', error))
     } catch (error) {
       await client.close().catch(() => {})
+      if (!current()) return
       const stderr = this.stderr.get(key)?.trim()
       const message = stderr ? `${errorText(error)}\n${stderr}` : errorText(error)
       console.error(`[mcp] 服务器 ${server.name} 连接失败`, error)
@@ -236,15 +240,23 @@ export class McpPool {
       .join('\n\n')
   }
 
-  // 只保留还有任务在用的连接；配置改了以后旧的连接在这里关掉
+  // 只保留还有任务在用的连接；配置改了以后旧的连接在这里关掉。
+  // 先同步移走再等：等的时候新的 ensure 可能放进同一个 key 的新连接，不能被这次顺手删掉。
+  // 还在连接的等它连完，connect 发现自己被移走会关掉，调用方接着可能要删 stdio 服务器的工作目录
   async retain(keep: Array<{ cwd: string; servers: McpServer[] }>): Promise<void> {
     const keys = new Set(keep.flatMap(({ cwd, servers }) => servers.map((server) => this.key(cwd, server))))
-    for (const [key, entry] of this.entries) {
-      if (keys.has(key)) continue
+    const removed = [...this.entries].filter(([key]) => !keys.has(key))
+    for (const [key] of removed) {
       this.entries.delete(key)
       this.stderr.delete(key)
-      if (entry.state === 'connected') await entry.client.close().catch((error: unknown) => console.error('[mcp] 关闭连接失败', error))
     }
+    await Promise.all(
+      removed.map(([, entry]) => {
+        if (entry.state === 'connecting') return entry.promise
+        if (entry.state === 'connected') return entry.client.close().catch((error: unknown) => console.error('[mcp] 关闭连接失败', error))
+        return undefined
+      }),
+    )
   }
 
   // 后台先连上，第一轮不用等

@@ -22,7 +22,7 @@ const MAX_HISTORY = 50
 
 const sameRoute = (a: Route | undefined, b: Route) => JSON.stringify(a) === JSON.stringify(b)
 
-// record 为 false 时不记进后退历史（后退、前进本身）。连着换首页的项目只改当前这一条，不算新的一页
+// record 为 false 时不记进后退历史（后退、前进本身）。连着换同一种首页的项目只改当前这一条，不算新的一页
 export function navigate(route: Route, record = true): void {
   // 离开设置页时重新读设置：模型、角色可能改过，输入框要用新的
   if (store.get().route.name === 'settings' && route.name !== 'settings') {
@@ -32,7 +32,7 @@ export function navigate(route: Route, record = true): void {
     let { history, historyIndex } = state
     const current = history[historyIndex]
     if (record && route.name !== 'settings' && !sameRoute(current, route)) {
-      if (route.name === 'home' && current?.name === 'home') history = history.map((item, index) => (index === historyIndex ? route : item))
+      if ((route.name === 'home' || route.name === 'design') && current?.name === route.name) history = history.map((item, index) => (index === historyIndex ? route : item))
       else {
         history = [...history.slice(0, historyIndex + 1), route].slice(-MAX_HISTORY)
         historyIndex = history.length - 1
@@ -40,7 +40,9 @@ export function navigate(route: Route, record = true): void {
     }
     const opened = route.name === 'task' ? state.live[route.sessionId] : undefined
     const live = opened?.unread ? { ...state.live, [opened.sessionId]: { ...opened, unread: false } } : state.live
-    return { ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route, history, historyIndex, live }
+    // 设计面板只有设计任务有；设计任务切到设计面板由 openTask、startTask 显式设置
+    const panel = opened && !opened.design && state.panel === 'design' ? 'monitor' : state.panel
+    return { ...state, route, lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route, history, historyIndex, live, panel }
   })
 }
 
@@ -70,10 +72,28 @@ export function leaveSettings(): void {
   navigate(store.get().lastWorkRoute)
 }
 
+// 不指定项目时沿用当前的：任务页取任务的项目（无项目任务取 null，不取它的文件夹），首页和设计首页取选着的项目
+function currentProject(): string | null {
+  const { route, live } = store.get()
+  if (route.name === 'task') {
+    const task = live[route.sessionId]
+    return task && !task.noProject ? task.project : null
+  }
+  return route.name === 'home' || route.name === 'design' ? route.project : null
+}
+
 export function openHome(project?: string | null): void {
-  const current = store.get().route
-  const fallback = current.name === 'task' ? (store.get().live[current.sessionId]?.project ?? null) : current.name === 'home' ? current.project : null
-  navigate({ name: 'home', project: project === undefined ? fallback : project })
+  navigate({ name: 'home', project: project === undefined ? currentProject() : project })
+}
+
+export function openDesign(project?: string | null): void {
+  navigate({ name: 'design', project: project === undefined ? currentProject() : project })
+}
+
+// 删除、归档正在看的任务后回到它那种首页
+function leaveTask(sessionId: string): void {
+  if (store.get().live[sessionId]?.design) openDesign()
+  else openHome()
 }
 
 // Ctrl+B、菜单和顶栏开关共用；设置页没有侧栏
@@ -101,7 +121,8 @@ export function setSidebarNarrow(narrow: boolean): void {
 export async function refreshTasks(): Promise<void> {
   try {
     const tasks = await window.diffra.listSessions(null)
-    store.set((state) => ({ ...state, tasks, projects: tasks.reduce((projects, task) => addProject(projects, task.cwd), state.projects) }))
+    // 无项目任务的文件夹不算项目，不进首页的项目下拉和侧栏的项目分组
+    store.set((state) => ({ ...state, tasks, projects: tasks.reduce((projects, task) => (task.noProject ? projects : addProject(projects, task.cwd)), state.projects) }))
   } catch (error) {
     console.error('读取任务列表失败', error)
   }
@@ -157,10 +178,10 @@ export function wireCoreEvents(): () => void {
     const { route, panel } = store.get()
     if (route.name === 'task' && route.sessionId === sessionId && panel !== 'browser') store.set((current) => ({ ...current, panel: 'browser' }))
   })
-  // 智能体在用设计面板：同样在看这个任务时打开
+  // 智能体在用设计面板：同样在看这个任务时打开，只有设计任务有设计面板
   const offDesignActivity = window.diffra.onDesignActivity(({ sessionId }) => {
-    const { route, panel } = store.get()
-    if (route.name === 'task' && route.sessionId === sessionId && panel !== 'design') store.set((current) => ({ ...current, panel: 'design' }))
+    const { route, panel, live } = store.get()
+    if (route.name === 'task' && route.sessionId === sessionId && live[sessionId]?.design && panel !== 'design') store.set((current) => ({ ...current, panel: 'design' }))
   })
   return () => {
     offUpdate()
@@ -171,10 +192,11 @@ export function wireCoreEvents(): () => void {
   }
 }
 
-function liveFrom(handle: SessionHandle, project: string, title: string, planMode = false): LiveTask {
+function liveFrom(handle: SessionHandle, title: string, planMode = false): LiveTask {
   return {
     sessionId: handle.sessionId,
-    project,
+    project: handle.cwd,
+    noProject: handle.noProject,
     title,
     modelLabel: handle.modelLabel,
     modelRef: handle.modelRef,
@@ -194,13 +216,14 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
   }
 }
 
-// 首页输入框的「先出计划」开着时，第一条消息先出计划，新任务也保持开着
-export async function startTask(project: string, text: string, options: SessionOptions, message: Partial<MessageOptions> = {}): Promise<void> {
-  const handle = await window.diffra.createSession(project, options)
+// 首页输入框的「先出计划」开着时，第一条消息先出计划，新任务也保持开着。project 为 null 时建无项目任务
+export async function startTask(project: string | null, text: string, options: SessionOptions, message: Partial<MessageOptions> = {}): Promise<void> {
+  const title = titleOf(text)
+  const handle = await window.diffra.createSession(project, { ...options, title })
   store.set((state) => ({
     ...state,
-    projects: addProject(state.projects, project),
-    live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), message.plan ?? false) },
+    projects: handle.noProject ? state.projects : addProject(state.projects, handle.cwd),
+    live: { ...state.live, [handle.sessionId]: liveFrom(handle, title, message.plan ?? false) },
     ...(handle.design ? { panel: 'design' as const } : {}),
   }))
   navigate({ name: 'task', sessionId: handle.sessionId })
@@ -217,7 +240,7 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
   try {
     const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
     const live: LiveTask = {
-      ...liveFrom(loaded, task.cwd, loaded.title),
+      ...liveFrom(loaded, loaded.title),
       progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
       turns: loaded.turns.map(turnFromStored),
       usage: lastUsage(loaded.turns),
@@ -401,21 +424,25 @@ export async function setArchived(sessionId: string, archived: boolean): Promise
     await window.diffra.updateSession(sessionId, { archived })
     await refreshTasks()
     const route = store.get().route
-    if (archived && route.name === 'task' && route.sessionId === sessionId) openHome()
+    if (archived && route.name === 'task' && route.sessionId === sessionId) leaveTask(sessionId)
   } catch (error) {
     showToast(errorMessage(error))
   }
 }
 
-export async function deleteTask(sessionId: string): Promise<void> {
+// trashFolder：无项目任务连文件夹一起移到回收站。删掉了才离开任务页，失败时留在原任务
+export async function deleteTask(sessionId: string, trashFolder = false): Promise<void> {
   try {
+    const { keptFolder } = await window.diffra.deleteSession(sessionId, { trashFolder })
     const route = store.get().route
-    if (route.name === 'task' && route.sessionId === sessionId) openHome()
-    await window.diffra.deleteSession(sessionId)
+    if (route.name === 'task' && route.sessionId === sessionId) leaveTask(sessionId)
     store.set((state) => {
       const { [sessionId]: _removed, ...live } = state.live
       return { ...state, live }
     })
+    if (keptFolder) {
+      showToast(keptFolder.reason === 'shared' ? `记录已删除，文件夹还有其他任务在用，保留在 ${keptFolder.path}` : `记录已删除，文件夹保留在 ${keptFolder.path}`)
+    }
     await refreshTasks()
   } catch (error) {
     showToast(errorMessage(error))

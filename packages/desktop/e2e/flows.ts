@@ -8,6 +8,11 @@ export function answerOpenDialog(app: ElectronApplication, path: string): Promis
   }, path)
 }
 
+// 直接点应用菜单项，不靠键盘触发菜单快捷键
+export function clickMenuItem(app: ElectronApplication, id: string): Promise<void> {
+  return app.evaluate(({ Menu }, itemId) => Menu.getApplicationMenu()?.getMenuItemById(itemId)?.click(), id)
+}
+
 // 在首页通过项目下拉选择文件夹
 export async function chooseProject(app: ElectronApplication, window: Page, dir: string): Promise<void> {
   await answerOpenDialog(app, dir)
@@ -25,6 +30,13 @@ export async function startTask(window: Page, text: string): Promise<void> {
   await taskInput(window).fill(text)
   await window.getByRole('button', { name: '发送', exact: true }).click()
   await expect(window.getByTestId('task-title')).toBeVisible()
+}
+
+// 从侧栏进设计首页，发出一个设计任务；之前选过的项目沿用
+export async function startDesignTask(window: Page, text: string): Promise<void> {
+  await window.getByTestId('sidebar').getByRole('button', { name: '设计', exact: true }).click()
+  await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
+  await startTask(window, text)
 }
 
 export async function waitTaskDone(window: Page, timeout = 20_000): Promise<void> {

@@ -177,7 +177,8 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           )}
         </Section>
 
-        <Section title="检查" action={<SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
+        {/* 无项目任务的文件夹不是用户的项目，不给它存项目设置 */}
+        <Section title="检查" action={task.noProject ? undefined : <SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
           {checks && (
             <>
               <Row

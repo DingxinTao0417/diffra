@@ -8,6 +8,7 @@ export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions
 
 export type Route =
   | { name: 'home'; project: string | null }
+  | { name: 'design'; project: string | null }
   | { name: 'task'; sessionId: string }
   | { name: 'settings'; section: SettingsSection }
 
@@ -25,7 +26,9 @@ export interface MessageOptions {
 export interface LiveTask {
   progress?: TaskProgressView
   sessionId: string
+  // 任务的目录；无项目任务是主进程替它建的文件夹
   project: string
+  noProject: boolean
   title: string
   modelLabel: string
   modelRef?: ModelRef
@@ -61,7 +64,7 @@ export interface AppState {
   route: Route
   // 从设置页返回时回到哪里
   lastWorkRoute: Route
-  // 后退、前进用：去过的首页和任务页（设置页不记）
+  // 后退、前进用：去过的首页、设计首页和任务页（设置页不记）
   history: Route[]
   historyIndex: number
   tasks: StoredSessionSummary[]

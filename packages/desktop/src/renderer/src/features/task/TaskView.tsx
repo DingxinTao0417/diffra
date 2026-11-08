@@ -92,7 +92,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
         <span className="min-w-0 truncate" data-testid="task-title">
           {task.title}
         </span>
-        <TaskMenu sessionId={task.sessionId} title={task.title} project={task.project} archived={archived}>
+        <TaskMenu sessionId={task.sessionId} title={task.title} project={task.project} noProject={task.noProject} archived={archived}>
           <Button variant="ghost" size="icon-sm" aria-label="任务菜单" className="text-muted-foreground">
             <Ellipsis className="size-4" />
           </Button>
@@ -117,9 +117,9 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
           </TooltipContent>
         </Tooltip>
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-        {/* 三个右侧面板互斥，做成一组；终端是独立开关，放在分隔线另一侧 */}
+        {/* 右侧面板互斥，做成一组，设计面板只有设计任务有；终端是独立开关，放在分隔线另一侧 */}
         <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
-          {PANEL_BUTTONS.map((item) => (
+          {PANEL_BUTTONS.filter((item) => item.panel !== 'design' || task.design).map((item) => (
             <PanelButton key={item.panel} label={item.label} active={panel === item.panel} onClick={() => togglePanel(item.panel)}>
               <item.icon className="size-4" />
             </PanelButton>
@@ -176,7 +176,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
                 onStop={() => cancelTask(task.sessionId)}
               />
               <div className="flex flex-wrap items-center gap-3.5 px-1 text-xs text-muted-foreground">
-                <span title={task.project}>{folderName(task.project)}</span>
+                <span title={task.project}>{task.noProject ? '无项目' : folderName(task.project)}</span>
                 {branch && (
                   <span className="flex items-center gap-1">
                     <GitBranch className="size-3" />
@@ -193,7 +193,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
         {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && <BrowserPanel sessionId={task.sessionId} />}
-        {panel === 'design' && <DesignPanel sessionId={task.sessionId} project={task.project} />}
+        {panel === 'design' && <DesignPanel sessionId={task.sessionId} project={task.project} noProject={task.noProject} />}
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />

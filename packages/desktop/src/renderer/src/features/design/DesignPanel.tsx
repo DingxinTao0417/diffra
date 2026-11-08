@@ -8,7 +8,7 @@ import { showToast } from '@/state/store'
 
 // 任务页右侧的设计面板。画布是主进程叠在这块区域上的设计页（OpenPencil，Vue），这里只负责顶栏和把位置告诉主进程。
 // 和浏览器面板一样：弹窗、下拉菜单打开时（Radix 给 body 加 data-scroll-locked）先把它藏起来
-export function DesignPanel({ sessionId, project }: { sessionId: string; project: string }) {
+export function DesignPanel({ sessionId, project, noProject }: { sessionId: string; project: string; noProject: boolean }) {
   const body = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -53,7 +53,7 @@ export function DesignPanel({ sessionId, project }: { sessionId: string; project
           <ToolButton label="打开 .fig 文件" onClick={() => void run(() => window.diffra.designOpenFile(sessionId), '已打开')}>
             <FolderOpen className="size-4" />
           </ToolButton>
-          <ToolButton label="另存到项目（.fig）" onClick={() => void run(() => window.diffra.designSaveFile(sessionId, project), '已另存')}>
+          <ToolButton label={noProject ? '另存为 .fig' : '另存到项目（.fig）'} onClick={() => void run(() => window.diffra.designSaveFile(sessionId, project), '已另存')}>
             <Save className="size-4" />
           </ToolButton>
         </>

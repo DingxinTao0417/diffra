@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, LoaderCircle, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
-import { openHome, openSettings, openTask, pickProject } from '@/state/actions'
+import { openDesign, openHome, openSettings, openTask, pickProject } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { BrandMark } from './BrandMark'
 import { TaskMenu } from './TaskMenu'
@@ -20,28 +20,37 @@ interface SidebarTask {
   title: string
   updatedAt: string
   archived: boolean
+  design: boolean
+  noProject: boolean
 }
 
-// 侧栏的项目分组：有任务的项目按最近更新排，只选过还没建任务的项目排在后面
+// 无项目任务都归到这一组；真实路径小写后不会是这个值
+const NO_PROJECT_KEY = '<no-project>'
+
+// 侧栏的项目分组：有任务的项目按最近更新排，只选过还没建任务的项目排在后面。
+// 无项目任务按标记归到「无项目」一组（path 为 null），和其他项目一起按最近更新排
 function groupTasks(projects: string[], tasks: StoredSessionSummary[], live: AppState['live']) {
   const all: SidebarTask[] = tasks.filter((task) => !task.archived)
   const known = new Set(tasks.map((task) => task.sessionId))
   // 刚建的任务在 core 存盘之前也要显示出来
   for (const task of Object.values(live)) {
     if (!known.has(task.sessionId) && task.turns.length > 0) {
-      all.push({ sessionId: task.sessionId, cwd: task.project, title: task.title, updatedAt: new Date().toISOString(), archived: false })
+      all.push({ sessionId: task.sessionId, cwd: task.project, title: task.title, updatedAt: new Date().toISOString(), archived: false, design: task.design, noProject: task.noProject })
     }
   }
   const byProject = new Map<string, SidebarTask[]>()
   for (const project of projects) byProject.set(project.toLowerCase(), [])
   for (const task of all) {
-    const key = task.cwd.toLowerCase()
+    const key = task.noProject ? NO_PROJECT_KEY : task.cwd.toLowerCase()
     if (!byProject.has(key)) byProject.set(key, [])
     byProject.get(key)?.push(task)
   }
+  // 无项目任务的文件夹被当成项目打开过、又没有项目任务时不单列，免得和「无项目」分组重复
+  const noProjectDirs = new Set(all.filter((task) => task.noProject).map((task) => task.cwd.toLowerCase()))
   const pathOf = (key: string) => projects.find((project) => project.toLowerCase() === key) ?? all.find((task) => task.cwd.toLowerCase() === key)?.cwd ?? key
   return [...byProject.entries()]
-    .map(([key, list]) => ({ path: pathOf(key), tasks: list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) }))
+    .filter(([key, list]) => list.length > 0 || !noProjectDirs.has(key))
+    .map(([key, list]) => ({ key, path: key === NO_PROJECT_KEY ? null : pathOf(key), tasks: list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) }))
     .sort((a, b) => (b.tasks[0]?.updatedAt ?? '').localeCompare(a.tasks[0]?.updatedAt ?? ''))
 }
 
@@ -68,6 +77,7 @@ export function Sidebar() {
   const route = useAppState((state) => state.route)
   const collapsed = useAppState((state) => state.collapsedProjects)
   const expanded = useAppState((state) => state.expandedProjects)
+  const workspacePath = useAppState((state) => state.settings?.defaultWorkspace.path)
   const groups = useMemo(() => groupTasks(projects, tasks, live), [projects, tasks, live])
   const activeSession = route.name === 'task' ? route.sessionId : null
 
@@ -88,6 +98,10 @@ export function Sidebar() {
           <span className="flex-1">搜索</span>
           <Kbd>Ctrl+K</Kbd>
         </SidebarButton>
+        <SidebarButton active={route.name === 'design'} onClick={() => openDesign()}>
+          <PenTool className="size-4" />
+          设计
+        </SidebarButton>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -99,16 +113,18 @@ export function Sidebar() {
           </Button>
         )}
         {groups.map((group) => {
-          const isCollapsed = collapsed.has(group.path)
-          const isExpanded = expanded.has(group.path)
+          const isCollapsed = collapsed.has(group.key)
+          const isExpanded = expanded.has(group.key)
           const hasTasks = group.tasks.length > 0
           const recent = recentTasks(group.tasks, activeSession)
           const hiddenCount = group.tasks.length - recent.length
+          const name = group.path === null ? '无项目' : folderName(group.path)
+          const GroupIcon = group.path === null ? FolderDot : Folder
           return (
-            <div key={group.path} className="space-y-px" data-testid="sidebar-project">
+            <div key={group.key} className="space-y-px" data-testid="sidebar-project">
               <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg px-2 hover:bg-accent">
                 <span className="relative size-4 shrink-0">
-                  <Folder
+                  <GroupIcon
                     className={cn(
                       'size-4 transition-opacity',
                       hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0',
@@ -126,11 +142,11 @@ export function Sidebar() {
                 <button
                   type="button"
                   className={rowButtonClass}
-                  title={group.path}
+                  title={group.path ?? workspacePath}
                   aria-expanded={hasTasks ? !isCollapsed : undefined}
-                  onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.path) : openHome(group.path))}
+                  onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.key) : openHome(group.path))}
                 >
-                  <span className="truncate">{folderName(group.path)}</span>
+                  <span className="truncate">{name}</span>
                 </button>
                 <span className={cn(trailingClass, 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')}>
                   {group.tasks.length || ''}
@@ -139,14 +155,14 @@ export function Sidebar() {
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      aria-label={`在 ${folderName(group.path)} 新建任务`}
+                      aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
                       className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
                       onClick={() => openHome(group.path)}
                     >
                       <Plus className="size-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>在这个项目新建任务</TooltipContent>
+                  <TooltipContent>{group.path === null ? '新建无项目任务' : '在这个项目新建任务'}</TooltipContent>
                 </Tooltip>
               </div>
               {!isCollapsed && (isExpanded ? group.tasks : recent).map((task) => <TaskRow key={task.sessionId} task={task} active={task.sessionId === activeSession} />)}
@@ -154,7 +170,7 @@ export function Sidebar() {
                 <button
                   type="button"
                   className="flex h-7 w-full items-center rounded-lg pr-2 pl-8 text-left text-xs text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                  onClick={() => toggleProject('expandedProjects', group.path)}
+                  onClick={() => toggleProject('expandedProjects', group.key)}
                 >
                   {isExpanded ? '收起' : `显示更多（${hiddenCount}）`}
                 </button>
@@ -175,9 +191,13 @@ export function Sidebar() {
   )
 }
 
-function openProjectFolder() {
+export function openProjectFolder() {
   pickProject().then(
-    (picked) => picked && openHome(picked),
+    (picked) => {
+      if (!picked) return
+      if (store.get().route.name === 'design') openDesign(picked)
+      else openHome(picked)
+    },
     (error: unknown) => showToast(errorMessage(error)),
   )
 }
@@ -252,13 +272,19 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
         setMenuOpen(true)
       }}
     >
+      {/* 画笔放在缩进区，标题仍然对齐；放在主按钮前面，被它铺满整行的 after 盖住，点画笔也是打开任务 */}
+      {task.design && (
+        <span role="img" aria-label="设计任务" className="absolute top-1/2 left-3 flex -translate-y-1/2 text-muted-foreground">
+          <PenTool className="size-3.5" />
+        </span>
+      )}
       <button type="button" className={rowButtonClass} title={task.title} onClick={() => void openTask(task)}>
         <span className="truncate">{task.title}</span>
       </button>
       <span className={cn(trailingClass, 'group-hover/task:opacity-0 group-has-[:focus-visible]/task:opacity-0', menuOpen && 'opacity-0')}>
         {status ? <TaskStatusMarker status={status} /> : formatTime(task.updatedAt)}
       </span>
-      <TaskMenu sessionId={task.sessionId} title={task.title} project={task.cwd} archived={task.archived} open={menuOpen} onOpenChange={setMenuOpen}>
+      <TaskMenu sessionId={task.sessionId} title={task.title} project={task.cwd} noProject={task.noProject} archived={task.archived} open={menuOpen} onOpenChange={setMenuOpen}>
         <button
           type="button"
           aria-label="任务菜单"

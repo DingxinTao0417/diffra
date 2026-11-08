@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, w
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
-import { answerOpenDialog, chooseProject, startTask, taskInput, waitTaskDone } from './flows'
+import { answerOpenDialog, chooseProject, startDesignTask, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -48,10 +48,9 @@ test('设计面板：OpenPencil 画布能画矩形、写中文、撤销，存成
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await startTask(window, '打开设计面板')
+    await startDesignTask(window, '打开设计面板')
     await waitTaskDone(window)
 
-    await window.getByRole('button', { name: '设计', exact: true }).click()
     await expect(window.getByTestId('design-panel')).toBeVisible()
     const design = await findDesignPage(app)
     // 坐标都相对画布：画布左边、上边是图层面板和工具栏
@@ -157,14 +156,13 @@ const REJECT_FIRST_LOCAL_FONTS_QUERY = `if (location.href.includes('design.html'
   }
 }`
 
-// 打开设计面板、写一段中文；返回读文字宽度的函数
+// 建一个设计任务（面板自动打开）、写一段中文；返回读文字宽度的函数
 async function writeChinese(app: ElectronApplication, model: { baseUrl: string }, project: string): Promise<{ design: Page; width: () => Promise<number> }> {
   const window = await app.firstWindow()
   await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
   await chooseProject(app, window, project)
-  await startTask(window, '打开设计面板')
+  await startDesignTask(window, '打开设计面板')
   await waitTaskDone(window)
-  await window.getByRole('button', { name: '设计', exact: true }).click()
   const design = await findDesignPage(app)
   const box = (await design.locator('canvas').boundingBox())!
   await design.mouse.click(box.x + box.width - 20, box.y + box.height - 20)
@@ -228,9 +226,8 @@ test('设计面板：页面不可见时写进去的中文，回到可见后按�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await startTask(window, '打开设计面板')
+    await startDesignTask(window, '打开设计面板')
     await waitTaskDone(window)
-    await window.getByRole('button', { name: '设计', exact: true }).click()
     const design = await findDesignPage(app)
 
     await design.evaluate('window.__setPageHidden(true)')
@@ -257,12 +254,13 @@ const CARD_JSX = `<Frame name="登录卡片" w={320} h="hug" flex="col" gap={12}
   <Frame name="按钮" w="fill" h={40} bg="#2563EB" rounded={8} />
 </Frame>`
 
-test('设计面板：打开后智能体拿到设计工具，用 render 在画布上画、读回节点；关着面板时调用会把面板打开；没打开过面板的任务不带设计工具', async () => {
+test('设计任务：普通任务顶栏没有设计按钮、也不带设计工具；设计任务带设计工具，用 render 在画布上画、读回节点；关掉面板后智能体调用会把面板打开', async () => {
   test.setTimeout(120_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-agent-'))
   const model = await startScriptedModel([
     { text: '先聊聊' },
+    { text: '好的' },
     { toolCalls: [{ name: 'design_render', input: { jsx: CARD_JSX } }] },
     { toolCalls: [{ name: 'design_find_nodes', input: { type: 'TEXT' } }] },
     { text: '画好了' },
@@ -274,16 +272,20 @@ test('设计面板：打开后智能体拿到设计工具，用 render 在画布
     await chooseProject(app, window, project)
     await startTask(window, '先不画')
     await waitTaskDone(window)
+    // 侧栏也有「设计」按钮，顶栏的面板按钮限定在 header 里找
+    const designToggle = window.locator('header').getByRole('button', { name: '设计', exact: true })
+    await expect(designToggle).toHaveCount(0)
 
-    // 打开设计面板，主进程把设计工具配置给会话；关掉面板后让智能体画
-    await window.getByRole('button', { name: '设计', exact: true }).click()
+    // 设计任务的面板自动打开；关掉面板后让智能体画
+    await startDesignTask(window, '先看看画布')
+    await waitTaskDone(window)
     const design = await findDesignPage(app)
-    await window.getByRole('button', { name: '设计', exact: true }).click()
+    await designToggle.click()
     await expect(window.getByTestId('design-panel')).toBeHidden()
     await taskInput(window).fill('画一个登录卡片')
     await window.getByRole('button', { name: '发送', exact: true }).click()
     // 上一轮的「已完成」还在，先等这一轮的请求都到了
-    await expect.poll(() => model.requests(), { timeout: 30_000 }).toBeGreaterThanOrEqual(4)
+    await expect.poll(() => model.requests(), { timeout: 30_000 }).toBeGreaterThanOrEqual(5)
     await waitTaskDone(window, 30_000)
 
     const bodies = model.bodies()
@@ -295,8 +297,11 @@ test('设计面板：打开后智能体拿到设计工具，用 render 在画布
     expect(bodies[1]).not.toContain('"design_export_image"')
     expect(bodies[1]).toContain('design_describe')
     expect(bodies[1]).toContain('Design JSX reference:')
-    expect(bodies[2]).toContain('登录卡片')
-    expect(bodies[3]).toContain('欢迎回来')
+    // render 返回新卡片的 id、名字和类型，作为工具结果回传；用户消息和 render 的参数里都没有这一段
+    const renderResult = String.raw`\"name\":\"登录卡片\",\"type\":\"FRAME\"`
+    expect(bodies[2]).not.toContain(renderResult)
+    expect(bodies[3]).toContain(renderResult)
+    expect(bodies[4]).toContain('欢迎回来')
     // 智能体一用设计工具，面板就打开了；画布上有这张卡片，用户能撤销
     await expect(window.getByTestId('design-panel')).toBeVisible()
     expect(await nodeNames(design, 'TEXT')).toContain('欢迎回来')
@@ -322,7 +327,7 @@ function designFiles(userDataDir: string): string[] {
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.fig')) : []
 }
 
-test('设计任务：首页打开「设计」建任务，面板自动打开、画布占主区，第一条消息就带设计工具（含离线图标）；属性面板和右键菜单能改；自动保存，重启后恢复；删除任务时设计稿一起删', async () => {
+test('设计任务：从设计首页建任务，面板自动打开、画布占主区，第一条消息就带设计工具（含离线图标）；属性面板和右键菜单能改；自动保存，重启后设计首页列出它、点开恢复；侧栏行带设计标记；删除任务时设计稿一起删', async () => {
   test.setTimeout(180_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-task-'))
@@ -334,10 +339,7 @@ test('设计任务：首页打开「设计」建任务，面板自动打开、�
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1600, 1000))
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    const toggle = window.getByRole('button', { name: '设计', exact: true })
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    await startTask(window, '画一个登录卡片')
+    await startDesignTask(window, '画一个登录卡片')
     const panel = window.getByTestId('design-panel')
     await expect(panel).toBeVisible()
     await waitTaskDone(window, 30_000)
@@ -394,20 +396,26 @@ test('设计任务：首页打开「设计」建任务，面板自动打开、�
     await window.waitForTimeout(2500)
     await app.close()
 
-    // 重启后打开任务：还是设计任务，面板自动打开，卡片和改过的宽度都在
+    // 重启后：侧栏的任务行带设计标记；设计首页列出这个任务，点开还是设计任务，面板自动打开，卡片和改过的宽度都在
     app = await launchApp(userDataDir)
     window = await app.firstWindow()
-    await window.getByTestId('sidebar-task').click()
+    await expect(window.getByTestId('sidebar-task').getByRole('img', { name: '设计任务', exact: true })).toBeVisible()
+    await window.getByTestId('sidebar').getByRole('button', { name: '设计', exact: true }).click()
+    await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
+    // 侧栏的任务行也是同名按钮，限定在主区里找
+    await window.locator('main').getByRole('button', { name: /画一个登录卡片/ }).click()
+    await expect(window.getByTestId('task-title')).toHaveText('画一个登录卡片')
     await expect(window.getByTestId('design-panel')).toBeVisible()
     design = await findDesignPage(app)
     await expect.poll(() => nodeNames(design, 'FRAME'), { timeout: 15_000 }).toEqual(expect.arrayContaining(['登录卡片', 'bell']))
     expect(await cardWidth(design)).toBe(400)
 
-    // 删除任务：设计稿一起删
+    // 删除正在看的设计任务：设计稿一起删，回到设计首页
     await window.getByTestId('sidebar-task').click({ button: 'right' })
     await window.getByRole('menuitem', { name: '删除任务记录' }).click()
     await window.getByRole('button', { name: '删除记录', exact: true }).click()
     await expect(window.getByTestId('sidebar-task')).toHaveCount(0)
+    await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
     await expect.poll(() => designFiles(userDataDir).length).toBe(0)
   } finally {
     await app.close()

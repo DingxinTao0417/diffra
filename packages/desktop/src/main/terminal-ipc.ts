@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, isAbsolute, relative, sep } from 'node:path'
 import type { DevServerParams, DevServerResult } from '@diffra/core/types'
 import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import { type IPty, spawn } from 'node-pty'
@@ -31,6 +31,8 @@ const LOG_LINES = 80
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)/g
 const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+\.localhost):\d+[^\s'"\x1b]*/
 const devServers = new Map<string, { terminalId: string; command: string }>()
+// 结束终端后等它退出的上限
+const EXIT_WAIT_MS = 5000
 
 const terminals = new Map<string, TerminalEntry>()
 // 已经挂了清理监听的窗口
@@ -51,6 +53,19 @@ function killTerminal(id: string): void {
   } catch (error) {
     console.error(`[terminal] 结束终端 ${id} 失败`, error)
   }
+}
+
+// 等进程真正退出：Windows 上进程还在时，它的当前目录删不掉也移不走
+function killTerminalAndWait(id: string): Promise<void> {
+  const entry = terminals.get(id)
+  if (!entry) return Promise.resolve()
+  let timer: NodeJS.Timeout | undefined
+  const exited = new Promise<void>((resolve) => {
+    entry.pty.onExit(() => resolve())
+    timer = setTimeout(resolve, EXIT_WAIT_MS)
+  })
+  killTerminal(id)
+  return exited.finally(() => clearTimeout(timer))
 }
 
 function killOwnedBy(owner: WebContents): void {
@@ -153,11 +168,22 @@ export async function devServer(params: DevServerParams): Promise<DevServerResul
   return { text: `已经在跑，但一分钟内没看到本地地址：${params.command}\n${tail(opened?.output ?? '')}\n可以用 dev_server_logs 再看输出。`, url: null }
 }
 
-export function stopDevServer(sessionId: string): void {
+export async function stopDevServer(sessionId: string): Promise<void> {
   const running = devServers.get(sessionId)
   if (!running) return
   devServers.delete(sessionId)
-  killTerminal(running.terminalId)
+  await killTerminalAndWait(running.terminalId)
+}
+
+// path 是 dir 本身或在它下面；Windows 路径不分大小写
+export function pathInside(dir: string, path: string): boolean {
+  const rel = process.platform === 'win32' ? relative(dir.toLowerCase(), path.toLowerCase()) : relative(dir, path)
+  return !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+}
+
+// 结束起始目录在 dir 里（含子目录）的终端，等它们退出
+export async function killTerminalsIn(dir: string): Promise<void> {
+  await Promise.all([...terminals].filter(([, entry]) => pathInside(dir, entry.cwd)).map(([id]) => killTerminalAndWait(id)))
 }
 
 export function registerTerminalIpc(): void {

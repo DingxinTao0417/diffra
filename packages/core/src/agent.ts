@@ -324,19 +324,25 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
-        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, taskState: taskStateView(live), design: live.designTask }
+        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, taskState: taskStateView(live), design: live.designTask, noProject: live.noProject }
         return { _meta: { diffra: loaded } }
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
       // 没在运行却是 running，说明还没有确定的任务状态，交给界面按轮次推导
-      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }), design: session.designTask }
+      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }), design: session.designTask, noProject: session.noProject }
       return { _meta: { diffra: loaded } }
     })
     .onRequest(acp.methods.agent.session.list, async ({ params }) => ({
       sessions: (await requireStore().list(params.cwd ?? undefined)).map((entry) => {
-        const meta: StoredSessionMeta = { createdAt: entry.createdAt, archived: entry.archived, turnCount: entry.turnCount }
+        const meta: StoredSessionMeta = {
+          createdAt: entry.createdAt,
+          archived: entry.archived,
+          turnCount: entry.turnCount,
+          design: entry.design,
+          noProject: entry.noProject,
+        }
         return { sessionId: entry.id, cwd: entry.cwd, title: entry.title, updatedAt: entry.updatedAt, _meta: { diffra: meta } }
       }),
     }))
@@ -344,7 +350,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (sessions.get(params.sessionId)?.running) throw new Error('任务还在进行中，先停止再删除')
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
-      void retainMcp()
+      // 等 stdio 服务器退出再返回：Windows 上它们的当前目录就是任务目录，调用方接着要删这个目录
+      await retainMcp()
       await requireStore().remove(params.sessionId)
       return {}
     })

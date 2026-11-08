@@ -151,6 +151,8 @@ export interface Settings {
   execution: ExecutionSettings
   mcpServers: McpServerConfig[]
   plugins: InstalledPlugin[]
+  // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
+  defaultWorkspace: string | null
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
@@ -166,6 +168,8 @@ export interface SettingsView {
   security: SecuritySettings
   execution: ExecutionSettings
   mcpServers: McpServerConfig[]
+  // 无项目任务的保存位置，已经按默认值解析好
+  defaultWorkspace: { path: string; isDefault: boolean }
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

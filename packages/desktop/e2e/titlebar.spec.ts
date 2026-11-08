@@ -15,7 +15,7 @@ const appRegion = (locator: Locator) => computedStyle(locator, '-webkit-app-regi
 // 点主进程里的菜单项，和用户在弹出的菜单里点一样
 const clickMenuItem = (app: ElectronApplication, id: string) => app.evaluate(({ Menu }, itemId) => Menu.getApplicationMenu()?.getMenuItemById(itemId)?.click(), id)
 
-test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹出、菜单项能用；系统窗口按钮跟着深浅色；侧栏开关；后退前进', async () => {
+test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹出、菜单项能用；系统窗口按钮跟着深浅色；侧栏开关；后退前进（含设计首页）', async () => {
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-titlebar-'))
@@ -122,6 +122,15 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     await expect(window.getByTestId('task-title')).toHaveText('打个招呼')
     await clickMenuItem(app, 'new-task')
     await expect(window.getByRole('heading', { name: '要做什么？' })).toBeVisible()
+    await expect(forward).toBeDisabled()
+
+    // 设计首页也记进历史：首页 → 设计首页，后退回首页，前进回设计首页
+    await window.getByTestId('sidebar').getByRole('button', { name: '设计', exact: true }).click()
+    await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
+    await back.click()
+    await expect(window.getByRole('heading', { name: '要做什么？' })).toBeVisible()
+    await forward.click()
+    await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
     await expect(forward).toBeDisabled()
   } finally {
     await app.close()

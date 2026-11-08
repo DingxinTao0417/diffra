@@ -1,5 +1,6 @@
 // 测试用的 MCP 服务器（stdio，按行收发 JSON-RPC），不依赖 SDK，core 单测和桌面端 e2e 共用。
 // 工具：echo（声明只读）、write_note（在当前目录写 note.txt）、whoami（返回环境变量和目录）、fail（返回出错）
+// DIFFRA_TEST_INIT_DELAY_MS：晚这么久才回 initialize，测还在连接时的处理
 import { writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
@@ -61,5 +62,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } catch (error) {
     reply = { jsonrpc: '2.0', id: message.id, error: { code: error.code ?? -32603, message: error.message ?? String(error) } }
   }
-  process.stdout.write(`${JSON.stringify(reply)}\n`)
+  const send = () => process.stdout.write(`${JSON.stringify(reply)}\n`)
+  const delay = message.method === 'initialize' ? Number(process.env.DIFFRA_TEST_INIT_DELAY_MS ?? 0) : 0
+  if (delay > 0) setTimeout(send, delay)
+  else send()
 })

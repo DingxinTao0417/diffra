@@ -148,6 +148,8 @@ export interface SessionConfig {
   browser?: boolean
   // 设计任务：建会话时定下，存进会话记录；客户端在每轮开始前把设计面板的工具配置给它
   design?: boolean
+  // 无项目任务：cwd 是客户端替任务建的文件夹，不是用户的项目。建会话时定下，存进会话记录
+  noProject?: boolean
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -271,7 +273,7 @@ export interface DesignToolSpec {
   readOnly: boolean
 }
 
-// 用户打开设计面板后客户端配置给会话（SESSION_EXT_METHODS.sessionConfigure）：之后的轮次带上设计工具和这段说明
+// 设计任务每轮开始前由客户端配置给会话（SESSION_EXT_METHODS.sessionConfigure）：之后的轮次带上设计工具和这段说明
 export interface SessionDesign {
   tools: DesignToolSpec[]
   instructions: string
@@ -344,6 +346,7 @@ export interface LoadedSession {
   // core 当前的任务状态，比最后一轮里的快照新（撤销、应用退出都会改它）
   taskState?: TaskProgressView
   design: boolean
+  noProject: boolean
 }
 
 // session/list 里每个会话 _meta.diffra 带的字段
@@ -351,6 +354,8 @@ export interface StoredSessionMeta {
   createdAt: string
   archived: boolean
   turnCount: number
+  design: boolean
+  noProject: boolean
 }
 
 // 客户端整理后的会话列表项

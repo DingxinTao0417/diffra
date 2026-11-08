@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 import { type ModelEndpoint, type ModelError, requestListModels, requestTestModel } from '@diffra/core'
-import { ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
@@ -58,6 +60,20 @@ export async function providerEndpoint(
   return { ok: true, endpoint: { protocol: provider.protocol, baseUrl: provider.baseUrl, apiKey } }
 }
 
+let warnedWorkspace: string | null = null
+
+// 无项目任务的保存位置。默认值：打包版放「文档\Diffra」；开发版和 e2e 放数据目录下，不往真实的「文档」里写
+export function workspaceRoot(settings: SettingsStore): { path: string; isDefault: boolean } {
+  const chosen = settings.get().defaultWorkspace
+  if (chosen && isAbsolute(chosen)) return { path: chosen, isDefault: false }
+  // 手改设置文件写成相对路径时会按主进程的当前目录解析（打包版常是安装目录），回落到默认值
+  if (chosen && warnedWorkspace !== chosen) {
+    warnedWorkspace = chosen
+    console.warn(`[settings] 默认保存位置不是绝对路径，改用默认值：${chosen}`)
+  }
+  return { path: app.isPackaged ? join(app.getPath('documents'), 'Diffra') : join(app.getPath('userData'), 'workspace'), isDefault: true }
+}
+
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
     const { providers, roles, appearance, defaultPermissionMode, security, execution, mcpServers } = settings.get()
@@ -71,6 +87,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       security,
       execution,
       mcpServers,
+      defaultWorkspace: workspaceRoot(settings),
       loadError: settings.loadError ?? secrets.loadError,
     }
   }
@@ -91,6 +108,29 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     )
     await settings.update((current) => ({ ...current, ...change }))
     return view()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.workspacePick, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = { title: '选择默认保存位置', defaultPath: workspaceRoot(settings).path, properties: ['openDirectory' as const, 'createDirectory' as const] }
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+    const path = result.canceled ? undefined : result.filePaths[0]
+    if (!path) return null
+    await settings.update((current) => ({ ...current, defaultWorkspace: path }))
+    return view()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.workspaceReset, async () => {
+    await settings.update((current) => ({ ...current, defaultWorkspace: null }))
+    return view()
+  })
+
+  // 默认位置在建第一个无项目任务时才创建，这里先建好再打开
+  ipcMain.handle(IPC_CHANNELS.workspaceOpen, async () => {
+    const { path } = workspaceRoot(settings)
+    await mkdir(path, { recursive: true })
+    const message = await shell.openPath(path)
+    if (message) throw new Error(`打不开文件夹：${message}`)
   })
 
   ipcMain.handle(IPC_CHANNELS.providerSave, async (_event, raw: unknown) => {

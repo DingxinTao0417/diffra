@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { readdir, stat } from 'node:fs/promises'
+import { mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import {
@@ -40,20 +40,22 @@ import {
   type LoadedSessionHandle,
   type PermissionRequestEvent,
   type ProjectState,
+  type SessionDeleteResult,
   type SessionHandle,
+  type TaskFolderState,
 } from '../shared/ipc'
 import { modelDisplayName, type ModelRef } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
 import { designHost } from './design'
-import { devServer, stopDevServer } from './terminal-ipc'
+import { devServer, killTerminalsIn, pathInside, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
 import { mcpServersFor } from './mcp-servers'
 import { enabledPlugins } from './plugins-ipc'
 import { SESSION_RULES } from './rule-packs'
 import type { SecretStore } from './secret-store'
-import { providerEndpoint } from './settings-ipc'
+import { providerEndpoint, workspaceRoot } from './settings-ipc'
 import {
   modelRefSchema,
   permissionModeSchema,
@@ -68,6 +70,8 @@ const sessionOptionsSchema = z.object({
   model: modelRefSchema.optional(),
   // 设计任务，只在新建时有效
   design: z.boolean().optional(),
+  // 无项目任务用它给文件夹起名，只在新建时有效
+  title: z.string().max(200).optional(),
 })
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
@@ -77,7 +81,11 @@ const promptImagesSchema = z
   .max(6)
 const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean(), images: promptImagesSchema })
 
-const mcpTargetSchema = z.union([z.object({ sessionId: z.string().min(1) }), z.object({ projectPath: z.string().min(1).nullable() })])
+const mcpTargetSchema = z.union([
+  z.object({ sessionId: z.string().min(1) }),
+  z.object({ projectPath: z.string().min(1).nullable() }),
+  z.object({ noProject: z.literal(true) }),
+])
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 
@@ -263,18 +271,62 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     }
   }
 
-  ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
-    const path = parse(z.string().min(1), rawPath)
-    const options = parse(sessionOptionsSchema, rawOptions ?? {})
-    const dir = await stat(path).catch(() => null)
-    if (!dir?.isDirectory()) throw new Error(encodeStartTaskError('project-missing', '项目文件夹不存在或已被移走，请重新选择项目'))
-    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options).catch((error: unknown) => {
+  const configForCreate = (path: string, options: SessionOptions) =>
+    sessionConfig(path, options).catch((error: unknown) => {
       throw error instanceof ModelConfigError ? new Error(encodeStartTaskError(error.code, error.message)) : error
     })
-    const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
+
+  // 无项目任务：先组装会话配置，模型不对就在这里失败，不留空目录；再在默认保存位置下建文件夹
+  const createInWorkspace = async (options: SessionOptions) => {
+    const root = workspaceRoot(settings).path
+    const base = workspaceFolderName(options.title ?? '')
+    const prepared = await configForCreate(join(root, base), options)
+    const cwd = await makeWorkspaceFolder(root, base)
+    const project = projectState(cwd)
+    const config: SessionConfig = {
+      ...prepared.config,
+      checks: project.checks,
+      readOnlyPaths: project.readOnlyPaths,
+      checkpointDir: join(userDataDir, 'checkpoints', projectKey(cwd)),
+      noProject: true,
+    }
+    try {
+      return { ...prepared, config, cwd, created: await createSession(await coreConnection(), cwd, config, await mcpServersFor(settings, secrets)) }
+    } catch (error) {
+      // rmdir 只删空目录；建会话失败时智能体还没动过它
+      await rmdir(cwd).catch(() => undefined)
+      throw error
+    }
+  }
+
+  const createInProject = async (path: string, options: SessionOptions) => {
+    const dir = await stat(path).catch(() => null)
+    if (!dir?.isDirectory()) throw new Error(encodeStartTaskError('project-missing', '项目文件夹不存在或已被移走，请重新选择项目'))
+    const prepared = await configForCreate(path, options)
+    const created = await createSession(await coreConnection(), path, prepared.config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
+    return { ...prepared, cwd: path, created }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
+    const path = parse(z.string().min(1).nullable(), rawPath)
+    const options = parse(sessionOptionsSchema, rawOptions ?? {})
+    // 无项目任务不记 lastProject：它的文件夹不是用户的项目，下次启动和 MCP 设置页的检测目录都还用上一个项目
+    const { config, modelLabel, planLabel, fallbackLabel, cwd, created } = path === null ? await createInWorkspace(options) : await createInProject(path, options)
+    const { sessionId, info } = created
     if (config.design) designHost.enable(sessionId)
-    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, design: config.design ?? false }
+    return {
+      sessionId,
+      info,
+      modelLabel,
+      modelRef: options.model ?? settings.get().roles.coder ?? undefined,
+      planLabel,
+      fallbackLabel,
+      permissionMode: config.permissionMode,
+      design: config.design ?? false,
+      cwd,
+      noProject: path === null,
+    }
   })
 
   // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
@@ -318,6 +370,23 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     if (message) throw new Error(`打不开文件夹：${message}`)
   })
 
+  // 无项目任务的文件夹，以及还有没有别的任务（含已归档）用着它或它下面的目录：用户可能把它选成项目，在里面建了项目任务。
+  // 项目任务为 null；记录不在索引里时为 unknown，不知道文件夹是谁的，不动它
+  const workspaceFolderOf = async (sessionId: string) => {
+    const sessions = await listSessions(await coreConnection())
+    const entry = sessions.find((item) => item.sessionId === sessionId)
+    if (!entry) return 'unknown' as const
+    if (!entry.noProject) return null
+    return { cwd: entry.cwd, shared: sessions.some((item) => item.sessionId !== sessionId && pathInside(entry.cwd, item.cwd)) }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.sessionFolderState, async (_event, rawSessionId: unknown): Promise<TaskFolderState> => {
+    const folder = await workspaceFolderOf(parse(z.string().min(1), rawSessionId))
+    if (folder === 'unknown') return 'unknown'
+    if (!folder) return 'missing'
+    return folder.shared ? 'shared' : folderState(folder.cwd)
+  })
+
   // 会话记录占用的磁盘空间
   ipcMain.handle(IPC_CHANNELS.sessionsStorage, async () => {
     const dir = join(userDataDir, 'sessions')
@@ -337,9 +406,23 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const path = parse(z.string().min(1), rawPath)
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
-    await rememberProject(path)
+    if (!loaded.noProject) await rememberProject(path)
     if (loaded.design) designHost.enable(sessionId)
-    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns, taskState: loaded.taskState, design: loaded.design }
+    return {
+      sessionId,
+      info: loaded.info,
+      modelLabel,
+      modelRef: settings.get().roles.coder ?? undefined,
+      planLabel,
+      fallbackLabel,
+      permissionMode: config.permissionMode,
+      title: loaded.title,
+      turns: loaded.turns,
+      taskState: loaded.taskState,
+      design: loaded.design,
+      cwd: path,
+      noProject: loaded.noProject,
+    }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>
@@ -362,12 +445,52 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     await updateSession(await coreConnection(), sessionId, change)
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionDelete, async (_event, rawSessionId: unknown) => {
-    const sessionId = parse(z.string().min(1), rawSessionId)
+  // 无项目任务的文件夹：空的直接删，否则用户勾了才移到回收站，连同它独占的检查点仓库；别的任务还用着就不动。
+  // 路径按 core 记下的 cwd，不用界面传来的。先让 core 删会话：任务还在跑会被拒绝，这时什么都没动；
+  // core 等 MCP 服务器退出才返回，再停开发服务器、结束在文件夹里的终端，Windows 上被占用的文件夹删不掉也移不走。
+  // 文件夹没删掉时记录照样删了，保留文件夹是安全的，告诉界面它留在哪。
+  // core 删完记录后的清理各自兜住错误：记录已经没了，再让界面报删除失败只会让用户重试一个不存在的任务
+  const removeSession = async (sessionId: string, trashFolder: boolean): Promise<SessionDeleteResult> => {
+    const folder = await workspaceFolderOf(sessionId)
     await deleteSession(await coreConnection(), sessionId)
-    browserHost.close(sessionId)
-    await designHost.remove(sessionId)
-    stopDevServer(sessionId)
+    const cleanup = async (label: string, step: () => unknown) => {
+      try {
+        await step()
+      } catch (error) {
+        console.error(`[sessions] 删除任务后${label}失败`, error)
+      }
+    }
+    await cleanup('关闭浏览器', () => browserHost.close(sessionId))
+    await cleanup('移除设计稿', () => designHost.remove(sessionId))
+    await cleanup('停止开发服务器', () => stopDevServer(sessionId))
+    if (!folder || folder === 'unknown') return { keptFolder: null }
+    if (folder.shared) return { keptFolder: { path: folder.cwd, reason: 'shared' } }
+    const state = await folderState(folder.cwd)
+    if (state === 'nonEmpty' && !trashFolder) return { keptFolder: null }
+    if (state !== 'missing') {
+      await cleanup('结束文件夹里的终端', () => killTerminalsIn(folder.cwd))
+      try {
+        // 只移到回收站，不永久删除；rmdir 只删空目录
+        await removeFolder(folder.cwd, () => (state === 'empty' ? rmdir(folder.cwd) : shell.trashItem(folder.cwd)))
+      } catch (error) {
+        console.error('[sessions] 任务文件夹删除失败', error)
+        return { keptFolder: { path: folder.cwd, reason: 'failed' } }
+      }
+    }
+    await cleanup('删除检查点仓库', () => rm(join(userDataDir, 'checkpoints', projectKey(folder.cwd)), { recursive: true, force: true }))
+    return { keptFolder: null }
+  }
+
+  // 同一个任务的并发删除共用一次：两次同时清理同一个文件夹会互相报错，后一次也可能读到删了一半的记录
+  const deleting = new Map<string, Promise<SessionDeleteResult>>()
+  ipcMain.handle(IPC_CHANNELS.sessionDelete, (_event, rawSessionId: unknown, rawOptions: unknown): Promise<SessionDeleteResult> => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const { trashFolder } = parse(z.object({ trashFolder: z.boolean() }), rawOptions ?? { trashFolder: false })
+    const running = deleting.get(sessionId)
+    if (running) return running
+    const task = removeSession(sessionId, trashFolder).finally(() => deleting.delete(sessionId))
+    deleting.set(sessionId, task)
+    return task
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawOptions: unknown) => {
@@ -406,15 +529,22 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return response.stopReason
   })
 
-  // 任务用建任务时的配置；没有任务时按设置里开着的插件和服务器，在最近的项目（没有就用户目录）里启动
-  const listTarget = (raw: unknown) => {
+  // 任务用建任务时的配置；没有任务时按设置里开着的插件和服务器，在最近的项目（没有就用户目录）里启动。
+  // 无项目首页用数据目录下一个专门的空目录：新任务建在默认保存位置下的空文件夹里，列不出任何项目 Skill，
+  // 这里不能用上一个项目或默认保存位置本身；在默认保存位置起 stdio MCP 还会占住它，没法改名或移动
+  const listTarget = async (raw: unknown) => {
     const target = parse(mcpTargetSchema, raw)
     if ('sessionId' in target) return target
+    if ('noProject' in target) {
+      const cwd = join(userDataDir, 'no-project')
+      await mkdir(cwd, { recursive: true })
+      return { cwd, plugins: enabledPlugins(settings) }
+    }
     return { cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'), plugins: enabledPlugins(settings) }
   }
 
   const mcpTarget = async (raw: unknown) => {
-    const target = listTarget(raw)
+    const target = await listTarget(raw)
     if ('sessionId' in target) return target
     return { ...target, servers: await mcpServersFor(settings, secrets) }
   }
@@ -433,9 +563,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     ),
   )
 
-  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawTarget: unknown) => listSkills(await coreConnection(), listTarget(rawTarget)))
+  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawTarget: unknown) => listSkills(await coreConnection(), await listTarget(rawTarget)))
 
-  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawTarget: unknown) => listCommands(await coreConnection(), listTarget(rawTarget)))
+  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawTarget: unknown) => listCommands(await coreConnection(), await listTarget(rawTarget)))
 
   ipcMain.handle(IPC_CHANNELS.sessionCancel, async (_event, rawSessionId: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)
@@ -457,6 +587,85 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.checkpointRestore, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
     restoreCheckpoint(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
+}
+
+const WORKSPACE_TITLE_CHARS = 20
+
+// 无项目任务的文件夹名：「本地日期 标题前 20 字」，去掉 Windows 不允许的字符和末尾的点、空格。
+// 以日期开头，不会撞上 CON、NUL 这类保留名
+function workspaceFolderName(title: string): string {
+  const now = new Date()
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const cleaned = Array.from(title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, ''))
+    .slice(0, WORKSPACE_TITLE_CHARS)
+    .join('')
+    .trim()
+    .replace(/[. ]+$/, '')
+  return `${date} ${cleaned || '新任务'}`
+}
+
+// 子文件夹不带 recursive：重名时 mkdir 原子地报 EEXIST，换下一个序号，不先查后建
+async function makeWorkspaceFolder(root: string, base: string): Promise<string> {
+  const unavailable = (error: unknown) =>
+    new Error(encodeStartTaskError('workspace-missing', `默认保存位置不可用（${root}）：${error instanceof Error ? error.message : String(error)}`))
+  await mkdir(root, { recursive: true }).catch((error: unknown) => {
+    throw unavailable(error)
+  })
+  for (let index = 1; ; index++) {
+    const path = join(root, index === 1 ? base : `${base} (${index})`)
+    try {
+      await mkdir(path)
+      return path
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw unavailable(error)
+    }
+  }
+}
+
+// 读不了（权限等）按不空算：宁可多问一句，也不当成空文件夹删掉
+async function folderState(cwd: string): Promise<'empty' | 'nonEmpty' | 'missing'> {
+  try {
+    return (await readdir(cwd)).length === 0 ? 'empty' : 'nonEmpty'
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'nonEmpty'
+  }
+}
+
+const REMOVE_RETRY_MS = 200
+const REMOVE_RETRY_TOTAL_MS = 3000
+const BUSY_CODES = new Set(['EBUSY', 'EPERM', 'EACCES'])
+// shell.trashItem 在 Windows 上只给文字说明，没有 code；文件夹被占用时是这两种
+const TRASH_BUSY_MESSAGES = ['Failed to perform delete operation', 'File operation aborted']
+
+function folderBusy(error: unknown): boolean {
+  if (BUSY_CODES.has((error as NodeJS.ErrnoException).code ?? '')) return true
+  return error instanceof Error && TRASH_BUSY_MESSAGES.some((text) => error.message.includes(text))
+}
+
+// 读不了（权限等）按还在算
+async function folderExists(cwd: string): Promise<boolean> {
+  try {
+    await stat(cwd)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+}
+
+// 刚结束的终端、MCP 服务器，以及杀毒和索引服务，可能还短暂占着文件夹：被占用时隔一会儿再试，最多约 3 秒；
+// 中途文件夹已经不在了就算删掉了
+async function removeFolder(cwd: string, remove: () => Promise<void>): Promise<void> {
+  const started = Date.now()
+  for (;;) {
+    try {
+      await remove()
+      return
+    } catch (error) {
+      if (!(await folderExists(cwd))) return
+      if (!folderBusy(error) || Date.now() - started >= REMOVE_RETRY_TOTAL_MS) throw error
+      await new Promise((resolve) => setTimeout(resolve, REMOVE_RETRY_MS))
+    }
+  }
 }
 
 // 每个项目一个检查点仓库；Windows 路径不分大小写

@@ -66,6 +66,7 @@ export const IPC_CHANNELS = {
   checkpointDiff: 'session:checkpoint-diff',
   projectBranch: 'project:branch',
   projectOpenFolder: 'project:open-folder',
+  sessionFolderState: 'session:folder-state',
   attachmentDescribe: 'attachment:describe',
   sessionsStorage: 'sessions:storage',
   usageSummary: 'usage:summary',
@@ -77,6 +78,9 @@ export const IPC_CHANNELS = {
   terminalExit: 'terminal:exit',
   terminalOpened: 'terminal:opened',
   preferencesSave: 'settings:preferences-save',
+  workspacePick: 'settings:workspace-pick',
+  workspaceReset: 'settings:workspace-reset',
+  workspaceOpen: 'settings:workspace-open',
   openExternal: 'shell:open-external',
   sessionPrompt: 'session:prompt',
   sessionDeepScan: 'session:deep-scan',
@@ -180,17 +184,31 @@ export interface SessionHandle {
   permissionMode: PermissionMode
   // 设计任务：任务页打开设计面板，画布占主区
   design: boolean
+  // 任务的目录：项目任务就是项目，无项目任务是主进程在默认保存位置下替它建的文件夹
+  cwd: string
+  noProject: boolean
 }
 
 export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
   design?: boolean
+  // 任务标题，无项目任务用它给文件夹起名；只在新建时有效
+  title?: string
+}
+
+// 无项目任务的文件夹：删除确认框据此决定怎么说。shared 是还有别的任务（含已归档）用着它或它下面的目录，只删记录；
+// unknown 是任务记录不在索引里，不知道文件夹在哪，也只删记录
+export type TaskFolderState = 'empty' | 'nonEmpty' | 'missing' | 'shared' | 'unknown'
+
+// 删除任务后没动的文件夹：shared 是别的任务还在用，failed 是删除或移到回收站没成功；用户自己选了保留时为 null
+export interface SessionDeleteResult {
+  keptFolder: { path: string; reason: 'shared' | 'failed' } | null
 }
 
 // 新建任务失败的原因。ipcMain.handle 抛出的错误过 IPC 后只剩 message，所以原因写在 message 开头的「[code] 」里
-export type StartTaskErrorCode = 'model-missing' | 'model-auth' | 'project-missing' | 'unknown'
-const START_TASK_ERROR_CODES = ['model-missing', 'model-auth', 'project-missing'] as const
+export type StartTaskErrorCode = 'model-missing' | 'model-auth' | 'project-missing' | 'workspace-missing' | 'unknown'
+const START_TASK_ERROR_CODES = ['model-missing', 'model-auth', 'project-missing', 'workspace-missing'] as const
 
 export function encodeStartTaskError(code: (typeof START_TASK_ERROR_CODES)[number], message: string): string {
   return `[${code}] ${message}`
@@ -202,8 +220,9 @@ export function decodeStartTaskError(message: string): { code: StartTaskErrorCod
   return match && code ? { code, message: message.slice(match[0].length) } : { code: 'unknown', message }
 }
 
-// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）；也决定斜杠菜单列哪些 Skill 和命令
-export type McpStatusTarget = { sessionId: string } | { projectPath: string | null }
+// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动，
+// noProject 时在默认保存位置里启动）；也决定斜杠菜单列哪些 Skill 和命令
+export type McpStatusTarget = { sessionId: string } | { projectPath: string | null } | { noProject: true }
 
 // 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
 export interface PromptOptions {
@@ -253,13 +272,16 @@ export interface DiffraApi {
   // 在项目目录试跑一条检查命令
   runCheck(path: string, command: string): Promise<CheckRunResult>
   saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
-  createSession(projectPath: string, options?: SessionOptions): Promise<SessionHandle>
+  // projectPath 为 null 时建无项目任务
+  createSession(projectPath: string | null, options?: SessionOptions): Promise<SessionHandle>
   // 返回新的模型名（换了模型时）
   configureSession(sessionId: string, options: SessionOptions): Promise<{ modelLabel: string | null }>
   rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean }>
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
   openProjectFolder(projectPath: string): Promise<void>
+  // 删除无项目任务前，看它的文件夹是空的、不空、已经不在，还是别的任务也在用
+  taskFolderState(sessionId: string): Promise<TaskFolderState>
   describeAttachments(paths: string[]): Promise<FileReference[]>
   getPathForFile(file: File): string
   sessionsStorage(): Promise<{ bytes: number; dir: string }>
@@ -279,6 +301,10 @@ export interface DiffraApi {
     security?: SecuritySettings
     execution?: ExecutionSettings
   }): Promise<SettingsView>
+  // 无项目任务的默认保存位置：弹出文件夹选择框，取消时返回 null；恢复默认；在资源管理器里打开（还没建就先建）
+  pickWorkspace(): Promise<SettingsView | null>
+  resetWorkspace(): Promise<SettingsView>
+  openWorkspace(): Promise<void>
   // 只打开 http(s) 链接
   openExternal(url: string): Promise<void>
   // 不给项目就列出所有项目的任务
@@ -286,7 +312,8 @@ export interface DiffraApi {
   searchSessions(query: string): Promise<SessionSearchResult[]>
   loadSession(sessionId: string, projectPath: string): Promise<LoadedSessionHandle>
   updateSession(sessionId: string, change: { title?: string; archived?: boolean }): Promise<void>
-  deleteSession(sessionId: string): Promise<void>
+  // trashFolder：无项目任务连文件夹一起移到回收站；项目任务忽略
+  deleteSession(sessionId: string, options?: { trashFolder: boolean }): Promise<SessionDeleteResult>
   sendPrompt(sessionId: string, turnId: string, text: string, options: PromptOptions): Promise<StopReason>
   // 深度安全扫描作为一轮记进任务，像 sendPrompt 一样等它跑完
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>

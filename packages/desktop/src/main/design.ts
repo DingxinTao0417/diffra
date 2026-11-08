@@ -77,7 +77,7 @@ function isAppRequest(url: string): boolean {
 
 export class DesignHost {
   private readonly pages = new Map<string, DesignPage>()
-  // 用设计面板的会话：设计任务，或者这次运行里打开过设计面板的任务
+  // 用设计面板的会话：设计任务
   private readonly enabled = new Set<string>()
   private sessionReady = false
 
@@ -219,7 +219,6 @@ export class DesignHost {
     page.shown = true
     page.lastShown = Date.now()
     page.view.setVisible(true)
-    this.enabled.add(sessionId)
   }
 
   enable(sessionId: string): void {

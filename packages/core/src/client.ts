@@ -225,6 +225,7 @@ export async function loadSession(
     turns: diffra.turns,
     ...(taskState.success ? { taskState: taskState.data } : {}),
     design: diffra.design === true,
+    noProject: diffra.noProject === true,
   }
 }
 
@@ -240,6 +241,8 @@ export async function listSessions(connection: acp.ClientConnection, cwd?: strin
       createdAt: meta.createdAt ?? '',
       archived: meta.archived === true,
       turnCount: meta.turnCount ?? 0,
+      design: meta.design === true,
+      noProject: meta.noProject === true,
     }
   })
 }

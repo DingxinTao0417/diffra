@@ -5,13 +5,13 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { HomeView } from '@/features/home/HomeView'
 import { SettingsView } from '@/features/settings/SettingsView'
 import { SearchDialog } from '@/features/shell/SearchDialog'
-import { Sidebar } from '@/features/shell/Sidebar'
+import { openProjectFolder, Sidebar } from '@/features/shell/Sidebar'
 import { TitleBar } from '@/features/shell/TitleBar'
 import { TaskView } from '@/features/task/TaskView'
 import { toggleTerminalPanel, wireTerminalEvents } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { INSET_PANEL } from '@/lib/shell'
-import { initialize, moveHistory, openHome, openSettings, pickProject, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
+import { initialize, moveHistory, openHome, openSettings, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
 import { hasWidePanel, isSidebarShown, showToast, store, useAppState } from '@/state/store'
 
 const TOAST_MS = 3000
@@ -25,11 +25,7 @@ function runCommand(command: MenuCommand): void {
     case 'new-task':
       return openHome()
     case 'open-project':
-      pickProject().then(
-        (picked) => picked && openHome(picked),
-        (error: unknown) => showToast(errorMessage(error)),
-      )
-      return
+      return openProjectFolder()
     case 'settings':
       return openSettings()
     case 'toggle-sidebar':
@@ -126,8 +122,9 @@ export function App() {
           ) : (
             <>
               {sidebarShown && <Sidebar />}
-              <main ref={route.name === 'home' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0')}>
-                {route.name === 'home' && <HomeView projectPath={route.project} />}
+              <main ref={route.name === 'home' || route.name === 'design' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0')}>
+                {route.name === 'home' && <HomeView key="home" projectPath={route.project} />}
+                {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
               </main>
             </>

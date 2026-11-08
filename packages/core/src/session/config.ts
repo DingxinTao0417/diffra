@@ -55,6 +55,7 @@ export const sessionConfigSchema = z.object({
   plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1) })).default([]),
   browser: z.boolean().default(false),
   design: z.boolean().default(false),
+  noProject: z.boolean().default(false),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 

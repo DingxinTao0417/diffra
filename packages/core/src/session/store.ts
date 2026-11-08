@@ -36,6 +36,8 @@ export interface SessionRecord {
   archived: boolean
   // 设计任务（见 SessionConfig.design）；旧记录没有
   design?: boolean
+  // 无项目任务（见 SessionConfig.noProject）；旧记录没有
+  noProject?: boolean
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
   compaction: Compaction | null
@@ -49,6 +51,8 @@ export interface SessionIndexEntry {
   updatedAt: string
   archived: boolean
   turnCount: number
+  design: boolean
+  noProject: boolean
 }
 
 const indexEntrySchema = z.object({
@@ -59,6 +63,10 @@ const indexEntrySchema = z.object({
   updatedAt: z.string(),
   archived: z.boolean(),
   turnCount: z.number(),
+  // 必填：旧索引没有这一项，读取时走重建，从会话文件拿到真实值
+  design: z.boolean(),
+  // 旧任务都不是无项目任务，不用重建
+  noProject: z.boolean().default(false),
 })
 const indexSchema = z.object({ version: z.literal(1), sessions: z.array(indexEntrySchema) })
 // 消息和更新是 AI SDK / ACP 的结构，这里只检查外层，内容原样还给它们
@@ -73,6 +81,8 @@ const recordSchema = z.object({
   archived: z.boolean(),
   // 设计模式加的，旧记录都是普通任务
   design: z.boolean().default(false),
+  // 无项目任务加的，旧记录都在项目里
+  noProject: z.boolean().default(false),
   turns: z.array(
     z.object({
       id: z.string(),
@@ -233,6 +243,8 @@ function toEntry(record: SessionRecord): SessionIndexEntry {
     updatedAt: record.updatedAt,
     archived: record.archived,
     turnCount: record.turns.length,
+    design: record.design ?? false,
+    noProject: record.noProject ?? false,
   }
 }
 

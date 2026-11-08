@@ -49,6 +49,9 @@ function SearchBody({ onClose }: { onClose(): void }) {
     [tasks],
   )
 
+  // 搜索结果不带无项目标记，按已知任务查
+  const noProject = useMemo(() => new Set(tasks.filter((task) => task.noProject).map((task) => task.sessionId)), [tasks])
+
   const text = query.trim()
   useEffect(() => {
     if (!text) {
@@ -151,7 +154,12 @@ function SearchBody({ onClose }: { onClose(): void }) {
               >
                 <div className="flex items-center gap-3">
                   <span className="min-w-0 flex-1 truncate">{highlightMatch(item.title, showSnippet ? '' : highlight)}</span>
-                  <span className={cn('max-w-44 shrink-0 truncate rounded-sm px-1.5 text-xs text-muted-foreground', index === selected ? 'bg-background/60' : 'bg-muted')}>{folderName(item.cwd)}</span>
+                  <span
+                    className={cn('max-w-44 shrink-0 truncate rounded-sm px-1.5 text-xs text-muted-foreground', index === selected ? 'bg-background/60' : 'bg-muted')}
+                    title={noProject.has(item.sessionId) ? item.cwd : undefined}
+                  >
+                    {noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}
+                  </span>
                   <span className="min-w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{formatTime(item.updatedAt)}</span>
                 </div>
                 {showSnippet && <div className="truncate text-xs text-muted-foreground">{highlightMatch(item.snippet, highlight)}</div>}
