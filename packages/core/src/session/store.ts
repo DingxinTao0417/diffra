@@ -88,6 +88,8 @@ const recordSchema = z.object({
       // 第 17 步加的
       skills: z.array(z.string()).default([]),
   images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
+      // 第 72 步加的，旧记录没有
+      restoredAt: z.string().optional(),
     }),
   ),
   messages: z.array(z.unknown()),

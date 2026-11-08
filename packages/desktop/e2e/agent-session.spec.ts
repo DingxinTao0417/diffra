@@ -85,6 +85,9 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
     await waitTaskStatus(window, 'unfinished')
+    // 完成卡还在，但标成之后撤销过，不再指向审阅
+    await expect(cards(window, 'finish')).toHaveAttribute('data-restored', 'true')
+    await expect(cards(window, 'finish').getByRole('button', { name: '审阅改动' })).toHaveCount(0)
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'done.txt'))).toBe(false)
   } finally {

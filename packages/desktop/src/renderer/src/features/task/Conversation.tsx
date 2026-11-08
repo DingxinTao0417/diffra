@@ -279,10 +279,10 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'verify':
-            // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开
-            return <ToolStep key={block.item.id} item={block.item} unverified={finishVerdict(block.item).tone === 'unverified'} />
+            // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
+            return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} progress={block.item.id === lastFinishId ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -967,7 +967,7 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
-function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
+function FinishCard({ item, files, commandsFailed, projectPath, latest, restored, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; restored: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
   const verdict = finishVerdict(item)
@@ -976,14 +976,19 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
   const unknownChanges = verdict.tone === 'unverified' && !noChecks
   // 最终检查通过了，过程中失败的命令不再需要留意，只作说明
   const verified = verdict.tone === 'verified'
-  const warnings = passed
+  // 之后撤销过：改动不一定还在，结论不再上色、不提醒，也不再指向审阅和撤销。
+  // 不看 files：只靠命令改的文件没有 diff，files 为空，但检查照样跑过、照样会画成已验证
+  const undone = restored && passed && verdict.tone !== 'nochange'
+  const warnings = passed && !undone
     ? [noChecks && '没有配置检查命令', unknownChanges && '没有检查点，无法判断命令或 MCP 工具是否改了文件，这次没有跑检查', commandsFailed > 0 && !verified && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false)
     : []
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined}>
-      <div className={cn('flex items-center gap-2 font-semibold', verdict.tone === 'failed' && 'text-destructive', verdict.tone === 'unverified' && 'text-warning')}>
-        {verdict.tone === 'unverified' ? (
+    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined} data-restored={undone ? 'true' : undefined}>
+      <div className={cn('flex items-center gap-2 font-semibold', !undone && verdict.tone === 'failed' && 'text-destructive', !undone && verdict.tone === 'unverified' && 'text-warning')}>
+        {undone ? (
+          <StatusIcon status={item.status} className="size-4" />
+        ) : verdict.tone === 'unverified' ? (
           <CircleAlert className="size-4 shrink-0" />
         ) : verified ? (
           // success-color-allow: 完成卡只在经检查命令验证过（或复用已验证的工作区）时画绿色，旧卡没有 verification，不会走到这里
@@ -992,6 +997,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
           <StatusIcon status={item.status} className="size-4" />
         )}
         {verdict.label}
+        {undone && <span className="font-normal text-muted-foreground">· 之后撤销过改动</span>}
         {passed && files.length > 0 && (
           <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
             {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
@@ -1008,7 +1014,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
           </div>
         </div>
       )}
-      {verified && commandsFailed > 0 && <p className="text-sm text-muted-foreground">过程中有 {commandsFailed} 条命令失败（最终检查已通过）</p>}
+      {verified && commandsFailed > 0 && !undone && <p className="text-sm text-muted-foreground">过程中有 {commandsFailed} 条命令失败（最终检查已通过）</p>}
       {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
       {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
@@ -1018,8 +1024,8 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
           {files.map((file) => {
             const path = relativePath(file.path, projectPath)
             const slash = path.lastIndexOf('/')
-            return (
-              <button key={file.path} type="button" title={path} className="flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent" onClick={openReview}>
+            const row = (
+              <>
                 <span className="min-w-0 flex-1 truncate font-mono text-xs">
                   {slash >= 0 && <span className="text-muted-foreground">{path.slice(0, slash + 1)}</span>}
                   {path.slice(slash + 1)}
@@ -1027,12 +1033,21 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestor
                 <span className="tabular-nums">
                   <DiffCounts added={file.added} removed={file.removed} />
                 </span>
+              </>
+            )
+            return undone ? (
+              <div key={file.path} title={path} className="flex items-center gap-2 px-2 py-1 text-muted-foreground">
+                {row}
+              </div>
+            ) : (
+              <button key={file.path} type="button" title={path} className="flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent" onClick={openReview}>
+                {row}
               </button>
             )
           })}
         </div>
       )}
-      {passed && files.length > 0 && (
+      {passed && files.length > 0 && !undone && (
         <div className="flex items-center gap-2">
           <Button variant={latest ? 'default' : 'outline'} size="sm" onClick={openReview}>审阅改动</Button>
           {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销本轮</Button>}

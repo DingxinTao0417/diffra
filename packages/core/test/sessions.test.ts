@@ -184,6 +184,54 @@ describe('会话持久化', () => {
     expect((await loadSession(third, sessionId, project, config(server.baseUrl))).taskState).toEqual(restored)
   })
 
+  test('撤销给这一轮及之后的轮次记下撤销时刻，撤销了哪些文件记在这一轮末尾，重启后还在', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 b.txt' } }] },
+      { text: '好' },
+    ])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '写 a.txt')
+    await sendPrompt(first, sessionId, 'turn-2', '写 b.txt')
+    await sendPrompt(first, sessionId, 'turn-3', '看看')
+
+    notifications = []
+    const before = Date.now()
+    expect(await restoreCheckpoint(first, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
+    expect(notifications.some(({ update }) => update.sessionUpdate === 'notice')).toBe(false)
+
+    const loaded = await loadSession(await startCore(), sessionId, project, config(server.baseUrl))
+    const [turn1, turn2, turn3] = loaded.turns
+    // 第一轮相当于没有这个字段的旧记录
+    expect(turn1).not.toHaveProperty('restoredAt')
+    expect(Date.parse(turn2?.restoredAt ?? '')).toBeGreaterThanOrEqual(before)
+    expect(turn3?.restoredAt).toBe(turn2?.restoredAt)
+    expect(turn2?.updates.at(-1)).toEqual({ sessionUpdate: 'notice', severity: 'info', title: '已撤销 1 个文件的改动', description: 'b.txt' })
+    expect(turn3?.updates.some((update) => update.sessionUpdate === 'notice')).toBe(false)
+  })
+
+  test('撤销提示最多列 50 个文件，没有改动时不带说明；再撤销一次覆盖撤销时刻', async () => {
+    server = await startScriptedServer([{ text: '好' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '你好')
+    expect(await restoreCheckpoint(core, sessionId, 'turn-1')).toEqual([])
+    const once = (await loadSession(core, sessionId, project, config(server.baseUrl))).turns[0]
+
+    const paths = Array.from({ length: 51 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`)
+    for (const path of paths) writeFileSync(join(project, path), 'x\n')
+    expect(await restoreCheckpoint(core, sessionId, 'turn-1')).toHaveLength(51)
+    const twice = (await loadSession(core, sessionId, project, config(server.baseUrl))).turns[0]
+    expect(Date.parse(twice?.restoredAt ?? '')).toBeGreaterThan(Date.parse(once?.restoredAt ?? ''))
+    expect(twice?.updates.filter((update) => update.sessionUpdate === 'notice')).toEqual([
+      { sessionUpdate: 'notice', severity: 'info', title: '已撤销 0 个文件的改动', description: null },
+      { sessionUpdate: 'notice', severity: 'info', title: '已撤销 51 个文件的改动', description: [...paths.slice(0, 50), '…等 51 个文件'].join('\n') },
+    ])
+  })
+
   test('应用退出时停在运行中的任务，加载后是受阻', async () => {
     server = await startScriptedServer([{ text: '好的' }])
     const first = await startCore()

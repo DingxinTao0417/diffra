@@ -40,6 +40,8 @@ export interface Turn {
   endedAt: number | null
   // core 在一轮结束时给的结论；plan、deep-scan、compact 轮和旧记录没有
   outcome?: TurnOutcome
+  // 撤销到这一轮或更早的轮次之前的时刻。只说明之后撤销过，不代表这一轮的改动现在不在
+  restoredAt?: number | null
 }
 
 export interface Usage {
@@ -69,6 +71,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     error: null,
     startedAt: Date.parse(turn.startedAt) || null,
     endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
+    restoredAt: turn.restoredAt ? Date.parse(turn.restoredAt) || null : null,
     outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
   }
 }

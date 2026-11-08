@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
@@ -101,6 +101,55 @@ test('智能体反复做同样的操作：先提醒，再重复就停下并说�
     await expect(notice).toBeVisible()
     await expect(notice).toContainText('search {"pattern":"TODO"}')
     expect(model.requests()).toBe(6)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('改了文件后卡住停下，撤销这一轮：结论改成未完成，重启后仍是未完成', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-stuck-restore-'))
+  writeFileSync(join(project, 'hello.txt'), 'hello world\n')
+  const same: ScriptStep = { toolCalls: [{ name: 'search', input: { pattern: 'TODO' } }] }
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
+    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
+    same,
+    same,
+    same,
+    same,
+    same,
+    same,
+    { text: '不会走到这里' },
+  ])
+  let app = await launchApp(userDataDir)
+  try {
+    let window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '改一下 hello')
+    await waitTaskStatus(window, 'stopped')
+    expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
+    expect(model.requests()).toBe(8)
+
+    await window.getByTestId('turn').getByRole('button', { name: '撤销到这一轮之前' }).click()
+    await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
+    await window.getByTestId('restore-confirm').click()
+    await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
+    expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
+
+    // 撤销记在会话里：重启后打开这个任务，结论和提示都还在
+    await app.close()
+    app = await launchApp(userDataDir)
+    window = await app.firstWindow()
+    await window.getByTestId('sidebar').getByRole('button', { name: '改一下 hello', exact: true }).click()
+    await waitTaskStatus(window, 'unfinished')
+    await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
   } finally {
     await app.close()
     await model.close()

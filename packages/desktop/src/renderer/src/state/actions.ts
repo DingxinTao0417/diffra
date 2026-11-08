@@ -1,4 +1,4 @@
-import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
+import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
 import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
@@ -314,27 +314,31 @@ export function respondPermission(sessionId: string, optionId: string | null): v
 
 export async function restoreTurn(sessionId: string, turnId: string): Promise<void> {
   const restored = await window.diffra.restoreCheckpoint(sessionId, turnId)
-  updateLive(sessionId, (task) => ({
-    ...task,
-    changeVersion: task.changeVersion + 1,
-    turns: task.turns.map((turn) =>
-      turn.id === turnId
-        ? {
-            ...turn,
-            items: [
-              ...turn.items,
-              {
-                kind: 'notice',
-                id: crypto.randomUUID(),
-                severity: 'info',
-                title: `已撤销 ${restored.length} 个文件的改动`,
-                description: restored.map((change) => change.path).join('\n') || null,
-              },
-            ],
-          }
-        : turn,
-    ),
-  }))
+  const restoredAt = Date.now()
+  updateLive(sessionId, (task) => {
+    const start = task.turns.findIndex((turn) => turn.id === turnId)
+    return {
+      ...task,
+      changeVersion: task.changeVersion + 1,
+      turns: task.turns.map((turn, index) => {
+        if (start < 0 || index < start) return turn
+        if (index > start) return { ...turn, restoredAt }
+        return {
+          ...turn,
+          restoredAt,
+          items: [
+            ...turn.items,
+            {
+              kind: 'notice',
+              id: crypto.randomUUID(),
+              severity: 'info',
+              ...restoreNotice(restored),
+            },
+          ],
+        }
+      }),
+    }
+  })
 }
 
 // 重新生成：撤掉这一轮及之后的文件改动和对话，再用同样的提问发一轮

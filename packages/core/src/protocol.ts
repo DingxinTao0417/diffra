@@ -169,6 +169,15 @@ export interface CheckpointChange {
   change: 'added' | 'modified' | 'deleted'
 }
 
+const RESTORE_NOTICE_PATHS = 50
+
+// 撤销提示：core 记进被撤销的那一轮，客户端撤销时本地追加同样的一条，重新打开任务时按记录重放
+export function restoreNotice(changes: CheckpointChange[]): { title: string; description: string | null } {
+  const lines = changes.slice(0, RESTORE_NOTICE_PATHS).map((change) => change.path)
+  if (changes.length > RESTORE_NOTICE_PATHS) lines.push(`…等 ${changes.length} 个文件`)
+  return { title: `已撤销 ${changes.length} 个文件的改动`, description: lines.join('\n') || null }
+}
+
 // usage_update 的 _meta.diffra：上下文里各部分的估算 token 数，合计等于模型返回的输入 token 数
 export interface UsageBreakdown {
   system: number
@@ -320,6 +329,8 @@ export interface StoredTurn {
   skills: string[]
   // 这一轮提问带的图片
   images: PromptImage[]
+  // 撤销到这一轮或更早的轮次之前时写入，多次撤销记最后一次。只说明之后撤销过，不代表这一轮的改动现在不在
+  restoredAt?: string
 }
 
 // session/load 响应的 _meta.diffra

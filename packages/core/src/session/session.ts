@@ -4,7 +4,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, SessionDesign, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -308,6 +308,13 @@ export class Session {
         '[Note from Diffra] The user reverted all file changes made since an earlier point in this conversation. ' +
         'Files may differ from what you saw before; read them again before editing.',
     })
+    const target = this.turns.find((turn) => turn.id === turnId)
+    if (target) {
+      const restoredAt = new Date().toISOString()
+      for (const turn of this.turns.slice(this.turns.indexOf(target))) turn.restoredAt = restoredAt
+      // 这一轮早已结束，recordUpdate 不再收，直接记进去
+      target.updates.push({ sessionUpdate: 'notice', severity: 'info', ...restoreNotice(changes) })
+    }
     return changes
   }
 }
