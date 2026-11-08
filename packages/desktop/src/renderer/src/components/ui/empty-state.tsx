@@ -51,7 +51,7 @@ function EmptyState({
       )}
       <p className="text-base text-foreground">{title}</p>
       {description != null && description !== false && (
-        <div className="mt-1 max-w-[44ch] text-sm text-balance text-muted-foreground">
+        <div className="mt-1 max-w-md text-sm text-balance text-muted-foreground">
           {description}
         </div>
       )}

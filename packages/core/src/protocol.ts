@@ -79,6 +79,23 @@ export interface TaskProgressView {
   status: 'running' | 'waiting' | 'blocked' | 'cancelled' | 'completed'
   reason: string | null
   requirements: Array<{ id: string; title: string; receiptId: string | null }>
+  // 有改动还没经过完成门禁（撤销之后、或带着未验证的改动停下）
+  needsVerification?: boolean
+}
+
+// 检查命令、静态检查、轻量扫描、规范审查卡片结束时的 tool_call_update._meta.diffra.result。ACP 的 status 照旧：
+// warned 只有提醒或附注；partial 只看了一部分（改动被截断、依赖审计没跑完）；error 工具或评审模型出错，这次不拦截
+export type CheckResult = 'passed' | 'warned' | 'partial' | 'error' | 'failed'
+// 完成卡和 verify_changes 卡的 _meta.diffra.verification；reused 是复用了这份工作区已经通过的验证
+export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edits' | 'failed'
+// 一轮结束时的 session_info_update._meta.diffra.turnOutcome，和 taskState 在同一条更新里，每轮只发一次。
+// finish 是本轮所有被接受的 finish 合并后的值（unverified > verified > no-edits，reused 算 verified），没有被接受的 finish 为 null；
+// stop 是没走到「finish 被接受」就停下的原因，正常结束为 null
+export const TURN_OUTCOME_META_KEY = 'turnOutcome'
+export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted'
+export interface TurnOutcome {
+  finish: 'verified' | 'unverified' | 'no-edits' | null
+  stop: TurnStop | null
 }
 
 export const TERMINAL_DEFAULT_LINES = 80
@@ -129,6 +146,8 @@ export interface SessionConfig {
   plugins: PluginRef[]
   // 客户端有内置浏览器：给模型浏览器工具，操作由客户端执行
   browser?: boolean
+  // 设计任务：建会话时定下，存进会话记录；客户端在每轮开始前把设计面板的工具配置给它
+  design?: boolean
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -141,11 +160,22 @@ export interface SessionInfo {
   rulePacks: string[]
   // 这个会话实际生效的安全检查开关（建会话时的设置）
   security: SessionSecurity
+  // 这个会话实际生效的检查命令（建会话时的设置）；旧版 core 没有这一项时为 null
+  checks?: SessionChecks | null
 }
 
 export interface CheckpointChange {
   path: string
   change: 'added' | 'modified' | 'deleted'
+}
+
+const RESTORE_NOTICE_PATHS = 50
+
+// 撤销提示：core 记进被撤销的那一轮，客户端撤销时本地追加同样的一条，重新打开任务时按记录重放
+export function restoreNotice(changes: CheckpointChange[]): { title: string; description: string | null } {
+  const lines = changes.slice(0, RESTORE_NOTICE_PATHS).map((change) => change.path)
+  if (changes.length > RESTORE_NOTICE_PATHS) lines.push(`…等 ${changes.length} 个文件`)
+  return { title: `已撤销 ${changes.length} 个文件的改动`, description: lines.join('\n') || null }
 }
 
 // usage_update 的 _meta.diffra：上下文里各部分的估算 token 数，合计等于模型返回的输入 token 数
@@ -232,10 +262,39 @@ export interface DevServerResult {
   url: string | null
 }
 
+// 设计面板（OpenPencil 矢量编辑器）的工具，来自客户端的设计页：name 是 OpenPencil 的工具名，参数是 JSON Schema
+export interface DesignToolSpec {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  // 不改文档（读节点、导出图片等）
+  readOnly: boolean
+}
+
+// 用户打开设计面板后客户端配置给会话（SESSION_EXT_METHODS.sessionConfigure）：之后的轮次带上设计工具和这段说明
+export interface SessionDesign {
+  tools: DesignToolSpec[]
+  instructions: string
+}
+
+// 智能体调用设计工具，core 通过 CLIENT_EXT_METHODS.designAction 请求客户端在设计页里执行
+export interface DesignActionParams {
+  sessionId: string
+  tool: string
+  args: unknown
+}
+
+// text 给模型看；导出图片的工具带 image
+export interface DesignActionResult {
+  text: string
+  image: PromptImage | null
+}
+
 // core 请求客户端做的事
 export const CLIENT_EXT_METHODS = {
   browserAction: '_diffra/browser/action',
   devServer: '_diffra/devserver',
+  designAction: '_diffra/design/action',
 } as const
 
 export interface McpPromptInfo {
@@ -257,6 +316,9 @@ export interface McpServerStatus {
 // 查哪些 MCP 服务器：某个任务用的，或者给定项目和配置（首页、设置页还没有任务）
 export type McpTarget = { sessionId: string } | { cwd: string; servers: McpServer[]; plugins?: PluginRef[] }
 
+// 列 Skill 和自定义命令：某个任务建立时开着的插件，或者给定项目和插件（首页还没有任务）
+export type ListTarget = { sessionId: string } | { cwd: string; plugins?: PluginRef[] }
+
 export interface StoredTurn {
   id: string
   kind: TurnKind
@@ -270,6 +332,8 @@ export interface StoredTurn {
   skills: string[]
   // 这一轮提问带的图片
   images: PromptImage[]
+  // 撤销到这一轮或更早的轮次之前时写入，多次撤销记最后一次。只说明之后撤销过，不代表这一轮的改动现在不在
+  restoredAt?: string
 }
 
 // session/load 响应的 _meta.diffra
@@ -277,6 +341,9 @@ export interface LoadedSession {
   info: SessionInfo
   title: string
   turns: StoredTurn[]
+  // core 当前的任务状态，比最后一轮里的快照新（撤销、应用退出都会改它）
+  taskState?: TaskProgressView
+  design: boolean
 }
 
 // session/list 里每个会话 _meta.diffra 带的字段
@@ -395,13 +462,13 @@ export const SESSION_EXT_METHODS = {
   deepScan: '_diffra/security/deep-scan',
   // 先出计划：规划模型只读地看代码，交一份计划，不改文件
   plan: '_diffra/session/plan',
-  // 列出这个项目能用的 Skill
+  // 列出这个任务或项目能用的 Skill
   skillsList: '_diffra/skills/list',
   // MCP 服务器状态；retry 为 true 时连不上的马上重连
   mcpStatus: '_diffra/mcp/status',
   // 把一个 MCP prompt 展开成文字
   mcpPrompt: '_diffra/mcp/prompt',
-  // 列出这个项目能用的自定义命令
+  // 列出这个任务或项目能用的自定义命令
   commandsList: '_diffra/commands/list',
   // 读一个插件文件夹里有什么
   pluginInspect: '_diffra/plugins/inspect',

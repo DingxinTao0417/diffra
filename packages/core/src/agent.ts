@@ -10,6 +10,8 @@ import {
   type BrowserActionParams,
   type BrowserActionResult,
   CLIENT_EXT_METHODS,
+  type DesignActionParams,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   type LoadedSession,
@@ -33,13 +35,14 @@ import {
   newSessionMetaSchema,
   pluginRefSchema,
   promptMetaSchema,
+  sessionDesignSchema,
 } from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { runPlan } from './session/plan.js'
 import { compactManually } from './session/compact.js'
 import type { Session as SessionType } from './session/session.js'
 import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
-import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
+import { CHECK_TIMEOUT_SECONDS, runTurn, taskStateUpdate, taskStateView, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
@@ -71,6 +74,8 @@ const sessionConfigureParams = z.object({
   sessionId: z.string().min(1),
   permissionMode: z.enum(['ask', 'auto', 'full']).optional(),
   model: modelConfigSchema.optional(),
+  // 设计面板的工具；null 是收回
+  design: sessionDesignSchema.nullable().optional(),
 })
 
 const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
@@ -84,6 +89,11 @@ const planParams = z.object({
 const mcpTargetParams = z.union([
   z.object({ sessionId: z.string().min(1) }),
   z.object({ cwd: z.string().min(1), servers: z.array(mcpServerSchema), plugins: z.array(pluginRefSchema).default([]) }),
+])
+
+const listTargetParams = z.union([
+  z.object({ sessionId: z.string().min(1) }),
+  z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }),
 ])
 
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
@@ -129,6 +139,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     if (!('sessionId' in params)) return { cwd: params.cwd, servers: [...params.servers, ...(await pluginMcpServers(params.plugins))] }
     const session = sessionOf(params.sessionId)
     return { cwd: session.cwd, servers: session.mcpServers }
+  }
+
+  // 任务里按建任务时开着的插件列，和选 Skill 一致
+  const listTarget = (params: z.infer<typeof listTargetParams>) => {
+    if (!('sessionId' in params)) return params
+    const session = sessionOf(params.sessionId)
+    return { cwd: session.cwd, plugins: session.config.plugins }
   }
 
   const sessionOf = (sessionId: string): Session => {
@@ -179,6 +196,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       checkpoints: checkpoints !== null,
       rulePacks: rulePacks.map((pack) => pack.name),
       security: config.security,
+      checks: config.checks,
     }
     sessions.set(session.id, session)
     infos.set(session.id, info)
@@ -259,6 +277,16 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
             }),
+        design: (tool, args, signal) =>
+          client
+            .request<DesignActionResult, DesignActionParams>(
+              CLIENT_EXT_METHODS.designAction,
+              { sessionId: session.id, tool, args },
+              { cancellationSignal: signal, stopWaitingOnCancel: true },
+            )
+            .catch((error: unknown) => {
+              throw new Error(clientErrorMessage(error))
+            }),
         // 用量只用于统计，写失败不打断任务
         recordUsage: async (call) => {
           if (!usageLog) return
@@ -296,13 +324,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
-        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns }
+        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, taskState: taskStateView(live), design: live.designTask }
         return { _meta: { diffra: loaded } }
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
-      const loaded: LoadedSession = { info, title: session.title, turns: session.turns }
+      // 没在运行却是 running，说明还没有确定的任务状态，交给界面按轮次推导
+      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }), design: session.designTask }
       return { _meta: { diffra: loaded } }
     })
     .onRequest(acp.methods.agent.session.list, async ({ params }) => ({
@@ -335,7 +364,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       })
       // 模型不支持图片时 API 会直接报错，先在这里说明去哪里改
       if (images.length > 0 && !session.config.model.supportsImages) {
-        throw new Error(`当前模型 ${session.config.model.modelId} 没有打开图片输入。支持看图的模型可以到「设置 → 模型与角色」里打开「图片」`)
+        throw new Error(`这个任务用的模型 ${session.config.model.modelId} 没有打开「视觉」，发不了图片。确认模型支持视觉后，到「设置 → 模型与角色」里，在这个模型的「配置能力」中打开「视觉」。设置里改过的，要新建任务或在输入框里重新选一次这个模型才生效`)
       }
       const skillNames = meta.success ? meta.data.diffra.skills : []
       const goal = meta.success && meta.data.diffra.goal
@@ -374,12 +403,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         return mcpPool.promptText(cwd, server, params.prompt, params.arguments)
       },
     )
-    .onRequest(SESSION_EXT_METHODS.skillsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), async ({ params }) =>
-      (await loadSkills(skillRoots(params.cwd, pluginSkillRoots(params.plugins)))).map(({ body: _body, ...info }) => info),
-    )
-    .onRequest(SESSION_EXT_METHODS.commandsList, z.object({ cwd: z.string().min(1), plugins: z.array(pluginRefSchema).default([]) }), ({ params }) =>
-      loadCommands(commandRoots(params.cwd, params.plugins)),
-    )
+    .onRequest(SESSION_EXT_METHODS.skillsList, listTargetParams, async ({ params }) => {
+      const { cwd, plugins } = listTarget(params)
+      return (await loadSkills(skillRoots(cwd, pluginSkillRoots(plugins)))).map(({ body: _body, ...info }) => info)
+    })
+    .onRequest(SESSION_EXT_METHODS.commandsList, listTargetParams, ({ params }) => {
+      const { cwd, plugins } = listTarget(params)
+      return loadCommands(commandRoots(cwd, plugins))
+    })
     .onRequest(SESSION_EXT_METHODS.pluginInspect, z.object({ dir: z.string().min(1) }), ({ params }) => inspectPlugin(params.dir))
     // 先出计划也作为一轮记进会话，和深度扫描一样
     .onRequest(SESSION_EXT_METHODS.plan, planParams, async ({ params, client }) => {
@@ -399,8 +430,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     )
     .onRequest(SESSION_EXT_METHODS.checkpointRestore, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
+      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
       const changes = await session.restoreCheckpoint(params.turnId)
-      await persist(session, (update) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update }))
+      await persist(session, notify)
+      await notify(taskStateUpdate(session))
       return changes
     })
     .onRequest(SESSION_EXT_METHODS.sessionUpdate, sessionUpdateParams, async ({ params }) => {
@@ -417,12 +450,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const session = sessionOf(params.sessionId)
       if (params.permissionMode) session.permissionMode = params.permissionMode
       if (params.model) session.setModel(params.model)
+      if (params.design !== undefined) session.design = params.design
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.sessionRewind, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
+      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
       const result = await session.rewind(params.turnId)
-      await persist(session, (update) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update }))
+      await persist(session, notify)
+      await notify(taskStateUpdate(session))
       return result
     })
     .onRequest(SESSION_EXT_METHODS.checkpointDiff, checkpointParams, ({ params }) =>

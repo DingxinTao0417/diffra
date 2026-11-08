@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TASK_PROGRESS_META_KEY } from '../protocol.js'
 import { ToolError } from '../tools/types.js'
 
 export { TASK_PROGRESS_META_KEY as TASK_STATE_META_KEY } from '../protocol.js'
@@ -29,6 +30,13 @@ export const taskStateSchema = z.object({
   receipts: z.array(receiptSchema).max(MAX_TASK_RECEIPTS),
 })
 export type TaskState = z.infer<typeof taskStateSchema>
+// session/load 响应里的 TaskProgressView，客户端按它校验
+export const taskProgressViewSchema = z.object({
+  status: taskStatusSchema,
+  reason: z.string().nullable(),
+  requirements: z.array(z.object({ id: z.string(), title: z.string(), receiptId: z.string().nullable() })),
+  needsVerification: z.boolean().optional(),
+})
 export type TaskRequirement = TaskState['requirements'][number]
 
 export const taskUpdateSchema = z.discriminatedUnion('action', [
@@ -113,3 +121,15 @@ export function requiresReleaseContract(text: string): boolean {
   return /发布|上线|\brelease\b|\bdeploy\b/i.test(text) && /提交|推送|打包|版本|\bpush\b|\bpackage\b|\bv?\d+\.\d+\.\d+\b/i.test(text)
 }
 
+// 记进轮次里的任务状态更新（_meta.diffra.taskState）带的待验证；不是任务状态更新时为 null。旧记录没有这个字段，算 false
+const recordedTaskStateSchema = z.object({
+  diffra: z.object({ [TASK_PROGRESS_META_KEY]: z.object({ needsVerification: z.boolean().optional(), requirements: z.array(z.object({ id: z.string() })).optional() }) }),
+})
+
+// 会话记录里某条更新带的任务状态：待验证和当时已定下的完成条件；不是任务状态更新时为 null
+export function recordedTaskState(meta: unknown): { needsVerification: boolean; requirementIds: string[] } | null {
+  const parsed = recordedTaskStateSchema.safeParse(meta)
+  if (!parsed.success) return null
+  const view = parsed.data.diffra[TASK_PROGRESS_META_KEY]
+  return { needsVerification: view.needsVerification ?? false, requirementIds: (view.requirements ?? []).map((item) => item.id) }
+}

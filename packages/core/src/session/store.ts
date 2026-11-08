@@ -34,6 +34,8 @@ export interface SessionRecord {
   createdAt: string
   updatedAt: string
   archived: boolean
+  // 设计任务（见 SessionConfig.design）；旧记录没有
+  design?: boolean
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
   compaction: Compaction | null
@@ -69,6 +71,8 @@ const recordSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   archived: z.boolean(),
+  // 设计模式加的，旧记录都是普通任务
+  design: z.boolean().default(false),
   turns: z.array(
     z.object({
       id: z.string(),
@@ -84,6 +88,8 @@ const recordSchema = z.object({
       // 第 17 步加的
       skills: z.array(z.string()).default([]),
   images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
+      // 第 72 步加的，旧记录没有
+      restoredAt: z.string().optional(),
     }),
   ),
   messages: z.array(z.unknown()),

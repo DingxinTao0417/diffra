@@ -1,84 +1,107 @@
+import { useState } from 'react'
 import { REASONING_EFFORTS, type Protocol, type ReasoningEffort } from '@diffra/core/types'
-import { Eye, Sparkles } from 'lucide-react'
-import { cn } from 'cn'
 import { MAX_MODEL_ID_LENGTH, MAX_MODEL_DISPLAY_NAME_LENGTH, CONTEXT_WINDOW_OPTIONS, type ModelConfig } from '../../../../shared/settings'
 import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Field } from './ProviderDialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Segmented } from '@/components/ui/segmented'
+import { formatTokens } from '@/lib/format'
+import { Field, ReadonlyField } from './ProviderDialog'
 
 const DEFAULT_ENABLED_REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
 const AUTO_CONTEXT = 'auto'
+const CUSTOM_CONTEXT = 'custom'
 const EFFORT_LABELS: Record<ReasoningEffort, string> = { default: '默认', none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' }
+const CONTEXT_CHOICES = [
+  { value: AUTO_CONTEXT, label: '自动' },
+  ...CONTEXT_WINDOW_OPTIONS.map((size) => ({ value: String(size), label: formatTokens(size).replace(/m$/, 'M') })),
+  { value: CUSTOM_CONTEXT, label: '自定义' },
+]
+
+const isPresetContext = (size: number) => CONTEXT_WINDOW_OPTIONS.some((option) => option === size)
 
 export function validateModelCapabilities(models: ModelConfig[]): string | null {
-  if (models.length === 0) return '请至少填写一个 Model ID'
+  if (models.length === 0) return '请至少填写一个模型 ID'
   if (models.some((model) => !model.id.trim())) return '模型 ID 不能为空'
   if (new Set(models.map((model) => model.id.trim())).size !== models.length) return '模型 ID 重复'
   if (models.some((model) => model.contextWindow !== null && (!Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0))) return '上下文长度要填正整数（单位：token）'
   return null
 }
 
-export function ModelCapabilities({ model, protocol, onChange, index = 0 }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number }) {
+// 折叠行右侧的一句话摘要，例如「128k · 视觉 · 思考」
+export function capabilitySummary(model: ModelConfig, protocol: Protocol): string {
+  const parts = [
+    model.contextWindow ? formatTokens(model.contextWindow) : null,
+    model.images ? '视觉' : null,
+    reasoningEffortsFor({ protocol }, model).some((value) => value !== 'default') ? '思考' : null,
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+// idField：readonly 用于向导第二步（第一步已填过）和编辑已保存的模型
+export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' }) {
+  const [customContext, setCustomContext] = useState(() => model.contextWindow !== null && !isPresetContext(model.contextWindow))
   const supportsEffort = protocol === 'openai-compatible' || protocol === 'openai-responses'
   const efforts = reasoningEffortsFor({ protocol }, model).filter((value) => value !== 'default')
   const reasoningEnabled = efforts.length > 0
-  const windows = [...new Set([...(model.contextWindows ?? []), ...(model.contextWindow ? [model.contextWindow] : [])])].sort((a, b) => a - b)
-  const windowOptions = [...new Set([...CONTEXT_WINDOW_OPTIONS, ...windows])].sort((a, b) => a - b)
+  const contextChoice = customContext ? CUSTOM_CONTEXT : model.contextWindow === null ? AUTO_CONTEXT : String(model.contextWindow)
   const prefix = `capability-${index}`
   return (
-    <div className="space-y-5 rounded-lg border bg-background p-4" data-testid={`capabilities-${index}`}>
+    <div className="space-y-5" data-testid={`capabilities-${index}`}>
+      {idField === 'readonly' && <ReadonlyField label="模型 ID" value={model.id} mono />}
       <Field id={`${prefix}-name`} label="显示名称"><Input id={`${prefix}-name`} value={model.displayName ?? model.id} maxLength={MAX_MODEL_DISPLAY_NAME_LENGTH} onChange={(event) => onChange({ ...model, displayName: event.target.value })} /></Field>
-      <Field id={`${prefix}-id`} label="Model ID"><Input id={`${prefix}-id`} value={model.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => onChange({ ...model, id: event.target.value })} /></Field>
-      <fieldset className="space-y-2">
-        <legend className="mb-2 text-sm font-medium">支持的上下文窗口</legend>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {windowOptions.map((size) => <label key={size} className={cn('cursor-pointer rounded-md border px-1 py-1.5 text-center text-xs', windows.includes(size) ? 'border-primary/50 bg-soft text-primary' : 'text-muted-foreground')}>
-            <input type="checkbox" className="mr-1 size-3 accent-primary" aria-label={`支持上下文 ${size}`} checked={windows.includes(size)} onChange={(event) => {
-              const contextWindows = event.target.checked ? [...windows, size] : windows.filter((value) => value !== size)
-              onChange({ ...model, contextWindows, contextWindow: contextWindows.includes(model.contextWindow ?? 0) ? model.contextWindow : contextWindows[0] ?? null })
-            }} />
-            {size >= 1_000_000 ? `${size / 1_000_000}M` : `${size / 1000}k`}
-          </label>)}
-        </div>
-      </fieldset>
-      <Field id={`${prefix}-context`} label="默认上下文窗口" hint="未指定时使用应用默认值；自定义长度可在下方填写。">
-        <Select value={model.contextWindow === null ? AUTO_CONTEXT : String(model.contextWindow)} onValueChange={(value) => {
-          const contextWindow = value === AUTO_CONTEXT ? null : Number(value)
-          if (contextWindow !== null && (!Number.isSafeInteger(contextWindow) || contextWindow <= 0)) return
-          onChange({ ...model, contextWindow })
-        }}>
-          <SelectTrigger id={`${prefix}-context`} className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value={AUTO_CONTEXT}>自动（未指定）</SelectItem>{windows.map((size) => <SelectItem key={size} value={String(size)}>{size.toLocaleString()} tokens</SelectItem>)}</SelectContent>
-        </Select>
-      </Field>
-      <Field id={`${prefix}-custom-context`} label="上下文长度" hint="单位 token，可直接填写服务商文档中的长度。">
-        <Input id={`${prefix}-custom-context`} type="number" min={1} step={1} value={model.contextWindow ?? ''} onChange={(event) => {
-          if (event.target.value === '') { onChange({ ...model, contextWindow: null }); return }
-          const value = event.target.valueAsNumber
-          if (!Number.isSafeInteger(value)) return
-          onChange({ ...model, contextWindow: value, contextWindows: value > 0 ? [...new Set([...windows, value])] : windows })
+      {idField === 'editable' && <Field id={`${prefix}-id`} label="模型 ID"><Input id={`${prefix}-id`} value={model.id} maxLength={MAX_MODEL_ID_LENGTH} required onChange={(event) => onChange({ ...model, id: event.target.value })} /></Field>}
+      <div className="space-y-1.5">
+        <p aria-hidden="true" className="text-sm leading-none">上下文长度</p>
+        <Segmented size="sm" label="上下文长度" value={contextChoice} options={CONTEXT_CHOICES} onChange={(value) => {
+          setCustomContext(value === CUSTOM_CONTEXT)
+          if (value === CUSTOM_CONTEXT) return
+          onChange({ ...model, contextWindow: value === AUTO_CONTEXT ? null : Number(value) })
         }} />
-      </Field>
-      <fieldset className="space-y-2">
-        <legend className="mb-2 text-sm font-medium">能力</legend>
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" aria-pressed={model.images} className={cn('flex items-center justify-center gap-2 rounded-md border py-2 text-xs', model.images && 'border-primary/50 bg-soft text-primary')} onClick={() => onChange({ ...model, images: !model.images })}><Eye className="size-3.5" />视觉</button>
-          <button type="button" aria-pressed={reasoningEnabled} disabled={!supportsEffort} className={cn('flex items-center justify-center gap-2 rounded-md border py-2 text-xs disabled:opacity-40', reasoningEnabled && 'border-primary/50 bg-soft text-primary')} onClick={() => onChange({ ...model, reasoningEfforts: reasoningEnabled ? [] : [...DEFAULT_ENABLED_REASONING_EFFORTS] })}><Sparkles className="size-3.5" />思考模式</button>
+        {customContext && <div className="flex items-center gap-2">
+          <Input aria-label="自定义上下文长度" type="number" min={1} step={1} placeholder="按服务商文档填写" value={model.contextWindow ?? ''} onChange={(event) => {
+            if (event.target.value === '') { onChange({ ...model, contextWindow: null }); return }
+            const value = event.target.valueAsNumber
+            if (!Number.isSafeInteger(value)) return
+            onChange({ ...model, contextWindow: value })
+          }} />
+          <span className="shrink-0 text-sm text-muted-foreground">tokens</span>
+        </div>}
+        <p className="text-xs text-muted-foreground">选「自动」时使用应用默认值。</p>
+      </div>
+      {/* 勾选框在 form 里会多渲染一个绝对定位的隐藏 input，所在行要 relative，否则内容区滚动时它会撑出弹窗外层的滚动条 */}
+      <fieldset className="space-y-3">
+        <legend className="mb-2 text-sm leading-none">能力</legend>
+        <div className="relative grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <Checkbox id={`${prefix}-images`} aria-describedby={`${prefix}-images-hint`} checked={model.images} onCheckedChange={() => onChange({ ...model, images: !model.images })} />
+          <Label htmlFor={`${prefix}-images`}>视觉</Label>
+          <p id={`${prefix}-images-hint`} className="col-start-2 text-xs text-muted-foreground">勾选后，输入框里的图片和浏览器截图会发给这个模型。</p>
         </div>
-        {!supportsEffort && <p className="text-xs text-muted-foreground">此协议暂不支持发送思考强度参数。</p>}
+        <div className="relative grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <Checkbox id={`${prefix}-reasoning`} aria-describedby={`${prefix}-reasoning-hint`} checked={reasoningEnabled} disabled={!supportsEffort} onCheckedChange={() => onChange({ ...model, reasoningEfforts: reasoningEnabled ? [] : [...DEFAULT_ENABLED_REASONING_EFFORTS] })} />
+          <Label htmlFor={`${prefix}-reasoning`}>思考模式</Label>
+          <p id={`${prefix}-reasoning-hint`} className="col-start-2 text-xs text-muted-foreground">{supportsEffort ? '勾选后，输入框里可以调思考强度。' : '此协议暂不支持发送思考强度参数。'}</p>
+        </div>
       </fieldset>
-      {supportsEffort && <fieldset className="space-y-2">
-        <legend className="mb-2 text-sm font-medium">思考强度</legend>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {REASONING_EFFORTS.filter((value) => value !== 'default').map((effort) => <label key={effort} className={cn('cursor-pointer rounded-md border px-1 py-1.5 text-center text-xs focus-within:ring-2 focus-within:ring-ring', efforts.includes(effort) ? 'border-primary/50 bg-soft text-primary' : 'text-muted-foreground')} title={effort}>
-            <input type="checkbox" className="mr-1 size-3 accent-primary" aria-label={`${model.id} 思考 ${effort}`} checked={efforts.includes(effort)} onChange={(event) => onChange({ ...model, reasoningEfforts: event.target.checked ? [...efforts, effort] : efforts.filter((value) => value !== effort) })} />{EFFORT_LABELS[effort]}
-          </label>)}
+      {supportsEffort && reasoningEnabled && <div role="group" aria-labelledby={`${prefix}-efforts`} className="space-y-2">
+        <div className="flex h-6 items-center justify-between">
+          <span id={`${prefix}-efforts`} className="text-sm leading-none">思考强度</span>
+          {model.reasoningEfforts !== undefined && <Button type="button" size="xs" variant="link" className="h-auto px-0" onClick={() => onChange({ ...model, reasoningEfforts: undefined })}>恢复自动识别</Button>}
         </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">仅勾选服务商支持的值；输入框的思考滑条会随模型变化。「默认」始终不发送参数。</p>
-        <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...model, reasoningEfforts: undefined })}>恢复自动识别</Button>
-      </fieldset>}
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+          {REASONING_EFFORTS.filter((value) => value !== 'default').map((effort) => {
+            const checked = efforts.includes(effort)
+            const id = `${prefix}-effort-${effort}`
+            return <div key={effort} className="relative flex h-7 items-center gap-2">
+              <Checkbox id={id} checked={checked} onCheckedChange={() => onChange({ ...model, reasoningEfforts: checked ? efforts.filter((value) => value !== effort) : [...efforts, effort] })} />
+              <Label htmlFor={id}>{EFFORT_LABELS[effort]}</Label>
+            </div>
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">只勾选服务商文档里列出的档位，输入框的思考滑条只显示这里勾选的档位。</p>
+      </div>}
     </div>
   )
 }

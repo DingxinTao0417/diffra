@@ -35,6 +35,7 @@ import { PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
+  encodeStartTaskError,
   IPC_CHANNELS,
   type LoadedSessionHandle,
   type PermissionRequestEvent,
@@ -45,6 +46,7 @@ import { modelDisplayName, type ModelRef } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { browserHost } from './browser'
+import { designHost } from './design'
 import { devServer, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
 import { mcpServersFor } from './mcp-servers'
@@ -64,6 +66,8 @@ const execFileAsync = promisify(execFile)
 const sessionOptionsSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
   model: modelRefSchema.optional(),
+  // 设计任务，只在新建时有效
+  design: z.boolean().optional(),
 })
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
@@ -83,6 +87,17 @@ interface PendingPermission {
 }
 
 const pendingPermissions = new Map<string, PendingPermission>()
+
+// 模型配置导致的失败带上原因，新建任务时转成界面能识别的错误码；加载任务、换模型时照常只显示 message。
+// 不改 name：IPC 传过去的是「Error: message」，界面按这个前缀去掉
+class ModelConfigError extends Error {
+  constructor(
+    readonly code: 'model-missing' | 'model-auth',
+    message: string,
+  ) {
+    super(message)
+  }
+}
 
 function broadcast(channel: string, payload: unknown): number {
   const windows = BrowserWindow.getAllWindows()
@@ -114,6 +129,7 @@ export const coreClientHandlers: CoreClientHandlers = {
     }),
   onBrowserAction: (params) => browserHost.act(params),
   onDevServer: (params) => devServer(params),
+  onDesignAction: (params) => designHost.act(params),
 }
 
 function settlePermission(requestId: string, optionId: string | null): void {
@@ -143,13 +159,15 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   const resolveModel = async (ref: ModelRef, label: string) => {
     const provider = settings.get().providers.find((item) => item.id === ref.providerId)
     const model = provider?.models.find((item) => item.id === ref.modelId)
-    if (!provider || !model) throw new Error(`${label}指向的模型不存在，请到「模型」页重新选择`)
-    if (model.enabled === false) throw new Error(`${label}已停用，请到「模型」页启用或重新选择`)
+    if (!provider || !model) throw new ModelConfigError('model-missing', `${label}不存在，请到「设置 → 模型与角色」里重新选择`)
+    if (model.enabled === false) throw new ModelConfigError('model-missing', `${label}已停用，请到「设置 → 模型与角色」里启用或重新选择`)
     if (ref.reasoningEffort && !reasoningEffortsFor(provider, model).includes(ref.reasoningEffort)) {
-      throw new Error(`${label}不支持所选思考档位，请重新选择或在模型管理中配置支持的档位`)
+      throw new ModelConfigError('model-missing', `${label}不支持选中的思考强度，请重新选择，或到「设置 → 模型与角色」里勾选支持的档位`)
     }
     const target = await providerEndpoint(settings, secrets, provider.id)
-    if (!target.ok) throw new Error(`「${provider.name}」${target.error.message}`)
+    if (!target.ok) {
+      throw new ModelConfigError(target.error.kind === 'auth' ? 'model-auth' : 'model-missing', `「${provider.name}」${target.error.message}`)
+    }
     return {
       label: `${provider.name} / ${modelDisplayName(model)}`,
       model: {
@@ -165,7 +183,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   const resolveRole = async (role: 'coder' | 'reviewer' | 'planner' | 'fallback', label: string) => {
     const ref = settings.get().roles[role]
-    return ref ? resolveModel(ref, `「${label}」角色`) : null
+    return ref ? resolveModel(ref, `「${label}」角色的模型`) : null
   }
 
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
@@ -212,12 +230,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     options: SessionOptions = {},
   ): Promise<{ config: SessionConfig; modelLabel: string; planLabel: string | null; fallbackLabel: string | null }> => {
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
-    if (!coder) throw new Error('还没有给「编码」角色分配模型，请先到「模型」页设置')
+    if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
     // 审查一直开着；没分配评审角色时 core 用编码模型审查
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
-    const fallback = await resolveRole('fallback', '兜底')
+    const fallback = await resolveRole('fallback', '备用')
     return {
       config: {
         model: coder.model,
@@ -236,6 +254,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         },
         plugins: enabledPlugins(settings),
         browser: true,
+        design: options.design ?? false,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,
@@ -247,10 +266,15 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
     const path = parse(z.string().min(1), rawPath)
     const options = parse(sessionOptionsSchema, rawOptions ?? {})
-    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options)
+    const dir = await stat(path).catch(() => null)
+    if (!dir?.isDirectory()) throw new Error(encodeStartTaskError('project-missing', '项目文件夹不存在或已被移走，请重新选择项目'))
+    const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path, options).catch((error: unknown) => {
+      throw error instanceof ModelConfigError ? new Error(encodeStartTaskError(error.code, error.message)) : error
+    })
     const { sessionId, info } = await createSession(await coreConnection(), path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode }
+    if (config.design) designHost.enable(sessionId)
+    return { sessionId, info, modelLabel, modelRef: options.model ?? settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, design: config.design ?? false }
   })
 
   // 会话中途换模型或权限模式；权限模式顺带记成新任务的默认值
@@ -314,7 +338,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     await rememberProject(path)
-    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns }
+    if (loaded.design) designHost.enable(sessionId)
+    return { sessionId, info: loaded.info, modelLabel, modelRef: settings.get().roles.coder ?? undefined, planLabel, fallbackLabel, permissionMode: config.permissionMode, title: loaded.title, turns: loaded.turns, taskState: loaded.taskState, design: loaded.design }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionsList, async (_event, rawPath: unknown) =>
@@ -341,6 +366,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     await deleteSession(await coreConnection(), sessionId)
     browserHost.close(sessionId)
+    await designHost.remove(sessionId)
     stopDevServer(sessionId)
   })
 
@@ -348,6 +374,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     const turnId = parse(z.string().min(1), rawTurnId)
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
+    await designHost.prepare(sessionId)
     const response = await sendPrompt(await coreConnection(), sessionId, turnId, text, parse(promptOptionsSchema, rawOptions))
     return response.stopReason
   })
@@ -368,6 +395,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawSkills: unknown) => {
+    await designHost.prepare(parse(z.string().min(1), rawSessionId))
     const response = await plan(
       await coreConnection(),
       parse(z.string().min(1), rawSessionId),
@@ -378,15 +406,17 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return response.stopReason
   })
 
-  // 任务用建任务时的配置；没有任务时按设置里开着的服务器，在最近的项目（没有就用户目录）里启动
-  const mcpTarget = async (raw: unknown) => {
+  // 任务用建任务时的配置；没有任务时按设置里开着的插件和服务器，在最近的项目（没有就用户目录）里启动
+  const listTarget = (raw: unknown) => {
     const target = parse(mcpTargetSchema, raw)
     if ('sessionId' in target) return target
-    return {
-      cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'),
-      servers: await mcpServersFor(settings, secrets),
-      plugins: enabledPlugins(settings),
-    }
+    return { cwd: target.projectPath ?? settings.get().lastProject ?? app.getPath('home'), plugins: enabledPlugins(settings) }
+  }
+
+  const mcpTarget = async (raw: unknown) => {
+    const target = listTarget(raw)
+    if ('sessionId' in target) return target
+    return { ...target, servers: await mcpServersFor(settings, secrets) }
   }
 
   ipcMain.handle(IPC_CHANNELS.mcpStatus, async (_event, rawTarget: unknown, rawRetry: unknown) =>
@@ -403,13 +433,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     ),
   )
 
-  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawPath: unknown) =>
-    listSkills(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
-  )
+  ipcMain.handle(IPC_CHANNELS.skillsList, async (_event, rawTarget: unknown) => listSkills(await coreConnection(), listTarget(rawTarget)))
 
-  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawPath: unknown) =>
-    listCommands(await coreConnection(), parse(z.string().min(1), rawPath), enabledPlugins(settings)),
-  )
+  ipcMain.handle(IPC_CHANNELS.commandsList, async (_event, rawTarget: unknown) => listCommands(await coreConnection(), listTarget(rawTarget)))
 
   ipcMain.handle(IPC_CHANNELS.sessionCancel, async (_event, rawSessionId: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)

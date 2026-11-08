@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
-import { cards, chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
+import { cards, chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { type ScriptStep, startScriptedModel } from './scripted-model'
@@ -48,6 +48,7 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     await maxSteps.getByRole('radio', { name: '无上限' }).click()
     await expect(maxSteps.getByRole('radio', { name: '无上限' })).toHaveAttribute('aria-checked', 'true')
     await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 90, maxSteps: null, goalMaxRounds: 5 })
+    await expect(window.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存，新任务生效')
     await window.screenshot({ path: 'test-results/execution-settings.png' })
     await window.getByRole('button', { name: '返回' }).click()
 
@@ -95,12 +96,111 @@ test('智能体反复做同样的操作：先提醒，再重复就停下并说�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '找 TODO')
-    await waitTaskDone(window)
+    await waitTaskStatus(window, 'stopped')
 
     const notice = window.getByTestId('notice').filter({ hasText: '智能体在重复同样的操作，已停止' })
     await expect(notice).toBeVisible()
     await expect(notice).toContainText('search {"pattern":"TODO"}')
     expect(model.requests()).toBe(6)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('改了文件后卡住停下，撤销这一轮：结论改成未完成，重启后仍是未完成', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-stuck-restore-'))
+  writeFileSync(join(project, 'hello.txt'), 'hello world\n')
+  const same: ScriptStep = { toolCalls: [{ name: 'search', input: { pattern: 'TODO' } }] }
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
+    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
+    same,
+    same,
+    same,
+    same,
+    same,
+    same,
+    { text: '不会走到这里' },
+  ])
+  let app = await launchApp(userDataDir)
+  try {
+    let window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '改一下 hello')
+    await waitTaskStatus(window, 'stopped')
+    expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
+    expect(model.requests()).toBe(8)
+
+    await window.getByTestId('turn').getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
+    await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
+    await window.getByTestId('restore-confirm').click()
+    await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
+    // 撤到的是第一轮，开始时没有待验证的改动，也没有完成条件
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '文件已撤销，原来的结论不再算数。')
+    expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
+
+    // 撤销记在会话里：重启后打开这个任务，结论和提示都还在
+    await app.close()
+    app = await launchApp(userDataDir)
+    window = await app.firstWindow()
+    await window.getByTestId('sidebar').getByRole('button', { name: '改一下 hello', exact: true }).click()
+    await waitTaskStatus(window, 'unfinished')
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '文件已撤销，原来的结论不再算数。')
+    await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('撤销到的那一轮开始时就有没验证的改动：撤销原因说之前轮次的改动还没验证', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-carried-restore-'))
+  // 第一轮改完只回文字：拉回三次还不调 finish，记成没调 finish，改动带到第二轮
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'first\n' } }] },
+    { text: '改好了' },
+    { text: '改好了' },
+    { text: '改好了' },
+    { text: '改好了' },
+    { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'second\n' } }] },
+    { toolCalls: [{ name: 'finish', input: { summary: '两个文件都改好了' } }] },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '改一下 a')
+    await waitTaskStatus(window, 'unfinished')
+    expect(model.requests()).toBe(5)
+
+    await taskInput(window).fill('再改一下 b')
+    await window.keyboard.press('Control+Enter')
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    await waitTaskDone(window)
+    expect(model.requests()).toBe(7)
+
+    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
+    await expect(window.getByTestId('restore-list')).toContainText('b.txt')
+    await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
+    await window.getByTestId('restore-confirm').click()
+    await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
+    // 第二轮开始时第一轮的改动还没验证，原因由 core 按来源写，不是界面兜底的那句
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '文件已撤销，之前轮次的改动还没验证。')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('first\n')
+    expect(existsSync(join(project, 'b.txt'))).toBe(false)
   } finally {
     await app.close()
     await model.close()

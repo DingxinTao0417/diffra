@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { expect, test } from '@playwright/test'
-import { answerOpenDialog, chooseProject, settingsNav, taskInput, waitTaskDone } from './flows'
+import { answerOpenDialog, chooseProject, settingsNav, startTask, taskInput, waitTaskDone } from './flows'
 import { desktopDir, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -36,7 +36,7 @@ function makeGitPlugin(dir: string) {
   git('commit', '-q', '-m', 'plugin')
 }
 
-test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连克隆一起删；斜杠菜单里的自定义命令、插件的 Skill 和 MCP 工具；停用后不再出现', async () => {
+test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连克隆一起删；斜杠菜单里的自定义命令、插件的 Skill 和 MCP 工具；停用后已打开的任务照旧列出、新任务不再列；停用时建的任务里再启用也不列（新任务生效）', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const workspace = mkdtempSync(join(tmpdir(), 'diffra-e2e-plugins-'))
@@ -46,7 +46,7 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
   write(join(project, '.diffra', 'commands', 'diffra-fix.md'), '---\ndescription: 修一下\n---\n把报错修好')
   makePlugin(pluginDir)
   makeGitPlugin(gitDir)
-  const model = await startScriptedModel([{ toolCalls: [{ name: 'mcp__kit-demo__echo', input: { text: 'hi' } }] }, { text: '好的' }])
+  const model = await startScriptedModel([{ toolCalls: [{ name: 'mcp__kit-demo__echo', input: { text: 'hi' } }] }, { text: '好的' }, { text: '好的' }])
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
@@ -59,6 +59,8 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     const kit = window.getByTestId('plugin-card').filter({ hasText: 'kit' }).first()
     await expect(kit).toContainText('1.0.0')
     await expect(kit).toContainText('本地文件夹')
+    await expect(kit.getByTestId('plugin-contents')).toContainText('1 个命令 · 1 个 Skill · 1 个 MCP 服务器')
+    await kit.getByRole('button', { name: '查看' }).click()
     await expect(kit.getByTestId('plugin-contents')).toContainText('/kit:greet')
     await expect(kit.getByTestId('plugin-contents')).toContainText('kit-style')
     await expect(kit.getByTestId('plugin-contents')).toContainText('kit-demo')
@@ -71,12 +73,19 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     await dialog.getByRole('button', { name: '安装' }).click()
     await expect(dialog).toBeHidden({ timeout: 30_000 })
     const gitKit = window.getByTestId('plugin-card').filter({ hasText: 'git-kit' })
+    // 只有命令的插件不显示空的 Skill 和 MCP 服务器类别
+    await expect(gitKit.getByTestId('plugin-contents')).toContainText('1 个命令')
+    await expect(gitKit.getByTestId('plugin-contents')).not.toContainText('Skill')
+    await gitKit.getByRole('button', { name: '查看' }).click()
     await expect(gitKit).toContainText('/git-kit:hello')
     await expect(gitKit).toContainText('Git')
     expect(readdirSync(join(userDataDir, 'plugins'))).toHaveLength(1)
     await window.screenshot({ path: 'test-results/plugins-settings.png' })
-    await gitKit.getByRole('button', { name: '删除' }).click()
-    await gitKit.getByRole('button', { name: '确认删除' }).click()
+    await gitKit.getByRole('button', { name: 'git-kit 插件操作' }).click()
+    await window.getByRole('menuitem', { name: '删除' }).click()
+    const confirmDelete = window.getByRole('alertdialog')
+    await expect(confirmDelete).toContainText('会连同克隆下来的文件一起删除')
+    await confirmDelete.getByRole('button', { name: '删除', exact: true }).click()
     await expect(window.getByTestId('plugin-card')).toHaveCount(1)
     expect(readdirSync(join(userDataDir, 'plugins'))).toHaveLength(0)
     expect(existsSync(pluginDir)).toBe(true)
@@ -114,17 +123,45 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     expect(model.bodies()[0]).toContain('mcp__kit-demo__echo')
     expect(model.bodies()[1]).toContain('echo: hi')
 
-    // 停用后菜单里没有它的命令
+    // 停用后，已打开的任务按建任务时开着的插件列，照旧有它的 Skill 和命令；新任务里没有
+    const kitSwitch = window.getByRole('switch', { name: '启用 kit' })
+    const newTask = window.getByTestId('sidebar').getByRole('button', { name: '新任务' })
     await window.keyboard.press('Control+,')
     await settingsNav(window).getByRole('button', { name: '插件', exact: true }).click()
-    await window.getByRole('switch', { name: '启用 kit' }).click()
-    await expect(window.getByRole('switch', { name: '启用 kit' })).toHaveAttribute('aria-checked', 'false')
+    await kitSwitch.click()
+    await expect(kitSwitch).toHaveAttribute('aria-checked', 'false')
     await window.getByRole('button', { name: '返回' }).click()
+    await input.pressSequentially('/kit-style')
+    await expect(option('kit-style')).toBeVisible()
+    await input.fill('')
+    await input.pressSequentially('/kit:')
+    await expect(option('kit:greet')).toBeVisible()
+    await input.fill('')
+    await newTask.click()
     await input.pressSequentially('/diffra')
     await expect(option('diffra-fix')).toBeVisible()
     await input.fill('')
+    // 读的时候也没有 option，先等「没有匹配」出来，说明列表读完了，再数
     await input.pressSequentially('/kit:')
-    await expect(menu).toBeHidden()
+    await expect(menu).toContainText('没有匹配的命令或 Skill')
+    await expect(menu.getByRole('option')).toHaveCount(0)
+    await input.fill('')
+
+    // 停用时建的任务里再启用也不列：core 按建任务时的插件找 Skill，列出来也选不了；新任务才有
+    await startTask(window, '再来一个任务')
+    await waitTaskDone(window)
+    await window.keyboard.press('Control+,')
+    await settingsNav(window).getByRole('button', { name: '插件', exact: true }).click()
+    await kitSwitch.click()
+    await expect(kitSwitch).toHaveAttribute('aria-checked', 'true')
+    await window.getByRole('button', { name: '返回' }).click()
+    await input.pressSequentially('/kit-style')
+    await expect(menu).toContainText('没有匹配的命令或 Skill')
+    await expect(menu.getByRole('option')).toHaveCount(0)
+    await input.fill('')
+    await newTask.click()
+    await input.pressSequentially('/kit-style')
+    await expect(option('kit-style')).toContainText('插件')
   } finally {
     await app.close()
     await model.close()

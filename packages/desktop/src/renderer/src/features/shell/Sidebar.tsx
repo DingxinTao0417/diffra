@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderOpen, LoaderCircle, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
+import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { openHome, openSettings, openTask, pickProject } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { TaskMenu } from './TaskMenu'
@@ -69,15 +72,9 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-(--sidebar-w) shrink-0 flex-col bg-sidebar" data-testid="sidebar">
-      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
-        <svg viewBox="0 0 32 32" className="size-5.5 shrink-0 text-primary" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M6.14 3H13.565A13 13 0 0 1 23.444 7.55H6.14Q5.44 7.55 5.44 6.85V3.7Q5.44 3 6.14 3ZM6.14 10.15H25.174A13 13 0 0 1 26.5 14.7H6.14Q5.44 14.7 5.44 14V10.85Q5.44 10.15 6.14 10.15ZM6.14 17.3H26.5A13 13 0 0 1 25.174 21.85H6.14Q5.44 21.85 5.44 21.15V18Q5.44 17.3 6.14 17.3ZM6.14 24.45H23.444A13 13 0 0 1 13.565 29H6.14Q5.44 29 5.44 28.3V25.15Q5.44 24.45 6.14 24.45Z"
-          />
-        </svg>
+      <div className="flex h-10.5 items-center gap-2 px-4 pt-3 pb-2">
+        <BrandMark />
         <span className="font-semibold">Diffra</span>
-        <AppVersion />
       </div>
 
       <div className="space-y-0.5 px-2">
@@ -88,7 +85,7 @@ export function Sidebar() {
         <SidebarButton onClick={() => store.set((state) => ({ ...state, searchOpen: true }))}>
           <Search className="size-4" />
           <span className="flex-1">搜索</span>
-          <span className="text-xs text-muted-foreground">Ctrl K</span>
+          <Kbd>Ctrl+K</Kbd>
         </SidebarButton>
       </div>
 
@@ -137,15 +134,19 @@ export function Sidebar() {
                 <span className={cn(trailingClass, 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')}>
                   {group.tasks.length || ''}
                 </span>
-                <button
-                  type="button"
-                  aria-label={`在 ${folderName(group.path)} 新建任务`}
-                  title="在这个项目新建任务"
-                  className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
-                  onClick={() => openHome(group.path)}
-                >
-                  <Plus className="size-3.5" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`在 ${folderName(group.path)} 新建任务`}
+                      className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
+                      onClick={() => openHome(group.path)}
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>在这个项目新建任务</TooltipContent>
+                </Tooltip>
               </div>
               {!isCollapsed && (isExpanded ? group.tasks : recent).map((task) => <TaskRow key={task.sessionId} task={task} active={task.sessionId === activeSession} />)}
               {!isCollapsed && hiddenCount > 0 && (
@@ -200,34 +201,46 @@ function SidebarButton({ active, onClick, children }: { active?: boolean; onClic
   )
 }
 
-type TaskStatus = 'waiting' | 'failed' | 'running' | 'unread' | null
-
-// 多个状态同时成立时只显示一个：等待确认 > 失败 > 运行中 > 完成未读
-function taskStatusOf(task: AppState['live'][string] | undefined): TaskStatus {
-  if (!task) return null
-  if (task.permission) return 'waiting'
-  if (task.turns.at(-1)?.error) return 'failed'
-  if (task.running) return 'running'
-  return task.unread ? 'unread' : null
+interface TaskStatus {
+  label: string
+  tone: Extract<VerdictTone, 'confirm' | 'error' | 'failed' | 'running' | 'blocked' | 'unfinished'> | 'unread'
 }
 
-function TaskStatusMarker({ status }: { status: Exclude<TaskStatus, null> }) {
-  if (status === 'running') return <LoaderCircle className="size-3.5 animate-spin text-primary" aria-label="运行中" />
-  const { label, dot } = {
-    // 浅色下 warning 和 destructive 色相接近，等待确认用空心圈、失败用实心点，靠形状区分
-    waiting: { label: '等待确认', dot: 'size-2 border-2 border-warning' },
-    failed: { label: '失败', dot: 'size-2 bg-destructive' },
-    unread: { label: '完成未读', dot: 'size-1.5 bg-primary' },
-  }[status]
+// 只标需要留意的结论，多个同时成立时只显示一个：等待确认 > 出错 > 验证未通过 > 运行中 > 受阻 / 未完成 > 未读。
+// 计划、压缩、深度扫描轮不改变结论，跑这些轮次时上一轮的出错和验证未通过照样标出来
+function taskStatusOf(task: AppState['live'][string] | undefined): TaskStatus | null {
+  if (!task) return null
+  const { label, tone } = turnVerdict({ ...task, running: false })
+  if (tone === 'confirm' || tone === 'error' || tone === 'failed') return { label, tone }
+  if (task.running) return { label: turnVerdict(task).label, tone: 'running' }
+  if (tone === 'blocked' || tone === 'unfinished') return { label, tone }
+  return task.unread ? { label: `${label}（未读）`, tone: 'unread' } : null
+}
+
+// 和顶栏同一套图标。浅色下 warning 和 destructive 色相接近，等待确认用空心圈、受阻用暂停、未完成用感叹号，和出错的实心点靠形状区分
+function TaskStatusMarker({ status: { label, tone } }: { status: TaskStatus }) {
+  if (tone === 'running') return <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label={label} />
+  const dot =
+    tone === 'unfinished' || tone === 'blocked'
+      ? null
+      : {
+          confirm: 'size-2 border-2 border-warning',
+          error: 'size-2 bg-destructive',
+          failed: 'size-2 bg-destructive',
+          unread: 'size-1.5 bg-foreground',
+        }[tone]
+  const Icon = tone === 'blocked' ? CirclePause : CircleAlert
   return (
     <span role="img" aria-label={label} title={label} className="flex size-3.5 items-center justify-center">
-      <span className={cn('rounded-full', dot)} />
+      {dot ? <span className={cn('rounded-full', dot)} /> : <Icon className="size-3.5 text-warning" />}
     </span>
   )
 }
 
 function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
-  const status = useAppState((state) => taskStatusOf(state.live[task.sessionId]))
+  // 选整个任务对象再算：结论每次都是新对象，直接从 useSyncExternalStore 的选择器返回会反复重渲染
+  const live = useAppState((state) => state.live[task.sessionId])
+  const status = taskStatusOf(live)
   const [menuOpen, setMenuOpen] = useState(false)
   return (
     <div
@@ -257,16 +270,15 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
   )
 }
 
-function AppVersion() {
-  const [version, setVersion] = useState<string | null>(null)
-  useEffect(() => {
-    window.diffra.getAppVersion().then(setVersion, (error: unknown) => console.error('读取版本号失败', error))
-  }, [])
-  if (!version) return null
+function BrandMark() {
   return (
-    <span className="text-xs text-muted-foreground" data-testid="app-version">
-      {version}
-    </span>
+    // primary-color-allow: 品牌标
+    <svg viewBox="0 0 32 32" className="size-5.5 shrink-0 text-primary" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M6.14 3H13.565A13 13 0 0 1 23.444 7.55H6.14Q5.44 7.55 5.44 6.85V3.7Q5.44 3 6.14 3ZM6.14 10.15H25.174A13 13 0 0 1 26.5 14.7H6.14Q5.44 14.7 5.44 14V10.85Q5.44 10.15 6.14 10.15ZM6.14 17.3H26.5A13 13 0 0 1 25.174 21.85H6.14Q5.44 21.85 5.44 21.15V18Q5.44 17.3 6.14 17.3ZM6.14 24.45H23.444A13 13 0 0 1 13.565 29H6.14Q5.44 29 5.44 28.3V25.15Q5.44 24.45 6.14 24.45Z"
+      />
+    </svg>
   )
 }
 
@@ -282,9 +294,11 @@ function UpdateNotice() {
   return (
     <button
       type="button"
+      // primary-color-allow: 下一步动作：重启安装新版本
       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-primary hover:bg-accent"
       onClick={() => window.diffra.installUpdate().catch((error: unknown) => console.error('安装更新失败', error))}
     >
+      {/* primary-color-allow: 下一步动作：重启安装新版本 */}
       <span className="size-1.5 shrink-0 rounded-full bg-primary" />
       新版本 {status.version} 已下载，点击重启安装
     </button>

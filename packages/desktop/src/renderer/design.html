@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 只在这个页面放开：CanvasKit 要编译 WASM，render / eval 工具要执行模型写的 JSX 和脚本（new Function）。
+         页面跑在单独的沙箱视图里，拿不到 window.diffra，外部网络在主进程拦掉 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' data: blob:"
+    />
+    <title>Diffra 设计</title>
+  </head>
+  <body>
+    <div id="design"></div>
+    <script type="module" src="./design/main.ts"></script>
+  </body>
+</html>

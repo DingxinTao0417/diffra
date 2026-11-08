@@ -12,14 +12,21 @@ import { detectDevCommand } from '../project/detect.js'
 import {
   type BrowserAction,
   type BrowserActionResult,
+  type CheckResult,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   EXTERNAL_ACCESS_SCOPE,
+  type FinishVerification,
   TERMINAL_DEFAULT_LINES,
   TERMINAL_READ_PERMISSION_PREFIX,
   PERMISSION_OPTIONS,
   type PromptImage,
   type SessionModel,
+  type TaskProgressView,
+  TURN_OUTCOME_META_KEY,
+  type TurnOutcome,
+  type TurnStop,
 } from '../protocol.js'
 import {
   allowNavigation,
@@ -31,6 +38,7 @@ import {
   screenshotMessage,
   toBrowserAction,
 } from './browser.js'
+import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -48,7 +56,7 @@ import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityF
 import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import type { Session } from './session.js'
-import { executeTool, isToolName, parseFinishInput, TOOL_KINDS } from './tools.js'
+import { executeTool, isToolName, parseFinishInput, startTitle, TOOL_KINDS } from './tools.js'
 
 // 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
 const MAX_CHECK_FAILURES = 3
@@ -71,6 +79,8 @@ export interface TurnIO {
   browser?(action: BrowserAction, signal: AbortSignal): Promise<BrowserActionResult>
   // 在客户端的终端里起、看、停开发服务器
   devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
+  // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）
+  design?(tool: string, args: unknown, signal: AbortSignal): Promise<DesignActionResult>
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -145,17 +155,22 @@ export async function runTurn(
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
     active = { language: session.fallbackModel, config: fallback }
-    await notice(io, 'info', `已换用兜底模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
+    await notice(io, 'info', `已换用备用模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
     session.messages.push({
       role: 'user',
       content: `[Diffra] ${note} A different model takes over this task from here. Read what was tried above, work out why it did not work, and take a different approach.`,
     })
     return true
   }
+  // 本轮被接受的 finish 合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
+  let turnFinish: TurnOutcome['finish'] = null
+  let stop: TurnStop | null = null
 
   try {
     await takeCheckpoint(session, turn.id, io)
     await prepareMcpTools(session, io)
+    // MCP 服务器启动时可能写文件，指纹在它之后取
+    let turnStartFingerprint = await workspaceFingerprint(session)
     const requestIndex = session.messages.length
     session.messages.push({
       role: 'user',
@@ -169,6 +184,9 @@ export async function runTurn(
 
     session.verifiedSnapshot = null
     let editedThisTurn = session.taskState.needsVerification
+    // 待验证是从之前的轮次带过来的、本轮还没改过文件：拉回时不能说「本轮改了文件」
+    let editsCarried = editedThisTurn
+    let commandedThisTurn = false
     let checkFailures = 0
     let gateAttempts = 0
     const compaction: CompactionState = { cooldownUntil: 0 }
@@ -181,10 +199,12 @@ export async function runTurn(
       if (compacted.kind === 'cancelled') return 'cancelled'
       if (compacted.kind === 'too-large') {
         await notice(io, 'warning', '上下文压缩后仍然太大，已停止', '最近几步的内容太多（比如一次读了很大的文件）。可以开一个新会话继续，或缩小任务范围。')
+        stop = 'context-limit'
         return 'max_tokens'
       }
       if (compacted.kind === 'failed') {
         await notice(io, 'warning', '上下文压缩失败，已停止', compacted.message)
+        stop = 'context-limit'
         return 'max_tokens'
       }
 
@@ -201,18 +221,31 @@ export async function runTurn(
       }
 
       if (toolCalls.length === 0) {
+        // 命令或 MCP 工具改的文件平时到 finish 才比指纹，只回文字时也比一次，改了就和 edit_file 一样拉回来走完成门禁
+        // 待验证是带过来的时候 finish 不再比指纹，拉回时靠这次比较说清本轮改没改
+        const commandEdits = commandedThisTurn && !signal.aborted && (!editedThisTurn || editsCarried) && (await changesOutsideEdits(session, turnStartFingerprint, true)) === 'edited'
+        if (commandEdits) {
+          editedThisTurn = true
+          session.taskState.needsVerification = true
+        }
         // 改了文件却没调 finish：拉回来走完成门禁；目标模式里只回了文字也要拉回来，让它说明目标达成没有
-        if ((editedThisTurn || goalMaxRounds !== null || session.taskState.contractRequired || pendingRequirements(session.taskState).length > 0) && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
+        const finishExpected = editedThisTurn || goalMaxRounds !== null || session.taskState.contractRequired || pendingRequirements(session.taskState).length > 0
+        if (finishExpected && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
           gateAttempts++
           session.messages.push({
             role: 'user',
             content: editedThisTurn
-              ? '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
+              ? editsCarried
+                ? commandEdits
+                  ? '[Diffra] File changes from earlier turns, and the files your commands or MCP tools changed in this turn, have not been verified yet. Verify them, then call finish.'
+                  : '[Diffra] File changes from earlier turns have not been verified yet. Verify them, then call finish.'
+                : '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
               : goalMaxRounds !== null ? '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.'
               : '[Diffra] Completion requirements remain unfinished. Continue executing the saved stages and satisfy them using real receipts, or call pause_task with a specific blocker. Do not stop after checks pass.',
           })
           continue
         }
+        if (finishExpected) stop = 'no-finish'
         return signal.aborted ? 'cancelled' : 'end_turn'
       }
 
@@ -240,6 +273,7 @@ export async function runTurn(
           results.push(...remaining.map((item) => errorResult(item, 'Task paused; this batched call was not executed.')))
           session.messages.push({ role: 'tool', content: results })
           await publishTaskState(session, io)
+          stop = 'paused'
           return signal.aborted ? 'cancelled' : 'end_turn'
         }
         if ((call.toolName === 'finish' || call.toolName === 'verify_changes') && !call.invalid) {
@@ -250,24 +284,40 @@ export async function runTurn(
           const verificationOnly = call.toolName === 'verify_changes'
           const missing = pendingRequirements(session.taskState)
           if (!verificationOnly && (missing.length > 0 || (session.taskState.contractRequired && session.taskState.requirements.length === 0))) {
+            await showFinishCard(io, call, 'failed', `完成条件未满足：${missing.map((item) => item.title).join('、') || '还没有定义提交、推送、CI 和发布这几项'}`)
             results.push(errorResult(call, `Task is NOT complete. Define/satisfy task_progress requirements with real command receipts before finish. Remaining: ${missing.map((item) => item.title).join(', ') || 'commit, push, ci, publish'}. Use verify_changes for intermediate validation or pause_task for blockers.`))
             gateAttempts++
             continue
           }
           const evidenceProblem = verificationOnly ? null : releaseEvidenceProblem(session.taskState)
-          if (evidenceProblem) { results.push(errorResult(call, evidenceProblem)); gateAttempts++; continue }
-          const gate = await runFinishGate(session, call, turn.id, verificationOnly || editedThisTurn, signal, io, verificationOnly)
+          if (evidenceProblem) {
+            await showFinishCard(io, call, 'failed', evidenceProblem)
+            results.push(errorResult(call, evidenceProblem))
+            gateAttempts++
+            continue
+          }
+          const changes = verificationOnly || editedThisTurn ? 'edited' : await changesOutsideEdits(session, turnStartFingerprint, commandedThisTurn)
+          // 命令或 MCP 改了文件，和 edit_file 一样记下：门禁打回后只回文字也要拉回来
+          if (changes === 'edited' && !verificationOnly) {
+            editedThisTurn = true
+            session.taskState.needsVerification = true
+          }
+          const gate = await runFinishGate(session, call, turn.id, changes, signal, io, verificationOnly)
           results.push(gate.result)
-          if (gate.passed && !verificationOnly) finished = { summary: gate.summary, goalMet: gate.goalMet }
-          else if (!gate.passed) gateAttempts++
+          if (gate.passed && !verificationOnly) {
+            finished = { summary: gate.summary, goalMet: gate.goalMet }
+            turnFinish = mergeFinish(turnFinish, gate.verification)
+          } else if (!gate.passed) gateAttempts++
           continue
         }
+        if (call.toolName === 'run_command' || call.toolName === 'dev_server_start' || call.toolName.startsWith('mcp__')) commandedThisTurn = true
         const outcome = await runToolCall(session, call, signal, io)
         results.push(outcome.result)
         screenshots.push(...(outcome.images ?? []))
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
+          editsCarried = false
           session.taskState.needsVerification = true
           repeats.clear()
         } else {
@@ -292,7 +342,10 @@ export async function runTurn(
         return 'end_turn'
       }
       if (finished && round >= goalMaxRounds!) {
+        // 目标没达成，但这次 finish 已经过了完成门禁，改动不再算没验证的
+        session.taskState.needsVerification = false
         await notice(io, 'warning', `目标模式已用完 ${goalMaxRounds} 轮，目标还没完成`, `最后一轮的总结：${finished.summary}`)
+        stop = 'goal-exhausted'
         return 'end_turn'
       }
       if (finished) {
@@ -300,6 +353,10 @@ export async function runTurn(
         gateAttempts = 0
         checkFailures = 0
         editedThisTurn = false
+        editsCarried = false
+        // 上一轮的改动已经过了那一轮的完成门禁，指纹从这一轮开始比
+        commandedThisTurn = false
+        turnStartFingerprint = await workspaceFingerprint(session)
         warnedStuck = false
         repeats.clear()
         await notice(io, 'info', `目标模式第 ${round} 轮`, `上一轮还剩：${finished.summary}`)
@@ -324,6 +381,7 @@ export async function runTurn(
             '智能体在重复同样的操作，已停止',
             `${describeCall(repeated)}：提醒过后又连续 ${STUCK_REPEATS} 次得到同样的结果。可以补充说明后让它继续。`,
           )
+          stop = 'stuck'
           return 'end_turn'
         }
         warnedStuck = false
@@ -358,6 +416,7 @@ export async function runTurn(
             )
             if (!escalatedNow) {
               await notice(io, 'warning', `快速检查连续 ${MAX_CHECK_FAILURES} 次失败，已停止`, '请查看检查输出，或调整任务后再继续。')
+              stop = 'check-exhausted'
               return 'end_turn'
             }
             checkFailures = 0
@@ -371,24 +430,30 @@ export async function runTurn(
         )
         if (!escalatedNow) {
           await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
+          stop = 'gate-exhausted'
           return 'end_turn'
         }
         gateAttempts = 0
       }
     }
     await notice(io, 'warning', `已达到单次任务的步数上限（${maxSteps} 步），已停止`, '发消息让它继续，或在「设置 → 任务执行」里调整上限。')
+    stop = 'step-limit'
     return 'max_turn_requests'
   } catch (error) {
     if (signal.aborted) return 'cancelled'
     const detail = toModelError(error, active.config.endpoint.apiKey, 0)
     console.error('[session] 任务出错', error)
     await notice(io, 'error', '模型调用失败', detail.message)
+    stop = 'model-error'
     return 'end_turn'
   } finally {
-    if (signal.aborted) session.taskState = { ...session.taskState, status: 'cancelled', reason: '用户取消，任务并未完成。' }
-    else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '本轮已停止，未通过完整任务完成门禁；可继续执行剩余步骤。' }
+    // 返回 cancelled 的地方都在 signal 中止之后，stop 统一在这里记
+    if (signal.aborted) {
+      stop = 'cancelled'
+      session.taskState = { ...session.taskState, status: 'cancelled', reason: '用户取消，任务并未完成。' }
+    } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '本轮已停止，未通过完整任务完成门禁；可继续执行剩余步骤。' }
     session.activeTurn = null
-    await publishTaskState(session, io)
+    await publishTaskState(session, io, { finish: turnFinish, stop })
   }
 }
 
@@ -409,11 +474,33 @@ export async function takeCheckpoint(session: Session, turnId: string, io: TurnI
   }
 }
 
+async function workspaceFingerprint(session: Session): Promise<string | null> {
+  if (!session.checkpoints) return null
+  try {
+    return await session.checkpoints.fingerprint()
+  } catch (error) {
+    console.error('[session] 读取工作区指纹失败', error)
+    return null
+  }
+}
+
+type TurnChanges = 'edited' | 'none' | 'unknown'
+
+// 没用 edit_file 等工具改文件时，工作区指纹变了也算有改动；取不到指纹又跑过命令或 MCP 工具，就不知道有没有改
+async function changesOutsideEdits(session: Session, startFingerprint: string | null, commanded: boolean): Promise<TurnChanges> {
+  if (startFingerprint !== null) {
+    const current = await workspaceFingerprint(session)
+    if (current === startFingerprint) return 'none'
+    if (current !== null) return 'edited'
+  }
+  return commanded ? 'unknown' : 'none'
+}
+
 async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO) {
   const step = await streamModelStep(
     {
       model: active.language,
-      system: session.systemPrompt,
+      system: session.systemPrompt + designInstructions(session),
       messages: session.contextMessages(),
       tools: session.toolSet(),
       usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
@@ -516,11 +603,12 @@ export async function runToolCall(
   if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
   if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
+  if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
     sessionUpdate: 'tool_call',
     toolCallId: call.toolCallId,
-    title: name,
+    title: call.invalid ? name : startTitle(name, call.input),
     kind,
     status: 'in_progress',
     rawInput: call.input,
@@ -563,7 +651,6 @@ export async function runToolCall(
       },
     }
     if (name === 'edit_file' || name === 'run_command') session.verifiedSnapshot = null
-    if (name === 'edit_file') session.taskState.needsVerification = true
     if (name === 'task_progress') {
       session.taskState = updateTask(session.taskState, call.input)
       await publishTaskState(session, io)
@@ -583,6 +670,8 @@ export async function runToolCall(
       status: 'completed',
       title: output.title ?? name,
       content: toolContent(output),
+      // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
+      ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
     })
     return { result: textResult(call, output.text), edited: output.edited ?? false }
   } catch (error) {
@@ -791,11 +880,11 @@ async function runFinishGate(
   session: Session,
   call: StepToolCall,
   turnId: string,
-  editedThisTurn: boolean,
+  changes: TurnChanges,
   signal: AbortSignal,
   io: TurnIO,
   verificationOnly = false,
-): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean }> {
+): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean; verification: FinishVerification }> {
   let summary = ''
   let goalMet = false
   try {
@@ -803,29 +892,26 @@ async function runFinishGate(
     summary = input.summary
     goalMet = input.goal_met ?? false
   } catch (error) {
-    return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false, summary, goalMet }
+    return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false, summary, goalMet, verification: 'failed' }
   }
   // 先跑完成检查，检查有了结果再显示「完成」卡片，界面上的先后顺序和实际一致
-  const showFinish = (status: 'completed' | 'failed', text: string) =>
-    io.update({
-      sessionUpdate: 'tool_call',
-      toolCallId: call.toolCallId,
-      title: verificationOnly ? '验证改动（不结束任务）' : '完成',
-      kind: 'other',
-      status,
-      rawInput: call.input,
-      content: [{ type: 'content', content: { type: 'text', text } }],
-    })
+  const showFinish = (verification: FinishVerification, text: string) => showFinishCard(io, call, verification, text, verificationOnly)
+  const cancelled = () => ({ result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet, verification: 'failed' as const })
 
-  if (!editedThisTurn) {
-    await showFinish('completed', summary)
-    return { result: textResult(call, 'Done.'), passed: true, summary, goalMet }
+  if (changes === 'none') {
+    await showFinish('no-edits', summary)
+    return { result: textResult(call, 'Done.'), passed: true, summary, goalMet, verification: 'no-edits' }
   }
-  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
+  if (changes === 'unknown') {
+    // 检查命令可能配了，不带「没配检查命令」的 unverified 标记
+    await showFinishCard(io, call, 'unverified', summary, false, false)
+    return { result: textResult(call, 'Done. Commands or MCP tools ran in this turn and there are no checkpoints to tell whether they changed files, so nothing was verified.'), passed: true, summary, goalMet, verification: 'unverified' }
+  }
+  if (signal.aborted) return cancelled()
   const snapshot = session.checkpoints ? await session.checkpoints.fingerprint() : null
   if (snapshot && session.verifiedSnapshot === snapshot) {
-    await showFinish('completed', verificationOnly ? '当前工作区已验证；继续剩余任务。' : summary)
-    return { result: textResult(call, 'Workspace validation reused. Only finish ends the task.'), passed: true, summary, goalMet }
+    await showFinish('reused', verificationOnly ? '当前工作区已验证；继续剩余任务。' : summary)
+    return { result: textResult(call, 'Workspace validation reused. Only finish ends the task.'), passed: true, summary, goalMet, verification: 'reused' }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
   if (command) {
@@ -837,13 +923,14 @@ async function runFinishGate(
         passed: false,
         summary,
         goalMet,
+        verification: 'failed',
       }
     }
   }
   // 检查通过（或没配检查）之后再做安全检查和规范审查，免得对跑不通的代码提意见
   const diff = await turnDiff(session, turnId, io)
   const security = diff === null ? [] : await runSecurityChecks(session, diff, summary, signal, io)
-  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
+  if (signal.aborted) return cancelled()
   const blockers = blocking(security)
   if (blockers.length > 0) {
     await showFinish('failed', `安全检查发现 ${blockers.length} 处高危问题`)
@@ -859,10 +946,11 @@ async function runFinishGate(
       passed: false,
       summary,
       goalMet,
+      verification: 'failed',
     }
   }
   const findings = diff === null ? [] : await runReview(session, diff, summary, signal, io)
-  if (signal.aborted) return { result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet }
+  if (signal.aborted) return cancelled()
   if (findings.length > 0) {
     await showFinish('failed', `规范审查发现 ${findings.length} 处问题`)
     const list = findings.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
@@ -875,15 +963,31 @@ async function runFinishGate(
       passed: false,
       summary,
       goalMet,
+      verification: 'failed',
     }
   }
   if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
   if (!command) {
-    await showFinish('completed', `${summary}\n\n未配置检查命令，改动未经自动验证。`)
-    return { result: textResult(call, verificationOnly ? 'No project checks configured. Review completed, but changes remain unverified. Continue the remaining task; do not claim validation passed.' : 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet }
+    // 界面还没按 verification 画 verify_changes 卡片，文本里照旧说明未经验证
+    await showFinish('unverified', verificationOnly ? `${summary}\n\n未配置检查命令，改动未经自动验证。` : summary)
+    return { result: textResult(call, verificationOnly ? 'No project checks configured. Review completed, but changes remain unverified. Continue the remaining task; do not claim validation passed.' : 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet, verification: 'unverified' }
   }
-  await showFinish('completed', verificationOnly ? `${summary}\n验证通过，不代表任务完成；继续执行提交、推送或发布等剩余步骤。` : summary)
-  return { result: textResult(call, verificationOnly ? `Verification passed: ${command}. Continue working; this is NOT task completion.` : `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet }
+  await showFinish('verified', verificationOnly ? `${summary}\n验证通过，不代表任务完成；继续执行提交、推送或发布等剩余步骤。` : summary)
+  return { result: textResult(call, verificationOnly ? `Verification passed: ${command}. Continue working; this is NOT task completion.` : `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet, verification: 'verified' }
+}
+
+function showFinishCard(io: TurnIO, call: StepToolCall, verification: FinishVerification, text: string, verificationOnly = false, noChecks = verification === 'unverified') {
+  return io.update({
+    sessionUpdate: 'tool_call',
+    toolCallId: call.toolCallId,
+    title: verificationOnly ? '验证改动（不结束任务）' : '完成',
+    kind: 'other',
+    status: verification === 'failed' ? 'failed' : 'completed',
+    rawInput: call.input,
+    content: [{ type: 'content', content: { type: 'text', text } }],
+    // 界面按 verification 画结论，不往模型写的总结里拼话；unverified 是旧的完成卡字段，表示没配检查命令，照旧只写在完成卡上
+    _meta: { diffra: { verification, ...(noChecks && !verificationOnly ? { unverified: true } : {}) } },
+  })
 }
 
 // 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
@@ -923,17 +1027,18 @@ async function runSecurityChecks(session: Session, diff: string, summary: string
 
 async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
   const toolCallId = `security-static-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全检查', kind: 'other', status: 'in_progress' })
-  const finishCard = (status: 'completed' | 'failed', text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '静态检查', kind: 'other', status: 'in_progress' })
+  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
   try {
     const findings = await staticScan(session.cwd, added)
     if (signal.aborted) return []
-    await finishCard(blocking(findings).length > 0 ? 'failed' : 'completed', findings.length > 0 ? formatFindings(findings) : '没有发现常见的高危写法')
+    const result: CheckResult = blocking(findings).length > 0 ? 'failed' : findings.length > 0 ? 'warned' : 'passed'
+    await finishCard(result === 'failed' ? 'failed' : 'completed', result, findings.length > 0 ? formatFindings(findings) : '没有发现常见的高危写法')
     return findings
   } catch (error) {
     console.error('[session] 静态安全检查失败', error)
-    await finishCard('failed', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
+    await finishCard('failed', 'error', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
     return []
   }
 }
@@ -952,19 +1057,26 @@ async function runLightScan(
   const depsChanged = dependenciesChanged(added)
   if (diff.addedLines.size === 0 && !depsChanged) return []
   const toolCallId = `security-scan-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '安全扫描', kind: 'other', status: 'in_progress' })
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '轻量扫描', kind: 'other', status: 'in_progress' })
   const findings: SecurityFinding[] = []
   const notes: string[] = []
+  let modelFailed = false
+  let partial = false
+  let existing = 0
   if (diff.addedLines.size > 0) {
     const reviewer = session.config.reviewModel ?? session.config.model
     try {
       const { text, usage } = await callReviewer(session.reviewModel, await buildLightScanRequest(session.cwd, diff, summary), signal)
       if (usage) await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
       findings.push(...parseLightScanOutput(text, diff.addedLines))
-      if (diff.truncated) notes.push('改动太多，模型只看了前面一部分')
+      if (diff.truncated) {
+        partial = true
+        notes.push('改动太多，模型只看了前面一部分')
+      }
     } catch (error) {
       if (signal.aborted) return []
       console.error('[session] 安全扫描的模型调用失败', error)
+      modelFailed = true
       notes.push(`模型扫描没有完成，这次不拦截：${toModelError(error, reviewer.endpoint.apiKey, 0).message}`)
     }
   }
@@ -972,14 +1084,23 @@ async function runLightScan(
     const audit = await auditDependencies(session.cwd, added, session.environment.bashPath, signal)
     findings.push(...audit.findings)
     notes.push(...audit.notes)
+    if (!audit.complete) partial = true
+    existing = audit.existing
   }
   if (signal.aborted) return []
   const text = [findings.length > 0 ? formatFindings(findings) : '没有发现安全问题', ...notes].join('\n')
+  // 「没有发现已知漏洞」这类附注不算提醒，项目原有的漏洞算
+  const result: CheckResult = blocking(findings).length > 0
+    ? 'failed'
+    : modelFailed ? 'error'
+    : partial ? 'partial'
+    : findings.length > 0 || existing > 0 ? 'warned' : 'passed'
   await io.update({
     sessionUpdate: 'tool_call_update',
     toolCallId,
-    status: blocking(findings).length > 0 ? 'failed' : 'completed',
+    status: result === 'failed' ? 'failed' : 'completed',
     content: [{ type: 'content', content: { type: 'text', text } }],
+    _meta: { diffra: { result } },
   })
   return findings
 }
@@ -995,8 +1116,8 @@ async function runReview(session: Session, rawDiff: string, summary: string, sig
     cardShown = true
     await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '规范审查', kind: 'other', status: 'in_progress' })
   }
-  const finishCard = (status: 'completed' | 'failed', text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
   try {
     const diff = annotateDiff(rawDiff)
     const packs = reviewRulePacks(session.rulePacks, [...diff.addedLines.keys()])
@@ -1012,6 +1133,7 @@ async function runReview(session: Session, rawDiff: string, summary: string, sig
     const partial = diff.truncated ? '\n（改动太多，只审查了前面一部分）' : ''
     await finishCard(
       findings.length > 0 ? 'failed' : 'completed',
+      findings.length > 0 ? 'failed' : diff.truncated ? 'partial' : 'passed',
       findings.length > 0
         ? `${findings.map((item) => `${item.ruleId}  ${item.path}:${item.line}  ${item.message}`).join('\n')}${partial}`
         : `没有发现违反规范的地方${partial}`,
@@ -1022,7 +1144,7 @@ async function runReview(session: Session, rawDiff: string, summary: string, sig
     const apiKey = (session.config.reviewModel ?? session.config.model).endpoint.apiKey
     console.error('[session] 规范审查失败', error)
     await showCard()
-    await finishCard('failed', `审查没有完成，这次不拦截：${toModelError(error, apiKey, 0).message}`)
+    await finishCard('failed', 'error', `审查没有完成，这次不拦截：${toModelError(error, apiKey, 0).message}`)
     return []
   }
 }
@@ -1044,6 +1166,7 @@ async function runCheck(
       toolCallId,
       status: passed ? 'completed' : 'failed',
       content: [{ type: 'content', content: { type: 'text', text: result.summary } }],
+      _meta: { diffra: { result: (passed ? 'passed' : 'failed') satisfies CheckResult } },
     })
     return { passed, output: truncateLines(result.summary, 120, 8000) }
   } catch (error) {
@@ -1053,6 +1176,7 @@ async function runCheck(
       toolCallId,
       status: 'failed',
       content: [{ type: 'content', content: { type: 'text', text: message } }],
+      _meta: { diffra: { result: 'failed' satisfies CheckResult } },
     })
     return { passed: false, output: message }
   }
@@ -1071,11 +1195,30 @@ export function errorResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'error-text', value: text } }
 }
 
-async function publishTaskState(session: Session, io: TurnIO): Promise<void> {
-  await io.update({
+export function taskStateView(session: Session): TaskProgressView {
+  const { status, reason, requirements, needsVerification } = session.taskState
+  return { status, reason, requirements: requirements.map(({ id, title, receiptId }) => ({ id, title, receiptId })), needsVerification }
+}
+
+// outcome 只在一轮结束时带
+export function taskStateUpdate(session: Session, outcome?: TurnOutcome): SessionUpdate {
+  return {
     sessionUpdate: 'session_info_update',
-    _meta: { diffra: { [TASK_STATE_META_KEY]: { status: session.taskState.status, reason: session.taskState.reason, requirements: session.taskState.requirements.map(({ id, title, receiptId }) => ({ id, title, receiptId })) } } },
-  })
+    _meta: { diffra: { [TASK_STATE_META_KEY]: taskStateView(session), ...(outcome ? { [TURN_OUTCOME_META_KEY]: outcome } : {}) } },
+  }
+}
+
+async function publishTaskState(session: Session, io: TurnIO, outcome?: TurnOutcome): Promise<void> {
+  await io.update(taskStateUpdate(session, outcome))
+}
+
+const FINISH_RANK = ['no-edits', 'verified', 'unverified'] as const
+
+// 目标模式一轮里会有多次被接受的 finish，前面未经验证的改动不能被后面「没有改动」的 finish 盖掉
+function mergeFinish(current: TurnOutcome['finish'], verification: FinishVerification): TurnOutcome['finish'] {
+  const next = verification === 'reused' ? 'verified' : verification === 'failed' ? null : verification
+  const rank = (value: TurnOutcome['finish']) => (value === null ? -1 : FINISH_RANK.indexOf(value))
+  return rank(next) > rank(current) ? next : current
 }
 
 export function notice(io: TurnIO, severity: 'info' | 'warning' | 'error', title: string, description?: string): Promise<void> {

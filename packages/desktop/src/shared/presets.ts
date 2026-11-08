@@ -94,5 +94,5 @@ export const CUSTOM_PROTOCOLS: Protocol[] = ['openai-compatible', 'openai-respon
 export function baseUrlHint(protocol: Protocol): string {
   return protocol === 'anthropic' || protocol === 'anthropic-compatible'
     ? '按 Claude Code 的写法填，不带 /v1'
-    : '一般以 /v1 结尾，按服务商文档填写'
+    : '一般以 /v1 结尾，按服务商文档填写。'
 }

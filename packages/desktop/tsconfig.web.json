@@ -12,5 +12,5 @@
     "paths": { "@/*": ["./src/renderer/src/*"] },
     "noEmit": true
   },
-  "include": ["src/renderer/src", "src/shared"]
+  "include": ["src/renderer/src", "src/renderer/design", "src/shared"]
 }

@@ -17,6 +17,7 @@ import type {
   SessionInfo,
   SessionNotification,
   StopReason,
+  TaskProgressView,
   TestModelResult,
   UsageQuery,
   UsageSummary,
@@ -101,6 +102,11 @@ export const IPC_CHANNELS = {
   browserGetState: 'browser:get-state',
   browserState: 'browser:state',
   browserActivity: 'browser:activity',
+  designBounds: 'design:bounds',
+  designActivity: 'design:activity',
+  designChanged: 'design:changed',
+  designOpenFile: 'design:open-file',
+  designSaveFile: 'design:save-file',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
@@ -172,14 +178,31 @@ export interface SessionHandle {
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode
+  // 设计任务：任务页打开设计面板，画布占主区
+  design: boolean
 }
 
 export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
+  design?: boolean
 }
 
-// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）
+// 新建任务失败的原因。ipcMain.handle 抛出的错误过 IPC 后只剩 message，所以原因写在 message 开头的「[code] 」里
+export type StartTaskErrorCode = 'model-missing' | 'model-auth' | 'project-missing' | 'unknown'
+const START_TASK_ERROR_CODES = ['model-missing', 'model-auth', 'project-missing'] as const
+
+export function encodeStartTaskError(code: (typeof START_TASK_ERROR_CODES)[number], message: string): string {
+  return `[${code}] ${message}`
+}
+
+export function decodeStartTaskError(message: string): { code: StartTaskErrorCode; message: string } {
+  const match = /^\[([a-z-]+)\] /.exec(message)
+  const code = START_TASK_ERROR_CODES.find((item) => item === match?.[1])
+  return match && code ? { code, message: message.slice(match[0].length) } : { code: 'unknown', message }
+}
+
+// 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动）；也决定斜杠菜单列哪些 Skill 和命令
 export type McpStatusTarget = { sessionId: string } | { projectPath: string | null }
 
 // 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
@@ -193,6 +216,7 @@ export interface PromptOptions {
 export interface LoadedSessionHandle extends SessionHandle {
   title: string
   turns: StoredTurn[]
+  taskState?: TaskProgressView
 }
 
 export interface PermissionRequestEvent {
@@ -269,16 +293,16 @@ export interface DiffraApi {
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
   compactSession(sessionId: string, turnId: string): Promise<StopReason>
-  // 项目、用户目录和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个
-  listSkills(projectPath: string): Promise<SkillInfo[]>
+  // 项目、用户目录、插件和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个；任务里按建任务时开着的插件，首页按设置里开着的插件
+  listSkills(target: McpStatusTarget): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>
   deleteMcpServer(serverId: string): Promise<SettingsView>
   // retry 为 true 时连不上的马上重连
   mcpStatus(target: McpStatusTarget, retry: boolean): Promise<McpServerStatus[]>
   // 把 MCP prompt 展开成文字
   mcpPrompt(target: McpStatusTarget, server: string, prompt: string, args: Record<string, string>): Promise<string>
-  // 项目、用户目录、开着的插件和兼容目录里的自定义命令
-  listCommands(projectPath: string): Promise<CommandInfo[]>
+  // 项目、用户目录、插件和兼容目录里的自定义命令；插件和 listSkills 一样按任务或设置
+  listCommands(target: McpStatusTarget): Promise<CommandInfo[]>
   listPlugins(): Promise<PluginView[]>
   // 页面套用外观后告诉主进程顶栏颜色和深浅色：Windows 的窗口按钮和原生菜单跟着变
   setWindowChrome(chrome: { color: string; symbolColor: string; theme: Appearance['theme'] }): Promise<void>
@@ -293,6 +317,13 @@ export interface DiffraApi {
   onBrowserState(listener: (state: BrowserState) => void): () => void
   // 智能体在用某个任务的浏览器，界面把面板打开
   onBrowserActivity(listener: (event: { sessionId: string }) => void): () => void
+  // 设计面板：位置（null 表示不显示，和浏览器共用矩形类型）、打开和保存 .fig；取消时返回 null，否则返回文件路径
+  setDesignBounds(sessionId: string, rect: BrowserRect | null): void
+  designOpenFile(sessionId: string): Promise<string | null>
+  // 另存为 .fig，默认放在项目文件夹里
+  designSaveFile(sessionId: string, projectPath: string): Promise<string | null>
+  // 智能体在用某个任务的设计面板，界面把面板打开
+  onDesignActivity(listener: (event: { sessionId: string }) => void): () => void
   // 弹出文件夹选择框；取消时返回 null
   installPluginFromFolder(): Promise<PluginView[] | null>
   installPluginFromGit(url: string): Promise<PluginView[]>

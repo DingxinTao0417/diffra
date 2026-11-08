@@ -42,7 +42,25 @@ export async function startMockProvider(): Promise<MockProvider> {
           return send(200, { object: 'list', data: [{ id: 'mock-b' }, { id: 'mock-a' }] })
         }
         if (req.method === 'POST' && path === '/openai/v1/chat/completions') {
-          const message = wantsTool
+          const body = JSON.parse(raw) as { model?: string; tool_choice?: unknown; max_tokens?: number; max_completion_tokens?: number }
+          // mock-thinking：默认先思考，输出上限不到 1000 时思考就把预算用完，没有工具调用
+          if (body.model === 'mock-thinking' && wantsTool && (body.max_tokens ?? body.max_completion_tokens ?? Infinity) < 1000) {
+            return send(200, {
+              id: 'chatcmpl-1',
+              object: 'chat.completion',
+              created: 1,
+              model: 'mock-thinking',
+              choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+              usage: { prompt_tokens: 5, completion_tokens: 256, total_tokens: 261 },
+            })
+          }
+          // mock-no-required：思考模式下不接受 tool_choice: required
+          if (body.model === 'mock-no-required' && body.tool_choice === 'required') {
+            return send(400, { error: { message: 'tool_choice "required" is not supported in thinking mode' } })
+          }
+          // mock-no-tools：带了工具也只回文字
+          const callsTool = wantsTool && body.model !== 'mock-no-tools'
+          const message = callsTool
             ? {
                 role: 'assistant',
                 content: null,
@@ -54,7 +72,7 @@ export async function startMockProvider(): Promise<MockProvider> {
             object: 'chat.completion',
             created: 1,
             model: 'mock-a',
-            choices: [{ index: 0, message, finish_reason: wantsTool ? 'tool_calls' : 'stop' }],
+            choices: [{ index: 0, message, finish_reason: callsTool ? 'tool_calls' : 'stop' }],
             usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
           })
         }

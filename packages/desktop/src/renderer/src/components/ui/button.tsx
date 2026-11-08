@@ -10,7 +10,7 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/10 dark:hover:bg-input/15",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
@@ -19,7 +19,7 @@ const buttonVariants = cva(
           "bg-destructive-soft text-destructive hover:bg-destructive/15 focus-visible:ring-destructive",
         // 暗色的 destructive 是浅红，白字对比度不够，改用深色字
         "destructive-solid":
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive dark:text-[#1a0d0b]",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

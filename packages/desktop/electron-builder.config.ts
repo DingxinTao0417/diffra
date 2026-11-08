@@ -23,6 +23,8 @@ const config: Configuration = {
   extraResources: [
     { from: rgPath, to: 'rg.exe' },
     { from: '../core/skills', to: 'skills' },
+    // 设计模式打进去的第三方组件（OpenPencil 等）的出处和许可
+    { from: 'NOTICE.md', to: 'NOTICE.md' },
   ],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],

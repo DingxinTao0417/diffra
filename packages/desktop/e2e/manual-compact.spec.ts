@@ -42,7 +42,7 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     expect(model.bodies()[2]).toContain('原始细节')
     await expect(window.getByTestId('user-message').first()).toContainText('原始细节')
     await expect(window.getByTestId('turn').last().getByRole('button', { name: '重新生成', exact: true })).toHaveCount(0)
-    await expect(window.getByTestId('turn').last().getByRole('button', { name: '撤销到这一轮之前', exact: true })).toHaveCount(0)
+    await expect(window.getByTestId('turn').last().getByRole('button', { name: '撤销这一轮及之后的改动', exact: true })).toHaveCount(0)
     await app.close()
     app = await launchApp(userDataDir)
     window = await app.firstWindow()

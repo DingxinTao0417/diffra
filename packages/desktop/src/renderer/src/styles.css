@@ -5,11 +5,11 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  /* 拉丁字母用 Segoe UI（静态字体只有 400 和 600，font-medium 和中文一样按 400 画，不会出现中英粗细不一），中文回落到雅黑 */
+  /* 拉丁字母用 Segoe UI，中文回落到雅黑。雅黑只有 300、400、700：400、500 中英都按 400 画；600 时英文是 Semibold，中文会画成 Bold 700，同一行里粗细不一，所以含中文的加粗文字用 700，只有拉丁字母和数字的才用 600 */
   --font-sans: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
   /*
-   * 字号阶梯（标准档根字号 14px 时）：12 辅助 / 13 控件 / 14 正文 / 16 卡片和弹窗标题 / 20 页标题 / 26 首页标题。
+   * 字号阶梯（标准档根字号 14px 时）：12 辅助 / 13 控件 / 14 正文 / 16 卡片和弹窗标题 / 20 页标题 / 26 首页标题和用量数字。
    * 仍按 rem 跟「文字大小」设置整体缩放，但中文最小不低于 12px，小字档也一样
    */
   --text-xs: max(12px, 0.857rem);
@@ -39,6 +39,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -52,6 +53,9 @@
   --color-destructive-soft: var(--destructive-soft);
   --color-diff-add: var(--diff-add-bg);
   --color-diff-del: var(--diff-del-bg);
+  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-del-fg: var(--diff-del-fg);
+  --color-highlight: var(--highlight);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -90,6 +94,7 @@
   --accent: #eaeae5;
   --accent-foreground: #1c1c1a;
   --destructive: #b42318;
+  --destructive-foreground: #ffffff;
   --destructive-soft: #fdeceb;
   --border: #e7e6e1;
   --input: #dcdbd5;
@@ -99,11 +104,15 @@
   --success-soft: #e9f6ee;
   --warning: #b54708;
   --warning-soft: #fdf3e8;
-  --diff-add-bg: #e9f6ee;
+  --diff-add-bg: #def2eb;
   --diff-del-bg: #fdeeec;
+  --diff-add-fg: #17736a;
+  --diff-del-fg: #b3362b;
+  --highlight: #cfdcef;
   --chart-1: var(--primary);
   --chart-2: #4f7cac;
-  --chart-3: var(--warning);
+  /* 不用 warning：用量接近上限时总量条才用 warning，同一个弹层里同一种颜色不能有两个意思 */
+  --chart-3: #8b6db3;
   --chart-4: #9a9992;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.18);
@@ -150,18 +159,24 @@
   --accent: #2a2a27;
   --accent-foreground: #ecece8;
   --destructive: #f2786d;
+  --destructive-foreground: #1a0d0b;
   --destructive-soft: #3a1d1a;
   --border: #2e2e2b;
-  --input: #3a3a36;
+  /* 控件边线（输入框、下拉、复选框、描边按钮）在主区、卡片、弹窗底色上都不低于 3:1。原语里 dark:bg-input/N 的填充透明度按这个亮度配，改值要一起调 */
+  --input: #70706c;
   --sidebar: #1b1b19;
   --sidebar-border: #2a2a27;
   --success: #5cc48c;
   --success-soft: #15291f;
   --warning: #e3a35c;
   --warning-soft: #2f2416;
-  --diff-add-bg: #15291f;
+  --diff-add-bg: #132826;
   --diff-del-bg: #2f1a18;
+  --diff-add-fg: #5ebfae;
+  --diff-del-fg: #ee8278;
+  --highlight: #2c3a4f;
   --chart-2: #7ea6d6;
+  --chart-3: #b49ad8;
   --chart-4: #8a8983;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.4);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.55);
@@ -295,7 +310,7 @@ body[data-scroll-locked] .title-bar {
 .markdown h2,
 .markdown h3,
 .markdown h4 {
-  font-weight: 600;
+  font-weight: 700;
   margin-top: 1em;
 }
 .markdown h1 {
@@ -320,6 +335,7 @@ body[data-scroll-locked] .title-bar {
   margin-top: 0.2em;
 }
 .markdown a {
+  /* primary-color-allow: 链接是可点的动作 */
   color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;

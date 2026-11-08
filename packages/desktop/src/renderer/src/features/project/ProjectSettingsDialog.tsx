@@ -1,14 +1,14 @@
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { CheckDetection, CheckRunResult, DetectedCheck } from '@diffra/core/types'
-import { Check, LoaderCircle, Play, ScanSearch, X } from 'lucide-react'
+import { Check, LoaderCircle, Play, ScanSearch, ShieldAlert, X } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
-import { folderName } from '@/lib/format'
 
 interface ProjectSettingsDialogProps {
   project: ProjectState | null
@@ -22,10 +22,15 @@ interface ProjectSettingsDialogProps {
 export function ProjectSettingsDialog({ project, open, detectOnOpen, onClose, onSaved }: ProjectSettingsDialogProps) {
   return (
     <Dialog open={open && project !== null} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>项目设置 · {project ? folderName(project.path) : ''}</DialogTitle>
-          <DialogDescription>保存在 Diffra 里，不往项目仓库写文件。新建或重新打开的任务按新设置运行。</DialogDescription>
+          <DialogTitle>项目设置</DialogTitle>
+          <DialogDescription>
+            <span className="block truncate font-mono text-xs" title={project?.path}>
+              {project?.path}
+            </span>
+            保存在 Diffra 里，不往项目仓库写文件。改动对新任务生效。
+          </DialogDescription>
         </DialogHeader>
         {open && project && <ProjectSettingsForm project={project} detectOnOpen={detectOnOpen ?? false} onClose={onClose} onSaved={onSaved} />}
       </DialogContent>
@@ -36,6 +41,20 @@ export function ProjectSettingsDialog({ project, open, detectOnOpen, onClose, on
 const KIND_LABELS: Record<DetectedCheck['kind'], string> = { typecheck: '类型检查', lint: 'Lint', test: '测试' }
 
 type Detection = { state: 'loading' } | { state: 'ready'; result: CheckDetection } | { state: 'error'; message: string }
+
+interface Suggestion {
+  command: string
+  checks: DetectedCheck[]
+}
+
+// core 用 ` && ` 把检测到的命令连成每栏的建议值（detect.ts 的 chain），拆开才能对回每条的来源；完成检查只列快速检查没列过的
+function suggestionsOf(result: CheckDetection): { afterEdit: Suggestion | null; beforeFinish: Suggestion | null } {
+  const checksIn = (command: string) => command.split(' && ').flatMap((part) => result.checks.filter((check) => check.command === part))
+  const afterEdit = result.afterEdit === null ? null : { command: result.afterEdit, checks: checksIn(result.afterEdit) }
+  const beforeFinish =
+    result.beforeFinish === null ? null : { command: result.beforeFinish, checks: checksIn(result.beforeFinish).filter((check) => !afterEdit?.checks.includes(check)) }
+  return { afterEdit, beforeFinish }
+}
 
 function ProjectSettingsForm({
   project,
@@ -64,6 +83,12 @@ function ProjectSettingsForm({
     if (detectOnOpen) void detect()
   }, [])
 
+  const suggestions = detection?.state === 'ready' ? suggestionsOf(detection.result) : null
+  const notes = detection?.state === 'ready' ? detection.result.notes : []
+  const noChecks = detection?.state === 'ready' && detection.result.checks.length === 0
+  const checksChanged = afterEdit.trim() !== (project.checks.afterEdit ?? '') || beforeFinish.trim() !== (project.checks.beforeFinish ?? '')
+  const showTrustNote = checksChanged && (afterEdit.trim() !== '' || beforeFinish.trim() !== '')
+
   const save = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true)
@@ -83,52 +108,81 @@ function ProjectSettingsForm({
   }
 
   return (
-    <form onSubmit={save} className="space-y-4">
-      <div className="space-y-2 rounded-lg border bg-muted/30 p-3" data-testid="check-detection">
-        <div className="flex items-center gap-2">
-          <span className="flex-1 text-sm font-medium">自动识别检查命令</span>
-          <Button type="button" size="sm" variant="outline" onClick={() => void detect()} disabled={detection?.state === 'loading'}>
-            {detection?.state === 'loading' ? <LoaderCircle className="animate-spin" /> : <ScanSearch />}
-            自动检测
-          </Button>
-        </div>
-        {!detection && <p className="text-xs text-muted-foreground">按 package.json、pyproject.toml 等配置找项目里已有的类型检查、lint 和测试，只读文件，不执行。</p>}
-        {detection?.state === 'error' && <p className="text-xs text-destructive">{detection.message}</p>}
-        {detection?.state === 'ready' && (
-          <DetectionResult
-            result={detection.result}
-            onApply={(result) => {
-              setAfterEdit(result.afterEdit ?? '')
-              setBeforeFinish(result.beforeFinish ?? '')
-            }}
+    <form onSubmit={save} className="flex min-h-0 flex-col gap-4">
+      {/* 滚动区会裁掉贴边控件的焦点环，上下留 4px 再用负边距抵消 */}
+      <DialogBody className="space-y-5">
+        <section className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <h3 className="flex-1 text-sm font-bold">检查命令</h3>
+              <Button type="button" size="sm" variant="outline" onClick={() => void detect()} disabled={detection?.state === 'loading'}>
+                {detection?.state === 'loading' ? <LoaderCircle className="animate-spin" /> : <ScanSearch />}
+                自动检测
+              </Button>
+            </div>
+            {(!detection || detection.state === 'error' || noChecks || notes.length > 0) && (
+              <div className="space-y-2" data-testid="check-detection">
+                {!detection && <p className="text-xs text-muted-foreground">按 package.json、pyproject.toml 等配置找项目里已有的类型检查、lint 和测试，只读文件，不执行。</p>}
+                {detection?.state === 'error' && <p className="text-xs text-destructive">{detection.message}</p>}
+                {noChecks && <p className="text-xs text-muted-foreground">没有识别到可用的检查命令。</p>}
+                {notes.length > 0 && (
+                  <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
+                    {notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+          <CheckField
+            id="check-after-edit"
+            label="快速检查"
+            hint="每步改动文件后运行；不填就不跑。"
+            placeholder="例如 pnpm typecheck"
+            value={afterEdit}
+            onChange={setAfterEdit}
+            suggestion={suggestions?.afterEdit ?? null}
+            projectPath={project.path}
           />
-        )}
-      </div>
-
-      <CheckField
-        id="check-after-edit"
-        label="快速检查（每步改动后）"
-        placeholder="例如 pnpm typecheck；不填就不跑"
-        value={afterEdit}
-        onChange={setAfterEdit}
-        projectPath={project.path}
-      />
-      <CheckField
-        id="check-before-finish"
-        label="完成检查（完成时）"
-        placeholder="例如 pnpm test；不填就用快速检查"
-        value={beforeFinish}
-        onChange={setBeforeFinish}
-        projectPath={project.path}
-      />
-      <div className="space-y-1.5">
-        <Label htmlFor="read-only-paths">禁止修改的目录</Label>
-        <Input id="read-only-paths" placeholder="例如 data, uploads（相对项目根目录）" value={readOnly} onChange={(event) => setReadOnly(event.target.value)} />
-      </div>
-      <p className="text-xs text-muted-foreground">检查命令在任务里自动运行，不再逐次确认，保存前请确认它们是你信任的命令。</p>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+          <CheckField
+            id="check-before-finish"
+            label="完成检查"
+            hint="任务完成前运行；不填就用快速检查。"
+            placeholder="例如 pnpm test"
+            value={beforeFinish}
+            onChange={setBeforeFinish}
+            suggestion={suggestions?.beforeFinish ?? null}
+            projectPath={project.path}
+          />
+          {showTrustNote && (
+            <div className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-sm" role="note">
+              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+              <p>保存后这些命令会在任务里自动运行，不再逐次确认。只保存你信任的命令。</p>
+            </div>
+          )}
+        </section>
+        <section className="space-y-1.5 border-t pt-5">
+          <h3>
+            <Label htmlFor="read-only-paths" className="font-bold">
+              禁止修改的目录
+            </Label>
+          </h3>
+          <Input
+            id="read-only-paths"
+            placeholder="例如 data, uploads"
+            aria-describedby="read-only-paths-hint"
+            value={readOnly}
+            onChange={(event) => setReadOnly(event.target.value)}
+          />
+          <p id="read-only-paths-hint" className="text-xs text-muted-foreground">
+            相对项目根目录，多个用逗号或空格分隔。
+          </p>
+        </section>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </DialogBody>
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>
+        <Button type="button" variant="ghost" onClick={onClose}>
           取消
         </Button>
         <Button type="submit" disabled={saving}>
@@ -139,59 +193,22 @@ function ProjectSettingsForm({
   )
 }
 
-function DetectionResult({ result, onApply }: { result: CheckDetection; onApply(result: CheckDetection): void }) {
-  return (
-    <div className="space-y-2 text-sm">
-      {result.checks.length === 0 ? (
-        <p className="text-xs text-muted-foreground">没有识别到可用的检查命令。</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {result.checks.map((check) => (
-            <li key={check.command} className="space-y-0.5" data-testid="detected-check">
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-xs text-muted-foreground">{KIND_LABELS[check.kind]}</span>
-                <code className="font-mono text-xs">{check.command}</code>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {check.source}
-                {check.script && (
-                  <>
-                    {'，实际运行：'}
-                    <code className="font-mono">{check.script}</code>
-                  </>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {result.notes.map((note) => (
-        <p key={note} className="text-xs text-muted-foreground">
-          · {note}
-        </p>
-      ))}
-      {result.checks.length > 0 && (
-        <Button type="button" size="sm" onClick={() => onApply(result)}>
-          填入下面的检查命令
-        </Button>
-      )}
-    </div>
-  )
-}
-
 interface CheckFieldProps {
   id: string
   label: string
+  hint: string
   placeholder: string
   value: string
   onChange(value: string): void
+  suggestion: Suggestion | null
   projectPath: string
 }
 
 // 检查命令输入框，带「试运行」：结果对应当时输入框里的命令，改了命令就清掉
-function CheckField({ id, label, placeholder, value, onChange, projectPath }: CheckFieldProps) {
+function CheckField({ id, label, hint, placeholder, value, onChange, suggestion, projectPath }: CheckFieldProps) {
   const [run, setRun] = useState<{ command: string; state: 'running' } | { command: string; state: 'done'; result: CheckRunResult } | null>(null)
   const [showOutput, setShowOutput] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const command = value.trim()
   const current = run?.command === command ? run : null
 
@@ -209,15 +226,62 @@ function CheckField({ id, label, placeholder, value, onChange, projectPath }: Ch
     <div className="space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
       <div className="flex gap-2">
-        <Input id={id} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
-        <Button type="button" variant="outline" disabled={!command || current?.state === 'running'} onClick={() => void tryRun()} title="在项目目录里跑一次这条命令">
-          {current?.state === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}
-          试运行
-        </Button>
+        <Input ref={inputRef} id={id} placeholder={placeholder} aria-describedby={`${id}-hint`} value={value} onChange={(event) => onChange(event.target.value)} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button type="button" variant="outline" disabled={!command || current?.state === 'running'} onClick={() => void tryRun()}>
+              {current?.state === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}
+              试运行
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>在项目目录里跑一次这条命令。</TooltipContent>
+        </Tooltip>
       </div>
+      <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+        {hint}
+      </p>
+      {suggestion && (
+        <div className="space-y-0.5 border-l-2 pl-3 text-xs" data-testid={`${id}-suggestion`}>
+          {/* 按钮换成「已填入」时行高不变，下面的内容不跳 */}
+          <div className="flex min-h-6 items-center gap-2">
+            <span className="min-w-0 flex-1 break-words">
+              建议：<code className="font-mono">{suggestion.command}</code>
+            </span>
+            {command === suggestion.command ? (
+              <span className="shrink-0 text-muted-foreground">已填入</span>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                aria-label={`填入${label}`}
+                onClick={() => {
+                  onChange(suggestion.command)
+                  // 按钮马上换成「已填入」，焦点留在它上面会被弹窗收回到容器，键盘用户得从头 Tab；挪到刚填好的输入框
+                  inputRef.current?.focus()
+                }}
+              >
+                填入
+              </Button>
+            )}
+          </div>
+          {suggestion.checks.map((check) => (
+            <p key={check.command} className="break-words text-muted-foreground">
+              {KIND_LABELS[check.kind]}：{check.source}
+              {check.script && (
+                <>
+                  {'，实际运行：'}
+                  <code className="font-mono">{check.script}</code>
+                </>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
       {current?.state === 'running' && <p className="text-xs text-muted-foreground">正在运行，最长 5 分钟…</p>}
       {current?.state === 'done' && (
         <div className="text-xs" data-testid={`${id}-result`}>
+          {/* success-color-allow: 用户主动试运行检查命令的结果 */}
           <button type="button" className={cn('flex items-center gap-1', current.result.passed ? 'text-success' : 'text-destructive')} onClick={() => setShowOutput(!showOutput)}>
             {current.result.passed ? <Check className="size-3.5" /> : <X className="size-3.5" />}
             {current.result.passed ? '通过' : '没通过'}

@@ -34,13 +34,18 @@ export interface AuditResult {
   findings: SecurityFinding[]
   // 卡片上的说明：没漏洞、跳过的原因、项目原有的漏洞数
   notes: string[]
+  // 该审计的清单都审计完了：跳过、失败、超时或新依赖没进锁文件时为 false
+  complete: boolean
+  // 项目原有、和本轮改动无关的漏洞数
+  existing: number
 }
 
 // 只把本轮新加或改了版本的依赖算到这一轮头上：高危、严重打回换版本，其余提醒；项目原有的漏洞只报数量。
 // 审计要联网查漏洞库，失败或超时只在卡片上说明，不拦截
 export async function auditDependencies(cwd: string, added: AddedLines, bashPath: string | null, signal: AbortSignal): Promise<AuditResult> {
-  const result: AuditResult = { findings: [], notes: [] }
+  const result: AuditResult = { findings: [], notes: [], complete: true, existing: 0 }
   if (!bashPath) {
+    result.complete = false
     result.notes.push('依赖审计需要 Git Bash，这一轮跳过了')
     return result
   }
@@ -66,16 +71,19 @@ async function auditNode(cwd: string, added: AddedLines, bashPath: string, signa
   try {
     pkg = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')) as PackageJson
   } catch {
+    result.complete = false
     result.notes.push('读不了 package.json，跳过了依赖审计')
     return
   }
   const pm = await packageManagerOf(cwd, pkg)
   if (pm !== 'pnpm' && pm !== 'npm') {
+    result.complete = false
     result.notes.push(`${pm} 项目暂不支持依赖审计`)
     return
   }
   const run = await runAudit(cwd, bashPath, `${pm} audit --json`, signal)
   if (run.timedOut || run.aborted) {
+    result.complete = false
     result.notes.push(`依赖审计没有完成（${run.timedOut ? '超时' : '已停止'}），这次不拦截`)
     return
   }
@@ -84,11 +92,20 @@ async function auditNode(cwd: string, added: AddedLines, bashPath: string, signa
   try {
     report = jsonIn(run.output)
   } catch {
+    result.complete = false
     result.notes.push(`依赖审计没有完成，这次不拦截：${firstLine(run.output)}`)
+    return
+  }
+  // 没有锁文件、联网失败等情况 audit 也输出 JSON，内容是 error 对象
+  const failure = (report as { error?: { code?: string; summary?: string; message?: string } }).error
+  if (failure) {
+    result.complete = false
+    result.notes.push(`依赖审计没有完成，这次不拦截：${firstLine(failure.summary ?? failure.message ?? failure.code ?? '')}`)
     return
   }
   const fresh = addedNodeDependencies(pkg, added)
   if (fresh.size > 0 && !added.has('pnpm-lock.yaml') && !added.has('package-lock.json')) {
+    result.complete = false
     result.notes.push('package.json 加了依赖但锁文件没变，新依赖可能还没安装，审计里没有它们')
   }
   const vulnerabilities = pm === 'pnpm' ? pnpmVulnerabilities(report) : npmVulnerabilities(report)
@@ -109,6 +126,7 @@ async function auditNode(cwd: string, added: AddedLines, bashPath: string, signa
       suppressed: null,
     })
   }
+  result.existing += existing
   if (existing > 0) result.notes.push(`项目原有 ${existing} 个依赖漏洞，和本轮改动无关，没有计入`)
   if (result.findings.length === 0 && existing === 0) result.notes.push('依赖审计：没有发现已知漏洞')
 }
@@ -168,15 +186,18 @@ function addedPythonDependencies(added: AddedLines): Map<string, { path: string;
 async function auditPython(cwd: string, added: AddedLines, bashPath: string, signal: AbortSignal, result: AuditResult): Promise<void> {
   const python = await projectPython(cwd)
   if (!python) {
+    result.complete = false
     result.notes.push('没找到项目的虚拟环境，跳过了 Python 依赖审计')
     return
   }
   const run = await runAudit(cwd, bashPath, `${python} -m pip_audit -f json --progress-spinner off`, signal)
   if (run.timedOut || run.aborted) {
+    result.complete = false
     result.notes.push(`Python 依赖审计没有完成（${run.timedOut ? '超时' : '已停止'}），这次不拦截`)
     return
   }
   if (/No module named pip_audit/.test(run.output)) {
+    result.complete = false
     result.notes.push('虚拟环境里没装 pip-audit，跳过了 Python 依赖审计')
     return
   }
@@ -184,6 +205,7 @@ async function auditPython(cwd: string, added: AddedLines, bashPath: string, sig
   try {
     report = jsonIn(run.output) as typeof report
   } catch {
+    result.complete = false
     result.notes.push(`Python 依赖审计没有完成，这次不拦截：${firstLine(run.output)}`)
     return
   }
@@ -208,6 +230,7 @@ async function auditPython(cwd: string, added: AddedLines, bashPath: string, sig
       })
     }
   }
+  result.existing += existing
   if (existing > 0) result.notes.push(`项目原有 ${existing} 个 Python 依赖漏洞，和本轮改动无关，没有计入`)
   if (result.findings.length === 0 && existing === 0) result.notes.push('Python 依赖审计：没有发现已知漏洞')
 }

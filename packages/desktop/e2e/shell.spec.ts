@@ -27,7 +27,7 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     // Ctrl+K 按对话内容搜
     await taskInput(window).click()
     await window.keyboard.press('Control+k')
-    await window.getByRole('textbox', { name: '搜索任务' }).fill('独角兽')
+    await window.getByRole('combobox', { name: '搜索任务' }).fill('独角兽')
     await expect(window.getByRole('option').filter({ hasText: '找到了独角兽的答案' })).toHaveCount(1)
     await window.keyboard.press('Escape')
 
@@ -89,7 +89,7 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     // 右键菜单删除任务记录
     await window.getByTestId('sidebar-task').click({ button: 'right' })
     await window.getByRole('menuitem', { name: '删除任务记录' }).click()
-    await window.getByRole('button', { name: '删除', exact: true }).click()
+    await window.getByRole('button', { name: '删除记录', exact: true }).click()
     await expect(window.getByTestId('sidebar-task')).toHaveCount(0)
     await expect(window.getByText('要做什么？')).toBeVisible()
   } finally {

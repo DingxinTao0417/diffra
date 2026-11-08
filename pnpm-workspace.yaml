@@ -7,3 +7,5 @@ allowBuilds:
   node-pty: true
   # 静态检查用的 Python 语法；包里带了各平台的预编译解析器，运行时直接加载，不需要安装脚本去本机编译
   '@ast-grep/lang-python': false
+  # 设计页 PDF 导出（jspdf → canvg）带进来的；安装脚本只打印捐助横幅
+  core-js: false

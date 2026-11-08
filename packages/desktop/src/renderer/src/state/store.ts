@@ -11,7 +11,7 @@ export type Route =
   | { name: 'task'; sessionId: string }
   | { name: 'settings'; section: SettingsSection }
 
-export type SidePanel = 'monitor' | 'review' | 'browser' | null
+export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | null
 
 // 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
 export interface MessageOptions {
@@ -32,6 +32,8 @@ export interface LiveTask {
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode
+  // 设计任务：打开任务时切到设计面板
+  design: boolean
   // 输入框里「先出计划」开着：发的消息先由规划模型出计划
   planMode: boolean
   info: SessionInfo
@@ -70,6 +72,10 @@ export interface AppState {
   browsers: Record<string, BrowserState>
   settings: SettingsView | null
   sidebarOpen: boolean
+  // 窄窗口自动收起是布局上的派生结果，不写回 sidebarOpen：宽度回来后侧栏自己出现，用户自己收起的除外。
+  // sidebarKeepOpen：窄窗口下用户主动展开的侧栏照常显示，宽度回来后清掉
+  sidebarNarrow: boolean
+  sidebarKeepOpen: boolean
   // 侧栏收起的项目、展开了全部任务的项目（按项目路径）；侧栏会随 Ctrl+B 和设置页卸载，所以放这里，只在内存里
   collapsedProjects: ReadonlySet<string>
   expandedProjects: ReadonlySet<string>
@@ -93,6 +99,8 @@ const initialState: AppState = {
   browsers: {},
   settings: null,
   sidebarOpen: true,
+  sidebarNarrow: false,
+  sidebarKeepOpen: false,
   collapsedProjects: new Set(),
   expandedProjects: new Set(),
   searchOpen: false,
@@ -129,6 +137,16 @@ export const store = new Store()
 // selector 要返回 state 里已有的引用或基本类型；需要计算的派生数据在组件里用 useMemo
 export function useAppState<T>(selector: (state: AppState) => T): T {
   return useSyncExternalStore(store.subscribe, () => selector(store.get()))
+}
+
+// 宽面板（浏览器、审阅）按主区一半取宽，收起侧栏省出的宽度一半让面板吃掉，对话列在默认 1200 窗口下也到不了阈值，
+// 收了只会让侧栏一开面板就消失，所以开着宽面板时不自动收起
+export function hasWidePanel(state: AppState): boolean {
+  return state.route.name === 'task' && (state.panel === 'browser' || state.panel === 'review' || state.panel === 'design')
+}
+
+export function isSidebarShown(state: AppState): boolean {
+  return state.sidebarOpen && (!state.sidebarNarrow || state.sidebarKeepOpen || hasWidePanel(state))
 }
 
 export function updateLive(sessionId: string, change: (task: LiveTask) => LiveTask): void {

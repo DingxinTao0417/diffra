@@ -105,6 +105,32 @@ export function isToolName(name: string): name is ToolName {
   return name in TOOLS
 }
 
+// 工具刚开始时的标题，用模型给的原始参数先带上目标；跑完后换成工具自己返回的标题（路径已规范化）
+export function startTitle(name: string, input: unknown): string {
+  if (typeof input !== 'object' || input === null) return name
+  const field = (key: string): string | null => {
+    const value: unknown = (input as Record<string, unknown>)[key]
+    return typeof value === 'string' && value !== '' ? value : null
+  }
+  const label = (action: string, target: string | null) => (target === null ? name : `${action} ${target}`)
+  switch (name) {
+    case 'read_file':
+      return label('读取', field('path'))
+    case 'list_files':
+      return label('列出', field('path') ?? '.')
+    case 'search':
+      return label('搜索', field('pattern'))
+    case 'outline':
+      return label('大纲', field('path') ?? '.')
+    case 'edit_file':
+      return label('old_string' in input && input.old_string === '' ? '新建' : '编辑', field('path'))
+    case 'run_command':
+      return label('执行', field('command'))
+    default:
+      return name
+  }
+}
+
 // AI SDK 已经按 inputSchema 校验过参数，这里再 parse 一次拿到准确的类型
 export function executeTool(name: Exclude<ToolName, 'finish'>, input: unknown, context: ToolContext): Promise<ToolOutput> {
   switch (name) {

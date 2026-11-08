@@ -3,7 +3,9 @@ import { join } from 'node:path'
 import type { SessionUpdate } from '@diffra/core/types'
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
-const CARD_TITLES = new Set(['完成', '规范审查', '安全检查', '安全扫描', '深度扫描报告', '上下文压缩'])
+// 静态检查、轻量扫描以前叫安全检查、安全扫描，旧的会话记录里还是旧标题，两套都认
+const SECURITY_CARDS = new Set(['静态检查', '轻量扫描', '安全检查', '安全扫描', '深度扫描报告'])
+const CARD_TITLES = new Set(['完成', '规范审查', '上下文压缩', ...SECURITY_CARDS])
 // 安全卡片、深度扫描报告的一行：级别  规则号  路径:行号  说明
 const FINDING_LINE = /^(高危|提醒|已放行) {2}(\S+) {2}(\S+):(\d+) {2}(.+)$/
 
@@ -19,7 +21,7 @@ export interface Finding {
 export interface TurnMetrics {
   // 智能体自己调用的工具（读、搜、改、命令），不含检查和各种卡片（包括上下文压缩）
   toolCalls: number
-  // 「完成」被门禁打回的次数
+  // 「完成」被门禁打回的次数，含完成条件未满足和证据不合格的打回；和语义层第 57 步之前的结果比，数字会偏高
   gateRejections: number
   checkFailures: number
   findings: Finding[]
@@ -62,7 +64,7 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
     const isCheck = CHECK_PREFIXES.some((prefix) => title.startsWith(prefix))
     if (title === '完成' && status === 'failed') gateRejections++
     else if (isCheck && status === 'failed') checkFailures++
-    if (title === '安全检查' || title === '安全扫描' || title === '深度扫描报告') findings.push(...parseFindings(title, finalText.get(id) ?? ''))
+    if (SECURITY_CARDS.has(title)) findings.push(...parseFindings(title, finalText.get(id) ?? ''))
     if (!isCheck && !CARD_TITLES.has(title)) toolCalls++
   }
   return { toolCalls, gateRejections, checkFailures, findings, notices }

@@ -5,7 +5,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { annotateDiff } from '../rules/review.js'
-import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, type TurnIO } from '../session/loop.js'
+import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, taskStateUpdate, type TurnIO } from '../session/loop.js'
 import { runReadOnlyLoop } from '../session/read-only.js'
 import type { Session } from '../session/session.js'
 import { TOOLS } from '../session/tools.js'
@@ -97,6 +97,8 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
   const contextWindow = session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   try {
     await takeCheckpoint(session, turn.id, io)
+    // 撤销到这一轮时按这一份恢复待验证
+    await io.update(taskStateUpdate(session))
     const outcome = await runReadOnlyLoop(
       session,
       {

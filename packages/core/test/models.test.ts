@@ -69,6 +69,14 @@ describe('OpenAI 兼容', () => {
     expect(call?.headers['user-agent']).toContain('diffra-core/')
   })
 
+  test('默认先思考的模型：工具调用探测留够输出预算，不会被思考吃光', async () => {
+    await expect(testModel(openai(), 'mock-thinking')).resolves.toMatchObject({ ok: true, tools: { supported: true } })
+  })
+
+  test('不接受 tool_choice: required 的模型：探测改用 auto 再试一次', async () => {
+    await expect(testModel(openai(), 'mock-no-required')).resolves.toMatchObject({ ok: true, tools: { supported: true } })
+  })
+
   test('测试连接时密钥错误归为 auth', async () => {
     const result = await testModel(openai('wrong-secret-key'), 'mock-a')
     expect(result).toMatchObject({ ok: false, error: { kind: 'auth', status: 401 } })

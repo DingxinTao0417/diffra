@@ -1,0 +1,10 @@
+/* 用 Diffra 主界面的配色和字体令牌；深浅色由 main.ts 按 prefers-color-scheme 切 .dark（主进程的 nativeTheme 跟着 Diffra 的外观设置） */
+@import '../src/styles.css';
+
+html,
+body,
+#design {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}

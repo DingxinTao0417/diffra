@@ -152,27 +152,41 @@ export async function testModel(
   return { ok: true, latencyMs, reply, tools: await probeToolCalling(model, endpoint.apiKey, timeoutMs) }
 }
 
+// 默认先思考的模型，输出上限太小时预算在思考里就用完了，来不及调工具
+const PROBE_MAX_OUTPUT_TOKENS = 2048
+
 // agent 靠工具调用干活：让模型必须调用一个工具，看它会不会
 async function probeToolCalling(
   model: LanguageModel,
   apiKey: string,
   timeoutMs: number,
 ): Promise<{ supported: boolean; detail: string | null }> {
-  try {
-    const result = await generateText({
+  const abortSignal = AbortSignal.timeout(timeoutMs)
+  const probe = (toolChoice: 'required' | 'auto') =>
+    generateText({
       model,
       prompt: 'Call the echo tool with text "OK".',
       tools: { echo: tool({ description: 'Echo the given text', inputSchema: z.object({ text: z.string() }) }) },
-      toolChoice: 'required',
-      maxOutputTokens: 256,
+      toolChoice,
+      maxOutputTokens: PROBE_MAX_OUTPUT_TOKENS,
       maxRetries: 0,
-      abortSignal: AbortSignal.timeout(timeoutMs),
+      abortSignal,
       headers: MODEL_CALL_HEADERS,
     })
-    return result.toolCalls.length > 0
-      ? { supported: true, detail: null }
-      : { supported: false, detail: '模型没有按要求调用工具' }
+  let result: Awaited<ReturnType<typeof probe>>
+  try {
+    result = await probe('required')
   } catch (error) {
-    return { supported: false, detail: toModelError(error, apiKey, timeoutMs).message }
+    // 有的服务（比如思考模式下）不接受 tool_choice: required，改用 auto 再探一次；密钥、超时、限流、连不上这类错误不重试
+    const failure = toModelError(error, apiKey, timeoutMs)
+    if (failure.kind !== 'unknown') return { supported: false, detail: failure.message }
+    try {
+      result = await probe('auto')
+    } catch (retryError) {
+      return { supported: false, detail: toModelError(retryError, apiKey, timeoutMs).message }
+    }
   }
+  return result.toolCalls.length > 0
+    ? { supported: true, detail: null }
+    : { supported: false, detail: '模型没有按要求调用工具' }
 }

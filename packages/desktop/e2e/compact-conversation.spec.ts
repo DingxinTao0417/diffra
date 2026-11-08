@@ -37,11 +37,20 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await window.getByRole('button', { name: '收起代码详情', exact: true }).click()
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     const delivery = cards(window, 'finish')
-    await expect(delivery).toContainText('本轮交付')
-    await expect(delivery).toContainText('1 个文件 · 净改动')
+    // 临时项目没有检查命令，完成卡标成未经验证
+    await expect(delivery).toContainText('已完成 · 未经自动验证')
+    await expect(delivery.getByTestId('finish-counts')).toHaveText('1 个文件 +1 −1')
+    // 监控开着时文件列表收成标题行的计数；note.txt 在编辑卡里也有，只在完成卡里找
+    await expect(delivery.getByText('note.txt')).toBeHidden()
+    await window.getByRole('button', { name: '任务监控' }).click()
+    await expect(delivery.getByText('note.txt')).toBeVisible()
+    await window.getByRole('button', { name: '任务监控' }).click()
+    await expect(delivery.getByText('note.txt')).toBeHidden()
+    await delivery.getByTestId('finish-counts').click()
+    await expect(delivery.getByText('note.txt')).toBeVisible()
     await expect(delivery).toContainText('+1')
     await expect(delivery).not.toContainText('+2')
-    await delivery.getByRole('button', { name: '审阅本任务改动', exact: true }).click()
+    await delivery.getByRole('button', { name: '审阅改动', exact: true }).click()
     await expect(window.getByTestId('review-file')).toContainText('note.txt')
   } finally {
     await app.close()

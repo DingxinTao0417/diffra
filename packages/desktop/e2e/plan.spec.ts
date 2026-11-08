@@ -47,10 +47,10 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     expect(existsSync(join(project, 'README.md'))).toBe(false)
     await expect(window.getByTestId('turn-actions').getByRole('button', { name: '重新生成' })).toHaveCount(0)
     await expect(window.getByRole('button', { name: '移除计划', exact: true })).toBeVisible()
-    // 任务监控里写明规划、兜底用的模型
+    // 任务监控里写明规划、备用用的模型
     const monitor = window.getByTestId('monitor-panel')
-    await expect(monitor).toContainText('同编码模型')
-    await expect(monitor).toContainText('未设置')
+    await expect(monitor).toContainText('沿用编码模型')
+    await expect(monitor).toContainText('不使用')
 
     const content = planCard.getByLabel('计划内容')
     await expect(content).toHaveValue(/1\. 新建 README\.md/)
@@ -85,12 +85,12 @@ test('兜底模型：编码模型卡住时换兜底模型接着做，对话里�
   try {
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: coder.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
-    await configureCoderModel(window, { name: '兜底供应商', baseUrl: fallback.baseUrl, apiKey: 'e2e-key-654321', modelId: 'fallback-model', role: '兜底' })
+    await configureCoderModel(window, { name: '兜底供应商', baseUrl: fallback.baseUrl, apiKey: 'e2e-key-654321', modelId: 'fallback-model', role: '备用' })
     await chooseProject(app, window, project)
     await startTask(window, '找 TODO')
     await waitTaskDone(window)
 
-    await expect(window.getByTestId('notice').filter({ hasText: '已换用兜底模型 兜底供应商 / fallback-model' })).toBeVisible()
+    await expect(window.getByTestId('notice').filter({ hasText: '已换用备用模型 兜底供应商 / fallback-model' })).toBeVisible()
     await expect(window.getByTestId('agent-message').last()).toContainText('兜底模型接手做完了')
     await expect(window.getByTestId('monitor-panel')).toContainText('兜底供应商 / fallback-model')
     expect(coder.requests()).toBe(6)

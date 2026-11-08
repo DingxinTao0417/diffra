@@ -1,6 +1,7 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import { browserActionParamsSchema, devServerParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema } from './session/config.js'
+import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
   type CheckDetection,
@@ -10,18 +11,21 @@ import {
   type BrowserActionResult,
   CLIENT_EXT_METHODS,
   type CommandInfo,
+  type DesignActionParams,
+  type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
+  type ListTarget,
   type LoadedSession,
   type McpServer,
   type McpServerStatus,
   type McpTarget,
   type PluginInfo,
-  type PluginRef,
   type PromptImage,
   type PermissionMode,
   SESSION_EXT_METHODS,
   type SessionConfig,
+  type SessionDesign,
   type SessionInfo,
   type SessionSearchResult,
   type StoredSessionMeta,
@@ -43,6 +47,8 @@ export interface CoreClientHandlers {
   // 智能体操作内置浏览器、起开发服务器；不提供时会话里不要开 browser
   onBrowserAction?(params: BrowserActionParams): Promise<BrowserActionResult>
   onDevServer?(params: DevServerParams): Promise<DevServerResult>
+  // 智能体调用设计面板的工具；不提供时不要给会话配置设计工具
+  onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -65,6 +71,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onBrowserAction) app.onRequest(CLIENT_EXT_METHODS.browserAction, browserActionParamsSchema, ({ params }) => onBrowserAction(params))
     const onDevServer = handlers.onDevServer
     if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
+    const onDesignAction = handlers.onDesignAction
+    if (onDesignAction) app.onRequest(CLIENT_EXT_METHODS.designAction, designActionParamsSchema, ({ params }) => onDesignAction(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
 }
@@ -137,12 +145,12 @@ export function compactSession(connection: acp.ClientConnection, sessionId: stri
   return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string }>(SESSION_EXT_METHODS.compact, { sessionId, turnId }, { cancellationSignal: AbortSignal.timeout(CHECK_RUN_TIMEOUT_MS), stopWaitingOnCancel: true })
 }
 
-export function listSkills(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<SkillInfo[]> {
-  return requestOf(connection)<SkillInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.skillsList, { cwd, plugins }, extRequestOptions())
+export function listSkills(connection: acp.ClientConnection, target: ListTarget): Promise<SkillInfo[]> {
+  return requestOf(connection)<SkillInfo[], ListTarget>(SESSION_EXT_METHODS.skillsList, target, extRequestOptions())
 }
 
-export function listCommands(connection: acp.ClientConnection, cwd: string, plugins: PluginRef[] = []): Promise<CommandInfo[]> {
-  return requestOf(connection)<CommandInfo[], { cwd: string; plugins: PluginRef[] }>(SESSION_EXT_METHODS.commandsList, { cwd, plugins }, extRequestOptions())
+export function listCommands(connection: acp.ClientConnection, target: ListTarget): Promise<CommandInfo[]> {
+  return requestOf(connection)<CommandInfo[], ListTarget>(SESSION_EXT_METHODS.commandsList, target, extRequestOptions())
 }
 
 export function inspectPlugin(connection: acp.ClientConnection, dir: string): Promise<PluginInfo> {
@@ -210,7 +218,14 @@ export async function loadSession(
   })
   const diffra = response && typeof response._meta?.diffra === 'object' ? (response._meta.diffra as Partial<LoadedSession>) : null
   if (!diffra || !Array.isArray(diffra.turns)) throw new Error('core 的 session/load 响应缺少会话历史')
-  return { info: readSessionInfo({ diffra: diffra.info }), title: String(diffra.title ?? ''), turns: diffra.turns }
+  const taskState = taskProgressViewSchema.safeParse(diffra.taskState)
+  return {
+    info: readSessionInfo({ diffra: diffra.info }),
+    title: String(diffra.title ?? ''),
+    turns: diffra.turns,
+    ...(taskState.success ? { taskState: taskState.data } : {}),
+    design: diffra.design === true,
+  }
 }
 
 export async function listSessions(connection: acp.ClientConnection, cwd?: string): Promise<StoredSessionSummary[]> {
@@ -244,7 +259,7 @@ export function updateSession(
 export async function configureSession(
   connection: acp.ClientConnection,
   sessionId: string,
-  change: { permissionMode?: PermissionMode; model?: SessionConfig['model'] },
+  change: { permissionMode?: PermissionMode; model?: SessionConfig['model']; design?: SessionDesign | null },
 ): Promise<void> {
   await requestOf(connection)(SESSION_EXT_METHODS.sessionConfigure, { sessionId, ...change }, extRequestOptions())
 }
@@ -293,6 +308,7 @@ function readSessionInfo(meta: unknown): SessionInfo {
   const checkpoints = 'checkpoints' in diffra && diffra.checkpoints === true
   const packs = 'rulePacks' in diffra && Array.isArray(diffra.rulePacks) ? diffra.rulePacks : []
   const security = 'security' in diffra && typeof diffra.security === 'object' && diffra.security !== null ? diffra.security : {}
+  const checks = 'checks' in diffra && typeof diffra.checks === 'object' && diffra.checks !== null ? diffra.checks : null
   return {
     bashPath,
     checkpoints,
@@ -300,6 +316,10 @@ function readSessionInfo(meta: unknown): SessionInfo {
     security: {
       staticCheck: 'staticCheck' in security && security.staticCheck === true,
       lightScan: 'lightScan' in security && security.lightScan === true,
+    },
+    checks: checks && {
+      afterEdit: 'afterEdit' in checks && typeof checks.afterEdit === 'string' ? checks.afterEdit : null,
+      beforeFinish: 'beforeFinish' in checks && typeof checks.beforeFinish === 'string' ? checks.beforeFinish : null,
     },
   }
 }

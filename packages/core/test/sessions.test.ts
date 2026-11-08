@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable, Writable } from 'node:stream'
@@ -7,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { createAgent } from '../src/agent.js'
 import { McpPool } from '../src/mcp.js'
 import {
+  cancelSession,
   checkpointDiff,
   configureSession,
   compactSession,
@@ -23,12 +26,13 @@ import {
   mcpStatus,
   plan,
   previewCheckpoint,
+  restoreCheckpoint,
   rewindSession,
   searchSessions,
   sendPrompt,
   updateSession,
 } from '../src/client.js'
-import type { SessionConfig } from '../src/protocol.js'
+import type { ListTarget, SessionConfig } from '../src/protocol.js'
 import { SessionStore } from '../src/session/store.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
@@ -36,10 +40,12 @@ import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
 let project: string
 let dataDir: string
 let server: ScriptedServer | null = null
+let notifications: acp.SessionNotification[] = []
 
 beforeEach(() => {
   project = mkdtempSync(join(tmpdir(), 'diffra-sessions-project-'))
   dataDir = mkdtempSync(join(tmpdir(), 'diffra-sessions-data-'))
+  notifications = []
 })
 
 afterEach(async () => {
@@ -55,11 +61,18 @@ async function startCore(mcpPool?: McpPool) {
   const toClient = new PassThrough()
   createAgent({ sessionsDir: join(dataDir, 'sessions'), mcpPool }).connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
   const connection = connectToCore(toAgent, toClient, {
-    onSessionUpdate: () => {},
+    onSessionUpdate: (notification) => notifications.push(notification),
     onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
   })
   await handshake(connection, 5000)
   return connection
+}
+
+function lastTaskState(sessionId: string): unknown {
+  const metas = notifications.flatMap(({ sessionId: id, update }) =>
+    id === sessionId && update.sessionUpdate === 'session_info_update' && update._meta ? [update._meta.diffra as Record<string, unknown>] : [],
+  )
+  return metas.filter((meta) => 'taskState' in meta).at(-1)?.taskState
 }
 
 function config(baseUrl: string): SessionConfig {
@@ -149,6 +162,218 @@ describe('会话持久化', () => {
     expect(existsSync(join(dataDir, 'sessions', `${sessionId}.json`))).toBe(false)
   })
 
+  test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值，下一轮只提问不被拉回', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+      { text: '刚才写了 a.txt，已经撤销了' },
+    ])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '写一个 a.txt')
+
+    const second = await startCore()
+    const loaded = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(loaded.taskState).toEqual({ status: 'completed', reason: null, requirements: [], needsVerification: false })
+
+    notifications = []
+    expect(await restoreCheckpoint(second, sessionId, 'turn-1')).toEqual([{ path: 'a.txt', change: 'added' }])
+    const restored = { status: 'blocked', reason: '文件已撤销，原来的结论不再算数。', requirements: [], needsVerification: false }
+    expect(lastTaskState(sessionId)).toEqual(restored)
+
+    const third = await startCore()
+    expect((await loadSession(third, sessionId, project, config(server.baseUrl))).taskState).toEqual(restored)
+
+    const requests = server.bodies.length
+    await sendPrompt(third, sessionId, 'turn-2', '刚才改了什么')
+    expect(server.bodies.length - requests).toBe(1)
+  })
+
+  test('撤销到的这一轮开始时就有没验证的改动：撤销后仍要验证', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
+    await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
+
+    // 从磁盘重新加载后撤销：开始时的待验证要从存下来的轮次里读
+    const second = await startCore()
+    await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(await restoreCheckpoint(second, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true, reason: '文件已撤销，之前轮次的改动还没验证。' })
+  })
+
+  test('撤销到计划轮：取计划轮开始时的待验证，不取更早轮次的', async () => {
+    const submit = { toolCalls: [{ name: 'submit_plan', input: { understanding: '再看看', steps: [{ title: '看 a.txt', detail: '读一遍', files: ['a.txt'] }], risks: [] } }] }
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      submit,
+      submit,
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    await plan(core, sessionId, 'plan-2', '接下来怎么做')
+    await restoreCheckpoint(core, sessionId, 'plan-2')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: true })
+
+    await restoreCheckpoint(core, sessionId, 'turn-1')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: false })
+    // 撤销后的状态没记进任何一轮；计划轮自己记下开始时的值，才不会取到第一轮结束时的 true
+    await plan(core, sessionId, 'plan-3', '接下来怎么做')
+    await restoreCheckpoint(core, sessionId, 'plan-3')
+    expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: false })
+  })
+
+  test('撤销给这一轮及之后的轮次记下撤销时刻，撤销了哪些文件记在这一轮末尾，重启后还在', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 b.txt' } }] },
+      { text: '好' },
+    ])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '写 a.txt')
+    await sendPrompt(first, sessionId, 'turn-2', '写 b.txt')
+    await sendPrompt(first, sessionId, 'turn-3', '看看')
+
+    notifications = []
+    const before = Date.now()
+    expect(await restoreCheckpoint(first, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
+    expect(notifications.some(({ update }) => update.sessionUpdate === 'notice')).toBe(false)
+
+    const loaded = await loadSession(await startCore(), sessionId, project, config(server.baseUrl))
+    const [turn1, turn2, turn3] = loaded.turns
+    // 第一轮相当于没有这个字段的旧记录
+    expect(turn1).not.toHaveProperty('restoredAt')
+    expect(Date.parse(turn2?.restoredAt ?? '')).toBeGreaterThanOrEqual(before)
+    expect(turn3?.restoredAt).toBe(turn2?.restoredAt)
+    expect(turn2?.updates.at(-1)).toEqual({ sessionUpdate: 'notice', severity: 'info', title: '已撤销 1 个文件的改动', description: 'b.txt' })
+    expect(turn3?.updates.some((update) => update.sessionUpdate === 'notice')).toBe(false)
+  })
+
+  test('撤销提示最多列 50 个文件，没有改动时不带说明；再撤销一次覆盖撤销时刻', async () => {
+    server = await startScriptedServer([{ text: '好' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '你好')
+    expect(await restoreCheckpoint(core, sessionId, 'turn-1')).toEqual([])
+    const once = (await loadSession(core, sessionId, project, config(server.baseUrl))).turns[0]
+
+    const paths = Array.from({ length: 51 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`)
+    for (const path of paths) writeFileSync(join(project, path), 'x\n')
+    expect(await restoreCheckpoint(core, sessionId, 'turn-1')).toHaveLength(51)
+    const twice = (await loadSession(core, sessionId, project, config(server.baseUrl))).turns[0]
+    expect(Date.parse(twice?.restoredAt ?? '')).toBeGreaterThan(Date.parse(once?.restoredAt ?? ''))
+    expect(twice?.updates.filter((update) => update.sessionUpdate === 'notice')).toEqual([
+      { sessionUpdate: 'notice', severity: 'info', title: '已撤销 0 个文件的改动', description: null },
+      { sessionUpdate: 'notice', severity: 'info', title: '已撤销 51 个文件的改动', description: [...paths.slice(0, 50), '…等 51 个文件'].join('\n') },
+    ])
+  })
+
+  test('应用退出时停在运行中的任务，加载后是受阻', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '你好')
+    const file = join(dataDir, 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { taskState: { status: string }; turns: Array<{ endedAt: string | null; stopReason: string | null }> }
+    record.taskState.status = 'running'
+    record.turns[0]!.endedAt = null
+    record.turns[0]!.stopReason = null
+    writeFileSync(file, JSON.stringify(record))
+
+    const loaded = await loadSession(await startCore(), sessionId, project, config(server.baseUrl))
+    expect(loaded.taskState).toMatchObject({ status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' })
+  })
+
+  test('没有确定的任务状态时，加载不带任务状态，也不说应用退出过', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '你好')
+    const file = join(dataDir, 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { taskState?: { status: string } }
+
+    // 只跑过出计划、深度扫描、压缩，或者撤销后还没开始新一轮：存下来的是初始的 running
+    record.taskState!.status = 'running'
+    writeFileSync(file, JSON.stringify(record))
+    expect((await loadSession(await startCore(), sessionId, project, config(server.baseUrl))).taskState).toBeUndefined()
+
+    // 旧版记录没有 taskState
+    delete record.taskState
+    writeFileSync(file, JSON.stringify(record))
+    expect((await loadSession(await startCore(), sessionId, project, config(server.baseUrl))).taskState).toBeUndefined()
+  })
+
+  test('任务进行中加载，带上运行中的任务状态', async () => {
+    let received: () => void = () => {}
+    const requested = new Promise<void>((resolve) => (received = resolve))
+    const hanging = createServer((req) => {
+      req.resume()
+      received()
+    })
+    await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve))
+    const { port } = hanging.address() as AddressInfo
+    try {
+      const core = await startCore()
+      const { sessionId } = await createSession(core, project, config(`http://127.0.0.1:${port}/v1`))
+      const turn = sendPrompt(core, sessionId, 'turn-1', '你好')
+      await requested
+      const loaded = await loadSession(core, sessionId, project, config(`http://127.0.0.1:${port}/v1`))
+      expect(loaded.taskState).toEqual({ status: 'running', reason: null, requirements: [], needsVerification: false })
+      await cancelSession(core, sessionId)
+      expect((await turn).stopReason).toBe('cancelled')
+    } finally {
+      hanging.closeAllConnections()
+      await new Promise<void>((resolve) => hanging.close(() => resolve()))
+    }
+  })
+
+  test('core 返回不合法的任务状态时丢掉，缺检查命令时为 null', async () => {
+    const toAgent = new PassThrough()
+    const toClient = new PassThrough()
+    acp
+      .agent({ name: 'fake-core' })
+      .onRequest(acp.methods.agent.session.load, () => ({ _meta: { diffra: { info: {}, title: '旧任务', turns: [], taskState: { status: 'unknown' } } } }))
+      .connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
+    const connection = connectToCore(toAgent, toClient, {
+      onSessionUpdate: () => {},
+      onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
+    })
+    const loaded = await loadSession(connection, 'fake', project, config('http://127.0.0.1:1/v1'))
+    expect(loaded.title).toBe('旧任务')
+    expect(loaded.taskState).toBeUndefined()
+    expect(loaded.info.checks).toBeNull()
+  })
+
+  test('新建和加载都返回这个会话实际生效的检查命令', async () => {
+    server = await startScriptedServer([])
+    const core = await startCore()
+    const checks = { afterEdit: 'pnpm typecheck', beforeFinish: null }
+    const { sessionId, info } = await createSession(core, project, { ...config(server.baseUrl), checks })
+    expect(info.checks).toEqual(checks)
+    const changed = { afterEdit: null, beforeFinish: 'pnpm test' }
+    const loaded = await loadSession(core, sessionId, project, { ...config(server.baseUrl), checks: changed })
+    expect(loaded.info.checks).toEqual(changed)
+  })
+
   test('只建了会话、没发过任务时不留记录', async () => {
     server = await startScriptedServer([])
     const core = await startCore()
@@ -211,7 +436,9 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(diff).toContain('+++ b/b.txt')
     expect(diff).toContain('+++ b/c.txt')
 
+    notifications = []
     expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(lastTaskState(sessionId)).toEqual({ status: 'running', reason: null, requirements: [], needsVerification: false })
     expect(existsSync(join(project, 'c.txt'))).toBe(false)
     expect(readFileSync(join(project, 'b.txt'), 'utf8')).toBe('first\n')
 
@@ -230,6 +457,62 @@ describe('重新生成、切换模型、整段 diff', () => {
     }
     const [summary] = await listSessions(core)
     expect(summary?.turnCount).toBe(2)
+  })
+
+  test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字会被拉回', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { text: '写好了' },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+      { text: '重新生成的回答' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
+
+    notifications = []
+    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', needsVerification: true })
+    expect(existsSync(join(project, 'b.txt'))).toBe(false)
+
+    const requests = server.bodies.length
+    await sendPrompt(core, sessionId, 'turn-2b', '再写 b.txt')
+    expect(server.bodies.length - requests).toBe(4)
+    expect(server.bodies.at(-1)).toContain('File changes from earlier turns have not been verified yet')
+  })
+
+  test('重新生成：这一轮开始前定下的完成条件保留、证据作废；这一轮里才定下的随对话一起丢掉', async () => {
+    const requirement = { id: 'test', title: '测试通过', commandIncludes: 'echo passed', outputIncludes: 'passed' }
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [requirement] } }] },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '先定完成条件')
+    await sendPrompt(core, sessionId, 'turn-2', '继续')
+    expect(lastTaskState(sessionId)).toMatchObject({ requirements: [{ id: 'test' }] })
+
+    await rewindSession(core, sessionId, 'turn-2')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [{ id: 'test', receiptId: null }] })
+    await rewindSession(core, sessionId, 'turn-1')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [] })
   })
 })
 
@@ -332,7 +615,7 @@ describe('Skill 和目标模式', () => {
     const core = await startCore()
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
 
-    const skills = await listSkills(core, project)
+    const skills = await listSkills(core, { cwd: project })
     expect(skills.find((skill) => skill.name === 'diffra-test-skill')).toEqual({
       name: 'diffra-test-skill',
       description: '测试用',
@@ -397,8 +680,8 @@ describe('插件', () => {
       const plugins = [{ name: 'kit', dir: plugin }]
       const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), plugins })
 
-      expect((await listSkills(core, project, plugins)).find((skill) => skill.name === 'kit-style')?.source).toBe('plugin')
-      expect((await listCommands(core, project, plugins)).find((command) => command.name === 'kit:greet')?.body).toBe('跟 $ARGUMENTS 打招呼')
+      expect((await listSkills(core, { cwd: project, plugins })).find((skill) => skill.name === 'kit-style')?.source).toBe('plugin')
+      expect((await listCommands(core, { cwd: project, plugins })).find((command) => command.name === 'kit:greet')?.body).toBe('跟 $ARGUMENTS 打招呼')
       const [status] = await mcpStatus(core, { sessionId })
       expect(status).toMatchObject({ name: 'kit-demo', state: 'connected' })
 
@@ -408,6 +691,36 @@ describe('插件', () => {
     } finally {
       await pool.closeAll()
     }
+  })
+
+  test('任务里按建任务时开着的插件列 Skill 和命令，和选 Skill 一致', async () => {
+    const plugin = join(dataDir, 'kit')
+    mkdirSync(join(plugin, '.claude-plugin'), { recursive: true })
+    writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'kit' }))
+    mkdirSync(join(plugin, 'skills', 'kit-style'), { recursive: true })
+    writeFileSync(join(plugin, 'skills', 'kit-style', 'SKILL.md'), '---\nname: kit-style\n---\n插件说明 KIT-OK')
+    mkdirSync(join(plugin, 'commands'))
+    writeFileSync(join(plugin, 'commands', 'greet.md'), '跟 $ARGUMENTS 打招呼')
+    server = await startScriptedServer([{ text: '好' }])
+    const core = await startCore()
+    const plugins = [{ name: 'kit', dir: plugin }]
+    const without = await createSession(core, project, config(server.baseUrl))
+    const withKit = await createSession(core, project, { ...config(server.baseUrl), plugins })
+    const skillNames = async (target: ListTarget) => (await listSkills(core, target)).map((skill) => skill.name)
+    const commandNames = async (target: ListTarget) => (await listCommands(core, target)).map((command) => command.name)
+
+    expect(await skillNames({ cwd: project, plugins })).toContain('kit-style')
+
+    expect(await skillNames({ sessionId: without.sessionId })).not.toContain('kit-style')
+    expect(await commandNames({ sessionId: without.sessionId })).not.toContain('kit:greet')
+    await expect(sendPrompt(core, without.sessionId, 't1', '你好', { skills: ['kit-style'] })).rejects.toThrow('找不到 Skill：kit-style')
+
+    expect(await skillNames({ sessionId: withKit.sessionId })).toContain('kit-style')
+    expect(await commandNames({ sessionId: withKit.sessionId })).toContain('kit:greet')
+    await sendPrompt(core, withKit.sessionId, 't1', '你好', { skills: ['kit-style'] })
+    expect(server.bodies[0]).toContain('插件说明 KIT-OK')
+
+    await expect(listSkills(core, { sessionId: 'no-such' })).rejects.toThrow()
   })
 })
 
@@ -420,7 +733,7 @@ describe('图片输入', () => {
     const core = await startCore()
     const plain = await createSession(core, project, config(server.baseUrl))
     await expect(sendPrompt(core, plain.sessionId, 'turn-1', '看看这张图', { images: [{ mimeType: 'image/png', data: PIXEL }] })).rejects.toThrow(
-      '没有打开图片输入',
+      '没有打开「视觉」',
     )
 
     const base = config(server.baseUrl)

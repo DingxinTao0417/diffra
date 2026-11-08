@@ -1,10 +1,10 @@
-import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
+import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
-import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, usageOf } from '../features/session/transcript'
+import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
-import { type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
 const TITLE_CHARS = 40
 
@@ -76,6 +76,28 @@ export function openHome(project?: string | null): void {
   navigate({ name: 'home', project: project === undefined ? fallback : project })
 }
 
+// Ctrl+B、菜单和顶栏开关共用；设置页没有侧栏
+export function toggleSidebar(): void {
+  store.set((state) => {
+    if (state.route.name === 'settings') return state
+    // 侧栏被窄窗口收起时是想看侧栏，直接展开，而不是把 sidebarOpen 关掉
+    if (state.sidebarOpen && !isSidebarShown(state)) return { ...state, sidebarKeepOpen: true }
+    const sidebarOpen = !state.sidebarOpen
+    // 开着宽面板时 sidebarNarrow 被压成 false，窗口其实可能是窄的；这时主动展开的也记下，关掉面板后不被自动收起。
+    // 窗口真的变宽后 setSidebarNarrow(false) 会清掉它
+    return { ...state, sidebarOpen, sidebarKeepOpen: sidebarOpen && (state.sidebarNarrow || hasWidePanel(state)) }
+  })
+}
+
+export function setSidebarNarrow(narrow: boolean): void {
+  store.set((state) => {
+    // 宽面板开着时不算窄，但保留 keepOpen：切回窄面板时用户展开过的侧栏不被收掉
+    const keepOpen = narrow || hasWidePanel(state) ? state.sidebarKeepOpen : false
+    if (state.sidebarNarrow === narrow && state.sidebarKeepOpen === keepOpen) return state
+    return { ...state, sidebarNarrow: narrow, sidebarKeepOpen: keepOpen }
+  })
+}
+
 export async function refreshTasks(): Promise<void> {
   try {
     const tasks = await window.diffra.listSessions(null)
@@ -109,11 +131,12 @@ export function wireCoreEvents(): () => void {
       if (usage) return { ...task, usage }
       const last = task.turns.at(-1)
       if (!last) return task
-      const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed'
+      // 读文件、搜索不改项目文件，完成时不用重读改动
+      const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && !last.items.some((item) => item.kind === 'tool' && item.id === update.toolCallId && (item.toolKind === 'read' || item.toolKind === 'search'))
       return {
         ...task,
         progress: taskProgressOf(update) ?? task.progress,
-        turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update) }],
+        turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update), outcome: turnOutcomeOf(update) ?? last.outcome }],
         changeVersion: filesMayChange ? task.changeVersion + 1 : task.changeVersion,
       }
     })
@@ -134,11 +157,17 @@ export function wireCoreEvents(): () => void {
     const { route, panel } = store.get()
     if (route.name === 'task' && route.sessionId === sessionId && panel !== 'browser') store.set((current) => ({ ...current, panel: 'browser' }))
   })
+  // 智能体在用设计面板：同样在看这个任务时打开
+  const offDesignActivity = window.diffra.onDesignActivity(({ sessionId }) => {
+    const { route, panel } = store.get()
+    if (route.name === 'task' && route.sessionId === sessionId && panel !== 'design') store.set((current) => ({ ...current, panel: 'design' }))
+  })
   return () => {
     offUpdate()
     offPermission()
     offBrowserState()
     offBrowserActivity()
+    offDesignActivity()
   }
 }
 
@@ -152,6 +181,7 @@ function liveFrom(handle: SessionHandle, project: string, title: string, planMod
     planLabel: handle.planLabel,
     fallbackLabel: handle.fallbackLabel,
     permissionMode: handle.permissionMode,
+    design: handle.design,
     planMode,
     info: handle.info,
     turns: [],
@@ -171,13 +201,16 @@ export async function startTask(project: string, text: string, options: SessionO
     ...state,
     projects: addProject(state.projects, project),
     live: { ...state.live, [handle.sessionId]: liveFrom(handle, project, titleOf(text), message.plan ?? false) },
+    ...(handle.design ? { panel: 'design' as const } : {}),
   }))
   navigate({ name: 'task', sessionId: handle.sessionId })
   void sendMessage(handle.sessionId, text, message)
 }
 
 export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>, record = true): Promise<void> {
-  if (store.get().live[task.sessionId]) {
+  const existing = store.get().live[task.sessionId]
+  if (existing) {
+    if (existing.design) store.set((state) => ({ ...state, panel: 'design' }))
     navigate({ name: 'task', sessionId: task.sessionId }, record)
     return
   }
@@ -185,11 +218,11 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
     const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
     const live: LiveTask = {
       ...liveFrom(loaded, task.cwd, loaded.title),
-      progress: loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
+      progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
       turns: loaded.turns.map(turnFromStored),
       usage: lastUsage(loaded.turns),
     }
-    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live } }))
+    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live }, ...(live.design ? { panel: 'design' as const } : {}) }))
     navigate({ name: 'task', sessionId: task.sessionId }, record)
   } catch (error) {
     showToast(`打不开这个任务：${errorMessage(error)}`)
@@ -282,27 +315,31 @@ export function respondPermission(sessionId: string, optionId: string | null): v
 
 export async function restoreTurn(sessionId: string, turnId: string): Promise<void> {
   const restored = await window.diffra.restoreCheckpoint(sessionId, turnId)
-  updateLive(sessionId, (task) => ({
-    ...task,
-    changeVersion: task.changeVersion + 1,
-    turns: task.turns.map((turn) =>
-      turn.id === turnId
-        ? {
-            ...turn,
-            items: [
-              ...turn.items,
-              {
-                kind: 'notice',
-                id: crypto.randomUUID(),
-                severity: 'info',
-                title: `已撤销 ${restored.length} 个文件的改动`,
-                description: restored.map((change) => change.path).join('\n') || null,
-              },
-            ],
-          }
-        : turn,
-    ),
-  }))
+  const restoredAt = Date.now()
+  updateLive(sessionId, (task) => {
+    const start = task.turns.findIndex((turn) => turn.id === turnId)
+    return {
+      ...task,
+      changeVersion: task.changeVersion + 1,
+      turns: task.turns.map((turn, index) => {
+        if (start < 0 || index < start) return turn
+        if (index > start) return { ...turn, restoredAt }
+        return {
+          ...turn,
+          restoredAt,
+          items: [
+            ...turn.items,
+            {
+              kind: 'notice',
+              id: crypto.randomUUID(),
+              severity: 'info',
+              ...restoreNotice(restored),
+            },
+          ],
+        }
+      }),
+    }
+  })
 }
 
 // 重新生成：撤掉这一轮及之后的文件改动和对话，再用同样的提问发一轮

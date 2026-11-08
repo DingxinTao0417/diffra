@@ -48,6 +48,7 @@ const LIGHT_ANSI: ITheme = {
 
 function currentTheme(): ITheme {
   const background = cssVar('--background')
+  // primary-color-allow: 终端光标
   const base: ITheme = { background, foreground: cssVar('--foreground'), cursor: cssVar('--primary'), cursorAccent: background, selectionBackground: cssVar('--soft') }
   return document.documentElement.classList.contains('dark') ? base : { ...LIGHT_ANSI, ...base }
 }

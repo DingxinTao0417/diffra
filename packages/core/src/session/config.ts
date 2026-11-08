@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROTOCOLS } from '../models/types.js'
-import { REASONING_EFFORTS, SCREENSHOT_MAX_WIDTH, SCREENSHOT_MIN_WIDTH, TERMINAL_MAX_LINES, type SessionConfig } from '../protocol.js'
+import { REASONING_EFFORTS, SCREENSHOT_MAX_WIDTH, SCREENSHOT_MIN_WIDTH, TERMINAL_MAX_LINES, type SessionConfig, type SessionDesign } from '../protocol.js'
 
 export const endpointSchema = z.object({
   protocol: z.enum(PROTOCOLS),
@@ -54,6 +54,7 @@ export const sessionConfigSchema = z.object({
   }),
   plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1) })).default([]),
   browser: z.boolean().default(false),
+  design: z.boolean().default(false),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 
@@ -80,6 +81,13 @@ export const devServerParamsSchema = z.discriminatedUnion('action', [
   z.object({ sessionId: z.string().min(1), action: z.literal('logs') }),
   z.object({ sessionId: z.string().min(1), action: z.literal('stop') }),
 ])
+
+export const sessionDesignSchema = z.object({
+  tools: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_]*$/), description: z.string(), inputSchema: z.record(z.string(), z.unknown()), readOnly: z.boolean() })),
+  instructions: z.string(),
+}) satisfies z.ZodType<SessionDesign>
+
+export const designActionParamsSchema = z.object({ sessionId: z.string().min(1), tool: z.string().min(1), args: z.unknown() })
 
 export const pluginRefSchema = z.object({ name: z.string().min(1), dir: z.string().min(1) })
 

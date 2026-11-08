@@ -4,11 +4,12 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import type { CheckpointChange, PermissionMode, PromptImage, RulePack, SessionConfig, StoredTurn, TurnKind, UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
-import { newTaskState, type TaskState } from './task-state.js'
+import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { browserTools } from './browser.js'
+import { designChars, designTools } from './design.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
 
 // 会话标题默认取第一条提问的开头
@@ -63,6 +64,8 @@ export class Session {
   readonly createdAt: string
   title: string
   archived: boolean
+  // 设计任务：建会话时定下，存进记录
+  readonly designTask: boolean
   readonly turns: StoredTurn[] = []
   // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
   config: SessionConfig
@@ -75,6 +78,8 @@ export class Session {
   readonly mcpPool: McpPool | null
   // 最近一轮开始时取到的 MCP 工具
   mcpTools: McpTurnTools | null = null
+  // 客户端配置的设计面板工具；用户打开设计面板之前是 null
+  design: SessionDesign | null = null
   readonly systemPrompt: string
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
@@ -106,9 +111,11 @@ export class Session {
     this.createdAt = record?.createdAt ?? new Date().toISOString()
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
+    this.designTask = record?.design ?? options.config.design ?? false
     if (record) {
       this.taskState = record.taskState ?? newTaskState()
-      if (this.taskState.status === 'running') this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
+      // 只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值
+      if (this.taskState.status === 'running' && record.turns.at(-1)?.endedAt === null) this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
       this.messages.push(...record.messages)
       this.compaction = record.compaction
       for (const { checkpoint, messageStart, ...turn } of record.turns) {
@@ -210,6 +217,7 @@ export class Session {
       createdAt: this.createdAt,
       updatedAt: new Date().toISOString(),
       archived: this.archived,
+      design: this.designTask,
       turns: this.turns.map((turn) => ({
         ...turn,
         checkpoint: this.turnCheckpoints.get(turn.id) ?? null,
@@ -220,13 +228,13 @@ export class Session {
     }
   }
 
-  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具
+  // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，打开过设计面板时再加设计工具
   toolSet(): ToolSet {
-    return { ...TOOLS, ...browserTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
@@ -264,6 +272,11 @@ export class Session {
       await this.checkpoints.restore(commit, await this.checkpoints.changesSince(commit))
       filesRestored = true
     }
+    // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
+    const before = taskStateBefore(this.turns, index)
+    const needsVerification = filesRestored ? before.needsVerification : this.taskState.needsVerification
+    // 完成条件定下后改不了，这一轮里才定的随对话一起撤掉，否则写错的条件再也摆脱不了；之前定的保留，证据作废
+    const keptRequirements = new Set(before.requirementIds)
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
@@ -273,7 +286,13 @@ export class Session {
     }
     this.readHashes.clear()
     this.verifiedSnapshot = null
-    this.taskState = { ...newTaskState(), contractRequired: this.taskState.contractRequired, releaseVersion: this.taskState.releaseVersion }
+    this.taskState = {
+      ...newTaskState(),
+      needsVerification,
+      contractRequired: this.taskState.contractRequired,
+      releaseVersion: this.taskState.releaseVersion,
+      requirements: this.taskState.requirements.filter((item) => keptRequirements.has(item.id)).map((item) => ({ ...item, receiptId: null })),
+    }
     return { filesRestored }
   }
 
@@ -293,13 +312,44 @@ export class Session {
     // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
     this.readHashes.clear()
     this.verifiedSnapshot = null
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification: true, reason: '文件已撤销，需要重新验证完成条件。', receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
+    const index = this.turns.findIndex((turn) => turn.id === turnId)
+    const target = this.turns[index]
+    const needsVerification = target ? needsVerificationBefore(this.turns, index) : false
+    const reason = this.taskState.requirements.length > 0 || this.taskState.contractRequired ?'文件已撤销，需要重新验证完成条件。' : needsVerification ? '文件已撤销，之前轮次的改动还没验证。' : '文件已撤销，原来的结论不再算数。'
+    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason, receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
     this.messages.push({
       role: 'user',
       content:
         '[Note from Diffra] The user reverted all file changes made since an earlier point in this conversation. ' +
         'Files may differ from what you saw before; read them again before editing.',
     })
+    if (target) {
+      const restoredAt = new Date().toISOString()
+      for (const turn of this.turns.slice(index)) turn.restoredAt = restoredAt
+      // 这一轮早已结束，recordUpdate 不再收，直接记进去
+      target.updates.push({ sessionUpdate: 'notice', severity: 'info', ...restoreNotice(changes) })
+    }
     return changes
   }
+}
+
+// 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
+// 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
+function taskStateBefore(turns: StoredTurn[], index: number): { needsVerification: boolean; requirementIds: string[] } {
+  for (const update of turns[index]!.updates) {
+    const recorded = recordedTaskState(update._meta)
+    if (recorded) return recorded
+  }
+  for (let i = index - 1; i >= 0; i--) {
+    const updates = turns[i]!.updates
+    for (let j = updates.length - 1; j >= 0; j--) {
+      const recorded = recordedTaskState(updates[j]!._meta)
+      if (recorded) return recorded
+    }
+  }
+  return { needsVerification: false, requirementIds: [] }
+}
+
+function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
+  return taskStateBefore(turns, index).needsVerification
 }

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { cards, chooseProject, startTask, waitTaskDone } from './flows'
+import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -30,7 +30,7 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await expect(window.getByTestId('model-menu')).toContainText('脚本模型 / scripted')
+    await expect(window.getByTestId('model-menu')).toHaveText('scripted')
 
     // 把 data 设为禁写目录；新任务按新设置运行
     await window.getByRole('button', { name: '未配置检查' }).click()
@@ -49,7 +49,9 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await permission.getByRole('button', { name: '允许一次' }).click()
 
     await waitTaskDone(window)
-    await expect(cards(window, 'finish')).toContainText('未经自动验证')
+    await expect(cards(window, 'finish')).toHaveAttribute('data-unverified', 'true')
+    await expect(cards(window, 'finish')).toContainText('已完成 · 未经自动验证')
+    await expect(cards(window, 'finish').getByTestId('finish-warnings')).toContainText('没有配置检查命令')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
     expect(readFileSync(join(project, 'done.txt'), 'utf8').trim()).toBe('done')
     expect(model.requests()).toBe(6)
@@ -74,13 +76,20 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await window.keyboard.press('Escape')
     await window.screenshot({ path: 'test-results/agent-session.png' })
 
-    // 撤销这一轮：先列出受影响的文件，确认后恢复
-    await window.getByTestId('turn').getByRole('button', { name: '撤销到这一轮之前' }).click()
+    // 撤销这一轮：完成卡上有撤销按钮，操作栏就不再放 ↶；先列出受影响的文件，确认后恢复
+    await expect(window.getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' })).toHaveCount(0)
+    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
     const list = window.getByTestId('restore-list')
     await expect(list).toContainText('hello.txt')
     await expect(list).toContainText('done.txt')
-    await window.getByRole('button', { name: '确认撤销' }).click()
+    await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
+    await expect(window.getByRole('dialog')).toContainText('不只是智能体改的')
+    await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
+    await waitTaskStatus(window, 'unfinished')
+    // 完成卡还在，但标成之后撤销过，不再指向审阅
+    await expect(cards(window, 'finish')).toHaveAttribute('data-restored', 'true')
+    await expect(cards(window, 'finish').getByRole('button', { name: '审阅改动' })).toHaveCount(0)
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'done.txt'))).toBe(false)
   } finally {
