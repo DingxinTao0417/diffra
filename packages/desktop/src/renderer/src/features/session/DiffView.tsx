@@ -38,9 +38,9 @@ function toDiffLines(hunk: { oldStart: number; newStart: number; lines: string[]
 export function DiffCounts({ added, removed }: { added: number; removed: number }) {
   return (
     <span className="shrink-0 font-mono text-xs">
-      {added > 0 && <span className="text-success">+{added}</span>}
+      {added > 0 && <span className="text-diff-add-fg">+{added}</span>}
       {added > 0 && removed > 0 && ' '}
-      {removed > 0 && <span className="text-destructive">−{removed}</span>}
+      {removed > 0 && <span className="text-diff-del-fg">−{removed}</span>}
     </span>
   )
 }

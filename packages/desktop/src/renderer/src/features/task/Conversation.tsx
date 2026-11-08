@@ -232,6 +232,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
     })
     return result
   }, [turn.items])
+  const lastFinishId = last ? [...finishFiles.keys()].at(-1) : undefined
+  const lastPassedId = last ? turn.items.filter((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0).at(-1)?.id : undefined
   const stopLabel = turn.stopReason ? STOP_LABELS[turn.stopReason] : undefined
   const canRegenerate = last && (turn.kind === 'prompt' || turn.kind === 'goal')
   const canRestore = task.info.checkpoints && turn.kind !== 'compact'
@@ -275,7 +277,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} progress={last && block.item.id === [...finishFiles.keys()].at(-1) ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} progress={block.item.id === lastFinishId ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -462,8 +464,9 @@ function Thought({ text }: { text: string }) {
   )
 }
 
-function StatusIcon({ status, className }: { status: string; className?: string }) {
-  if (status === 'completed') return <Check className={cn('size-3.5 shrink-0 text-success', className)} strokeWidth={2.6} />
+// 跑完只是过程，默认画中性；只有检查命令通过这类验证结果才传 tone="success"
+function StatusIcon({ status, tone = 'muted', className }: { status: string; tone?: 'muted' | 'success'; className?: string }) {
+  if (status === 'completed') return <Check className={cn('size-3.5 shrink-0', tone === 'success' ? 'text-success' : 'text-muted-foreground', className)} strokeWidth={2.6} />
   if (status === 'failed') return <X className={cn('size-3.5 shrink-0 text-destructive', className)} strokeWidth={2.6} />
   if (status === 'command-failed') return <CircleAlert className={cn('size-3.5 shrink-0 text-warning', className)} />
   return <LoaderCircle className={cn('size-3.5 shrink-0 animate-spin text-muted-foreground', className)} />
@@ -668,11 +671,13 @@ function CheckGroup({ items }: { items: ToolItem[] }) {
   const rows = items.map((item) => <CheckItem key={item.id} item={item} />)
   if (items.length < 2 || !items.every(checkPassed)) return <>{rows}</>
   const names = [...new Set(items.map(checkName))]
+  // 只有检查命令真跑过才算验证；只有安全检查和规范审查时，没发现问题不等于检查通过
+  const verified = items.some((item) => toolBlockType(item) === 'check')
   return (
     <div className="flex flex-col gap-1.5" data-testid="check-group">
       <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground/85">
-        <Check className="size-3.5 shrink-0 text-success" strokeWidth={2.6} />
-        <span className="shrink-0 text-muted-foreground">自动检查通过</span>
+        <Check className={cn('size-3.5 shrink-0', verified ? 'text-success' : 'text-muted-foreground')} strokeWidth={2.6} />
+        <span className="shrink-0 text-muted-foreground">{verified ? '自动检查通过' : '未发现问题'}</span>
         <span className="min-w-0 truncate">{names.join('、')}</span>
       </DisclosureRow>
       <div hidden={!open} className="flex flex-col gap-0.5 pl-5">
@@ -714,7 +719,7 @@ function CheckRow({ item }: { item: ToolItem }) {
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="check" data-status={item.status}>
       <DisclosureRow open={open} onToggle={output ? () => setOpen(!open) : undefined}>
-        <StatusIcon status={item.status} />
+        <StatusIcon status={item.status} tone="success" />
         <span className="shrink-0 text-muted-foreground">{label}</span>
         <span className="min-w-0 truncate font-mono text-xs">{command}</span>
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
@@ -822,7 +827,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
       )}
     >
       <div className={cn('flex items-center gap-2 font-semibold', high > 0 && 'text-destructive')}>
-        {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <Check className="size-3.5 text-success" strokeWidth={2.6} />}
+        {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <CircleAlert className="size-3.5 text-warning" />}
         {high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
       </div>
       {rows.map(({ line, match }, index) =>
@@ -940,7 +945,7 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
-function FinishCard({ item, files, commandsFailed, projectPath, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; onRestore?: () => void; progress?: TaskProgressView }) {
+function FinishCard({ item, files, commandsFailed, projectPath, latest, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
   const text = textOf(item)
   const passed = item.status === 'completed'
   const unverified = passed && item.unverified === true
@@ -992,7 +997,7 @@ function FinishCard({ item, files, commandsFailed, projectPath, onRestore, progr
       )}
       {passed && files.length > 0 && (
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={openReview}>审阅改动</Button>
+          <Button variant={latest ? 'default' : 'outline'} size="sm" onClick={openReview}>审阅改动</Button>
           {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销本轮</Button>}
         </div>
       )}

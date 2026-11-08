@@ -215,7 +215,7 @@ function StatusLabel({ status }: { status: TaskStatus }) {
 
 // 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，出错实心点
 function StatusIndicator({ tone }: { tone: TaskStatus['tone'] }) {
-  if (tone === 'running') return <LoaderCircle className="size-3 animate-spin text-primary" />
+  if (tone === 'running') return <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
   if (tone === 'done') return <Check className="size-3" />
   const dot = {
     confirm: 'size-2 border-2 border-warning',

@@ -700,11 +700,10 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
           title={locked ? '运行中不能切换模型' : '切换模型'}
           className={cn(
             MENU_TRIGGER,
-            'max-w-72 disabled:opacity-80',
-            label ? 'text-muted-foreground hover:text-foreground aria-expanded:text-foreground' : 'text-warning',
+            'max-w-72 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
           )}
         >
-          <span className="truncate">{label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '配置模型…'}</span>
+          <span className="truncate">{label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'}</span>
           {label && supportsReasoning && effort !== 'default' && <span className="shrink-0 text-muted-foreground">· {REASONING_LABELS[effort]}</span>}
           <ChevronDown className="size-3 shrink-0" />
         </button>

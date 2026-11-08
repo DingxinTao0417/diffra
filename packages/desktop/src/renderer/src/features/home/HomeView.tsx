@@ -101,7 +101,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
           <button
             type="button"
             data-testid="project-path"
-            className={cn(clickableChipClass, 'bg-primary/10 text-sm text-primary hover:bg-primary/15 hover:text-primary aria-expanded:bg-primary/15 aria-expanded:text-primary')}
+            className={cn(clickableChipClass, 'border border-dashed border-muted-foreground/40 px-[7px] text-sm')}
           >
             <Folder className="size-3.5" />
             选择项目
@@ -241,7 +241,7 @@ function RecentTaskRow({ task }: { task: StoredSessionSummary }) {
       onClick={() => void openTask(task)}
     >
       <span className="min-w-0 truncate">{task.title}</span>
-      {running && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" aria-label="运行中" />}
+      {running && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="运行中" />}
       <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">{folderName(task.cwd)}</span>
       <span className="w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{formatTime(task.updatedAt)}</span>
     </button>
