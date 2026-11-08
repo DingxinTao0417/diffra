@@ -220,7 +220,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   const [showEditDetails, setShowEditDetails] = useState(false)
   // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
-  // 目标模式一轮里有好几张完成卡片，每张只算上一张之后的改动和失败的命令
+  // 目标模式一轮里有好几张完成卡片，每张只算上一张通过的卡之后的改动和失败的命令；打回的卡不切分，免得通过的卡漏掉打回前的改动
   const finishFiles = useMemo(() => {
     const result = new Map<string, { files: ChangedFile[]; commandsFailed: number }>()
     let start = 0
@@ -228,7 +228,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
       if (item.kind !== 'tool' || toolBlockType(item) !== 'finish') return
       const scope = turn.items.slice(start, index + 1)
       result.set(item.id, { files: filesOf(scope), commandsFailed: scope.filter((entry) => entry.kind === 'tool' && entry.succeeded === false).length })
-      start = index + 1
+      if (item.status === 'completed') start = index + 1
     })
     return result
   }, [turn.items])

@@ -39,7 +39,7 @@ import { runPlan } from './session/plan.js'
 import { compactManually } from './session/compact.js'
 import type { Session as SessionType } from './session/session.js'
 import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
-import { CHECK_TIMEOUT_SECONDS, runTurn, type TurnIO } from './session/loop.js'
+import { CHECK_TIMEOUT_SECONDS, runTurn, taskStateUpdate, taskStateView, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
@@ -179,6 +179,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       checkpoints: checkpoints !== null,
       rulePacks: rulePacks.map((pack) => pack.name),
       security: config.security,
+      checks: config.checks,
     }
     sessions.set(session.id, session)
     infos.set(session.id, info)
@@ -296,13 +297,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
-        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns }
+        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, taskState: taskStateView(live) }
         return { _meta: { diffra: loaded } }
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
-      const loaded: LoadedSession = { info, title: session.title, turns: session.turns }
+      // 没在运行却是 running，说明还没有确定的任务状态，交给界面按轮次推导
+      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }) }
       return { _meta: { diffra: loaded } }
     })
     .onRequest(acp.methods.agent.session.list, async ({ params }) => ({
@@ -399,8 +401,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     )
     .onRequest(SESSION_EXT_METHODS.checkpointRestore, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
+      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
       const changes = await session.restoreCheckpoint(params.turnId)
-      await persist(session, (update) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update }))
+      await persist(session, notify)
+      await notify(taskStateUpdate(session))
       return changes
     })
     .onRequest(SESSION_EXT_METHODS.sessionUpdate, sessionUpdateParams, async ({ params }) => {
@@ -421,8 +425,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     })
     .onRequest(SESSION_EXT_METHODS.sessionRewind, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
+      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
       const result = await session.rewind(params.turnId)
-      await persist(session, (update) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update }))
+      await persist(session, notify)
+      await notify(taskStateUpdate(session))
       return result
     })
     .onRequest(SESSION_EXT_METHODS.checkpointDiff, checkpointParams, ({ params }) =>

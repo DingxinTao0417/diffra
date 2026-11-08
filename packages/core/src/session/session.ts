@@ -108,7 +108,8 @@ export class Session {
     this.archived = record?.archived ?? false
     if (record) {
       this.taskState = record.taskState ?? newTaskState()
-      if (this.taskState.status === 'running') this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
+      // 只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值
+      if (this.taskState.status === 'running' && record.turns.at(-1)?.endedAt === null) this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
       this.messages.push(...record.messages)
       this.compaction = record.compaction
       for (const { checkpoint, messageStart, ...turn } of record.turns) {

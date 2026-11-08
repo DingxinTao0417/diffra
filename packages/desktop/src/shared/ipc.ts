@@ -17,6 +17,7 @@ import type {
   SessionInfo,
   SessionNotification,
   StopReason,
+  TaskProgressView,
   TestModelResult,
   UsageQuery,
   UsageSummary,
@@ -207,6 +208,7 @@ export interface PromptOptions {
 export interface LoadedSessionHandle extends SessionHandle {
   title: string
   turns: StoredTurn[]
+  taskState?: TaskProgressView
 }
 
 export interface PermissionRequestEvent {

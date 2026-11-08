@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
-import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity, SkillInfo, SkillSource } from '../src/protocol.js'
+import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity, SkillInfo, SkillSource, TaskProgressView, TurnOutcome } from '../src/protocol.js'
 import { normalizeUrl } from '../src/urls.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
@@ -146,6 +146,37 @@ function toolUpdates(io: { updates: SessionUpdate[] }, status: 'completed' | 'fa
   return io.updates.filter((update) => update.sessionUpdate === 'tool_call_update' && update.status === status)
 }
 
+const diffraMeta = (update: SessionUpdate) => (update._meta?.diffra ?? {}) as { result?: string; verification?: string }
+
+// 标题以 title 开头的检查卡片，每次结束时记的 result，按出现顺序
+function checkResults(io: { updates: SessionUpdate[] }, title: string) {
+  const ids = new Set(io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title.startsWith(title) ? [update.toolCallId] : [])))
+  return io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call_update' && ids.has(update.toolCallId) ? [diffraMeta(update).result] : []))
+}
+
+// 完成卡和 verify_changes 卡的 verification，按出现顺序
+function verifications(io: { updates: SessionUpdate[] }, title = '完成') {
+  return io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title === title ? [diffraMeta(update).verification] : []))
+}
+
+const infoMeta = (update: SessionUpdate) =>
+  (update.sessionUpdate === 'session_info_update' ? update._meta?.diffra ?? {} : {}) as { taskState?: TaskProgressView; turnOutcome?: TurnOutcome }
+
+// 每轮结束时随任务状态发出的 turnOutcome，按出现顺序；一轮只发一次
+function turnOutcomes(io: { updates: SessionUpdate[] }) {
+  return io.updates.flatMap((update) => {
+    const outcome = infoMeta(update).turnOutcome
+    return outcome ? [outcome] : []
+  })
+}
+
+function lastTaskState(io: { updates: SessionUpdate[] }) {
+  return io.updates.flatMap((update) => {
+    const state = infoMeta(update).taskState
+    return state ? [state] : []
+  }).at(-1)
+}
+
 describe('主循环', () => {
   test('用户终端读取必须授权，拒绝不调用客户端，会话允许只对指定终端生效', async () => {
     const terminalId = '11111111-1111-4111-8111-111111111111'
@@ -187,7 +218,11 @@ describe('主循环', () => {
     expect(session.taskState.status).toBe('completed')
     expect(session.taskState.requirements[0]?.receiptId).toBe('call-3-0')
     expect(JSON.stringify(session.messages)).toContain('Task is NOT complete')
-    expect(io.updates.some((item) => item.sessionUpdate === 'tool_call' && item.title === '验证改动（不结束任务）')).toBe(true)
+    expect(verifications(io, '验证改动（不结束任务）')).toEqual(['verified'])
+    // 完成条件没满足的 finish 也出一张打回卡；最后一次 finish 之前只跑了不改文件的命令，指纹没变，走无编辑短路
+    expect(verifications(io)).toEqual(['failed', 'no-edits'])
+    // verify_changes 通过不改变本轮结论
+    expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: null }])
   }, 30_000)
 
   test('验证缓存匹配工作区指纹；后续编辑使缓存失效，取消不标记完成', async () => {
@@ -203,6 +238,10 @@ describe('主循环', () => {
     const io = recordingIO()
     await runTurn(session, { id: 'cache', text: '测试验证缓存' }, io)
     expect(io.updates.filter((item) => item.sessionUpdate === 'tool_call' && item.title.startsWith('完成检查'))).toHaveLength(2)
+    expect(verifications(io, '验证改动（不结束任务）')).toEqual(['verified', 'reused', 'verified'])
+    expect(verifications(io)).toEqual(['reused'])
+    // 复用的验证在本轮结论里算已验证
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
     expect(session.taskState.status).toBe('completed')
     const cancelled = await makeSession(scriptedModel([{ toolCalls: [{ name: 'verify_changes', input: { summary: '验证期间取消' } }] }]), { afterEdit: null, beforeFinish: 'true' })
     const cancelIO = recordingIO()
@@ -213,6 +252,7 @@ describe('主循环', () => {
     }
     expect(await runTurn(cancelled, { id: 'cancel', text: '取消' }, cancelIO)).toBe('cancelled')
     expect(cancelled.taskState.status).toBe('cancelled')
+    expect(turnOutcomes(cancelIO)).toEqual([{ finish: null, stop: 'cancelled' }])
   }, 30_000)
 
   test('发布任务没定义完整契约不能提前结束；暂停保留受阻状态', async () => {
@@ -221,7 +261,9 @@ describe('主循环', () => {
       { toolCalls: [{ name: 'pause_task', input: { status: 'waiting', reason: '等待 CI 完成' } }] },
     ])
     const session = await makeSession(model)
-    await runTurn(session, { id: 't', text: '提交推送打包发布 0.1.2' }, recordingIO())
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '提交推送打包发布 0.1.2' }, io)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'paused' }])
     expect(session.taskState.status).toBe('waiting')
     expect(session.taskState.contractRequired).toBe(true)
     expect(session.taskState.reason).toBe('等待 CI 完成')
@@ -272,6 +314,10 @@ describe('主循环', () => {
     const finishIndex = io.updates.findIndex((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
     expect(finishCheckIndex).toBeGreaterThanOrEqual(0)
     expect(finishIndex).toBeGreaterThan(finishCheckIndex)
+    expect(checkResults(io, '快速检查')).toEqual(['failed', 'passed'])
+    expect(checkResults(io, '完成检查')).toEqual(['passed'])
+    expect(verifications(io)).toEqual(['verified'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
     // 系统提示词里写明了会自动跑的检查命令
     expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('Do not run it yourself')
 
@@ -298,7 +344,126 @@ describe('主循环', () => {
     expect(model.doStreamCalls).toHaveLength(5)
     const finish = io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
     expect(finish).toMatchObject({ status: 'completed' })
-    expect(finish?._meta).toBeUndefined()
+    // 检查通过的完成卡只带 verification，不带未验证标记
+    expect(finish?._meta).toEqual({ diffra: { verification: 'verified' } })
+    expect(verifications(io)).toEqual(['failed', 'verified'])
+    expect(checkResults(io, '完成检查')).toEqual(['failed', 'passed'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
+  })
+
+  test('完成条件没满足、证据不合格时打回，各出一张 failed 完成卡', async () => {
+    const pending = scriptedModel([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [{ id: 'delivery', title: '执行交付', commandIncludes: 'deliver', outputIncludes: 'ok' }] } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '过早完成' } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'blocked', reason: '还没交付' } }] },
+    ])
+    const pendingIO = recordingIO()
+    await runTurn(await makeSession(pending), { id: 't', text: '交付' }, pendingIO)
+    const card = (io: { updates: SessionUpdate[] }) => io.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
+    expect(card(pendingIO)).toMatchObject({
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: '完成条件未满足：执行交付' } }],
+      _meta: { diffra: { verification: 'failed' } },
+    })
+    expect(turnOutcomes(pendingIO)).toEqual([{ finish: null, stop: 'paused' }])
+
+    const evidence = scriptedModel([
+      { toolCalls: [{ name: 'finish', input: { summary: '发布好了' } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'blocked', reason: '缺少提交证据' } }] },
+    ])
+    const session = await makeSession(evidence)
+    const receipt = { id: 'r', command: 'git rev-parse HEAD', output: 'no sha here', at: '2026-01-01T00:00:00.000Z' }
+    session.taskState = {
+      ...session.taskState,
+      contractRequired: true,
+      requirements: ['commit', 'push', 'ci', 'publish'].map((id) => ({ id, title: id, commandIncludes: 'git', outputIncludes: 'sha', receiptId: 'r' })),
+      receipts: [receipt],
+    }
+    const evidenceIO = recordingIO()
+    await runTurn(session, { id: 't', text: '发布' }, evidenceIO)
+    expect(card(evidenceIO)).toMatchObject({
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: 'Commit evidence must contain the actual full 40-character SHA.' } }],
+      _meta: { diffra: { verification: 'failed' } },
+    })
+    expect(JSON.stringify(session.messages)).toContain('Commit evidence must contain')
+  })
+
+  test('只用命令改了文件时 finish 不走无编辑短路，照样跑完成检查', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf draft > out.txt' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了' } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf final > out.txt' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final out.txt' })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 out.txt' }, io)).resolves.toBe('end_turn')
+    expect(readFileSync(join(project, 'out.txt'), 'utf8')).toBe('final')
+    expect(checkResults(io, '完成检查')).toEqual(['failed', 'passed'])
+    expect(verifications(io)).toEqual(['failed', 'verified'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
+  })
+
+  test('只用命令改了文件、完成检查打回后只回文字时被拉回，仍不调 finish 记 no-finish', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf draft > out.txt' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了' } }] },
+      { text: '写好了' },
+      { text: '真的写好了' },
+      { text: '结束' },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final out.txt' })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 out.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(5)
+    expect(JSON.stringify(session.messages)).toContain('You changed files but did not call finish')
+    expect(verifications(io)).toEqual(['failed'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
+  })
+
+  test('dev_server_start 也算跑过命令：没有检查点时 finish 记 unverified', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'dev_server_start', input: { command: 'pnpm gen' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '起好了' } }] },
+    ])
+    const session = await makeSession(model, undefined, [], undefined, undefined, undefined, {}, { checkpoints: null })
+    session.config.browser = true
+    session.permissionMode = 'full'
+    const io = recordingIO()
+    // 开发服务器启动时生成文件
+    await runTurn(session, { id: 't', text: '起服务' }, { ...io, devServer: async () => {
+      writeFileSync(join(project, 'out.txt'), 'x')
+      return { text: 'started', url: null }
+    } })
+    expect(verifications(io)).toEqual(['unverified'])
+  })
+
+  test('没有检查点时跑过命令就 finish 记 unverified，不记 no-edits；没跑命令仍是 no-edits', async () => {
+    const commanded = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf x > out.txt' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了' } }] },
+    ])
+    const io = recordingIO()
+    await runTurn(await makeSession(commanded, { afterEdit: null, beforeFinish: 'true' }, [], undefined, undefined, undefined, {}, { checkpoints: null }), { id: 't', text: '写 out.txt' }, io)
+    const finish = io.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
+    expect(finish).toMatchObject({ status: 'completed' })
+    // 检查命令配了，不带表示「没配检查命令」的 unverified 标记
+    expect(finish?._meta).toEqual({ diffra: { verification: 'unverified' } })
+    // 不知道有没有改动，不跑检查命令冒充验证
+    expect(checkResults(io, '完成检查')).toEqual([])
+    expect(commanded.doStreamCalls).toHaveLength(2)
+    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+
+    writeFileSync(join(project, 'a.txt'), 'a\n')
+    const readOnly = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '看过了' } }] },
+    ])
+    const readIO = recordingIO()
+    await runTurn(await makeSession(readOnly, undefined, [], undefined, undefined, undefined, {}, { checkpoints: null }), { id: 't', text: '看看 a.txt' }, readIO)
+    expect(verifications(readIO)).toEqual(['no-edits'])
   })
 
   test('改了文件却没调 finish 时被拉回', async () => {
@@ -313,9 +478,30 @@ describe('主循环', () => {
     expect(model.doStreamCalls).toHaveLength(3)
     // 没配检查命令：finish 照样通过，但标注未经验证
     const finish = io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')
-    expect(finish).toMatchObject({ status: 'completed', _meta: { diffra: { unverified: true } } })
+    expect(finish).toMatchObject({ status: 'completed', _meta: { diffra: { unverified: true, verification: 'unverified' } } })
     // 未经验证是结构化字段，不再拼进模型写的总结
     expect(finish).toMatchObject({ content: [{ type: 'content', content: { type: 'text', text: '完成' } }] })
+    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: false })
+  })
+
+  test('改了文件、拉回 3 次仍不调 finish 时停下，记 no-finish，任务状态带着待验证', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
+      { text: '改好了' },
+      { text: '真的改好了' },
+      { text: '不用验证' },
+      { text: '结束' },
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '写 b.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(5)
+    expect(verifications(io)).toEqual([])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
+    const outcomeUpdate = io.updates.find((update) => infoMeta(update).turnOutcome)
+    expect(outcomeUpdate && infoMeta(outcomeUpdate).taskState).toMatchObject({ status: 'blocked', needsVerification: true })
   })
 
   test('没配检查命令时 verify_changes 卡片仍用文字说明未经验证', async () => {
@@ -327,9 +513,9 @@ describe('主循环', () => {
     const io = recordingIO()
     await expect(runTurn(await makeSession(model), { id: 't', text: '写 v.txt' }, io)).resolves.toBe('end_turn')
     const verify = io.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '验证改动（不结束任务）')
-    // 验证卡片走通用工具步骤、不读 _meta，所以未经验证必须写在文本里
+    // 界面还按通用工具行画验证卡片，未经验证仍要写在文本里；旧的 unverified 标记只给完成卡
     expect(verify).toMatchObject({ status: 'completed', content: [{ type: 'content', content: { type: 'text', text: '中间验证\n\n未配置检查命令，改动未经自动验证。' } }] })
-    expect(verify?._meta).toBeUndefined()
+    expect(verify?._meta).toEqual({ diffra: { verification: 'unverified' } })
   })
 
   test('只回答问题、不改文件时不需要 finish', async () => {
@@ -337,6 +523,8 @@ describe('主循环', () => {
     const io = recordingIO()
     await expect(runTurn(await makeSession(model), { id: 't', text: '介绍一下' }, io)).resolves.toBe('end_turn')
     expect(io.updates.some((update) => update.sessionUpdate === 'agent_message_chunk')).toBe(true)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(io)).toMatchObject({ needsVerification: false })
   })
 
   test('需要确认的命令被拒绝后，模型收到拒绝结果，文件没被写', async () => {
@@ -424,12 +612,26 @@ describe('主循环', () => {
   test('停止时结束正在跑的命令并返回 cancelled', async () => {
     const model = scriptedModel([{ toolCalls: [{ name: 'run_command', input: { command: 'sleep 30' } }] }, { text: '不会走到这里' }])
     const session = await makeSession(model)
+    const io = recordingIO()
     const started = Date.now()
-    const running = runTurn(session, { id: 't', text: '等' }, recordingIO())
+    const running = runTurn(session, { id: 't', text: '等' }, io)
     setTimeout(() => session.cancel(), 500)
     await expect(running).resolves.toBe('cancelled')
     expect(Date.now() - started).toBeLessThan(10_000)
     expect(session.running).toBe(false)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'cancelled' }])
+  })
+
+  test('模型调用失败时停下，记 model-error', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error('coder down')
+      },
+    })
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '介绍一下' }, io)).resolves.toBe('end_turn')
+    expect(io.updates.some((update) => update.sessionUpdate === 'notice' && update.title === '模型调用失败')).toBe(true)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'model-error' }])
   })
 })
 
@@ -598,7 +800,9 @@ describe('完成前的规范审查', () => {
     const reviewCards = io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title === '规范审查')
     expect(reviewCards).toHaveLength(2)
     expect(toolUpdates(io, 'failed').some((update) => JSON.stringify(update).includes('catch 块是空的'))).toBe(true)
+    expect(checkResults(io, '规范审查')).toEqual(['failed', 'passed'])
     expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+    expect(verifications(io)).toEqual(['failed', 'unverified'])
   })
 
   test('评审模型出错时不拦截完成，卡片上说明', async () => {
@@ -615,7 +819,22 @@ describe('完成前的规范审查', () => {
     const io = recordingIO()
     await expect(runTurn(session, { id: 't', text: '调用 run' }, io)).resolves.toBe('end_turn')
     expect(JSON.stringify(toolUpdates(io, 'failed'))).toContain('审查没有完成，这次不拦截')
+    expect(checkResults(io, '规范审查')).toEqual(['error'])
     expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
+  })
+
+  test('改动太多被截断时只审查了一部分，记 partial', async () => {
+    const code = Array.from({ length: 2000 }, (_, index) => `export const value${index} = ${index} // 用来撑大改动的一行\n`).join('')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'big.ts', old_string: '', new_string: code } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了常量' } }] },
+    ])
+    const reviewer = scriptedModel([{ text: 'NO_VIOLATIONS' }])
+    const session = await makeSession(model, undefined, [], { packs: [pack], model: reviewer })
+    const io = recordingIO()
+    await expect(runTurn(session, { id: 't', text: '加常量' }, io)).resolves.toBe('end_turn')
+    expect(JSON.stringify(toolUpdates(io, 'completed'))).toContain('只审查了前面一部分')
+    expect(checkResults(io, '规范审查')).toEqual(['partial'])
   })
 
   test('这一轮只改了非代码文件时不审查', async () => {
@@ -689,6 +908,8 @@ describe('完成前的静态安全检查', () => {
     expect(results.map((update) => (update.sessionUpdate === 'tool_call_update' ? update.status : null))).toEqual(['failed', 'completed'])
     expect(JSON.stringify(results[0])).toContain('高危  SEC-INJ-2  calc.ts:1')
     expect(JSON.stringify(results[1])).toContain('没有发现常见的高危写法')
+    expect(checkResults(io, '静态检查')).toEqual(['failed', 'passed'])
+    expect(verifications(io)).toEqual(['failed', 'unverified'])
 
     // 下一轮只回答问题，不改文件，不跑安全检查
     const second = recordingIO()
@@ -706,6 +927,8 @@ describe('完成前的静态安全检查', () => {
     const io = recordingIO()
     await runTurn(session, { id: 't1', text: '加一个计算函数' }, io)
     expect(JSON.stringify(toolUpdates(io, 'completed'))).toContain('已放行  SEC-INJ-2  calc.ts:2')
+    // 放行的地方要让用户看到，不算干净
+    expect(checkResults(io, '静态检查')).toEqual(['warned'])
     expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
   })
 })
@@ -734,6 +957,7 @@ describe('完成前的轻量安全扫描', () => {
     expect(JSON.stringify(reviewer.doStreamCalls[1]?.prompt)).toContain('文件名限制在上传目录内')
     expect(scanCards(io)).toHaveLength(2)
     expect(JSON.stringify(toolUpdates(io, 'failed'))).toContain('高危  SEC-INJ-4  files.ts:1')
+    expect(checkResults(io, '轻量扫描')).toEqual(['failed', 'passed'])
     expect(io.usage.filter((call) => call.role === 'reviewer')).toHaveLength(2)
     expect(io.updates.findLast((update) => update.sessionUpdate === 'tool_call' && update.title === '完成')).toMatchObject({ status: 'completed' })
   })
@@ -751,6 +975,70 @@ describe('完成前的轻量安全扫描', () => {
     await runTurn(session, { id: 't1', text: '加一个计算函数' }, io)
     expect(reviewer.doStreamCalls).toHaveLength(1)
     expect(scanCards(io)).toHaveLength(1)
+  })
+
+  test('只有提醒时记 warned；模型调用失败时不拦截，记 error', async () => {
+    // 两个会话共用一个项目目录，各写各的文件
+    const edit = (path: string) => ({ toolCalls: [{ name: 'edit_file', input: { path, old_string: '', new_string: 'export const read = (name: string) => load(name)\n' } }] })
+    const finish = { toolCalls: [{ name: 'finish', input: { summary: '加了读文件' } }] }
+    const warned = await makeSession(scriptedModel([edit('files.ts'), finish]), undefined, [], { packs: [], model: scriptedModel([{ text: 'medium | SEC-INJ-4 | files.ts:1 | 确认 name 不含 ../' }]) }, { staticCheck: false, lightScan: true })
+    const warnedIO = recordingIO()
+    await runTurn(warned, { id: 't1', text: '加读文件' }, warnedIO)
+    expect(checkResults(warnedIO, '轻量扫描')).toEqual(['warned'])
+    expect(toolUpdates(warnedIO, 'failed')).toHaveLength(0)
+
+    const failing = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new Error('reviewer down')
+      },
+    })
+    const errored = await makeSession(scriptedModel([edit('load.ts'), finish]), undefined, [], { packs: [], model: failing }, { staticCheck: false, lightScan: true })
+    const erroredIO = recordingIO()
+    await runTurn(errored, { id: 't1', text: '加读文件' }, erroredIO)
+    expect(JSON.stringify(erroredIO.updates)).toContain('模型扫描没有完成，这次不拦截')
+    expect(checkResults(erroredIO, '轻量扫描')).toEqual(['error'])
+    expect(verifications(erroredIO)).toEqual(['unverified'])
+  })
+
+  test('依赖审计没跑完时记 partial', async () => {
+    const manifest = JSON.stringify({ packageManager: 'yarn@4.0.0', dependencies: { axios: '1.6.0' } }, null, 2)
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'package.json', old_string: '', new_string: `${manifest}\n` } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了 axios' } }] },
+    ])
+    const reviewer = scriptedModel([{ text: 'NO_FINDINGS' }])
+    const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: false, lightScan: true })
+    const io = recordingIO()
+    await runTurn(session, { id: 't1', text: '加依赖' }, io)
+    expect(JSON.stringify(io.updates)).toContain('yarn 项目暂不支持依赖审计')
+    expect(checkResults(io, '轻量扫描')).toEqual(['partial'])
+  })
+
+  test('只有项目原有的依赖漏洞时记 warned', async () => {
+    // 假的 npm：audit 报一个和本轮依赖无关的漏洞，不联网
+    const bin = mkdtempSync(join(tmpdir(), 'diffra-fake-bin-'))
+    const report = { vulnerabilities: { minimist: { name: 'minimist', severity: 'moderate', via: [{ title: 'Prototype pollution' }], fixAvailable: true } } }
+    writeFileSync(join(bin, 'npm'), `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(report)}\nJSON\nexit 1\n`, { mode: 0o755 })
+    const savedPath = process.env.PATH
+    process.env.PATH = `${bin}${process.platform === 'win32' ? ';' : ':'}${savedPath ?? ''}`
+    try {
+      const manifest = JSON.stringify({ dependencies: { axios: '1.7.4' } }, null, 2)
+      const model = scriptedModel([
+        { toolCalls: [{ name: 'edit_file', input: { path: 'package.json', old_string: '', new_string: `${manifest}\n` } }] },
+        { toolCalls: [{ name: 'edit_file', input: { path: 'package-lock.json', old_string: '', new_string: '{}\n' } }] },
+        { toolCalls: [{ name: 'finish', input: { summary: '加了 axios' } }] },
+      ])
+      const reviewer = scriptedModel([{ text: 'NO_FINDINGS' }])
+      const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: false, lightScan: true })
+      const io = recordingIO()
+      await runTurn(session, { id: 't1', text: '加依赖' }, io)
+      expect(JSON.stringify(io.updates)).toContain('项目原有 1 个依赖漏洞')
+      expect(checkResults(io, '轻量扫描')).toEqual(['warned'])
+      expect(toolUpdates(io, 'failed')).toHaveLength(0)
+    } finally {
+      process.env.PATH = savedPath
+      rmSync(bin, { recursive: true, force: true })
+    }
   })
 })
 
@@ -903,6 +1191,7 @@ describe('上下文压缩', () => {
 
     await expect(runTurn(session, { id: 'turn-1', text: '找一找' }, io)).resolves.toBe('max_tokens')
     expect(notices(io)).toEqual(['上下文压缩失败，已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'context-limit' }])
     expect(cardText(io)).toContain('压缩失败')
     expect(session.compaction).toBeNull()
   })
@@ -916,6 +1205,7 @@ describe('上下文压缩', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_tokens')
     expect(model.doStreamCalls).toHaveLength(1)
     expect(notices(io)).toEqual(['上下文压缩后仍然太大，已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'context-limit' }])
   })
 
   test('触发点按设置来：设成 90% 时 7.5 万不压缩', async () => {
@@ -944,6 +1234,7 @@ describe('卡死检测和步数上限', () => {
     // 第三次之后提醒了模型，第四次请求里带着提醒
     expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('same call 3 times')
     expect(notices(io)).toEqual(['智能体在重复同样的操作，已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'stuck' }])
   })
 
   test('中间有成功的编辑时重新计数', async () => {
@@ -976,6 +1267,44 @@ describe('卡死检测和步数上限', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '读文件' }, io)).resolves.toBe('max_turn_requests')
     expect(model.doStreamCalls).toHaveLength(3)
     expect(notices(io)).toEqual(['已达到单次任务的步数上限（3 步），已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'step-limit' }])
+  })
+
+  test('快速检查连续 3 次失败、没配兜底模型时停下，记 check-exhausted', async () => {
+    writeFileSync(join(project, 'a.txt'), 'value = broken\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'broken', new_string: 'try1' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'try1', new_string: 'try2' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'try2', new_string: 'try3' } }] },
+      { text: '不会走到这里' },
+    ])
+    const session = await makeSession(model, { afterEdit: 'grep -q "value = fixed" a.txt', beforeFinish: null })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(4)
+    expect(notices(io)).toEqual(['快速检查连续 3 次失败，已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
+  })
+
+  test('完成检查连续 3 次不过、没配兜底模型时停下，记 gate-exhausted', async () => {
+    const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'new.txt', old_string: '', new_string: 'draft\n' } }] },
+      finish,
+      finish,
+      finish,
+      { text: '不会走到这里' },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final new.txt' })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
+    expect(notices(io)).toEqual(['完成检查连续 3 次没有通过，已停止'])
+    expect(verifications(io)).toEqual(['failed', 'failed', 'failed'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'gate-exhausted' }])
   })
 })
 
@@ -1131,6 +1460,7 @@ describe('目标模式', () => {
     expect(notices(io)).toEqual(['目标模式第 2 轮', '目标已完成（用了 2 轮）'])
     // 两轮各跑了一次完成检查
     expect(io.updates.filter((update) => update.sessionUpdate === 'tool_call' && update.title.startsWith('完成检查'))).toHaveLength(2)
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
   })
 
   test('轮数用完还没达成就停下说明；只回文字时拉回来让它调 finish', async () => {
@@ -1141,7 +1471,53 @@ describe('目标模式', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '做完它' }, io, { goalMaxRounds: 2 })).resolves.toBe('end_turn')
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('call finish with goal_met')
     expect(notices(io)).toEqual(['目标模式第 2 轮', '目标模式已用完 2 轮，目标还没完成'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: 'goal-exhausted' }])
   })
+
+  test('第 1 轮的改动未经验证，第 2 轮没改文件就完成：本轮结论仍是 unverified', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
+      finish('还要确认一下', false),
+      finish('确认过了', true),
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '写出 a.txt' }, io, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
+    expect(verifications(io)).toEqual(['unverified', 'no-edits'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+  })
+
+  test('第 1 轮已验证、第 2 轮未经验证时结论是 unverified；第 2 轮没有改动时结论仍是 verified', async () => {
+    const unverified = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
+      finish('还差 b.txt', false),
+      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'two\n' } }] },
+      finish('都写好了', true),
+    ])
+    const session = await makeSession(unverified, { afterEdit: null, beforeFinish: 'test -f a.txt' })
+    const io = recordingIO()
+    const originalUpdate = io.update
+    // 第 2 轮开始时去掉检查命令，让第 2 次 finish 未经验证
+    io.update = async (update) => {
+      await originalUpdate(update)
+      if (update.sessionUpdate === 'notice' && update.title === '目标模式第 2 轮') session.config.checks = { afterEdit: null, beforeFinish: null }
+    }
+    await expect(runTurn(session, { id: 'turn-1', text: '写出 a.txt 和 b.txt' }, io, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
+    expect(verifications(io)).toEqual(['verified', 'unverified'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+
+    rmSync(join(project, 'a.txt'))
+    const noEdits = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'one\n' } }] },
+      finish('再看一遍', false),
+      finish('没问题', true),
+    ])
+    const verifiedIO = recordingIO()
+    await expect(runTurn(await makeSession(noEdits, { afterEdit: null, beforeFinish: 'test -f a.txt' }), { id: 'turn-1', text: '写出 a.txt' }, verifiedIO, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
+    expect(verifications(verifiedIO)).toEqual(['verified', 'no-edits'])
+    expect(turnOutcomes(verifiedIO)).toEqual([{ finish: 'verified', stop: null }])
+  }, 30_000)
 
   test('不是目标模式时 finish 照常结束，不看 goal_met', async () => {
     const model = scriptedModel([finish('好了', false)])
@@ -1151,6 +1527,7 @@ describe('目标模式', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '问个问题' }, io)).resolves.toBe('end_turn')
     expect(model.doStreamCalls).toHaveLength(1)
     expect(notices(io)).toEqual([])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: null }])
   })
 })
 
@@ -1186,6 +1563,8 @@ describe('MCP 工具', () => {
     expect(io.permissionRequests).toBe(1)
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('first\n')
     expect(toolCallTitles(io)).toEqual(['MCP demo · echo', 'MCP demo · write_note', '完成'])
+    // write_note 改了项目文件，指纹变了，不算没有改动
+    expect(verifications(io)).toEqual(['unverified'])
 
     await runTurn(session, { id: 'turn-2', text: '再记一下' }, io)
     expect(io.permissionRequests).toBe(1)

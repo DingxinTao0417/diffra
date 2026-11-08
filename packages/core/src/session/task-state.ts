@@ -29,6 +29,13 @@ export const taskStateSchema = z.object({
   receipts: z.array(receiptSchema).max(MAX_TASK_RECEIPTS),
 })
 export type TaskState = z.infer<typeof taskStateSchema>
+// session/load 响应里的 TaskProgressView，客户端按它校验
+export const taskProgressViewSchema = z.object({
+  status: taskStatusSchema,
+  reason: z.string().nullable(),
+  requirements: z.array(z.object({ id: z.string(), title: z.string(), receiptId: z.string().nullable() })),
+  needsVerification: z.boolean().optional(),
+})
 export type TaskRequirement = TaskState['requirements'][number]
 
 export const taskUpdateSchema = z.discriminatedUnion('action', [

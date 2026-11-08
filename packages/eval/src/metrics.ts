@@ -21,7 +21,7 @@ export interface Finding {
 export interface TurnMetrics {
   // 智能体自己调用的工具（读、搜、改、命令），不含检查和各种卡片（包括上下文压缩）
   toolCalls: number
-  // 「完成」被门禁打回的次数
+  // 「完成」被门禁打回的次数，含完成条件未满足和证据不合格的打回；和语义层第 57 步之前的结果比，数字会偏高
   gateRejections: number
   checkFailures: number
   findings: Finding[]
