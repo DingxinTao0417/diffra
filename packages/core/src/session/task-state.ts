@@ -122,9 +122,14 @@ export function requiresReleaseContract(text: string): boolean {
 }
 
 // 记进轮次里的任务状态更新（_meta.diffra.taskState）带的待验证；不是任务状态更新时为 null。旧记录没有这个字段，算 false
-const recordedTaskStateSchema = z.object({ diffra: z.object({ [TASK_PROGRESS_META_KEY]: z.object({ needsVerification: z.boolean().optional() }) }) })
+const recordedTaskStateSchema = z.object({
+  diffra: z.object({ [TASK_PROGRESS_META_KEY]: z.object({ needsVerification: z.boolean().optional(), requirements: z.array(z.object({ id: z.string() })).optional() }) }),
+})
 
-export function recordedNeedsVerification(meta: unknown): boolean | null {
+// 会话记录里某条更新带的任务状态：待验证和当时已定下的完成条件；不是任务状态更新时为 null
+export function recordedTaskState(meta: unknown): { needsVerification: boolean; requirementIds: string[] } | null {
   const parsed = recordedTaskStateSchema.safeParse(meta)
-  return parsed.success ? (parsed.data.diffra[TASK_PROGRESS_META_KEY].needsVerification ?? false) : null
+  if (!parsed.success) return null
+  const view = parsed.data.diffra[TASK_PROGRESS_META_KEY]
+  return { needsVerification: view.needsVerification ?? false, requirementIds: (view.requirements ?? []).map((item) => item.id) }
 }

@@ -19,7 +19,7 @@ const buttonVariants = cva(
           "bg-destructive-soft text-destructive hover:bg-destructive/15 focus-visible:ring-destructive",
         // 暗色的 destructive 是浅红，白字对比度不够，改用深色字
         "destructive-solid":
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive dark:text-[#1a0d0b]",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

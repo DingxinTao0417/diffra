@@ -107,6 +107,11 @@ export function splitTitle(title: string): { action: string; target: string } {
   return space < 0 ? { action: title, target: '' } : { action: title.slice(0, space), target: title.slice(space + 1) }
 }
 
+// 显式写 smooth 不受全局 CSS 的 scroll-behavior 管，开了「减少动态效果」要在这里改成瞬时；每次滚动时读，系统设置可能在运行中改
+function scrollBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
 interface ConversationProps {
   task: LiveTask
   locate: { id: string; at: number } | null
@@ -138,9 +143,12 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
     setActiveTurn(current ?? task.turns[0]?.id ?? null)
   }
 
+  // 不跟随时内容在下面长高没有滚动事件，「回到底部」在这里也重算
   useLayoutEffect(() => {
     const element = scrollRef.current
-    if (element && stickRef.current) element.scrollTop = element.scrollHeight
+    if (!element) return
+    if (stickRef.current) element.scrollTop = element.scrollHeight
+    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 200)
   }, [task.turns, task.permission])
 
   // 切到这个任务时滚到底
@@ -150,14 +158,17 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
     if (element) element.scrollTop = element.scrollHeight
   }, [task.sessionId])
 
-  // 下面的排队提示、输入框变高会把对话区压矮，贴底时跟着滚
+  // 下面的排队提示、输入框变高会把对话区压矮，贴底时跟着滚；不贴底时压矮也没有滚动事件，重算「回到底部」。
+  // 内容列也观察：展开工具组、编辑详情时内容长高同样没有滚动事件，只重算「回到底部」，不滚，免得把刚展开的内容推出视口
   useEffect(() => {
     const element = scrollRef.current
     if (!element) return
-    const observer = new ResizeObserver(() => {
-      if (stickRef.current) element.scrollTop = element.scrollHeight
+    const observer = new ResizeObserver((entries) => {
+      if (stickRef.current && entries.some((entry) => entry.target === element)) element.scrollTop = element.scrollHeight
+      setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 200)
     })
     observer.observe(element)
+    if (element.firstElementChild) observer.observe(element.firstElementChild)
     return () => observer.disconnect()
   }, [])
 
@@ -175,7 +186,7 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
     // 只拦从底部这一带滚出去的情况；终点也在这一带时不拦，否则停下后 onScroll 一直不改贴底，滚回底部也恢复不了跟随
     const bottom = element.scrollHeight - element.clientHeight
     locatingRef.current = bottom - element.scrollTop < 80 && bottom - Math.max(top, 0) >= 80
-    element.scrollTo({ top, behavior: 'smooth' })
+    element.scrollTo({ top, behavior: scrollBehavior() })
     const focusTarget = row instanceof HTMLButtonElement ? row : target
     focusTarget.focus({ preventScroll: true })
     row.animate([{ backgroundColor: 'var(--accent)' }, { backgroundColor: 'transparent' }], { duration: 1500, easing: 'ease-out' })
@@ -183,7 +194,11 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
 
   const scrollToBottom = () => {
     const element = scrollRef.current
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+    if (!element) return
+    // 先打开贴底：滚动事件到之前进来的新内容也要跟上，不等 onScroll 判断
+    stickRef.current = true
+    locatingRef.current = false
+    element.scrollTo({ top: element.scrollHeight, behavior: scrollBehavior() })
   }
 
   const scrollToTurn = (turnId: string) => {
@@ -201,7 +216,7 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
       stickRef.current = true
       locatingRef.current = false
     }
-    element.scrollTo({ top, behavior: 'smooth' })
+    element.scrollTo({ top, behavior: scrollBehavior() })
   }
 
   return (

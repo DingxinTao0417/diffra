@@ -141,7 +141,7 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
               :key="index"
               type="button"
               class="size-6 rounded"
-              :class="node.primaryAxisAlign === cell.primary && node.counterAxisAlign === cell.counter ? 'bg-primary' : 'bg-muted hover:bg-accent'"
+              :class="/* primary-color-allow: 对齐格选中态，标签属性之间放不了注释 */ node.primaryAxisAlign === cell.primary && node.counterAxisAlign === cell.counter ? 'bg-primary' : 'bg-muted hover:bg-accent'"
               :title="`${cell.primary} / ${cell.counter}`"
               @click="layout.setAlignment(cell.primary, cell.counter)"
             />

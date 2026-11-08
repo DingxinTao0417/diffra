@@ -58,7 +58,7 @@ import { errorMessage } from '@/lib/errors'
 import { folderName, formatBytes, formatTime } from '@/lib/format'
 import { INSET_PANEL } from '@/lib/shell'
 import { PERMISSION_MODES } from '@/lib/permission-modes'
-import { leaveSettings, openSettings, setArchived, setPermissionMode } from '@/state/actions'
+import { leaveSettings, openSettings, setArchived } from '@/state/actions'
 import { type SettingsSection, showToast, store, useAppState } from '@/state/store'
 
 const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: string; icon: LucideIcon; keywords: string }> }> = [
@@ -218,6 +218,7 @@ function CoreStatusView({ status }: { status: CoreStatus | null }) {
 }
 
 const THEME_LABELS: Record<Appearance['theme'], string> = { light: '浅色', dark: '深色', system: '跟随系统' }
+// primary-color-allow: 注释说明缩略图色值的来源，不是用法
 // 和 styles.css 里各配色的 --primary、浅色 --sidebar 保持一致；深色侧栏各配色相同，直接用 --sidebar
 const PALETTE_LABELS: Record<Appearance['palette'], { label: string; swatch: string; swatchDark: string; side: string }> = {
   forest: { label: '森绿', swatch: '#2e6b57', swatchDark: '#5fa88c', side: '#f5f5f2' },
@@ -278,6 +279,7 @@ function AppearanceSection() {
                 style={{ '--thumb-light': item.swatch, '--thumb-dark': item.swatchDark, '--thumb-side': item.side } as CSSProperties}
                 className="group space-y-2 rounded-lg text-xs outline-none [--thumb:var(--thumb-light)] focus-visible:ring-2 focus-visible:ring-ring dark:[--thumb:var(--thumb-dark)]"
               >
+                {/* primary-color-allow: 配色缩略图选中框 */}
                 <span className={cn('relative flex h-24 overflow-hidden rounded-lg border bg-(--thumb-side) dark:bg-sidebar', selected ? 'border-primary ring-1 ring-primary/30' : 'border-border group-hover:border-input')}>
                   <span className="absolute top-3 left-3 h-1.5 w-1/2 rounded bg-(--thumb)" />
                   <span className="absolute top-6 left-3 h-1 w-1/3 rounded bg-foreground/10" />
@@ -334,9 +336,13 @@ function PermissionsSection() {
   const [saved, flashSaved] = useSavedFlash()
   const choose = async (next: PermissionMode) => {
     if (next === mode) return
-    await setPermissionMode(null, next)
-    // setPermissionMode 失败时只弹 toast、不改设置，按存下来的值判断是否成功
-    if (store.get().settings?.defaultPermissionMode === next) flashSaved(true)
+    try {
+      const settings = await window.diffra.savePreferences({ defaultPermissionMode: next })
+      store.set((state) => ({ ...state, settings }))
+      flashSaved(true)
+    } catch (error) {
+      showToast(`保存失败：${errorMessage(error)}`)
+    }
   }
   return (
     <>
@@ -357,7 +363,9 @@ function PermissionsSection() {
               className={cn('flex w-full items-start gap-3 px-4 py-3 text-left outline-none first:rounded-t-xl last:rounded-b-xl hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset', checked && 'bg-soft hover:bg-soft')}
               onClick={() => void choose(item.mode)}
             >
+              {/* primary-color-allow: 单选点 */}
               <span className={cn('mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border', checked ? 'border-primary' : 'border-muted-foreground/70')}>
+                {/* primary-color-allow: 单选点 */}
                 {checked && <span className="size-1.5 rounded-full bg-primary" />}
               </span>
               <span className="min-w-0">
@@ -627,6 +635,7 @@ function AboutSection() {
       <SettingsHeader title="更新与关于" />
       <SettingsGroup>
         <div className="flex items-center gap-3 px-4 py-4">
+          {/* primary-color-allow: 品牌标 */}
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-soft text-primary">
             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="size-5" aria-hidden="true">
               <path d="M2.5 6.5h8.5" />

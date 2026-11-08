@@ -265,7 +265,7 @@ function StepIndicator({ current }: { current: number }) {
       {STEPS.map((label, index) => (
         <li key={label} aria-current={index === current ? 'step' : undefined} className="flex items-center gap-2">
           {index > 0 && <span aria-hidden="true" className="h-px w-8 bg-border" />}
-          <span aria-hidden="true" className={cn('flex size-5 items-center justify-center rounded-full border tabular-nums', index < current && 'border-transparent bg-muted text-foreground', index === current && 'border-primary/40 bg-soft text-primary', index > current && 'text-muted-foreground')}>
+          <span aria-hidden="true" className={cn('flex size-5 items-center justify-center rounded-full border tabular-nums', index < current && 'border-transparent bg-muted text-foreground', index === current && 'border-transparent bg-soft text-foreground', index > current && 'text-muted-foreground')}>
             {index < current ? <Check className="size-3" /> : index + 1}
           </span>
           <span className={index === current ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>

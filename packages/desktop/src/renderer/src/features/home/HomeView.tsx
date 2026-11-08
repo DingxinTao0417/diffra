@@ -119,6 +119,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
               <span className="truncate">{folderName(path)}</span>
               <span className="truncate text-xs text-muted-foreground">{parentPath(path)}</span>
             </span>
+            {/* primary-color-allow: 选中标记 */}
             {path === projectPath && <Check className="text-primary" />}
           </DropdownMenuItem>
         ))}
@@ -169,7 +170,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
                     type="button"
                     aria-pressed={design}
                     onClick={() => setDesign((current) => !current)}
-                    className={cn(clickableChipClass, 'aria-pressed:bg-primary/10 aria-pressed:text-primary aria-pressed:hover:bg-primary/15 aria-pressed:hover:text-primary')}
+                    className={cn(clickableChipClass, 'aria-pressed:bg-soft aria-pressed:text-foreground')}
                   >
                     <PenTool className="size-3.5" />
                     设计
@@ -207,11 +208,13 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
             {project && (
               <button
                 type="button"
+                // primary-color-allow: 下一步动作：确认检测到的检查命令
                 className={cn(clickableChipClass, detectedCount ? 'text-primary hover:text-primary' : '')}
                 onClick={() => setEditingProject({ detect: detectedCount !== null && detectedCount > 0 })}
               >
                 <span className="relative flex shrink-0">
                   <Settings2 className="size-3.5" />
+                  {/* primary-color-allow: 下一步动作：确认检测到的检查命令 */}
                   {detectedCount ? <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary" /> : null}
                 </span>
                 <span className="truncate">{detectedCount ? `检测到 ${detectedCount} 个检查命令` : checksSummary(project)}</span>

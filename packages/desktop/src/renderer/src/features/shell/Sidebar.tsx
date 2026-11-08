@@ -272,6 +272,7 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
 
 function BrandMark() {
   return (
+    // primary-color-allow: 品牌标
     <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="size-4.5 shrink-0 text-primary" aria-hidden="true">
       <path d="M2.5 6.5h8.5" />
       <path d="M7 11.5h8.5" />
@@ -291,9 +292,11 @@ function UpdateNotice() {
   return (
     <button
       type="button"
+      // primary-color-allow: 下一步动作：重启安装新版本
       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-primary hover:bg-accent"
       onClick={() => window.diffra.installUpdate().catch((error: unknown) => console.error('安装更新失败', error))}
     >
+      {/* primary-color-allow: 下一步动作：重启安装新版本 */}
       <span className="size-1.5 shrink-0 rounded-full bg-primary" />
       新版本 {status.version} 已下载，点击重启安装
     </button>

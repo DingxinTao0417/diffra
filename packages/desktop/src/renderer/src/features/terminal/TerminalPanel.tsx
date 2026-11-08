@@ -71,7 +71,7 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
       >
-        <span className={cn('absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-primary/40 opacity-0 transition-opacity group-hover/resize:opacity-100', dragging && 'opacity-100')} />
+        <span className={cn('absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-muted-foreground/40 opacity-0 transition-opacity group-hover/resize:opacity-100', dragging && 'opacity-100')} />
       </div>
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-3 text-sm">
         {/* overflow-x-auto 会连带裁掉纵向溢出：撑满栏高并留出左右内边距，焦点环才不会被切掉 */}

@@ -241,7 +241,7 @@ onUnmounted(() => {
         type="button"
         :title="`${item.label}（${item.key}）`"
         :aria-pressed="editor.state.activeTool === item.tool"
-        class="rounded-md px-2 py-1 whitespace-nowrap hover:bg-accent aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+        class="rounded-md px-2 py-1 whitespace-nowrap hover:bg-accent aria-pressed:bg-soft aria-pressed:text-foreground"
         @click="editor.setTool(item.tool)"
       >
         {{ item.label }}

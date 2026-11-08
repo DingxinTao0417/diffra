@@ -39,6 +39,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -93,6 +94,7 @@
   --accent: #eaeae5;
   --accent-foreground: #1c1c1a;
   --destructive: #b42318;
+  --destructive-foreground: #ffffff;
   --destructive-soft: #fdeceb;
   --border: #e7e6e1;
   --input: #dcdbd5;
@@ -157,6 +159,7 @@
   --accent: #2a2a27;
   --accent-foreground: #ecece8;
   --destructive: #f2786d;
+  --destructive-foreground: #1a0d0b;
   --destructive-soft: #3a1d1a;
   --border: #2e2e2b;
   /* 控件边线（输入框、下拉、复选框、描边按钮）在主区、卡片、弹窗底色上都不低于 3:1。原语里 dark:bg-input/N 的填充透明度按这个亮度配，改值要一起调 */
@@ -332,6 +335,7 @@ body[data-scroll-locked] .title-bar {
   margin-top: 0.2em;
 }
 .markdown a {
+  /* primary-color-allow: 链接是可点的动作 */
   color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;

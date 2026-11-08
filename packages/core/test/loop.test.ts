@@ -647,6 +647,20 @@ describe('主循环', () => {
     expect(session.taskState).toMatchObject({ status: 'blocked', reason: '文件已撤销，需要重新验证完成条件。' })
   })
 
+  test('重新生成时，这一轮里才定下的完成条件和证据一起作废', async () => {
+    const session = await makeSession(scriptedModel([{ text: '好' }]))
+    session.startTurn('turn-1', '看看')
+    await runTurn(session, { id: 'turn-1', text: '看看' }, recordingIO())
+    session.endTurn('end_turn')
+    session.taskState = {
+      ...session.taskState,
+      requirements: [{ id: 'test', title: '测试通过', commandIncludes: 'pnpm test', outputIncludes: 'passed', receiptId: 'r1' }],
+      receipts: [{ id: 'r1', command: 'pnpm test', output: 'passed', at: '2026-01-01T00:00:00.000Z' }],
+    }
+    await session.rewind('turn-1')
+    expect(session.taskState).toMatchObject({ status: 'running', reason: null, receipts: [], requirements: [] })
+  })
+
   test('edit_file 失败、没改到文件时，不要求 finish，也不标成需要验证', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'edit_file', input: { path: 'missing.txt', old_string: 'x', new_string: 'y' } }] },

@@ -489,6 +489,31 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(server.bodies.length - requests).toBe(4)
     expect(server.bodies.at(-1)).toContain('File changes from earlier turns have not been verified yet')
   })
+
+  test('重新生成：这一轮开始前定下的完成条件保留、证据作废；这一轮里才定下的随对话一起丢掉', async () => {
+    const requirement = { id: 'test', title: '测试通过', commandIncludes: 'echo passed', outputIncludes: 'passed' }
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [requirement] } }] },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '定好了' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+      { text: '还没跑' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '先定完成条件')
+    await sendPrompt(core, sessionId, 'turn-2', '继续')
+    expect(lastTaskState(sessionId)).toMatchObject({ requirements: [{ id: 'test' }] })
+
+    await rewindSession(core, sessionId, 'turn-2')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [{ id: 'test', receiptId: null }] })
+    await rewindSession(core, sessionId, 'turn-1')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [] })
+  })
 })
 
 describe('错误提示', () => {

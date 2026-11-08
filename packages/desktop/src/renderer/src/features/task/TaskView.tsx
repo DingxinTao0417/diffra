@@ -150,7 +150,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
                     {item.options.images.length > 0 && ` · ${item.options.images.length} 张图片`}
                   </span>
                   <span className="max-w-96 truncate">{item.text}</span>
-                  <button type="button" className="text-primary hover:underline" onClick={() => dequeue(task.sessionId, item.id)}>
+                  <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => dequeue(task.sessionId, item.id)}>
                     撤回
                   </button>
                 </div>

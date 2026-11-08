@@ -1,11 +1,17 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 import { cards, chooseProject, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
+
+// 对话的滚动容器在每一轮外面两层；SCROLLER 给在页面里求值的脚本用
+const SCROLLER = `document.querySelector('[data-testid="turn"]').parentElement.parentElement`
+const conversationScroller = (window: Page) => window.getByTestId('turn').first().locator('xpath=../..')
+
+const paragraphs = (from: number, count: number) => Array.from({ length: count }, (_, index) => `第 ${from + index} 段说明`).join('\n\n')
 
 test('任务页：工具分组、检查、监控和审阅面板、上下文明细、排队、时间线、重新生成、撤销、权限模式', async () => {
   test.setTimeout(90_000)
@@ -151,6 +157,126 @@ test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底�
     await expect(firstPrompt).toBeInViewport()
     await expect(window.getByRole('button', { name: '回到底部' })).toBeVisible()
     await waitTaskDone(window)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('不跟随时下面长出新内容、没有滚动事件，也会出「回到底部」', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-grow-'))
+  writeFileSync(join(project, 'notes.txt'), 'hello\n')
+  const model = await startScriptedModel([
+    { text: paragraphs(1, 40), toolCalls: [{ name: 'read_file', input: { path: 'notes.txt' } }] },
+    // 慢一点回来，期间先往上翻一点；留足时间，机器慢时也要在它回来之前翻好
+    { text: paragraphs(41, 40), delayMs: 8000 },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '读一下 notes')
+    await expect.poll(() => model.requests()).toBe(2)
+    await expect(window.locator('[data-testid="tool-call"][data-status="completed"]')).toHaveCount(1)
+    await expect(window.getByText('第 40 段说明', { exact: true })).toBeVisible()
+
+    // 往上翻 120px：离开贴底的 80px，还在「回到底部」的 200px 以内。等滚动事件处理完，再开始数之后的滚动事件
+    await window.evaluate(`(async () => {
+      const scroller = ${SCROLLER}
+      scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - 120
+      await new Promise(requestAnimationFrame)
+      await new Promise(requestAnimationFrame)
+      scroller.dataset.scrolls = '0'
+      scroller.addEventListener('scroll', () => { scroller.dataset.scrolls = String(Number(scroller.dataset.scrolls) + 1) })
+    })()`)
+    const toBottom = window.getByRole('button', { name: '回到底部' })
+    await expect(toBottom).toBeHidden()
+
+    await waitTaskDone(window)
+    await expect(window.getByText('第 80 段说明', { exact: true })).toBeAttached()
+    // 新内容长在视口下面，对话没有跟着滚，也没有滚动事件
+    await expect(conversationScroller(window)).toHaveAttribute('data-scrolls', '0')
+    await expect(toBottom).toBeVisible()
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('开了减少动态效果：跳到某一轮、回到底部、定位失败的命令都直接到位，不走平滑滚动', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-reduced-motion-'))
+  writeFileSync(join(project, 'notes.txt'), 'hello\n')
+  const model = await startScriptedModel([
+    { text: paragraphs(1, 80) },
+    // false 在只读命令名单里，直接执行，退出码 1；后面一大段回复把它挤出视口
+    {
+      toolCalls: [
+        { name: 'list_files', input: { path: '.' } },
+        { name: 'run_command', input: { command: 'false' } },
+        { name: 'read_file', input: { path: 'notes.txt' } },
+      ],
+    },
+    { text: paragraphs(81, 80) },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await window.emulateMedia({ reducedMotion: 'reduce' })
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '第一轮')
+    await waitTaskDone(window)
+    await taskInput(window).fill('第二轮')
+    await window.keyboard.press('Control+Enter')
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    await waitTaskDone(window)
+    expect(model.requests()).toBe(3)
+
+    // 平滑滚动要等之后的帧才动；点击返回的同一时刻就该到位
+    const firstPrompt = window.getByTestId('turn').first().getByTestId('user-message')
+    await expect(firstPrompt).not.toBeInViewport()
+    const jumped = await window.evaluate(`(() => {
+      const scroller = ${SCROLLER}
+      const target = document.querySelector('[data-testid="turn"] [data-testid="user-message"]')
+      document.querySelector('nav[aria-label="对话时间线"] button[aria-label="跳到：第一轮"]').click()
+      const view = scroller.getBoundingClientRect()
+      const box = target.getBoundingClientRect()
+      return box.top >= view.top && box.bottom <= view.bottom
+    })()`)
+    expect(jumped).toBe(true)
+
+    await expect(window.getByRole('button', { name: '回到底部' })).toBeVisible()
+    const distance = await window.evaluate(`(() => {
+      const scroller = ${SCROLLER}
+      document.querySelector('button[aria-label="回到底部"]').click()
+      return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+    })()`)
+    expect(distance).toBeLessThan(1)
+
+    // 定位经过状态和 effect，给一帧
+    const failed = window.locator('[data-testid="tool-call"][data-succeeded="false"]')
+    await expect(failed).not.toBeInViewport()
+    await expect(window.getByTestId('monitor-panel').getByRole('button', { name: '跳到失败的命令：false', exact: true })).toBeVisible()
+    const located = await window.evaluate(`(async () => {
+      const scroller = ${SCROLLER}
+      const row = document.querySelector('[data-testid="tool-call"][data-succeeded="false"]')
+      document.querySelector('[data-testid="monitor-failed-command"]').click()
+      await new Promise(requestAnimationFrame)
+      const view = scroller.getBoundingClientRect()
+      const box = row.getBoundingClientRect()
+      return box.top >= view.top && box.bottom <= view.bottom
+    })()`)
+    expect(located).toBe(true)
+    await expect(failed.getByRole('button')).toBeFocused()
   } finally {
     await app.close()
     await model.close()

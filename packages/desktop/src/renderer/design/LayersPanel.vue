@@ -99,8 +99,8 @@ function nodeState(id: string, _version: number) {
             :style="{ paddingLeft: padLeft }"
             :data-testid="`layer-${node.name}`"
           >
-            <button type="button" class="w-3 shrink-0 text-[10px]" :class="hasChildren ? '' : 'invisible'" :aria-label="`展开 ${node.name}`" @click="actions.toggleExpand()">▸</button>
-            <span class="w-4 shrink-0 text-center text-[10px] opacity-70">{{ TYPE_LABELS[node.type] ?? '·' }}</span>
+            <button type="button" class="w-3 shrink-0 text-xs" :class="hasChildren ? '' : 'invisible'" :aria-label="`展开 ${node.name}`" @click="actions.toggleExpand()">▸</button>
+            <span class="w-4 shrink-0 text-center text-xs opacity-70">{{ TYPE_LABELS[node.type] ?? '·' }}</span>
             <input
               v-if="renaming?.kind === 'layer' && renaming.id === node.id"
               ref="renameInput"

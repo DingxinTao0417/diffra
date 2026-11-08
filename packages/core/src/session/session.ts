@@ -6,7 +6,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
 import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
-import { newTaskState, recordedNeedsVerification, type TaskState } from './task-state.js'
+import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { browserTools } from './browser.js'
 import { designChars, designTools } from './design.js'
@@ -273,7 +273,10 @@ export class Session {
       filesRestored = true
     }
     // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
-    const needsVerification = filesRestored ? needsVerificationBefore(this.turns, index) : this.taskState.needsVerification
+    const before = taskStateBefore(this.turns, index)
+    const needsVerification = filesRestored ? before.needsVerification : this.taskState.needsVerification
+    // 完成条件定下后改不了，这一轮里才定的随对话一起撤掉，否则写错的条件再也摆脱不了；之前定的保留，证据作废
+    const keptRequirements = new Set(before.requirementIds)
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
@@ -283,7 +286,13 @@ export class Session {
     }
     this.readHashes.clear()
     this.verifiedSnapshot = null
-    this.taskState = { ...newTaskState(), needsVerification, contractRequired: this.taskState.contractRequired, releaseVersion: this.taskState.releaseVersion }
+    this.taskState = {
+      ...newTaskState(),
+      needsVerification,
+      contractRequired: this.taskState.contractRequired,
+      releaseVersion: this.taskState.releaseVersion,
+      requirements: this.taskState.requirements.filter((item) => keptRequirements.has(item.id)).map((item) => ({ ...item, receiptId: null })),
+    }
     return { filesRestored }
   }
 
@@ -326,17 +335,21 @@ export class Session {
 
 // 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
 // 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
-function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
+function taskStateBefore(turns: StoredTurn[], index: number): { needsVerification: boolean; requirementIds: string[] } {
   for (const update of turns[index]!.updates) {
-    const value = recordedNeedsVerification(update._meta)
-    if (value !== null) return value
+    const recorded = recordedTaskState(update._meta)
+    if (recorded) return recorded
   }
   for (let i = index - 1; i >= 0; i--) {
     const updates = turns[i]!.updates
     for (let j = updates.length - 1; j >= 0; j--) {
-      const value = recordedNeedsVerification(updates[j]!._meta)
-      if (value !== null) return value
+      const recorded = recordedTaskState(updates[j]!._meta)
+      if (recorded) return recorded
     }
   }
-  return false
+  return { needsVerification: false, requirementIds: [] }
+}
+
+function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
+  return taskStateBefore(turns, index).needsVerification
 }

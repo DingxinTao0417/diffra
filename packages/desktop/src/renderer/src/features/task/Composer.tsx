@@ -415,6 +415,7 @@ export function Composer(props: ComposerProps) {
       className={cn(
         'relative flex flex-col border border-input bg-card focus-within:border-ring/60 dark:border-input/50 dark:focus-within:border-ring',
         large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-2xl',
+        // primary-color-allow: 用户正在拖放文件
         dragging && 'border-primary/60 bg-primary/5 dark:border-primary/60',
       )}
       data-testid="composer"
@@ -437,6 +438,7 @@ export function Composer(props: ComposerProps) {
       }}
       onDrop={onDrop}
     >
+      {/* primary-color-allow: 用户正在拖放文件 */}
       {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-card/95 text-sm text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
       {/* 处理附件的提示只给读屏，界面上由发送按钮转圈表示，不插新行，免得输入框跳高 */}
       {addingAttachments && <p role="status" className="sr-only">正在添加附件…</p>}
@@ -502,7 +504,7 @@ export function Composer(props: ComposerProps) {
       )}
       {fileReferences.length > 0 && <div className={cn('flex flex-wrap gap-2', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')}>
         {fileReferences.map((file) => <div key={file.path} title={file.path} className="flex max-w-full items-center gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1 pl-2.5 text-xs" data-testid="composer-file">
-          {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-primary" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
+          {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
           <span className="max-w-52 truncate">{file.name}</span><span className="text-muted-foreground">{file.kind === 'directory' ? '文件夹' : '文件'}</span>
           <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded p-1 hover:bg-muted" onClick={() => setFileReferences((current) => current.filter((item) => item.path !== file.path))}><X className="size-3" /></button>
         </div>)}
@@ -584,6 +586,7 @@ export function Composer(props: ComposerProps) {
                 type="button"
                 aria-label={running ? '排队发送' : '发送'}
                 disabled={!canSend}
+                // primary-color-allow: 下一步动作：发送
                 className={cn(SEND_BUTTON, 'bg-primary text-primary-foreground enabled:hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground/50 disabled:inset-ring disabled:inset-ring-input')}
                 onClick={() => void send()}
               >
@@ -607,10 +610,10 @@ const MENU_TRIGGER = cn('flex h-7 items-center gap-1.5 rounded-md px-2 text-sm h
 
 function Chip({ icon: Icon, label, removeLabel, onRemove }: { icon: LucideIcon; label: string; removeLabel: string; onRemove(): void }) {
   return (
-    <span className="flex h-6.5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 pr-0.5 pl-1.5 text-xs text-primary" data-testid="composer-chip">
+    <span className="flex h-6.5 items-center gap-1 rounded-md border bg-muted/40 pr-0.5 pl-1.5 text-xs text-foreground" data-testid="composer-chip">
       <Icon className="size-3.5" />
       {label}
-      <button type="button" aria-label={removeLabel} className="flex size-5 items-center justify-center rounded hover:bg-primary/15" onClick={onRemove}>
+      <button type="button" aria-label={removeLabel} className="flex size-5 items-center justify-center rounded hover:bg-muted" onClick={onRemove}>
         <X className="size-3" />
       </button>
     </span>
@@ -717,6 +720,7 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
               <DropdownMenuItem key={model.id} onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}>
                 <span title={model.id} className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
                 {model.contextWindow && <span className="text-xs text-muted-foreground">{formatTokens(model.contextWindow)}</span>}
+                {/* primary-color-allow: 选中标记 */}
                 <Check className={cn('size-4 text-primary', modelRef?.providerId === provider.id && modelRef.modelId === model.id ? 'visible' : 'invisible')} />
               </DropdownMenuItem>
             ))}
