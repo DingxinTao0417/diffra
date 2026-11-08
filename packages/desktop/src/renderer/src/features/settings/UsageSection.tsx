@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { UsageSummary, UsageTotals } from '@diffra/core/types'
-import { ArrowUpRight, BarChart3, Plus } from 'lucide-react'
+import { BarChart3, Plus } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -326,12 +326,11 @@ function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
         <tbody className="divide-y">
           {rows.map((row) => (
             // 整行可点；名称里的按钮负责键盘操作，它的点击会冒泡到这一行
-            <tr key={row.key} data-testid="usage-row" className={cn(row.onOpen && 'cursor-pointer hover:bg-accent')} onClick={row.onOpen}>
+            <tr key={row.key} data-testid="usage-row" className={cn(row.onOpen && 'group cursor-pointer hover:bg-accent')} onClick={row.onOpen}>
               <td className="px-3 py-2" title={row.hint}>
                 {row.onOpen ? (
                   <button type="button" className="flex max-w-full items-center gap-1 text-left">
-                    <span className="truncate">{row.name}</span>
-                    <ArrowUpRight className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate underline-offset-2 group-hover:underline">{row.name}</span>
                   </button>
                 ) : (
                   <span className="block truncate">{row.name}</span>

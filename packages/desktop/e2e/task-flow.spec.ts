@@ -39,7 +39,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await startTask(window, '改问候语')
     await waitTaskDone(window)
 
-    // 对话流：读文件收成一组，Markdown 渲染，两张改动卡片，每次改动后跑了快速检查，完成卡片列出改动的文件
+    // 对话流：读文件收成一组，Markdown 渲染，两张改动卡片，每次改动后跑了快速检查，监控开着时完成卡片点开计数列出改动的文件
     await expect(window.getByRole('button', { name: '执行工具 2 次' })).toBeVisible()
     await expect(window.getByTestId('agent-message').locator('strong')).toHaveText('hello world')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
@@ -50,7 +50,8 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await expect(window.getByTestId('diff-view')).toHaveCount(2)
     await expect(cards(window, 'check')).toHaveCount(3)
     await expect(cards(window, 'check').first()).toContainText('通过')
-    await expect(cards(window, 'finish')).toContainText('greet.js')
+    await cards(window, 'finish').getByTestId('finish-counts').click()
+    await expect(cards(window, 'finish').getByText('greet.js')).toBeVisible()
 
     // 任务监控和审阅面板列出两个改动文件
     await expect(window.getByTestId('monitor-file')).toHaveCount(2)

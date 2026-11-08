@@ -131,7 +131,8 @@ export function wireCoreEvents(): () => void {
       if (usage) return { ...task, usage }
       const last = task.turns.at(-1)
       if (!last) return task
-      const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed'
+      // 读文件、搜索不改项目文件，完成时不用重读改动
+      const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && !last.items.some((item) => item.kind === 'tool' && item.id === update.toolCallId && (item.toolKind === 'read' || item.toolKind === 'search'))
       return {
         ...task,
         progress: taskProgressOf(update) ?? task.progress,

@@ -14,7 +14,7 @@ import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
 import { sendMessage } from '@/state/actions'
-import { type LiveTask, showToast, store } from '@/state/store'
+import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { Markdown } from './Markdown'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
@@ -100,7 +100,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   run_command: '执行',
 }
 
-function splitTitle(title: string): { action: string; target: string } {
+export function splitTitle(title: string): { action: string; target: string } {
   const action = TOOL_ACTIONS[title]
   if (action) return { action, target: '' }
   const space = title.indexOf(' ')
@@ -109,14 +109,17 @@ function splitTitle(title: string): { action: string; target: string } {
 
 interface ConversationProps {
   task: LiveTask
+  locate: { id: string; at: number } | null
   onRestore(turnId: string): void
   onRegenerate(turnId: string): void
 }
 
-export function Conversation({ task, onRestore, onRegenerate }: ConversationProps) {
+export function Conversation({ task, locate, onRestore, onRegenerate }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // 用户停在底部时，新内容进来就跟着滚；往上翻了就不打扰
   const stickRef = useRef(true)
+  // 定位用的平滑滚动起步那几帧还在底部 80px 内，onScroll 会把贴底改回去，流式输出一到就被拉回底部；滚出这一带之前不改贴底
+  const locatingRef = useRef(false)
   const [atBottom, setAtBottom] = useState(true)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
 
@@ -124,7 +127,8 @@ export function Conversation({ task, onRestore, onRegenerate }: ConversationProp
     const element = scrollRef.current
     if (!element) return
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
-    stickRef.current = distance < 80
+    if (distance >= 80) locatingRef.current = false
+    if (!locatingRef.current) stickRef.current = distance < 80
     setAtBottom(distance < 200)
     let current: string | null = null
     for (const turn of task.turns) {
@@ -156,6 +160,26 @@ export function Conversation({ task, onRestore, onRegenerate }: ConversationProp
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
+
+  // 任务监控点了失败的命令：滚到那一行，焦点跟过去。不用 scrollIntoView，它会连带滚动 overflow-hidden 的外壳
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!locate || !element) return
+    const id = CSS.escape(locate.id)
+    // 所在的组被手动收起时这一行不在 DOM 里，退到组的展开按钮，不强制打开
+    const target = element.querySelector<HTMLElement>(`[data-item-id="${id}"]`) ?? element.querySelector<HTMLElement>(`[data-item-ids~="${id}"]`)
+    const row = target?.firstElementChild
+    if (!target || !(row instanceof HTMLElement)) return
+    stickRef.current = false
+    const top = element.scrollTop + row.getBoundingClientRect().top - element.getBoundingClientRect().top - element.clientHeight / 3
+    // 只拦从底部这一带滚出去的情况；终点也在这一带时不拦，否则停下后 onScroll 一直不改贴底，滚回底部也恢复不了跟随
+    const bottom = element.scrollHeight - element.clientHeight
+    locatingRef.current = bottom - element.scrollTop < 80 && bottom - Math.max(top, 0) >= 80
+    element.scrollTo({ top, behavior: 'smooth' })
+    const focusTarget = row instanceof HTMLButtonElement ? row : target
+    focusTarget.focus({ preventScroll: true })
+    row.animate([{ backgroundColor: 'var(--accent)' }, { backgroundColor: 'transparent' }], { duration: 1500, easing: 'ease-out' })
+  }, [locate])
 
   const scrollToBottom = () => {
     const element = scrollRef.current
@@ -220,6 +244,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
+  const monitorOpen = useAppState((state) => state.panel === 'monitor')
   // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
   // 目标模式一轮里有好几张完成卡片，每张只算上一张通过的卡之后的改动和失败的命令；打回的卡不切分，免得通过的卡漏掉打回前的改动
@@ -284,7 +309,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
             return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -487,9 +512,9 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
   const commandsFailed = items.filter((item) => item.succeeded === false).length
   const [open, setOpen] = useState<boolean | null>(null)
   if (items.length === 1 && items[0]) return <ToolStep item={items[0]} />
-  const expanded = open ?? busy
+  const expanded = open ?? (busy || commandsFailed > 0)
   return (
-    <div className="flex flex-col gap-1.5" data-testid="tool-group">
+    <div className="flex flex-col gap-1.5" data-testid="tool-group" data-item-ids={items.map((item) => item.id).join(' ')}>
       <DisclosureRow open={expanded} onToggle={() => setOpen(!expanded)} className="text-muted-foreground hover:text-foreground">
         <StatusIcon status={busy ? 'in_progress' : failed > 0 ? 'failed' : commandsFailed > 0 ? 'command-failed' : 'completed'} />
         执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}{commandsFailed > 0 ? ` · ${commandsFailed} 条命令失败` : ''}
@@ -514,7 +539,7 @@ function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: b
   const output = textOf(item)
   const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
   return (
-    <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)}>
+    <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)} data-item-id={item.id} tabIndex={commandFailed && !output ? -1 : undefined}>
       <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground/85">
         {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={commandFailed ? 'command-failed' : item.status} />}
         <span className="shrink-0 text-muted-foreground">{action}</span>
@@ -974,7 +999,8 @@ function filesOf(items: TranscriptItem[]): ChangedFile[] {
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
-function FinishCard({ item, files, commandsFailed, projectPath, latest, restored, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; restored: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
+function FinishCard({ item, files, commandsFailed, projectPath, latest, restored, compactFiles, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; restored: boolean; compactFiles: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
+  const [filesOpen, setFilesOpen] = useState(false)
   const text = textOf(item)
   const passed = item.status === 'completed'
   const verdict = finishVerdict(item)
@@ -990,6 +1016,11 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
     ? [noChecks && '没有配置检查命令', unknownChanges && '没有检查点，无法判断命令或 MCP 工具是否改了文件，这次没有跑检查', commandsFailed > 0 && !verified && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false)
     : []
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
+  const counts = (
+    <>
+      {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+    </>
+  )
   return (
     <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined} data-restored={undone ? 'true' : undefined}>
       <div className={cn('flex items-center gap-2 font-semibold', !undone && verdict.tone === 'failed' && 'text-destructive', !undone && verdict.tone === 'unverified' && 'text-warning')}>
@@ -1005,11 +1036,16 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
         )}
         {verdict.label}
         {undone && <span className="font-normal text-muted-foreground">· 之后撤销过改动</span>}
-        {passed && files.length > 0 && (
+        {passed && files.length > 0 && (compactFiles ? (
+          <button type="button" aria-expanded={filesOpen} className="-mr-1.5 ml-auto flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-muted-foreground tabular-nums hover:bg-accent/60" onClick={() => setFilesOpen(!filesOpen)}>
+            <span className="flex items-center gap-1.5" data-testid="finish-counts">{counts}</span>
+            {filesOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+          </button>
+        ) : (
           <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
-            {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+            {counts}
           </span>
-        )}
+        ))}
       </div>
       {warnings.length > 0 && (
         <div className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-sm" role="note" data-testid="finish-warnings">
@@ -1027,8 +1063,9 @@ function FinishCard({ item, files, commandsFailed, projectPath, latest, restored
         {/* success-color-allow: 完成条件的证据已核对 */}
         {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
       </div>}
+      {/* 监控开着时那边已经列出整个任务的改动，这里收成标题行的计数；收起时留在 DOM 里（hidden） */}
       {passed && files.length > 0 && (
-        <div className="-mx-2 flex flex-col">
+        <div hidden={compactFiles && !filesOpen} className="-mx-2 flex flex-col">
           {files.map((file) => {
             const path = relativePath(file.path, projectPath)
             const slash = path.lastIndexOf('/')

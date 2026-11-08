@@ -132,6 +132,77 @@ test('设计面板：OpenPencil 画布能画矩形、写中文、撤销，存成
   }
 })
 
+// 机器忙时设计页第一次读系统字体列表要好几秒；把第一次读卡住，写完中文再放行（e2e 的 tsconfig 没有 DOM 类型，写成字符串）
+const HOLD_FIRST_LOCAL_FONTS_QUERY = `if (location.href.includes('design.html')) {
+  const query = window.queryLocalFonts.bind(window)
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  let held = false
+  window.__releaseLocalFonts = () => release()
+  window.queryLocalFonts = (options) => {
+    if (held) return query(options)
+    held = true
+    return gate.then(() => query(options))
+  }
+}`
+
+// 页面不可见时 queryLocalFonts 会被拒（「Page needs to be visible.」）；只拒第一次
+const REJECT_FIRST_LOCAL_FONTS_QUERY = `if (location.href.includes('design.html')) {
+  const query = window.queryLocalFonts.bind(window)
+  let rejected = false
+  window.queryLocalFonts = (options) => {
+    if (rejected) return query(options)
+    rejected = true
+    return Promise.reject(new DOMException('Page needs to be visible.', 'SecurityError'))
+  }
+}`
+
+// 打开设计面板、写一段中文；返回读文字宽度的函数
+async function writeChinese(app: ElectronApplication, model: { baseUrl: string }, project: string): Promise<{ design: Page; width: () => Promise<number> }> {
+  const window = await app.firstWindow()
+  await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+  await chooseProject(app, window, project)
+  await startTask(window, '打开设计面板')
+  await waitTaskDone(window)
+  await window.getByRole('button', { name: '设计', exact: true }).click()
+  const design = await findDesignPage(app)
+  const box = (await design.locator('canvas').boundingBox())!
+  await design.mouse.click(box.x + box.width - 20, box.y + box.height - 20)
+  await design.keyboard.press('t')
+  await design.mouse.click(box.x + 50, box.y + 240)
+  await design.keyboard.type('你好 Diffra')
+  await design.keyboard.press('Escape')
+  await expect.poll(() => nodeNames(design, 'TEXT')).toContain('你好 Diffra')
+  const { nodes: texts } = JSON.parse((await runTool(design, 'find_nodes', { type: 'TEXT' })).text) as { nodes: Array<{ id: string }> }
+  const width = async () => (JSON.parse((await runTool(design, 'get_node', { id: texts[0]?.id ?? '', depth: 0 })).text) as { width: number }).width
+  return { design, width }
+}
+
+test('设计面板：系统字体列表晚到、或第一次被拒时，先写的中文之后按系统字体重新排版', async () => {
+  test.setTimeout(180_000)
+  for (const [initScript, held] of [[HOLD_FIRST_LOCAL_FONTS_QUERY, true], [REJECT_FIRST_LOCAL_FONTS_QUERY, false]] as const) {
+    const userDataDir = makeUserDataDir()
+    const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-'))
+    const model = await startScriptedModel([{ text: '好的' }])
+    const app = await launchApp(userDataDir)
+    try {
+      await app.context().addInitScript(initScript)
+      const { design, width } = await writeChinese(app, model, project)
+      if (held) {
+        // 列表没到时中文只能按方框量；这一条也证明卡住生效了
+        expect(await width()).toBeLessThan(65)
+        await design.evaluate('window.__releaseLocalFonts()')
+      }
+      await expect.poll(width, { timeout: 15_000 }).toBeGreaterThan(65)
+    } finally {
+      await app.close()
+      await model.close()
+      rmSync(project, { recursive: true, force: true })
+      rmSync(userDataDir, { recursive: true, force: true })
+    }
+  }
+})
+
 const CARD_JSX = `<Frame name="登录卡片" w={320} h="hug" flex="col" gap={12} p={24} bg="#FFFFFF" rounded={12}>
   <Text name="标题" size={20} weight="bold" color="#111827">欢迎回来</Text>
   <Frame name="按钮" w="fill" h={40} bg="#2563EB" rounded={8} />

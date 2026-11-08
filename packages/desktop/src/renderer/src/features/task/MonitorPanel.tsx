@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpRight, Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
+import { Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { DiffCounts } from '@/features/session/DiffView'
@@ -11,10 +11,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
+import { splitTitle } from './Conversation'
 import { SidePanel } from './SidePanel'
 import type { TaskDiff } from './useTaskDiff'
 
 const COLLAPSED_CHANGED_FILE_LIMIT = 10
+const FAILED_COMMAND_LIMIT = 3
 
 interface MonitorPanelProps {
   task: LiveTask
@@ -24,9 +26,10 @@ interface MonitorPanelProps {
   onProjectSaved(project: ProjectState): void
   // 点了深度扫描，由任务页弹确认框
   onDeepScan(scope: 'task' | 'project'): void
+  onLocate(itemId: string): void
 }
 
-export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan }: MonitorPanelProps) {
+export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan, onLocate }: MonitorPanelProps) {
   const [editing, setEditing] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
@@ -35,7 +38,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const mcp = useMcpStatus({ sessionId: task.sessionId })
   const verdict = turnVerdict(task)
   const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
-  const commandsFailed = verdictTurn?.items.filter((item) => item.kind === 'tool' && item.succeeded === false).length ?? 0
+  const failedCommands = verdictTurn?.items.flatMap((item) => (item.kind === 'tool' && item.succeeded === false ? [item] : [])) ?? []
   // 有完成条件时下面的完成条件区已经写了这句原因，不重复
   const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
   const checks = task.info.checks ?? project?.checks
@@ -70,9 +73,36 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
               >
                 {verdict.label}
               </span>
-              {commandsFailed > 0 && <span className="shrink-0 text-muted-foreground">{commandsFailed} 条命令失败</span>}
+              {failedCommands.length > 0 && (
+                <span className="shrink-0 text-muted-foreground">
+                  {verdict.tone === 'verified' ? `过程中 ${failedCommands.length} 条命令失败` : `${failedCommands.length} 条命令失败`}
+                </span>
+              )}
             </div>
             {verdictReason && <p className="text-muted-foreground">{verdictReason}</p>}
+            {failedCommands.length > 0 && (
+              <div className="flex flex-col">
+                {failedCommands.slice(-FAILED_COMMAND_LIMIT).reverse().map((item) => {
+                  const command = splitTitle(item.title).target
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      aria-label={`跳到失败的命令：${command}`}
+                      className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                      data-testid="monitor-failed-command"
+                      onClick={() => onLocate(item.id)}
+                    >
+                      <CircleAlert className={cn('size-3.5 shrink-0', verdict.tone === 'verified' ? 'text-muted-foreground' : 'text-warning')} />
+                      <span className="min-w-0 truncate" title={command}>
+                        {command}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {failedCommands.length > FAILED_COMMAND_LIMIT && <p className="text-muted-foreground">还有 {failedCommands.length - FAILED_COMMAND_LIMIT} 条命令失败</p>}
           </Section>
         )}
 
@@ -160,30 +190,6 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           )}
         </Section>
 
-        <Section
-          title="安全"
-          action={
-            <SectionAction settings onClick={() => openSettings('security')}>
-              安全设置
-            </SectionAction>
-          }
-        >
-          <Row status={task.info.security.staticCheck ? 'on' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
-          <Row status={task.info.security.lightScan ? 'on' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
-        </Section>
-
-        <Section title="规范">
-          {task.info.rulePacks.length > 0 ? <Row status="on" label="完成前规范审查" value="已开" /> : <Row status="off" label="没有选中的规则包，不会审查" />}
-          {task.info.rulePacks.length > 0 && (
-            <div className="flex gap-2">
-              <span className="size-3.5 shrink-0" />
-              <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
-                {task.info.rulePacks.join('、')}
-              </span>
-            </div>
-          )}
-        </Section>
-
         {deepScanEnabled && (
           <Section
             title="深度扫描"
@@ -227,14 +233,24 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
 
           {/* 折叠只用 CSS 隐藏，内容留在 DOM 里，e2e 的 toContainText 仍能读到 */}
           <div className={cn('flex flex-col gap-4', !configOpen && 'hidden')}>
-            <Section
-              title="模型"
-              action={
-                <SectionAction settings onClick={() => openSettings('models')}>
-                  模型与角色
-                </SectionAction>
-              }
-            >
+            <Section title="安全" action={<SectionAction onClick={() => openSettings('security')}>安全设置</SectionAction>}>
+              <Row status={task.info.security.staticCheck ? 'on' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
+              <Row status={task.info.security.lightScan ? 'on' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
+            </Section>
+
+            <Section title="规范">
+              {task.info.rulePacks.length > 0 ? <Row status="on" label="完成前规范审查" value="已开" /> : <Row status="off" label="没有选中的规则包，不会审查" />}
+              {task.info.rulePacks.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="size-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
+                    {task.info.rulePacks.join('、')}
+                  </span>
+                </div>
+              )}
+            </Section>
+
+            <Section title="模型" action={<SectionAction onClick={() => openSettings('models')}>模型与角色</SectionAction>}>
               <Row label="编码" value={task.modelLabel} />
               <Row label="规划" value={task.planLabel ?? '沿用编码模型'} />
               <Row label="备用" value={task.fallbackLabel ?? '不使用'} />
@@ -246,9 +262,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
                 action={
                   <>
                     {mcpFailed && <SectionAction onClick={mcp.retry}>重新连接</SectionAction>}
-                    <SectionAction settings onClick={() => openSettings('mcp')}>
-                      MCP 设置
-                    </SectionAction>
+                    <SectionAction onClick={() => openSettings('mcp')}>MCP 设置</SectionAction>
                   </>
                 }
               >
@@ -386,11 +400,10 @@ function Row({ status, label, value, mono, note, title }: { status?: keyof typeo
   )
 }
 
-function SectionAction({ settings, disabled, onClick, children }: { settings?: boolean; disabled?: boolean; onClick(): void; children: React.ReactNode }) {
+function SectionAction({ disabled, onClick, children }: { disabled?: boolean; onClick(): void; children: React.ReactNode }) {
   return (
     <Button variant="ghost" size="xs" disabled={disabled} className="text-foreground/80 hover:text-foreground" onClick={onClick}>
       {children}
-      {settings && <ArrowUpRight data-icon="inline-end" />}
     </Button>
   )
 }

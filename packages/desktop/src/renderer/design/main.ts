@@ -6,7 +6,7 @@ import { EDITOR_KEY } from '@open-pencil/vue'
 import { createApp, reactive } from 'vue'
 import { installBridge } from './bridge'
 import DesignApp from './DesignApp.vue'
-import { watchTextFonts } from './fonts'
+import { requestLocalFonts, watchTextFonts } from './fonts'
 import { createLocalIcons } from './icons'
 import './design.css'
 
@@ -32,7 +32,7 @@ installBridge(editor)
 // 主进程只给了这个视图读系统字体的权限；拿到列表后，中文等内置字体没有的字回退到系统字体。
 // 回退字体按平台挑（Windows 是微软雅黑等），不告诉它平台时按 Linux 的字体找，Windows 上一个都找不到
 fontManager.setFallbackUserAgent(navigator.userAgent)
-fontManager.requestLocalFontAccess().catch((error: unknown) => console.error('读取系统字体失败', error))
+requestLocalFonts().catch((error: unknown) => console.error('读取系统字体失败', error))
 watchTextFonts(editor)
 // 每次编辑（包括撤销、智能体的修改）都告诉主进程，由它攒一会儿再自动保存
 editor.onEditorEvent('history:changed', () => window.diffraDesignHost?.changed())

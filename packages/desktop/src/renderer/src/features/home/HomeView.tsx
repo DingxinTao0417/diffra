@@ -135,7 +135,7 @@ export function HomeView({ projectPath }: { projectPath: string | null }) {
     <div className="relative flex h-full flex-col items-center overflow-y-auto px-6 pb-12">
       {/* 标题区向上长，输入框的位置不随提示条、错误条、最近任务出现而跳动 */}
       <div className="flex min-h-[36vh] w-full max-w-[720px] shrink-0 flex-col justify-end gap-5 pb-6">
-        <h1 className="flex min-w-0 justify-center text-2xl font-semibold tracking-tight">
+        <h1 className="flex min-w-0 justify-center text-2xl font-bold tracking-tight">
           {projectPath ? (
             <>
               <span className="shrink-0">在</span>

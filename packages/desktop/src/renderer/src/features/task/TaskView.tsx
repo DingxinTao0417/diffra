@@ -38,6 +38,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
   const { project, setProject, branch } = useProject(task.project)
   const [confirm, setConfirm] = useState<{ mode: 'restore' | 'regenerate'; turnId: string; changes: CheckpointChange[] | null } | null>(null)
   const [scanScope, setScanScope] = useState<'task' | 'project' | null>(null)
+  const [locate, setLocate] = useState<{ id: string; at: number } | null>(null)
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const firstTurn = task.turns[0]?.id ?? null
   const monitorDiff = useTaskDiff(task.sessionId, firstTurn, task.info.checkpoints && panel === 'monitor', task.changeVersion)
@@ -132,7 +133,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
           {/* 终端在对话列底部，右侧面板保持全高；对话区留出最小高度，终端拉高时由 flex 压缩终端而不是对话 */}
           {/* 对话列变窄时对话区和输入框一起收窄左右留白，两边才对齐；对话区的滚动层在 Conversation 里 */}
           <div className="flex min-h-40 flex-1 flex-col @max-[600px]:[&>div>.overflow-y-auto]:px-5">
-            <Conversation task={task} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
+            <Conversation task={task} locate={locate} onRestore={(turnId) => void askRestore('restore', turnId)} onRegenerate={(turnId) => void askRestore('regenerate', turnId)} />
           </div>
           <div className="px-8 pb-3.5 @max-[600px]:px-5">
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
@@ -189,7 +190,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
           </div>
           {terminalOpen && <TerminalPanel cwd={task.project} />}
         </section>
-        {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} />}
+        {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={setProject} onDeepScan={setScanScope} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={(turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && <BrowserPanel sessionId={task.sessionId} />}
         {panel === 'design' && <DesignPanel sessionId={task.sessionId} project={task.project} />}
