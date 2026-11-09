@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -49,7 +49,8 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除和外�
     // 拖入的文件在输入框里留下 @ 提示词，点附件能看路径
     await expect(input).toHaveValue(/@note\.txt/)
     await window.getByRole('button', { name: '预览附件 note.txt', exact: true }).click()
-    await expect(window.getByRole('dialog')).toContainText(note)
+    // 应用显示解析后的真实路径；临时目录可能是指向别处的目录联接，断言按真实路径比
+    await expect(window.getByRole('dialog')).toContainText(realpathSync.native(note))
     await window.keyboard.press('Escape')
     await dispatch([note], 'dragEnter')
     await dispatch([note], 'drop')
