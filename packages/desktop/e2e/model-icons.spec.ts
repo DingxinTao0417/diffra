@@ -109,6 +109,8 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
     await enabledSwitch.click()
     await expect.poll(() => savedEnabled(userDataDir, name, 'mock-a')).toBe(false)
     expect(savedIcon(userDataDir, name)).toBe('DeepSeek')
+    // 主进程先写盘、再把结果交回界面；等开关真的变成关，再点第二下，不然点的还是旧状态，又存一次「关」
+    await expect(enabledSwitch).not.toBeChecked()
     await enabledSwitch.click()
     await expect.poll(() => savedEnabled(userDataDir, name, 'mock-a')).toBe(true)
     expect(savedIcon(userDataDir, name)).toBe('DeepSeek')
