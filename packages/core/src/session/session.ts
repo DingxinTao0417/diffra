@@ -36,6 +36,11 @@ export interface SessionEnvironment {
   rgPath: string
 }
 
+export interface UnresolvedCheck {
+  command: string
+  lines: string[]
+}
+
 export interface SessionOptions {
   cwd: string
   config: SessionConfig
@@ -104,6 +109,10 @@ export class Session {
   lastContext: { inputTokens: number; chars: number; cacheRead: number | null; cacheWrite: number | null } | null = null
   // 验证缓存仅存于内存，恢复后重新验证；Git 快照覆盖未跟踪文件。
   verifiedSnapshot: string | null = null
+  // 最近一次因检查卡住停下时还没修好的错误，下一个执行轮开始时交给模型一次；只在内存里，撤销后作废
+  unresolvedCheck: UnresolvedCheck | null = null
+  // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到
+  readonly consumedChecks = new Map<string, UnresolvedCheck>()
   taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
 
@@ -284,9 +293,11 @@ export class Session {
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
+    this.unresolvedCheck = this.consumedChecks.get(turnId) ?? null
     for (const turn of this.turns.splice(index)) {
       this.turnCheckpoints.delete(turn.id)
       this.messageStarts.delete(turn.id)
+      this.consumedChecks.delete(turn.id)
     }
     this.readHashes.clear()
     this.verifiedSnapshot = null
@@ -316,6 +327,7 @@ export class Session {
     // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
     this.readHashes.clear()
     this.verifiedSnapshot = null
+    this.unresolvedCheck = null
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
     const needsVerification = target ? needsVerificationBefore(this.turns, index) : false

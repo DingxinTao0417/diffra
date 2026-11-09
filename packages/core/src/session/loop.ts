@@ -57,10 +57,28 @@ import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, parseFinishInput, startTitle, TOOL_KINDS } from './tools.js'
+import {
+  type CheckExhaustion,
+  checkExhaustion,
+  type CheckTracker,
+  MAX_CHECK_FAILURES_PER_TURN,
+  MAX_CHECKS_WITHOUT_PROGRESS,
+  newCheckTracker,
+  parseCheckErrors,
+  progressSummary,
+  recordCheckFailure,
+  recordCheckPass,
+  remainingLines,
+} from './check-progress.js'
 
-// 编辑后的快速检查连续失败、或 finish 门禁连续不过，超过次数就停下交给用户
-const MAX_CHECK_FAILURES = 3
+// finish 门禁因检查命令以外的原因（完成条件、证据、安全检查、规范审查）连续打回，或只回文字被拉回，超过次数就停下交给用户；
+// 检查命令不过按错误有没有进展计数，见 check-progress.ts
 const MAX_GATE_ATTEMPTS = 3
+// 检查卡住停下时，提示里列几条剩余错误；下一轮交给模型几条
+const STOP_ERROR_LINES = 5
+const RESUME_ERROR_LINES = 20
+const SAME_CHANGE_HINT =
+  'If the remaining errors are in files that belong to the same change, update them together in the next step: edit_file can be called several times in one step.'
 // 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
 const STUCK_REPEATS = 3
 // 深度扫描用：上下文用到这个比例时要求交报告
@@ -149,11 +167,22 @@ export async function runTurn(
   let active: ActiveModel = { language: session.model, config: session.config.model }
   const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let escalated = false
+  // 快速检查、完成检查各自按进展计数，这一轮的检查失败总数两者合计
+  let editChecks = newCheckTracker()
+  let finishChecks = newCheckTracker()
+  let checkFailures = 0
+  // 完成门禁因检查命令以外的原因打回、只回文字被拉回的次数；检查命令不过的打回不算，那部分按进展计数
+  let gateAttempts = 0
   // 卡住或连续失败时，配了兜底模型就换它做这一轮剩下的部分；每轮最多换一次。换成了返回 true
   const escalate = async (reason: string, note: string): Promise<boolean> => {
     const fallback = session.config.fallbackModel
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
+    // 不管因为哪一项换的人，各项计数都重新开始，否则另一项马上到头、备用模型一步没做就停了；上次失败的输出留着，备用模型的失败照样和它比
+    editChecks.stalled = 0
+    finishChecks.stalled = 0
+    checkFailures = 0
+    gateAttempts = 0
     active = { language: session.fallbackModel, config: fallback }
     await notice(io, 'info', `已换用备用模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
     session.messages.push({
@@ -165,6 +194,36 @@ export async function runTurn(
   // 本轮被接受的 finish 合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
   let turnFinish: TurnOutcome['finish'] = null
   let stop: TurnStop | null = null
+  // 检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
+  const checkStuck = async (label: '快速检查' | '完成检查', command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
+    const stalled = exhaustion === 'stalled'
+    const subject = label === '快速检查' ? `The automatic check \`${command}\`` : `The finish check \`${command}\``
+    const escalatedNow = await escalate(
+      stalled ? `${label}连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展` : `检查这一轮已经失败 ${MAX_CHECK_FAILURES_PER_TURN} 次`,
+      stalled
+        ? `${subject} failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
+        : `The checks failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
+    )
+    if (escalatedNow) return false
+    const parsed = tracker.last!
+    const count = parsed.errors?.length ?? null
+    const clip = (line: string) => (line.length > 200 ? `${line.slice(0, 200)}…` : line)
+    const shown = remainingLines(parsed, STOP_ERROR_LINES).map((line) => `- ${clip(line)}`)
+    const list = count === null
+      ? `检查输出的最后几行：\n${shown.join('\n')}`
+      : `还剩 ${count} 个错误：\n${shown.join('\n')}${count > shown.length ? `\n- 另外还有 ${count - shown.length} 个` : ''}`
+    await notice(
+      io,
+      'warning',
+      stalled ? `${label}连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展，已停止` : '检查失败次数到上限，已停止',
+      `${stalled ? '' : `这一轮快速检查和完成检查一共失败了 ${MAX_CHECK_FAILURES_PER_TURN} 次。`}${list}\n发「继续」可以接着修，或者先手动处理这几处。`,
+    )
+    const resume = remainingLines(parsed, RESUME_ERROR_LINES).map(clip)
+    if (count !== null && count > resume.length) resume.push(`(${count - resume.length} more)`)
+    session.unresolvedCheck = { command, lines: resume }
+    stop = label === '快速检查' ? 'check-exhausted' : 'gate-exhausted'
+    return true
+  }
 
   try {
     await takeCheckpoint(session, turn.id, io)
@@ -180,6 +239,16 @@ export async function runTurn(
     if (session.taskState.contractRequired || session.taskState.requirements.length > 0) {
       session.messages.push({ role: 'user', content: `[Diffra] Saved completion contract: ${JSON.stringify(session.taskState)}. Define concrete completion requirements with task_progress before release work (ids commit, push, ci, publish). Continue unfinished stages; checks passing alone is not completion. Use pause_task for blockers.` })
     }
+    if (session.unresolvedCheck) {
+      session.messages.push({
+        role: 'user',
+        content:
+          `[Diffra] When the most recent turn stopped because a check was stuck, these errors from the check \`${session.unresolvedCheck.command}\` were still unresolved:\n` +
+          `${session.unresolvedCheck.lines.join('\n')}\nIf the user wants you to continue, start by fixing them.`,
+      })
+      session.consumedChecks.set(turn.id, session.unresolvedCheck)
+      session.unresolvedCheck = null
+    }
     let round = 1
 
     session.verifiedSnapshot = null
@@ -187,8 +256,6 @@ export async function runTurn(
     // 待验证是从之前的轮次带过来的、本轮还没改过文件：拉回时不能说「本轮改了文件」
     let editsCarried = editedThisTurn
     let commandedThisTurn = false
-    let checkFailures = 0
-    let gateAttempts = 0
     const compaction: CompactionState = { cooldownUntil: 0 }
     // 调用签名 → 自上次成功编辑以来出现的次数
     const repeats = new Map<string, number>()
@@ -252,6 +319,8 @@ export async function runTurn(
       const results: ToolResultPart[] = []
       const screenshots: PromptImage[] = []
       let editedThisStep = false
+      // 这一步 finish 或 verify_changes 被检查命令打回时是那条命令
+      let failedFinishCheck: string | null = null
       let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
       for (const call of toolCalls) {
@@ -302,11 +371,14 @@ export async function runTurn(
             editedThisTurn = true
             session.taskState.needsVerification = true
           }
-          const gate = await runFinishGate(session, call, turn.id, changes, signal, io, verificationOnly)
+          const gate = await runFinishGate(session, call, turn.id, changes, finishChecks, signal, io, verificationOnly)
           results.push(gate.result)
           if (gate.passed && !verificationOnly) {
             finished = { summary: gate.summary, goalMet: gate.goalMet }
             turnFinish = mergeFinish(turnFinish, gate.verification)
+          } else if (!gate.passed && gate.failedCheck) {
+            failedFinishCheck = gate.failedCheck
+            checkFailures++
           } else if (!gate.passed) gateAttempts++
           continue
         }
@@ -352,6 +424,8 @@ export async function runTurn(
         round++
         gateAttempts = 0
         checkFailures = 0
+        editChecks = newCheckTracker()
+        finishChecks = newCheckTracker()
         editedThisTurn = false
         editsCarried = false
         // 上一轮的改动已经过了那一轮的完成门禁，指纹从这一轮开始比
@@ -402,38 +476,32 @@ export async function runTurn(
         const check = await runCheck(session, afterEdit, '快速检查', signal, io)
         if (signal.aborted) return 'cancelled'
         if (check.passed) {
-          checkFailures = 0
+          recordCheckPass(editChecks)
         } else {
+          const parsed = parseCheckErrors(check.full, session.cwd)
+          const progress = progressSummary(parsed, recordCheckFailure(editChecks, parsed))
           checkFailures++
           session.messages.push({
             role: 'user',
-            content: `[Diffra] The automatic check \`${afterEdit}\` failed after your edits:\n${check.output}\nFix the problems before continuing.`,
+            content: `[Diffra] The automatic check \`${afterEdit}\` failed after your edits.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems before continuing.`,
           })
-          if (checkFailures >= MAX_CHECK_FAILURES) {
-            const escalatedNow = await escalate(
-              `快速检查连续 ${MAX_CHECK_FAILURES} 次失败`,
-              `The automatic check \`${afterEdit}\` failed ${MAX_CHECK_FAILURES} times in a row.`,
-            )
-            if (!escalatedNow) {
-              await notice(io, 'warning', `快速检查连续 ${MAX_CHECK_FAILURES} 次失败，已停止`, '请查看检查输出，或调整任务后再继续。')
-              stop = 'check-exhausted'
-              return 'end_turn'
-            }
-            checkFailures = 0
-          }
+          const exhaustion = checkExhaustion(editChecks, checkFailures)
+          if (exhaustion && (await checkStuck('快速检查', afterEdit, editChecks, exhaustion))) return 'end_turn'
         }
       }
+      // 快速检查卡住、换了备用模型时计数已经清零，这里不会再判到头
+      const finishExhaustion = failedFinishCheck ? checkExhaustion(finishChecks, checkFailures) : null
+      if (failedFinishCheck && finishExhaustion && (await checkStuck('完成检查', failedFinishCheck, finishChecks, finishExhaustion))) return 'end_turn'
       if (gateAttempts >= MAX_GATE_ATTEMPTS) {
         const escalatedNow = await escalate(
           `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`,
-          `Finishing was rejected ${MAX_GATE_ATTEMPTS} times in a row because the checks did not pass.`,
+          `Finishing was rejected ${MAX_GATE_ATTEMPTS} times in a row.`,
         )
         if (!escalatedNow) {
           await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
           stop = 'gate-exhausted'
           return 'end_turn'
         }
-        gateAttempts = 0
       }
     }
     await notice(io, 'warning', `已达到单次任务的步数上限（${maxSteps} 步），已停止`, '发消息让它继续，或在「设置 → 任务执行」里调整上限。')
@@ -885,10 +953,11 @@ async function runFinishGate(
   call: StepToolCall,
   turnId: string,
   changes: TurnChanges,
+  checks: CheckTracker,
   signal: AbortSignal,
   io: TurnIO,
   verificationOnly = false,
-): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean; verification: FinishVerification }> {
+): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean; verification: FinishVerification; failedCheck?: string }> {
   let summary = ''
   let goalMet = false
   try {
@@ -922,14 +991,21 @@ async function runFinishGate(
     const check = await runCheck(session, command, '完成检查', signal, io)
     if (!check.passed) {
       await showFinish('failed', `完成检查没有通过：${command}`)
+      const parsed = parseCheckErrors(check.full, session.cwd)
+      const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
       return {
-        result: errorResult(call, `The check \`${command}\` failed, so the task is not finished:\n${check.output}\nFix the problems and call finish again.`),
+        result: errorResult(
+          call,
+          `The check \`${command}\` failed, so the task is not finished.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems and call finish again.`,
+        ),
         passed: false,
         summary,
         goalMet,
         verification: 'failed',
+        failedCheck: command,
       }
     }
+    recordCheckPass(checks)
   }
   // 检查通过（或没配检查）之后再做安全检查和规范审查，免得对跑不通的代码提意见
   const diff = await turnDiff(session, turnId, io)
@@ -1159,7 +1235,7 @@ async function runCheck(
   label: string,
   signal: AbortSignal,
   io: TurnIO,
-): Promise<{ passed: boolean; output: string }> {
+): Promise<{ passed: boolean; output: string; full: string }> {
   const toolCallId = `check-${randomUUID()}`
   await io.update({ sessionUpdate: 'tool_call', toolCallId, title: `${label}：${command}`, kind: 'execute', status: 'in_progress' })
   try {
@@ -1172,7 +1248,8 @@ async function runCheck(
       content: [{ type: 'content', content: { type: 'text', text: result.summary } }],
       _meta: { diffra: { result: (passed ? 'passed' : 'failed') satisfies CheckResult } },
     })
-    return { passed, output: truncateLines(result.summary, 120, 8000) }
+    // 交给模型的输出截短；比较错误用截短前的，免得中间被省略的错误算成修好了
+    return { passed, output: truncateLines(result.summary, 120, 8000), full: result.fullSummary }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await io.update({
@@ -1182,7 +1259,7 @@ async function runCheck(
       content: [{ type: 'content', content: { type: 'text', text: message } }],
       _meta: { diffra: { result: 'failed' satisfies CheckResult } },
     })
-    return { passed: false, output: message }
+    return { passed: false, output: message, full: message }
   }
 }
 

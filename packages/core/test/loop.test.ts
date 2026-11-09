@@ -412,11 +412,13 @@ describe('主循环', () => {
       { text: '写好了' },
       { text: '真的写好了' },
       { text: '结束' },
+      { text: '还是结束' },
     ])
     const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final out.txt' })
     const io = recordingIO()
     await expect(runTurn(session, { id: 't', text: '写 out.txt' }, io)).resolves.toBe('end_turn')
-    expect(model.doStreamCalls).toHaveLength(5)
+    // 检查命令不过的打回不占拉回的名额，只回文字照样拉回 3 次
+    expect(model.doStreamCalls).toHaveLength(6)
     expect(JSON.stringify(session.messages)).toContain('You changed files but did not call finish')
     expect(verifications(io)).toEqual(['failed'])
     expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'no-finish' }])
@@ -787,6 +789,11 @@ describe('系统提示词', () => {
     expect(prompt).toContain('automatically runs `pnpm typecheck`')
     expect(prompt).toContain('Do not run it yourself')
     expect(prompt).toContain('Diffra then runs `pnpm test`')
+  })
+
+  test('约定牵动多个文件的改动在同一步一起改', async () => {
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [])
+    expect(prompt).toContain('edit all affected files in the same step')
   })
 
   test('没配检查命令时要求模型自己验证', async () => {
@@ -1436,7 +1443,7 @@ describe('卡死检测和步数上限', () => {
     expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'step-limit' }])
   })
 
-  test('快速检查连续 3 次失败、没配兜底模型时停下，记 check-exhausted', async () => {
+  test('快速检查连续 3 次失败且输出一样（没有进展）、没配兜底模型时停下，记 check-exhausted', async () => {
     writeFileSync(join(project, 'a.txt'), 'value = broken\n')
     const model = scriptedModel([
       { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
@@ -1450,12 +1457,12 @@ describe('卡死检测和步数上限', () => {
 
     await expect(runTurn(session, { id: 'turn-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
     expect(model.doStreamCalls).toHaveLength(4)
-    expect(notices(io)).toEqual(['快速检查连续 3 次失败，已停止'])
+    expect(notices(io)).toEqual(['快速检查连续 3 次没有进展，已停止'])
     expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
     expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true })
   })
 
-  test('完成检查连续 3 次不过、没配兜底模型时停下，记 gate-exhausted', async () => {
+  test('完成检查连续 3 次不过且输出一样（没有进展）、没配兜底模型时停下，记 gate-exhausted', async () => {
     const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] }
     const model = scriptedModel([
       { toolCalls: [{ name: 'edit_file', input: { path: 'new.txt', old_string: '', new_string: 'draft\n' } }] },
@@ -1468,10 +1475,224 @@ describe('卡死检测和步数上限', () => {
     const io = recordingIO()
 
     await expect(runTurn(session, { id: 'turn-1', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
-    expect(notices(io)).toEqual(['完成检查连续 3 次没有通过，已停止'])
+    expect(notices(io)).toEqual(['完成检查连续 3 次没有进展，已停止'])
     expect(verifications(io)).toEqual(['failed', 'failed', 'failed'])
     expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'gate-exhausted' }])
   })
+
+  const noticesWithText = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [{ title: update.title, description: update.description ?? '' }] : []))
+  const tscError = (file: string, line: number, name: string) => `src/${file}.ts(${line},1): error TS2304: Cannot find name '${name}'.`
+  const tscCheck = 'cat errors.txt; ! grep -q "error TS" errors.txt'
+
+  test('快速检查前 3 次失败但每次都修好一部分时不停，第 4 步通过后正常完成；失败信息带进展摘要和一步改完的引导', async () => {
+    const errors = ['a', 'b', 'c', 'd'].map((name) => tscError(name, 1, name))
+    writeFileSync(join(project, 'errors.txt'), `${errors.join('\n')}\n`)
+    const fix = (index: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: errors[index], new_string: `// fixed ${index}` } })
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, fix(0)] },
+      { toolCalls: [fix(1)] },
+      { toolCalls: [fix(2)] },
+      { toolCalls: [fix(3)] },
+      { toolCalls: [{ name: 'finish', input: { summary: '都修好了' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: null })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修类型错误' }, io)).resolves.toBe('end_turn')
+    expect(notices(io)).toEqual([])
+    expect(checkResults(io, '快速检查')).toEqual(['failed', 'failed', 'failed', 'passed'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
+    const prompt = (index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt)
+    expect(prompt(1)).toContain('The check reported 3 errors.')
+    expect(prompt(2)).toContain('Since the last check: 1 of 3 errors fixed, 0 new, 2 remaining.')
+    expect(prompt(2)).toContain('edit_file can be called several times in one step')
+  }, 30_000)
+
+  test('同样的错误连续 3 次没有进展（只是行号变了）时停下，提示里列出剩余错误；下一轮开始时模型收到上次剩余的错误', async () => {
+    writeFileSync(join(project, 'errors.txt'), `${tscError('task', 1, 'draftKey')}\n`)
+    const shift = (from: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: `(${from},1)`, new_string: `(${from + 1},1)` } })
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, shift(1)] },
+      { toolCalls: [shift(2)] },
+      { toolCalls: [shift(3)] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'errors.txt', old_string: tscError('task', 4, 'draftKey'), new_string: '// fixed' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '修好了' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: null })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修类型错误' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(3)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
+    const [stopped] = noticesWithText(io)
+    expect(stopped?.title).toBe('快速检查连续 3 次没有进展，已停止')
+    expect(stopped?.description).toContain(tscError('task', 4, 'draftKey'))
+    expect(stopped?.description).toContain('发「继续」可以接着修')
+
+    const next = recordingIO()
+    await expect(runTurn(session, { id: 'turn-2', text: '继续' }, next)).resolves.toBe('end_turn')
+    const resumed = JSON.stringify(model.doStreamCalls[3]?.prompt)
+    expect(resumed).toContain('were still unresolved')
+    expect(resumed).toContain("Cannot find name 'draftKey'")
+    expect(turnOutcomes(next)).toEqual([{ finish: 'verified', stop: null }])
+    // 只带一次：这一轮的检查已经通过，下一轮不再说
+    expect(session.unresolvedCheck).toBeNull()
+  }, 30_000)
+
+  test('错误来回变、每次都算有进展时，本轮快速检查失败满 12 次停下', async () => {
+    writeFileSync(join(project, 'errors.txt'), `${tscError('a', 1, 'x0')}\n`)
+    const rename = (from: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: `x${from}'`, new_string: `x${from + 1}'` } })
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, rename(0)] },
+      ...Array.from({ length: 11 }, (_, index): Step => ({ toolCalls: [rename(index + 1)] })),
+      { text: '不会走到这里' },
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: null })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修类型错误' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(12)
+    expect(checkResults(io, '快速检查')).toHaveLength(12)
+    expect(notices(io)).toEqual(['检查失败次数到上限，已停止'])
+    expect(noticesWithText(io)[0]?.description).toContain(tscError('a', 1, 'x12'))
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
+  }, 60_000)
+
+  test('快速检查和完成检查共用每轮的失败上限：每步都改了又 finish、每次都有进展，合计失败满 12 次停下', async () => {
+    writeFileSync(join(project, 'errors.txt'), `${tscError('a', 1, 'x0')}\n`)
+    const rename = (from: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: `x${from}'`, new_string: `x${from + 1}'` } })
+    const finish = { name: 'finish', input: { summary: '修好了' } }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, rename(0), finish] },
+      ...Array.from({ length: 5 }, (_, index): Step => ({ toolCalls: [rename(index + 1), finish] })),
+      { text: '不会走到这里' },
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: tscCheck })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修类型错误' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(6)
+    expect(checkResults(io, '快速检查')).toEqual(Array.from({ length: 6 }, () => 'failed'))
+    expect(checkResults(io, '完成检查')).toEqual(Array.from({ length: 6 }, () => 'failed'))
+    expect(notices(io)).toEqual(['检查失败次数到上限，已停止'])
+    expect(noticesWithText(io)[0]?.description).toContain('快速检查和完成检查一共失败了 12 次')
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
+  }, 60_000)
+
+  test('检查输出超过给模型看的行数时按完整输出比较：500 个错误一个没修、每步只多一个，算没进展', async () => {
+    const errors = Array.from({ length: 500 }, (_, index) => tscError(`f${index}`, 1, `x${index}`))
+    writeFileSync(join(project, 'errors.txt'), `${errors.join('\n')}\n`)
+    const add = (index: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: errors[0], new_string: `${tscError(`new${index}`, 1, 'n')}\n${errors[0]}` } })
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, add(1)] },
+      { toolCalls: [add(2)] },
+      { toolCalls: [add(3)] },
+      { text: '不会走到这里' },
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: null })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修类型错误' }, io)).resolves.toBe('end_turn')
+    const prompt = (index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt)
+    expect(prompt(1)).toContain('The check reported 501 errors.')
+    expect(prompt(2)).toContain('Since the last check: 0 of 501 errors fixed, 1 new, 502 remaining.')
+    expect(model.doStreamCalls).toHaveLength(3)
+    expect(notices(io)).toEqual(['快速检查连续 3 次没有进展，已停止'])
+    expect(noticesWithText(io)[0]?.description).toContain('还剩 503 个错误')
+  }, 60_000)
+
+  test('完成检查有进展地打回 3 次后只回一次文字，照样拉回接着修，最后通过', async () => {
+    const failures = Array.from({ length: 10 }, (_, index) => `FAILED tests/test_app.py::test_${index + 1} - AssertionError: assert 0 == 1`)
+    writeFileSync(join(project, 'results.txt'), `# results\n${failures.join('\n')}\n`)
+    const remove = (from: number, to: number): Step => ({
+      toolCalls: [{ name: 'edit_file', input: { path: 'results.txt', old_string: `${failures.slice(from, to).join('\n')}\n`, new_string: '' } }],
+    })
+    const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '测试都过了' } }] }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'results.txt' } }, { name: 'edit_file', input: { path: 'results.txt', old_string: '# results', new_string: '# run' } }] },
+      finish,
+      remove(0, 3),
+      finish,
+      remove(3, 6),
+      finish,
+      { text: '还剩几个，我接着修' },
+      remove(6, 10),
+      finish,
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'cat results.txt; ! grep -q FAILED results.txt' })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修测试' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(9)
+    expect(JSON.stringify(model.doStreamCalls[7]?.prompt)).toContain('You changed files but did not call finish')
+    expect(notices(io)).toEqual([])
+    expect(verifications(io)).toEqual(['failed', 'failed', 'failed', 'verified'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
+  }, 30_000)
+
+  test('重新生成收到剩余错误的那一轮时，重发的那一轮照样收到；说明里写的是最近一次因检查卡住停下', async () => {
+    writeFileSync(join(project, 'errors.txt'), `${tscError('task', 1, 'draftKey')}\n`)
+    const shift = (from: number) => ({ name: 'edit_file', input: { path: 'errors.txt', old_string: `(${from},1)`, new_string: `(${from + 1},1)` } })
+    const fix = { name: 'edit_file', input: { path: 'errors.txt', old_string: tscError('task', 4, 'draftKey'), new_string: '// fixed' } }
+    const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '修好了' } }] }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, shift(1)] },
+      { toolCalls: [shift(2)] },
+      { toolCalls: [shift(3)] },
+      { toolCalls: [fix] },
+      finish,
+      { toolCalls: [{ name: 'read_file', input: { path: 'errors.txt' } }, fix] },
+      finish,
+    ])
+    const session = await makeSession(model, { afterEdit: tscCheck, beforeFinish: null })
+    const run = async (id: string, text: string) => {
+      session.startTurn(id, text)
+      const io = recordingIO()
+      await runTurn(session, { id, text }, io)
+      session.endTurn('end_turn')
+      return io
+    }
+
+    expect(turnOutcomes(await run('turn-1', '修类型错误'))).toEqual([{ finish: null, stop: 'check-exhausted' }])
+    expect(turnOutcomes(await run('turn-2', '继续'))).toEqual([{ finish: 'verified', stop: null }])
+    const resumed = JSON.stringify(model.doStreamCalls[3]?.prompt)
+    expect(resumed).toContain('When the most recent turn stopped because a check was stuck')
+    expect(resumed).not.toContain('When the previous turn stopped')
+
+    await session.rewind('turn-2')
+    expect(turnOutcomes(await run('turn-3', '继续'))).toEqual([{ finish: 'verified', stop: null }])
+    expect(JSON.stringify(model.doStreamCalls[5]?.prompt).split('were still unresolved')).toHaveLength(2)
+  }, 60_000)
+
+  test('完成检查的失败测试从 10 个修到 0 个时不停，正常完成', async () => {
+    const failures = Array.from({ length: 10 }, (_, index) => `FAILED tests/test_app.py::test_${index + 1} - AssertionError: assert 0 == 1`)
+    writeFileSync(join(project, 'results.txt'), `# results\n${failures.join('\n')}\n`)
+    const remove = (from: number, to: number): Step => ({
+      toolCalls: [{ name: 'edit_file', input: { path: 'results.txt', old_string: `${failures.slice(from, to).join('\n')}\n`, new_string: '' } }],
+    })
+    const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '测试都过了' } }] }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'results.txt' } }, { name: 'edit_file', input: { path: 'results.txt', old_string: '# results', new_string: '# run' } }] },
+      finish,
+      remove(0, 4),
+      finish,
+      remove(4, 7),
+      finish,
+      remove(7, 10),
+      finish,
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'cat results.txt; ! grep -q FAILED results.txt' })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修测试' }, io)).resolves.toBe('end_turn')
+    expect(notices(io)).toEqual([])
+    expect(verifications(io)).toEqual(['failed', 'failed', 'failed', 'verified'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
+    const prompt = (index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt)
+    expect(prompt(2)).toContain('The check reported 10 errors.')
+    expect(prompt(4)).toContain('Since the last check: 4 of 10 errors fixed, 0 new, 6 remaining.')
+  }, 30_000)
 })
 
 describe('兜底模型', () => {
@@ -1528,6 +1749,24 @@ describe('兜底模型', () => {
     expect(fallback.doStreamCalls).toHaveLength(6)
     expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback', '智能体在重复同样的操作，已停止'])
   })
+
+  test('换备用模型后检查计数一起清零：快速检查和完成检查同一条命令、每步都改了又 finish，备用模型还有完整的 3 次没进展名额', async () => {
+    writeFileSync(join(project, 'a.txt'), 'v0\n')
+    const step = (index: number): Step => ({
+      toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: `v${index}`, new_string: `v${index + 1}` } }, { name: 'finish', input: { summary: '改好了' } }],
+    })
+    const coder = scriptedModel([{ toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] }, step(0), step(1), step(2), { text: '不会走到这里' }])
+    const fallback = scriptedModel([step(3), step(4), step(5), { text: '不会走到这里' }])
+    const check = 'echo "src/a.ts(1,1): error TS2304: Cannot find name \'x\'."; exit 1'
+    const session = await makeSession(coder, { afterEdit: check, beforeFinish: check }, [], undefined, undefined, undefined, { fallback })
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '修 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(coder.doStreamCalls).toHaveLength(4)
+    expect(fallback.doStreamCalls).toHaveLength(3)
+    expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback', '快速检查连续 3 次没有进展，已停止'])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'check-exhausted' }])
+  }, 60_000)
 
   test('下一轮回到编码模型', async () => {
     writeFileSync(join(project, 'b.txt'), 'b\n')
@@ -1676,12 +1915,13 @@ describe('目标模式', () => {
       { text: '写好了' },
       { text: '真的写好了' },
       { text: '结束' },
+      { text: '还是结束' },
     ])
     const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final out.txt' })
     const io = recordingIO()
 
     await expect(runTurn(session, { id: 'turn-1', text: '写出 out.txt' }, io, { goalMaxRounds: 3 })).resolves.toBe('end_turn')
-    expect(model.doStreamCalls).toHaveLength(6)
+    expect(model.doStreamCalls).toHaveLength(7)
     expect(verifications(io)).toEqual(['no-edits', 'failed'])
     const messages = JSON.stringify(session.messages)
     expect(messages).toContain('You changed files but did not call finish')

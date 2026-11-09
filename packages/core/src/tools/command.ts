@@ -3,6 +3,9 @@ import { ToolError, type ToolContext, type ToolOutput } from './types.js'
 
 const DEFAULT_TIMEOUT_SECONDS = 120
 const MAX_TIMEOUT_SECONDS = 600
+// 检查比较前后两次的错误要看全部输出：按给模型看的规模截短，中间被省略的错误会被算成修好了
+const FULL_MAX_LINES = 20_000
+const FULL_MAX_CHARS = 2 * 1024 * 1024
 
 // 命令统一在 Git Bash 里执行；关掉分页器和颜色，避免卡在交互界面或输出控制字符
 export function commandEnv(): NodeJS.ProcessEnv {
@@ -13,7 +16,7 @@ export async function runShell(
   context: Pick<ToolContext, 'cwd' | 'bashPath' | 'signal'>,
   command: string,
   timeoutSeconds: number,
-): Promise<{ exitCode: number | null; output: string; timedOut: boolean; aborted: boolean; summary: string }> {
+): Promise<{ exitCode: number | null; output: string; timedOut: boolean; aborted: boolean; summary: string; fullSummary: string }> {
   if (!context.bashPath) {
     throw new ToolError('No bash found. Install Git for Windows to run commands.')
   }
@@ -24,12 +27,13 @@ export async function runShell(
     env: commandEnv(),
   })
   const output = truncateLines(result.output.trim())
+  const full = truncateLines(result.output.trim(), FULL_MAX_LINES, FULL_MAX_CHARS)
   const status = result.timedOut
     ? `Timed out after ${timeoutSeconds}s and was killed.`
     : result.aborted
       ? 'Cancelled by the user.'
       : `Exit code: ${result.exitCode}`
-  return { ...result, output, summary: `${status}\n${output || '(no output)'}` }
+  return { ...result, output, summary: `${status}\n${output || '(no output)'}`, fullSummary: `${status}\n${full || '(no output)'}` }
 }
 
 export async function runCommandTool(
