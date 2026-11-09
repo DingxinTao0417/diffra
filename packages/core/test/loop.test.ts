@@ -1197,7 +1197,7 @@ describe('上下文压缩', () => {
       session.messages.push({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: `read-${index}`, toolName: 'read_file', input: { path: `f${index}.txt` } }] })
       session.messages.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: `read-${index}`, toolName: 'read_file', output: { type: 'text', value: 'old tool result' } }] })
     }
-    session.lastContext = { inputTokens: 100, chars: messagesChars(session.messages) + session.systemPrompt.length + session.toolChars() }
+    session.lastContext = { inputTokens: 100, chars: messagesChars(session.messages) + session.systemPrompt.length + session.toolChars(), cacheRead: null, cacheWrite: null }
     const original = JSON.stringify(session.messages)
     const taskState = JSON.stringify(session.taskState)
     const io = recordingIO()
@@ -1213,6 +1213,26 @@ describe('上下文压缩', () => {
     expect(session.running).toBe(false)
     await runTurn(session, { id: 'after-compact', text: '继续' }, recordingIO())
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('保留用户约束及已读文件')
+  })
+
+  test('重启后没有 lastContext 时，手动压缩仍按存下来的最近用量更新上下文百分比', async () => {
+    const model = scriptedModel([{ text: '摘要：保留项目偏好。' }])
+    const session = await makeSession(model)
+    session.messages.push({ role: 'user', content: `早期需求 ${'历史细节'.repeat(3000)}` }, { role: 'assistant', content: '早期回复' }, { role: 'user', content: '最新请求' })
+    session.startTurn('old-turn', '早期需求')
+    session.recordUpdate({ sessionUpdate: 'usage_update', used: 1000, size: 10_000, _meta: { diffra: { system: 10, rules: 10, tools: 10, messages: 970 }, cache: { read: 600, write: 20, input: 1000 } } })
+    session.recordUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '早期回复' } })
+    session.endTurn('end_turn')
+    // 重启后 lastContext 只在内存里，加载会话时是空的
+    session.lastContext = null
+    const io = recordingIO()
+    expect(await compactManually(session, io)).toBe('end_turn')
+    const usage = io.updates.find((update) => update.sessionUpdate === 'usage_update')
+    expect(usage?.sessionUpdate).toBe('usage_update')
+    if (usage?.sessionUpdate !== 'usage_update') throw new Error('没有更新上下文用量')
+    expect(usage.used).toBeGreaterThan(0)
+    expect(usage.used).toBeLessThan(1000)
+    expect(usage._meta).toMatchObject({ cache: { read: 600, write: 20, input: 1000 } })
   })
 
   test('短会话不调用模型，正在运行不能并发手动压缩', async () => {

@@ -1,11 +1,12 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type CommandInfo, type PermissionMode, type PromptImage, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, File as FileIcon, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, X, Zap } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
-import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences, type FileReference } from '../../../../shared/attachments'
+import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../../shared/attachments'
 import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
 import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { cn } from 'cn'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +29,7 @@ import { useLobeIcons } from '@/lib/model-icons'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
 import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
+import { clearComposerDraft, type ComposerDraft, type ComposerFile, type ComposerImage, readComposerDraft, writeComposerDraft } from './composer-drafts'
 import { showToast, store, useAppState } from '@/state/store'
 
 // 斜杠菜单里由页面提供的命令，比如任务页的深度扫描
@@ -43,6 +45,8 @@ export interface ComposerCommand {
 
 interface ComposerProps {
   size: 'large' | 'normal'
+  // 草稿按它存：首页按项目、任务按会话，切走再回来接着写
+  draftKey: string
   // 会话没建好时不能发送
   disabled?: boolean
   // 底栏最左边的控件，首页没选项目时放项目选择
@@ -98,20 +102,70 @@ function expandCommand(body: string, input: string): string {
   return body.replace(/\$([1-9])/g, (_match, index: string) => positional[Number(index) - 1] ?? '').replace(/\$ARGUMENTS/g, () => input.trim())
 }
 
+const MAX_COMPOSER_LINES = 10
+
+type PreviewTarget =
+  | { kind: 'image'; image: ComposerImage }
+  | { kind: 'file'; file: ComposerFile }
+
+interface MentionTarget {
+  token: string
+  image?: ComposerImage
+  file?: ComposerFile
+}
+
+// 把草稿拆成普通文字和 @附件：附件只上色，不加边距，着色层和 textarea 的换行才一致
+function highlightDraft(text: string, mentions: MentionTarget[]): ReactNode[] {
+  const nodes: ReactNode[] = []
+  let index = 0
+  let key = 0
+  while (index < text.length) {
+    const target = mentions.find(({ token }) => text.startsWith(token, index))
+    if (target) {
+      nodes.push(
+        // primary-color-allow: @附件点击后打开预览，是可点的动作
+        <span key={`mention-${key++}`} className="rounded-[3px] bg-primary/10 text-primary">
+          {target.token}
+        </span>,
+      )
+      index += target.token.length
+      continue
+    }
+    let next = text.length
+    for (const { token } of mentions) {
+      const at = text.indexOf(token, index)
+      if (at > index && at < next) next = at
+    }
+    nodes.push(text.slice(index, next))
+    index = next
+  }
+  return nodes
+}
+
 export function Composer(props: ComposerProps) {
   const { size, disabled, running, onSend, onStop } = props
+  const large = size === 'large'
+  // 右侧给滚动条留固定宽度：textarea 是 pr-2.5 + 10px gutter，着色层用 pr-5，换行宽度才一致
+  const textLayout = large ? 'pl-4.5 pt-4 pb-2 text-base' : 'pl-3.5 pt-3 pb-1'
   const placeholder = COMPOSER_PLACEHOLDER
   const goalRounds = useAppState((state) => state.settings?.execution.goalMaxRounds ?? null)
-  const [draft, setDraft] = useState('')
+  // 切页面前存在这里，回来接着写；只在这个组件第一次挂载时读一次
+  const initialDraft = useRef<ComposerDraft | null>(readComposerDraft(props.draftKey)).current
+  const [draft, setDraft] = useState(initialDraft?.text ?? '')
   const [caret, setCaret] = useState(0)
   const [sending, setSending] = useState(false)
-  const [goal, setGoal] = useState(false)
-  const [skills, setSkills] = useState<SkillInfo[]>([])
+  const [goal, setGoal] = useState(initialDraft?.goal ?? false)
+  const [skills, setSkills] = useState<SkillInfo[]>(initialDraft?.skills ?? [])
   // 粘贴或拖入的图片，已经缩小、转成 WebP；普通文件只保留路径引用。
-  const [images, setImages] = useState<Array<PromptImage & { id: string }>>([])
-  const [fileReferences, setFileReferences] = useState<FileReference[]>([])
+  const [images, setImages] = useState<ComposerImage[]>(initialDraft?.images ?? [])
+  const [fileReferences, setFileReferences] = useState<ComposerFile[]>(initialDraft?.files ?? [])
   const [dragging, setDragging] = useState(false)
   const [addingAttachments, setAddingAttachments] = useState(false)
+  const [preview, setPreview] = useState<PreviewTarget | null>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  // 输入法组字时把文字显示在 textarea 本身，着色层先藏起来，避免两份文字叠着
+  const [composing, setComposing] = useState(false)
+  const mentionCounter = useRef(initialDraft?.images.reduce((max, image) => Math.max(max, Number(/(\d+)$/.exec(image.mention)?.[1] ?? 0)), 0) ?? 0)
   const attachmentBusy = useRef(false)
   const dragDepth = useRef(0)
   // 当前模型打开了「视觉」没有；对不上设置里的模型时为 null，交给 core 判断
@@ -144,6 +198,32 @@ export function Composer(props: ComposerProps) {
   // 选完菜单项后光标要放回的位置；输入框内容更新后立刻放，晚了会和接着输入的字抢
   const pendingCaret = useRef<number | null>(null)
   const hasMessage = draft.trim() !== '' || images.length > 0 || fileReferences.length > 0
+  // 离开页面时草稿还在；写进模块里的表，不触发全局重渲染
+  useEffect(() => {
+    writeComposerDraft(props.draftKey, { text: draft, images, files: fileReferences, goal, skills })
+  }, [props.draftKey, draft, images, fileReferences, goal, skills])
+  const mentions = useMemo<MentionTarget[]>(
+    () =>
+      [
+        ...images.map((image) => ({ token: image.mention, image })),
+        ...fileReferences.map((file) => ({ token: file.mention, file })),
+      ].sort((a, b) => b.token.length - a.token.length),
+    [images, fileReferences],
+  )
+  // 光标落在哪个 @ 附件上；点击 token 时打开预览
+  const previewAt = (text: string, position: number): PreviewTarget | null => {
+    const target = mentions.find(({ token }) => {
+      let from = 0
+      while (from <= text.length) {
+        const index = text.indexOf(token, from)
+        if (index < 0) return false
+        if (position >= index && position <= index + token.length) return true
+        from = index + token.length
+      }
+      return false
+    })
+    return target?.image ? { kind: 'image', image: target.image } : target?.file ? { kind: 'file', file: target.file } : null
+  }
 
   const token = disabled ? null : slashToken(draft, caret)
   const menuOpen = token !== null && token.start !== dismissed
@@ -302,21 +382,72 @@ export function Composer(props: ComposerProps) {
     pendingCaret.current = null
   }, [draft])
 
+  // 输入框最多长到 10 行，再长就在框里滚动；高度跟着内容走，不能只留固定三行
+  useLayoutEffect(() => {
+    const element = textareaRef.current
+    if (!element) return
+    element.style.height = 'auto'
+    const styles = getComputedStyle(element)
+    const lineHeight = Number.parseFloat(styles.lineHeight)
+    const padding = Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom)
+    const maxHeight = Number.isFinite(lineHeight) ? lineHeight * MAX_COMPOSER_LINES + padding : element.scrollHeight
+    const height = Math.min(element.scrollHeight, maxHeight)
+    element.style.height = `${height}px`
+    element.style.overflowY = element.scrollHeight > height ? 'auto' : 'hidden'
+    setScrollTop(element.scrollTop)
+  }, [draft, large])
+
+  // 把 @图片1、@文件名 插到光标处；返回的位置给 setSelectionRange 用
+  const insertMentions = (tokens: string[]) => {
+    if (tokens.length === 0) return
+    const at = textareaRef.current?.selectionStart ?? draft.length
+    const inserted = tokens.map((token) => `${token} `).join('')
+    setDraft((current) => {
+      const position = Math.min(at, current.length)
+      const space = position > 0 && !/\s/.test(current[position - 1] ?? '') ? ' ' : ''
+      pendingCaret.current = position + space.length + inserted.length
+      return current.slice(0, position) + space + inserted + current.slice(position)
+    })
+    textareaRef.current?.focus()
+  }
+
+  const removeMentionText = (mention: string) => {
+    setDraft((current) => {
+      const index = current.indexOf(mention)
+      if (index < 0) return current
+      let end = index + mention.length
+      if (current[end] === ' ') end++
+      return current.slice(0, index) + current.slice(end)
+    })
+  }
+
+  const removeImage = (image: ComposerImage) => {
+    setImages((current) => current.filter((item) => item.id !== image.id))
+    removeMentionText(image.mention)
+  }
+
+  const removeFile = (file: ComposerFile) => {
+    setFileReferences((current) => current.filter((item) => item.path !== file.path))
+    removeMentionText(file.mention)
+  }
+
   const addImages = async (files: File[]) => {
     const room = MAX_PROMPT_IMAGES - images.length
     if (room <= 0) return showToast(`一条消息最多带 ${MAX_PROMPT_IMAGES} 张图片`)
     if (files.length > room) showToast(`一条消息最多带 ${MAX_PROMPT_IMAGES} 张图片，多出来的没有加`)
+    const added: ComposerImage[] = []
     for (const file of files.slice(0, room)) {
       try {
         const image = await prepareImage(file)
-        setImages((current) => (current.length < MAX_PROMPT_IMAGES ? [...current, { ...image, id: crypto.randomUUID() }] : current))
+        added.push({ ...image, id: crypto.randomUUID(), mention: `@图片${++mentionCounter.current}` })
       } catch (error) {
         showToast(`${file.name || '图片'}：${errorMessage(error)}`)
       }
     }
+    if (added.length === 0) return
+    setImages((current) => [...current, ...added].slice(0, MAX_PROMPT_IMAGES))
+    insertMentions(added.map((image) => image.mention))
   }
-
-  const imageFiles = (list: FileList | null) => [...(list ?? [])].filter((file) => file.type.startsWith('image/'))
 
   const addAttachments = async (files: File[], includeReferences: boolean) => {
     if (disabled || sending) return
@@ -332,7 +463,18 @@ export function Composer(props: ComposerProps) {
       if (paths.length !== Math.min(documents.length, Math.max(0, room))) showToast('无法获取部分附件的本地路径，请从文件管理器拖入')
       if (paths.length > 0) {
         const references = await window.diffra.describeAttachments(paths)
-        setFileReferences((current) => [...current, ...references.filter((item) => !current.some((entry) => entry.path === item.path))].slice(0, MAX_PROMPT_FILE_REFERENCES))
+        const taken = new Set([...fileReferences.map((file) => file.mention), ...images.map((image) => image.mention)])
+        const added: ComposerFile[] = []
+        for (const file of references) {
+          if (fileReferences.some((entry) => entry.path === file.path) || added.some((entry) => entry.path === file.path)) continue
+          const base = `@${file.name}`
+          let mention = base
+          for (let suffix = 2; taken.has(mention); suffix++) mention = `${base}(${suffix})`
+          taken.add(mention)
+          added.push({ ...file, mention })
+        }
+        setFileReferences((current) => [...current, ...added].slice(0, MAX_PROMPT_FILE_REFERENCES))
+        insertMentions(added.map((file) => file.mention))
       }
       if (pictures.length > 0) await addImages(pictures)
     } catch (error) {
@@ -359,14 +501,16 @@ export function Composer(props: ComposerProps) {
     if (images.length > 0 && imagesSupported === false) return showToast('当前模型没有打开「视觉」，发不了图片。确认模型支持视觉后，到「设置 → 模型与角色」里，在这个模型的「配置能力」中打开「视觉」')
     setSending(true)
     try {
-      const text = promptWithFileReferences(draft.trim(), fileReferences)
-      if (await onSend(text === '' ? IMAGE_ONLY_PROMPT : text, { goal, skills: skills.map((skill) => skill.name), images: images.map(({ id: _id, ...image }) => image) })) {
+      const text = promptWithFileReferences(draft.trim(), fileReferences.map(({ mention: _mention, ...file }) => file))
+      const sentImages = images.map(({ id: _id, mention: _mention, ...image }) => image)
+      if (await onSend(text === '' ? IMAGE_ONLY_PROMPT : text, { goal, skills: skills.map((skill) => skill.name), images: sentImages })) {
         setDraft('')
         setCaret(0)
         setGoal(false)
         setSkills([])
         setImages([])
         setFileReferences([])
+        clearComposerDraft(props.draftKey)
       }
     } catch (error) {
       showToast(`发送失败：${errorMessage(error)}`)
@@ -411,7 +555,6 @@ export function Composer(props: ComposerProps) {
     }
   }
 
-  const large = size === 'large'
   return (
     <div
       className={cn(
@@ -491,12 +634,14 @@ export function Composer(props: ComposerProps) {
         <div className={cn('flex flex-wrap gap-2', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')}>
           {images.map((image, index) => (
             <div key={image.id} className="relative" data-testid="composer-image">
-              <img src={imageUrl(image)} alt={`图片 ${index + 1}`} className="size-14 rounded-lg border object-cover" />
+              <button type="button" aria-label={`预览图片 ${index + 1}`} className="block rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setPreview({ kind: 'image', image })}>
+                <img src={imageUrl(image)} alt={`图片 ${index + 1}`} className="size-14 rounded-lg border object-cover" />
+              </button>
               <button
                 type="button"
                 aria-label={`移除图片 ${index + 1}`}
                 className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
-                onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+                onClick={() => removeImage(image)}
               >
                 <X className="size-3" />
               </button>
@@ -506,9 +651,11 @@ export function Composer(props: ComposerProps) {
       )}
       {fileReferences.length > 0 && <div className={cn('flex flex-wrap gap-2', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')}>
         {fileReferences.map((file) => <div key={file.path} title={file.path} className="flex max-w-full items-center gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1 pl-2.5 text-xs" data-testid="composer-file">
-          {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
-          <span className="max-w-52 truncate">{file.name}</span><span className="text-muted-foreground">{file.kind === 'directory' ? '文件夹' : '文件'}</span>
-          <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded p-1 hover:bg-muted" onClick={() => setFileReferences((current) => current.filter((item) => item.path !== file.path))}><X className="size-3" /></button>
+          <button type="button" aria-label={`预览附件 ${file.name}`} className="flex min-w-0 items-center gap-2 rounded outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setPreview({ kind: 'file', file })}>
+            {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
+            <span className="max-w-52 truncate">{file.name}</span><span className="text-muted-foreground">{file.kind === 'directory' ? '文件夹' : '文件'}</span>
+          </button>
+          <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded p-1 hover:bg-muted" onClick={() => removeFile(file)}><X className="size-3" /></button>
         </div>)}
       </div>}
       {(props.planMode || goal || skills.length > 0) && (
@@ -526,32 +673,47 @@ export function Composer(props: ComposerProps) {
           ))}
         </div>
       )}
-      <textarea
-        ref={textareaRef}
-        aria-label="任务"
-        aria-controls={menuOpen ? 'composer-slash-menu' : undefined}
-        aria-activedescendant={menuOpen && items.length > 0 ? `composer-option-${active}` : undefined}
-        rows={large ? 4 : 2}
-        autoFocus
-        value={draft}
-        placeholder={placeholder}
-        onChange={(event) => {
-          setDraft(event.target.value)
-          setCaret(event.target.selectionStart)
-        }}
-        onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-        onKeyDown={onKeyDown}
-        onPaste={(event) => {
-          const files = imageFiles(event.clipboardData.files)
-          if (files.length === 0) return
-          event.preventDefault()
-          void addAttachments(files, false)
-        }}
-        className={cn(
-          'max-h-[40vh] resize-none bg-transparent outline-none placeholder:text-muted-foreground',
-          large ? 'px-4.5 pt-4 pb-2 text-base' : 'px-3.5 pt-3 pb-1',
-        )}
-      />
+      <div className="relative">
+        {/* 着色层只画文字颜色和背景，不加内外边距，换行位置才和下面的 textarea 一致 */}
+        <div aria-hidden className={cn('pointer-events-none absolute inset-0 overflow-hidden', composing && 'invisible')}>
+          <div className={cn('composer-highlight w-full pr-5 whitespace-pre-wrap break-words', textLayout)} style={{ transform: `translateY(-${scrollTop}px)` }}>
+            {draft === '' ? <span className="text-muted-foreground">{placeholder}</span> : highlightDraft(draft, mentions)}
+          </div>
+        </div>
+        <textarea
+          ref={textareaRef}
+          aria-label="任务"
+          aria-controls={menuOpen ? 'composer-slash-menu' : undefined}
+          aria-activedescendant={menuOpen && items.length > 0 ? `composer-option-${active}` : undefined}
+          rows={large ? 4 : 2}
+          autoFocus
+          spellCheck={false}
+          value={draft}
+          placeholder={placeholder}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            setCaret(event.target.selectionStart)
+          }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+          onClick={(event) => setPreview(previewAt(event.currentTarget.value, event.currentTarget.selectionStart))}
+          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
+          onKeyDown={onKeyDown}
+          onPaste={(event) => {
+            // 图片直接缩小；从文件管理器复制来的文件如果拿得到本地路径，也当作附件
+            const files = [...event.clipboardData.files]
+            if (files.length === 0) return
+            event.preventDefault()
+            void addAttachments(files, true)
+          }}
+          className={cn(
+            'relative block w-full resize-none bg-transparent pr-2.5 outline-none [scrollbar-gutter:stable] placeholder:text-transparent',
+            textLayout,
+            composing ? 'text-foreground' : 'text-transparent caret-foreground',
+          )}
+        />
+      </div>
       {/* 底栏内边距加触发器的 px-2 等于输入框的 px，图标和占位符左缘对齐 */}
       <div className={cn('flex flex-wrap items-center gap-2 pt-1.5 pb-2.5', large ? 'px-2.5' : 'pr-2.5 pl-1.5')}>
         {props.leading}
@@ -601,7 +763,37 @@ export function Composer(props: ComposerProps) {
           </Tooltip>
         )}
       </div>
+      <AttachmentPreview preview={preview} onClose={() => setPreview(null)} />
     </div>
+  )
+}
+
+// 输入框里的附件缩略图、文件标签和 @token 点开后看大图或路径
+function AttachmentPreview({ preview, onClose }: { preview: PreviewTarget | null; onClose(): void }) {
+  return (
+    <Dialog open={preview !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className={cn(preview?.kind === 'image' && 'max-w-[90vw] sm:max-w-[90vw]')}>
+        {preview?.kind === 'image' && (
+          <>
+            <DialogTitle>图片预览</DialogTitle>
+            <img src={imageUrl(preview.image)} alt="附件图片" className="max-h-[75vh] w-auto max-w-full self-center rounded-lg object-contain" data-testid="composer-image-preview" />
+            <DialogDescription className="text-center">{preview.image.mention}</DialogDescription>
+          </>
+        )}
+        {preview?.kind === 'file' && (
+          <>
+            <DialogTitle className="flex items-center gap-2 break-all">
+              {preview.file.kind === 'directory' ? <Folder className="size-5 shrink-0" /> : <FileText className="size-5 shrink-0" />}
+              {preview.file.name}
+            </DialogTitle>
+            <DialogDescription className="break-all">{preview.file.path}</DialogDescription>
+            <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+              {preview.file.kind === 'directory' ? '文件夹' : '文件'}只以路径引用发送，模型需要时用文件工具读取；项目外路径需要授权。
+            </p>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -718,37 +910,60 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
         >
           {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
           <span className="truncate">{label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'}</span>
-          {label && supportsReasoning && effort !== 'default' && <span className="shrink-0 text-muted-foreground">· {REASONING_LABELS[effort]}</span>}
+          {label && supportsReasoning && (
+            <span className="shrink-0 rounded-[4px] bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{REASONING_LABELS[effort]}</span>
+          )}
           <ChevronDown className="size-3 shrink-0" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-96 w-72 overflow-y-auto">
+      <DropdownMenuContent align="end" className="max-h-[28rem] w-[20rem]">
+        <div className="flex items-center justify-between px-2 pt-1 pb-1.5 text-xs text-muted-foreground">
+          <span>模型</span>
+          <span>{providers?.reduce((count, provider) => count + provider.models.filter((model) => model.enabled !== false).length, 0) ?? 0} 个可用</span>
+        </div>
         {providers?.map((provider) => {
           const providerIcon = icons && icons.matchProviderIcon(provider)
           return (
             <div key={provider.id}>
-              <DropdownMenuLabel className="flex items-center gap-2 text-xs text-muted-foreground">
+              <DropdownMenuLabel className="flex items-center gap-2 pt-2 pb-1 text-xs text-muted-foreground">
                 <BrandIcon id={providerIcon} fallbackText={provider.name} size={16} className="size-4" />
                 <span className="min-w-0 truncate">{provider.name}</span>
               </DropdownMenuLabel>
-              {provider.models.filter((model) => model.enabled !== false).map((model) => (
-                <DropdownMenuItem key={model.id} onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}>
-                  <BrandIcon id={(icons && icons.matchModelIcon(model.id)) ?? providerIcon} fallbackText={provider.name} size={16} className="size-4" />
-                  <span title={model.id} className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
-                  {model.contextWindow && <span className="text-xs text-muted-foreground">{formatTokens(model.contextWindow)}</span>}
-                  {/* primary-color-allow: 选中标记 */}
-                  <Check className={cn('size-4 text-primary', modelRef?.providerId === provider.id && modelRef.modelId === model.id ? 'visible' : 'invisible')} />
-                </DropdownMenuItem>
-              ))}
+              {provider.models.filter((model) => model.enabled !== false).map((model) => {
+                const selected = modelRef?.providerId === provider.id && modelRef.modelId === model.id
+                const detail = [
+                  model.contextWindow ? `${formatTokens(model.contextWindow)} 上下文` : null,
+                  model.images ? '视觉' : null,
+                  model.id !== modelDisplayName(model) ? model.id : null,
+                ]
+                  .filter((part): part is string => part !== null)
+                  .join(' · ')
+                return (
+                  <DropdownMenuItem
+                    key={model.id}
+                    // primary-color-allow: 选中模型的底色，表示当前选择
+                    className={cn('items-center gap-2.5 py-2', selected && 'bg-soft focus:bg-soft')}
+                    onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}
+                  >
+                    <BrandIcon id={(icons && icons.matchModelIcon(model.id)) ?? providerIcon} fallbackText={provider.name} size={18} className="size-[18px]" />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span title={model.id} className="truncate">{modelDisplayName(model)}</span>
+                      <span className="truncate text-xs text-muted-foreground">{detail === '' ? '文本模型' : detail}</span>
+                    </span>
+                    {/* primary-color-allow: 选中标记 */}
+                    <Check className={cn('size-4 shrink-0 text-primary', selected ? 'visible' : 'invisible')} />
+                  </DropdownMenuItem>
+                )
+              })}
             </div>
           )
         })}
         {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
         {supportsReasoning && modelRef && (
           <>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="my-1" />
             <div
-              className="space-y-3 px-3 py-2"
+              className="rounded-lg bg-muted/50 p-3"
               onKeyDown={(event) => {
                 if (event.key !== 'Escape') event.stopPropagation()
               }}
@@ -756,11 +971,14 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
                 if (event.key !== 'Escape') event.stopPropagation()
               }}
             >
-              <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Zap className="size-3.5" />
                 <span id={reasoningLabelId}>思考强度</span>
-                <span className="text-muted-foreground">{REASONING_LABELS[effort]}</span>
               </div>
+              {/* primary-color-allow: 当前思考强度，右侧滑条的选中值 */}
+              <div className="mt-0.5 text-center text-2xl font-bold text-primary" aria-hidden="true">{REASONING_LABELS[effort]}</div>
               <Slider
+                className="mt-1"
                 aria-labelledby={reasoningLabelId}
                 aria-valuetext={REASONING_LABELS[effort]}
                 min={0}
@@ -773,13 +991,13 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
                   if (nextEffort) onChange({ ...modelRef, reasoningEffort: nextEffort })
                 }}
               />
-              <div className="flex justify-between text-xs text-muted-foreground" aria-hidden="true">
+              <div className="mt-1 flex justify-between text-xs text-muted-foreground" aria-hidden="true">
                 {efforts.map((value) => <span key={value}>{REASONING_LABELS[value]}</span>)}
               </div>
             </div>
           </>
         )}
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator className="my-1" />
         <DropdownMenuItem onSelect={() => openSettings('models')}>
           <Settings2 />
           模型与角色…

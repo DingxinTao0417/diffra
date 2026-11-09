@@ -46,6 +46,11 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除和外�
     await dispatch([note, folder], 'drop')
     await expect(window.getByTestId('composer-file')).toHaveCount(2)
     await expect(composer).toHaveAttribute('aria-busy', 'false')
+    // 拖入的文件在输入框里留下 @ 提示词，点附件能看路径
+    await expect(input).toHaveValue(/@note\.txt/)
+    await window.getByRole('button', { name: '预览附件 note.txt', exact: true }).click()
+    await expect(window.getByRole('dialog')).toContainText(note)
+    await window.keyboard.press('Escape')
     await dispatch([note], 'dragEnter')
     await dispatch([note], 'drop')
     await expect(composer).toHaveAttribute('aria-busy', 'false')

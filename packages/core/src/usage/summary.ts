@@ -4,7 +4,7 @@ const TOP_TASKS = 10
 const DAY_MS = 86_400_000
 
 export function emptyTotals(): UsageTotals {
-  return { calls: 0, unknownCalls: 0, input: 0, cacheRead: 0, output: 0, reasoning: 0 }
+  return { calls: 0, unknownCalls: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }
 }
 
 function addTo(totals: UsageTotals, record: UsageRecord): void {
@@ -12,6 +12,7 @@ function addTo(totals: UsageTotals, record: UsageRecord): void {
   if (record.input === null && record.output === null) totals.unknownCalls += 1
   totals.input += record.input ?? 0
   totals.cacheRead += record.cacheRead ?? 0
+  totals.cacheWrite += record.cacheWrite ?? 0
   totals.output += record.output ?? 0
   totals.reasoning += record.reasoning ?? 0
 }

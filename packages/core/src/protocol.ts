@@ -189,6 +189,14 @@ export interface UsageBreakdown {
   messages: number
 }
 
+// 最近一次模型调用返回的缓存用量，放在 usage_update 的 _meta.cache 里给界面；旧记录没有这一项。
+// input 是那次调用的输入 token 数：压缩后上下文的估算值会变小，缓存命中率仍要按原来的输入算
+export interface UsageCache {
+  read: number | null
+  write: number | null
+  input: number
+}
+
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
 export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact'
@@ -426,6 +434,7 @@ export interface UsageTotals {
   unknownCalls: number
   input: number
   cacheRead: number
+  cacheWrite: number
   output: number
   reasoning: number
 }

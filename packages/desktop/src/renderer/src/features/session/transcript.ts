@@ -48,6 +48,11 @@ export interface Usage {
   used: number
   size: number
   breakdown: UsageBreakdown | null
+  // 最近一次模型调用返回的缓存用量；旧记录和供应商没返回时为 null
+  cacheRead: number | null
+  cacheWrite: number | null
+  // 那次调用的输入 token 数；压缩后 used 变小，缓存命中率仍按它算
+  cacheInput: number
 }
 
 export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): Turn {
@@ -137,10 +142,35 @@ function diffraChoiceOf<T extends string>(update: SessionUpdate, key: 'result' |
   return oneOf(values, value) ? value : undefined
 }
 
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
 export function usageOf(update: SessionUpdate): Usage | null {
   if (update.sessionUpdate !== 'usage_update') return null
-  const meta = update._meta as { diffra?: UsageBreakdown } | null | undefined
-  return { used: update.used, size: update.size, breakdown: meta?.diffra ?? null }
+  const meta = update._meta as
+    | {
+        cache?: { read?: unknown; write?: unknown; input?: unknown }
+        diffra?: UsageBreakdown & {
+          // 兼容还没发布过的嵌套和扁平写法
+          cache?: { read?: unknown; write?: unknown; input?: unknown }
+          cacheRead?: unknown
+          cacheWrite?: unknown
+          cacheInput?: unknown
+        }
+      }
+    | null
+    | undefined
+  const raw = meta?.diffra
+  const cache = meta?.cache ?? raw?.cache
+  return {
+    used: update.used,
+    size: update.size,
+    breakdown: raw ? { system: raw.system, rules: raw.rules, tools: raw.tools, messages: raw.messages } : null,
+    cacheRead: tokenCount(cache?.read) ?? tokenCount(raw?.cacheRead),
+    cacheWrite: tokenCount(cache?.write) ?? tokenCount(raw?.cacheWrite),
+    cacheInput: tokenCount(cache?.input) ?? tokenCount(raw?.cacheInput) ?? update.used,
+  }
 }
 
 export function lastUsage(turns: StoredTurn[]): Usage | null {

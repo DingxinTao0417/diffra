@@ -11,8 +11,8 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-manual-compact-'))
   const model = await startScriptedModel([
-    { text: '第一轮已记录' },
-    { text: '第二轮已记录' },
+    { text: '第一轮已记录', promptTokens: 60_000, cacheReadTokens: 30_000 },
+    { text: '第二轮已记录', promptTokens: 60_000, cacheReadTokens: 30_000 },
     { text: '摘要：用户希望中文答复，保留项目约束。', delayMs: 1500 },
     { text: '按摘要继续了' },
   ])
@@ -27,6 +27,11 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     await taskInput(window).press('Enter')
     await expect(window.getByTestId('turn')).toHaveCount(2)
     await waitTaskDone(window)
+    // 上下文和缓存命中率都跟着模型返回的用量显示
+    const contextUsage = window.getByTestId('context-usage')
+    await expect(window.getByTestId('cache-usage')).toContainText('缓存 50%')
+    const beforePercent = Number((await contextUsage.textContent())?.match(/(\d+)%/)?.[1] ?? NaN)
+    expect(beforePercent).toBeGreaterThan(10)
     await taskInput(window).fill('待发送的草稿 /compact')
     const option = window.getByRole('listbox', { name: '命令和 Skill' }).getByRole('option').filter({ hasText: 'compact' })
     await expect(option).toBeVisible()
@@ -37,6 +42,9 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     await expect(window.getByRole('listbox', { name: '命令和 Skill' }).getByRole('option').filter({ hasText: 'compact' })).toHaveCount(0)
     await expect(cards(window, 'compaction')).toContainText('已手动压缩', { timeout: 15_000 })
     await waitTaskDone(window)
+    // 手动压缩后界面上的上下文百分比马上变小，不用等下一次模型调用
+    await expect.poll(async () => Number((await contextUsage.textContent())?.match(/(\d+)%/)?.[1] ?? beforePercent)).toBeLessThan(beforePercent)
+    await expect(window.getByTestId('cache-usage')).toContainText('缓存 50%')
     expect(model.requests()).toBe(3)
     expect(model.bodies()[2]).toContain('Write a summary')
     expect(model.bodies()[2]).toContain('原始细节')

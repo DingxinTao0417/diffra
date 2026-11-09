@@ -209,14 +209,14 @@ export async function runTurn(
       }
 
       const sentChars = contextChars(session)
-      const { toolCalls, inputTokens, answered } = await streamStep(session, active, signal, io)
+      const { toolCalls, inputTokens, cacheRead, cacheWrite, answered } = await streamStep(session, active, signal, io)
       if (inputTokens > 0) {
-        session.lastContext = { inputTokens, chars: sentChars }
+        session.lastContext = { inputTokens, chars: sentChars, cacheRead, cacheWrite }
         await io.update({
           sessionUpdate: 'usage_update',
           used: inputTokens,
           size: contextWindow(),
-          _meta: { diffra: session.usageBreakdown(inputTokens) },
+          _meta: { diffra: session.usageBreakdown(inputTokens), cache: { read: cacheRead, write: cacheWrite, input: inputTokens } },
         })
       }
 
@@ -536,7 +536,7 @@ export async function streamModelStep(
   settings: StepSettings,
   signal: AbortSignal,
   io: TurnIO,
-): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; answered: Set<string>; responseMessages: ModelMessage[] }> {
+): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[] }> {
   const result = streamText({
     model: settings.model,
     system: settings.system,
@@ -549,6 +549,8 @@ export async function streamModelStep(
   })
   const toolCalls: StepToolCall[] = []
   let inputTokens = 0
+  let cacheRead: number | null = null
+  let cacheWrite: number | null = null
   for await (const part of result.fullStream) {
     switch (part.type) {
       case 'text-delta':
@@ -567,6 +569,8 @@ export async function streamModelStep(
         break
       case 'finish-step':
         inputTokens = part.usage.inputTokens ?? inputTokens
+        cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
+        cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
         await io.recordUsage({ ...settings.usage, usage: part.usage })
         break
       case 'error':
@@ -579,7 +583,7 @@ export async function streamModelStep(
       message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
     ),
   )
-  return { toolCalls, inputTokens, answered, responseMessages }
+  return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages }
 }
 
 export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> {

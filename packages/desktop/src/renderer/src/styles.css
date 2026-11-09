@@ -206,7 +206,8 @@
 
 /* 仅更改对话正文和输入框，设置界面仍使用清晰的无衬线字体。 */
 :root[data-font-style="serif"] .markdown,
-:root[data-font-style="serif"] textarea[aria-label="任务"] {
+:root[data-font-style="serif"] textarea[aria-label="任务"],
+:root[data-font-style="serif"] .composer-highlight {
   font-family: Georgia, "Noto Serif SC", "Songti SC", SimSun, serif;
 }
 

@@ -92,7 +92,7 @@ describe('用量汇总', () => {
     )
     const summary = aggregator.result(0)
 
-    expect(summary.totals).toEqual({ calls: 4, unknownCalls: 1, input: 1200, cacheRead: 120, output: 120, reasoning: 6 })
+    expect(summary.totals).toEqual({ calls: 4, unknownCalls: 1, input: 1200, cacheRead: 120, cacheWrite: 0, output: 120, reasoning: 6 })
     expect(summary.days.map((day) => [day.date, day.calls])).toEqual([
       ['2026-11-04', 3],
       ['2026-11-05', 0],

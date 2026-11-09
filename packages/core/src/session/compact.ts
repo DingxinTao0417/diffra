@@ -3,7 +3,7 @@ import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { DEFAULT_CONTEXT_WINDOW, type ActiveModel, type TurnIO } from './loop.js'
-import type { StopReason } from '../protocol.js'
+import type { StopReason, UsageCache } from '../protocol.js'
 import { SCREENSHOT_MARKER } from './browser.js'
 import { IMAGE_CHARS, messagesChars, type Session } from './session.js'
 
@@ -48,6 +48,65 @@ export function estimateContextTokens(session: Session): number | null {
   return Math.round((last.inputTokens * contextChars(session)) / last.chars)
 }
 
+interface LastUsage {
+  used: number
+  cacheRead: number | null
+  cacheWrite: number | null
+  cacheInput: number
+}
+
+// 刚启动或重启后 lastContext 还是空的，从存下来的更新里找最近一次上下文用量
+function latestUsage(session: Session): LastUsage | null {
+  for (let turnIndex = session.turns.length - 1; turnIndex >= 0; turnIndex--) {
+    const updates = session.turns[turnIndex]?.updates ?? []
+    for (let updateIndex = updates.length - 1; updateIndex >= 0; updateIndex--) {
+      const update = updates[updateIndex]
+      if (update?.sessionUpdate !== 'usage_update' || update.used <= 0) continue
+      const meta = update._meta as
+        | {
+            cache?: { read?: unknown; write?: unknown; input?: unknown }
+            diffra?: { cache?: { read?: unknown; write?: unknown; input?: unknown }; cacheRead?: unknown; cacheWrite?: unknown; cacheInput?: unknown }
+          }
+        | null
+        | undefined
+      const cache = meta?.cache ?? meta?.diffra?.cache
+      return {
+        used: update.used,
+        cacheRead: typeof cache?.read === 'number' ? cache.read : typeof meta?.diffra?.cacheRead === 'number' ? meta.diffra.cacheRead : null,
+        cacheWrite: typeof cache?.write === 'number' ? cache.write : typeof meta?.diffra?.cacheWrite === 'number' ? meta.diffra.cacheWrite : null,
+        cacheInput:
+          typeof cache?.input === 'number' ? cache.input : typeof meta?.diffra?.cacheInput === 'number' ? meta.diffra.cacheInput : update.used,
+      }
+    }
+  }
+  return null
+}
+
+function cacheUsageOf(session: Session, previous: LastUsage | null): UsageCache {
+  if (session.lastContext) return { read: session.lastContext.cacheRead, write: session.lastContext.cacheWrite, input: session.lastContext.inputTokens }
+  return { read: previous?.cacheRead ?? null, write: previous?.cacheWrite ?? null, input: previous?.cacheInput ?? previous?.used ?? 0 }
+}
+
+// 压缩后按减少的字数比例折算上下文用量，让界面上的百分比马上跟着变；没有上次实际用量时发不了
+async function emitCompactedUsage(
+  session: Session,
+  io: TurnIO,
+  beforeChars: number,
+  beforeUsed: number | null,
+  cache: UsageCache,
+): Promise<void> {
+  if (beforeUsed === null || beforeChars <= 0) return
+  const afterChars = contextChars(session)
+  if (afterChars >= beforeChars) return
+  const used = Math.max(1, Math.round((beforeUsed * afterChars) / beforeChars))
+  await io.update({
+    sessionUpdate: 'usage_update',
+    used,
+    size: session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    _meta: { diffra: session.usageBreakdown(used), cache },
+  })
+}
+
 // 每次调用编码模型前检查：估算超过触发点时，先省略较早的工具输出，还不够再把早期对话压成摘要
 export async function compactIfNeeded(
   session: Session,
@@ -86,6 +145,8 @@ export async function compactIfNeeded(
   try {
     const summary = await summarize(session, options.model, cut, signal, io)
     session.compaction = { upTo: cut, summary: summaryMessage(session, options.requestIndex, cut, summary) }
+    // 压缩拖了一会儿才结束，界面上的上下文百分比这时就更新，不用等下一次模型调用
+    await emitCompactedUsage(session, io, charsBefore, estimate, cacheUsageOf(session, latestUsage(session)))
     await finishCard('completed', `上下文用到约 ${percent}%。${omittedNote}较早的对话压缩成了下面的摘要，最近 ${KEEP_RECENT_STEPS} 步保留原文。\n\n${summary}`)
     return { kind: 'ok' }
   } catch (error) {
@@ -112,6 +173,10 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
   try {
     await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '上下文压缩', kind: 'other', status: 'in_progress' })
+    // 压缩前后都按同一套字数估算；重启后 lastContext 为空时用存下来的最近一次用量
+    const beforeChars = contextChars(session)
+    const previous = latestUsage(session)
+    const beforeUsed = estimateContextTokens(session) ?? previous?.used ?? null
     const start = session.compaction?.upTo ?? 0
     // 优先保留最近四步；短会话至少保留最新用户轮，工具调用与结果不会拆开。
     let latestRequest = -1
@@ -148,10 +213,7 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
       return 'end_turn'
     }
     session.compaction = { upTo: cut, summary: content }
-    const estimate = estimateContextTokens(session)
-    if (estimate !== null) {
-      await io.update({ sessionUpdate: 'usage_update', used: estimate, size: session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW, _meta: { diffra: session.usageBreakdown(estimate) } })
-    }
+    await emitCompactedUsage(session, io, beforeChars, beforeUsed, cacheUsageOf(session, previous))
     await finishCard('completed', `已手动压缩早期上下文（对话约 ${before.toLocaleString()} → ${after.toLocaleString()} 字），保留最近内容。历史记录和任务完成条件不变。\n\n${summary}`)
     return 'end_turn'
   } finally {

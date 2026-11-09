@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { checksSummary, useProject } from '@/features/project/useProject'
 import { Composer } from '@/features/task/Composer'
+import { composerDraftKey } from '@/features/task/composer-drafts'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { openDesign, openHome, openSettings, openTask, pickProject, setPermissionMode, startTask } from '@/state/actions'
@@ -70,6 +71,7 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
     [tasks, live],
   )
   const openPage = design ? openDesign : openHome
+  const draftKey = design ? composerDraftKey.design(projectPath) : composerDraftKey.home(projectPath)
   const modelLabel = modelLabelOf(settings, model ?? settings?.roles.coder ?? null)
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
   const workspacePath = settings?.defaultWorkspace.path
@@ -183,7 +185,9 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
 
       <div className="w-full max-w-[720px] space-y-3">
         <Composer
+          key={draftKey}
           size="large"
+          draftKey={draftKey}
           leading={projectPath ? null : projectMenu}
           projectPath={projectPath}
           mcpTarget={projectPath ? { projectPath } : { noProject: true }}

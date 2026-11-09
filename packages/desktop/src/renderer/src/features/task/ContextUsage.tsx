@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Archive, Info } from 'lucide-react'
+import { Archive, Info, Zap } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -20,10 +20,35 @@ const USAGE_PARTS = [
 const RING_RADIUS = 6
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS
 
+function cacheRateOf(usage: Usage): number | null {
+  return usage.cacheRead !== null && usage.cacheInput > 0 ? Math.min(100, Math.round((usage.cacheRead / usage.cacheInput) * 100)) : null
+}
+
+// 输入框下方、上下文旁边显示的缓存命中率：最近一次模型调用里有多少输入 token 走了缓存
+export function CacheUsage({ usage }: { usage: Usage }) {
+  const rate = cacheRateOf(usage)
+  const detail =
+    usage.cacheRead === null
+      ? '供应商没有返回缓存用量'
+      : `最近一次模型调用：输入 ${formatTokens(usage.cacheInput)}，命中 ${formatTokens(usage.cacheRead)}${usage.cacheWrite === null ? '' : `，写入 ${formatTokens(usage.cacheWrite)}`}`
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="flex items-center gap-1 tabular-nums" data-testid="cache-usage">
+          <Zap className="size-3" />
+          缓存 {rate === null ? '—' : `${rate}%`}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{detail}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function ContextUsage({ sessionId, usage, running }: { sessionId: string; usage: Usage; running: boolean }) {
   const [open, setOpen] = useState(false)
   const percent = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0
   const high = percent >= 80
+  const cacheRate = cacheRateOf(usage)
   const breakdown = usage.breakdown
   // 分项是按字数分摊的估算，加起来不一定正好等于 used，按分项之和归一化才能让四段占满整条
   const breakdownTotal = breakdown ? USAGE_PARTS.reduce((sum, part) => sum + breakdown[part.key], 0) : 0
@@ -118,6 +143,18 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
             </div>
           </div>
         )}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs text-muted-foreground">缓存</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg font-bold tabular-nums">{cacheRate === null ? '—' : `${cacheRate}%`}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {usage.cacheRead === null
+                ? '供应商没有返回缓存用量'
+                : `命中 ${formatTokens(usage.cacheRead)}${usage.cacheWrite === null ? '' : ` · 写入 ${formatTokens(usage.cacheWrite)}`}`}
+            </span>
+          </div>
+          <span className="text-xs text-muted-foreground">最近一次模型调用的输入里，命中缓存的比例。</span>
+        </div>
         <div className="-mx-3 flex justify-end border-t px-3 pt-3">
           <Button variant="outline" size="sm" disabled={running} onClick={compact}>
             <Archive />

@@ -100,8 +100,8 @@ export class Session {
   readonly messageStarts = new Map<string, number>()
   // 上下文压缩的位置和摘要；messages 保留原文，重新生成、撤销照常按位置截断
   compaction: Compaction | null = null
-  // 上一次模型调用的输入 token 数和当时发出去的字数，用来估算下一次调用有多大
-  lastContext: { inputTokens: number; chars: number } | null = null
+  // 上一次模型调用的输入 token 数、当时发出去的字数和缓存用量，用来估算下一次调用有多大
+  lastContext: { inputTokens: number; chars: number; cacheRead: number | null; cacheWrite: number | null } | null = null
   // 验证缓存仅存于内存，恢复后重新验证；Git 快照覆盖未跟踪文件。
   verifiedSnapshot: string | null = null
   taskState: TaskState = newTaskState()

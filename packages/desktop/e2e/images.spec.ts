@@ -61,6 +61,21 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
     await expect(window.getByRole('button', { name: '添加图片', exact: true })).toHaveCount(0)
     await window.evaluate(DROP_SMALL_IMAGE)
     await expect(thumbnails).toHaveCount(2)
+    // 附件在输入框里留下 @ 提示词，点缩略图能看大图
+    await expect(input).toHaveValue(/@图片1/)
+    await expect(input).toHaveValue(/@图片2/)
+    // 点输入框里的 @ 提示词也能打开预览：这里把光标放到 @图片1 里再点一下
+    await window.evaluate(`(() => {
+      const element = document.querySelector('textarea[aria-label="任务"]')
+      element.focus()
+      element.setSelectionRange(2, 2)
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })()`)
+    await expect(window.getByTestId('composer-image-preview')).toBeVisible()
+    await window.keyboard.press('Escape')
+    await window.getByRole('button', { name: '预览图片 1', exact: true }).click()
+    await expect(window.getByTestId('composer-image-preview')).toBeVisible()
+    await window.keyboard.press('Escape')
     await window.screenshot({ path: 'test-results/images-composer.png' })
 
     // 模型没开图片：不发，说明去哪里开，输入框里的内容留着
@@ -81,13 +96,10 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
     await expect(capabilities).toBeHidden()
     await window.getByRole('button', { name: '返回' }).click()
-    // 去设置页时首页的输入框卸载了，草稿和图片不保留，重新加
-    await window.evaluate(PASTE_BIG_IMAGE)
-    await expect(thumbnails).toHaveCount(1)
-    await expect(window.getByTestId('composer')).toHaveAttribute('aria-busy', 'false')
-    await window.evaluate(DROP_SMALL_IMAGE)
+    // 去设置页再回来，输入框草稿和两张图片都还在
+    await expect(input).toHaveValue('这两张图是什么')
     await expect(thumbnails).toHaveCount(2)
-    await input.fill('这两张图是什么')
+    await expect(window.getByTestId('composer')).toHaveAttribute('aria-busy', 'false')
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await expect(window.getByTestId('task-title')).toBeVisible()
     await waitTaskDone(window)

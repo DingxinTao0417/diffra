@@ -4,8 +4,8 @@ import type { AddressInfo } from 'node:net'
 // 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复；
 // promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满
 export type ScriptStep =
-  | { toolCalls: Array<{ name: string; input: unknown }>; text?: string; delayMs?: number; promptTokens?: number }
-  | { text: string; delayMs?: number; promptTokens?: number }
+  | { toolCalls: Array<{ name: string; input: unknown }>; text?: string; delayMs?: number; promptTokens?: number; cacheReadTokens?: number }
+  | { text: string; delayMs?: number; promptTokens?: number; cacheReadTokens?: number }
 
 export interface ScriptedModel {
   baseUrl: string
@@ -89,7 +89,12 @@ export async function startScriptedModel(
 function chunksFor(step: ScriptStep, index: number): unknown[] {
   const base = { id: `chatcmpl-${index}`, object: 'chat.completion.chunk', created: 1, model: 'scripted' }
   const promptTokens = step.promptTokens ?? 1200
-  const usage = { prompt_tokens: promptTokens, completion_tokens: 20, total_tokens: promptTokens + 20 }
+  const usage = {
+    prompt_tokens: promptTokens,
+    completion_tokens: 20,
+    total_tokens: promptTokens + 20,
+    ...(step.cacheReadTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: step.cacheReadTokens } }),
+  }
   const textChunks = step.text ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: step.text }, finish_reason: null }] }] : []
   if (!('toolCalls' in step)) {
     return [...textChunks, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]

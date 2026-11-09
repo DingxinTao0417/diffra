@@ -19,7 +19,8 @@ import { turnVerdict, type Verdict, type VerdictTone } from '@/lib/turn-verdict'
 import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
-import { ContextUsage } from './ContextUsage'
+import { composerDraftKey } from './composer-drafts'
+import { CacheUsage, ContextUsage } from './ContextUsage'
 import { Conversation } from './Conversation'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReviewPanel } from './ReviewPanel'
@@ -157,6 +158,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
               ))}
               <Composer
                 size="normal"
+                draftKey={composerDraftKey.task(task.sessionId)}
                 projectPath={task.project}
                 mcpTarget={{ sessionId: task.sessionId }}
                 commands={commands}
@@ -184,6 +186,7 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
                   </span>
                 )}
                 <div className="flex-1" />
+                {task.usage && <CacheUsage usage={task.usage} />}
                 {task.usage && <ContextUsage sessionId={task.sessionId} usage={task.usage} running={task.running} />}
               </div>
             </div>
