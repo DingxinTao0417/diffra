@@ -290,6 +290,40 @@ v2：
 - 保留供应商与角色的数据结构，旧模型默认启用。停用模型从选择器移除并清空对应角色，服务端拒绝新任务使用停用模型；已经运行的任务不强行中断。显示名称只用于界面，请求继续使用原始 Model ID。
 - 模型行通过省略号菜单配置能力、测试连接或移除，启用开关直接可见。能力表不照搬服务商未支持的 max 等取值；只保存当前协议可实际发送的思考参数。
 
+## 模型图标（第 130–137 步）
+
+- 来源：`@lobehub/icons@6.15.0`（MIT，出处登记在 `packages/desktop/NOTICE.md`），锁定版本。主界面 CSP 是 `img-src 'self' data:`，图标只能打包进应用，不从 CDN 取。
+- 只在构建期使用：放在 `devDependencies`，渲染进程构建时打进 `out/`，包本身不进 asar（打包只带 `out/**/*` 和生产依赖）。
+- 只用它的品牌图标组件（Mono、Color 两个变体）、`toc`（图标清单）和 `features/modelConfig` 的模型匹配表；`ModelIcon`、`ProviderIcon`、`Avatar` 这些组件都不用。
+  - `lib/lobe-icon-table.ts` 由 `scripts/gen-lobe-icons.ts` 生成：`toc` 里服务类、模型类的图标，加上模型匹配表用到的图标，共 230 个。升级包以后重跑。
+- `@lobehub/ui` 用本地占位模块，不安装：
+  - 包把它列为必需的 peer，但它是一整套 UI 库（emotion 等几十个依赖），和本项目的 shadcn + Tailwind 是两套体系。
+  - 品牌入口会导入 Avatar 和 Combine，它们依赖 `@lobehub/ui` 的 `Flexbox`、`Center`、`useThemeMode`；模型匹配表又导入了全部品牌入口，所以绕不开这条导入链。
+  - `pnpm-workspace.yaml` 用 `packageExtensions` 把它标成可选 peer；渲染进程构建用 alias 把 `@lobehub/ui` 指到 `lib/lobe-ui-shim.tsx`，只导出这条链上用到的名字（`Flexbox`、`Center`、`useThemeMode`），只为让构建能解析，Avatar、Combine 实际不会渲染。升级后构建报缺少导出，再按报错补。
+  - 包里每个组件文件都带 `"use client"`，构建会逐个告警，渲染进程关掉了 `moduleLevelDirective` 检查。
+- 服务图标的匹配顺序（`lib/model-icons.ts`）：
+  1. 用户自选的；
+  2. 预设对应的图标（服务类优先：百炼三个预设都是 Bailian，Kimi 两个预设是 Moonshot，智谱两个是 Zhipu）；
+  3. 名称：先查中文和常见叫法的别名表（硅基流动、百炼、通义、智谱、月之暗面、火山、混元、文心、讯飞……，更具体的写在前面）；再和 `toc` 的 id、标题、全称做整词匹配，全称括号里的别名（如「SiliconCloud (SiliconFlow)」）排在后面，同等时服务类优先于模型类；
+     - id 或标题本身是常用词的（Inference、Nova、Together、Spark、Yi 等，见 `COMMON_WORDS`）只在整个名称等于它时命中，作为名称里的一个词不算：「Local Inference」「Nova 网关」不会认成 Inference、Nova；
+  4. 地址：主机名去掉 `api.`、`www.` 后各段都试，顺序是二级域名、往左逐段的子域名、最后整个注册域名（`api.siliconflow.cn` → siliconflow；x.ai、z.ai 这类二级域名只有一个字母的，靠注册域名认出）。别名表先在所有段里按表的顺序找（`dashscope.aliyuncs.com` 是百炼，不是阿里云），再逐段按清单匹配；子域名是常用词的跳过，IP 和 localhost 不参与；
+  5. 都不中，显示通用回退：32px 的卡片头像是首字母方块，20px 及以下（模型行、菜单、选择器）写不下字，换成 lucide 的 `Box` 图标。
+- 模型图标：按模型 ID 用 Lobe 的模型匹配表，按表的顺序取第一条命中（`qwen3-coder` → Qwen）；不中就用所属服务的图标。这样聚合服务下面的模型也能分清。
+- 自选与自动匹配：服务配置多一个 `icon` 字段，存 Lobe 的图标 id，null 表示自动匹配；旧设置文件没有这个字段，按 null 读。
+  - 添加和编辑服务弹窗里，「名称」左边是图标按钮，显示当前图标；点开是选择器：搜索框、「自动匹配」一项、服务类和模型类图标的网格。预设服务也能改。
+  - 选择器的显示名称去重：标题重名的（Azure 和 Microsoft 都叫 Azure，Grok 和 xAI 都叫 Grok）换成完整标题，还重名就用 id。
+  - 搜索查 id、标题、完整标题和别名表里的叫法，搜「深度求索」能搜到 DeepSeek；在搜索框按 Enter 选中第一条（输入法组字时的 Enter 不算）。
+  - 键盘和读屏：「自动匹配」和网格是同一个 `radiogroup`，每项是 `radio`，`aria-checked` 标当前自选，可访问名称是「选择图标：名字」；只有一项在 Tab 序列里，方向键在网格里按行列移动焦点、不选中，Home、End 到首尾，Enter、空格选中。
+  - 名称不为空又认不出来时，标签旁显示「没认出来，点这里选」，点了直接打开选择器。
+  - 切换预设会把自选清回自动匹配；选「自动匹配」保存后存回 null。
+- 彩色和单色：有彩色版本的用彩色，没有的用单色（跟随 `currentColor`，深浅主题都看得清）。彩色版主体是近黑色的几个（`DARK_MONO`：AionLabs、CogVideo、CogView、LlmApi、Meshy、Targon、Unsloth）深色主题下改用单色。图标都是 `aria-hidden`，不改变按钮、菜单项的可访问名称。
+- 品牌图标 SVG 自带的原色是第三方数据，列在「组件里不写 px 字号……和十六进制颜色」那条的例外里。
+- 按需加载：图标组件、清单和匹配表放在 `lib/lobe-icons.tsx`，只通过 `useLobeIcons()` 动态导入；第一次用到时加载，加载完之前显示上面的通用回退。
+- 体积（2026-11-08，渲染进程构建，和接入前对比；审查后的修复没有重新构建，下面的数字未重测）：
+  - 启动时加载的部分多了约 12.5 kB（主入口 2,151.24 kB → 2,140.99 kB，另拆出静态加载的 `model-icons` 22.76 kB）。
+  - 按需加载的 `lobe-icons` 1,857.74 kB（gzip 约 406 kB），外加 1.64 kB 的依赖小块。
+- 范围：设置里的服务卡和模型行、添加和编辑服务弹窗、输入框的模型菜单（分组标题、模型行、触发按钮）。角色分配下拉、任务监控里的模型行、网站不在这次。
+
 ## 紧凑会话展示
 
 - 聊天默认展示编辑文件摘要，完整 diff 点击展开；连续编辑按组折叠，保留逐次操作记录。每轮提供展开/收起代码详情，用户手动展开不会被流式更新自动收回。
@@ -583,7 +617,7 @@ v2：
   - warning 给需要留意、可能要出手但不是失败的情况：等待确认、受阻、未完成或未验证、命令失败、检查工具出错或只看了一部分、提醒级发现。destructive 只给确定的失败和打回，以及破坏性动作。过程和配置（运行中、跑完、已开、已停止、没有改动）用 muted。
   - primary 只用于用户的下一步动作（发送、允许一次、最后一张通过的完成卡上的「审阅改动」、首页「检测到 N 个检查命令」、侧栏「新版本…点击重启安装」，以及 markdown 链接和 link 样式按钮：可点的就是动作），不表示成功，也不用于运行中的转圈、未读点和首页没选项目时的选择器。例外只有三类：品牌标（侧栏、关于页）；终端光标；拖入文件时输入框的描边和「松开以添加文件或文件夹」提示（用户正在做的拖放）。选中标记（菜单里的勾、单选点、勾选框、开关、滑块、配色缩略图的选中框、设计页对齐格的选中态）不算。计划卡图标用 muted-foreground，时间线当前轮用 foreground（细线上 soft 看不出来），浏览器加载条和上下文用量（输入框下的圆环、弹层里的总量条）用 muted-foreground，用量到 80% 起用 warning。以前也用 primary、现在改成中性色的：输入框里的计划、目标、Skill 标签和附件标签同样式（`border bg-muted/40`、文字 foreground，× 悬停 `bg-muted`）；附件的文件夹图标和终端拖动条用 muted-foreground；设计页当前工具、添加模型步骤条的当前步是「当前项」（首页原来的「设计」开关也是，已经去掉，见「设计模式」），用 soft 底加 foreground；排队消息的「撤回」用 muted-foreground、悬停 foreground，和计划卡「恢复原计划」一致。新加 primary 要过颜色门禁（见下面），在同一行或上一行写 `primary-color-allow: 理由`，理由写它是哪种下一步动作或哪条例外。
   - 权限卡是唯一大声的元素。只有「运行中」有持续动画（转圈），「等待确认」用静态的 warning 标记。
-- 令牌都在 `packages/desktop/src/renderer/src/styles.css`，组件里不写 px 字号、`text-[0.86rem]` 这类临时值和十六进制颜色。设计页图层树的 `text-[10px]` 已换成 `text-xs`；destructive-solid 按钮深色下的 `dark:text-[#1a0d0b]` 换成了 `destructive-foreground` 令牌（`text-destructive-foreground`，浅色 #ffffff、深色 #1a0d0b）。原有的例外照旧：xterm 的终端配色（见「界面」的底部终端），设置页配色缩略图的色值（数据，和 styles.css 里各配色保持一致）。
+- 令牌都在 `packages/desktop/src/renderer/src/styles.css`，组件里不写 px 字号、`text-[0.86rem]` 这类临时值和十六进制颜色。设计页图层树的 `text-[10px]` 已换成 `text-xs`；destructive-solid 按钮深色下的 `dark:text-[#1a0d0b]` 换成了 `destructive-foreground` 令牌（`text-destructive-foreground`，浅色 #ffffff、深色 #1a0d0b）。原有的例外照旧：xterm 的终端配色（见「界面」的底部终端），设置页配色缩略图的色值（数据，和 styles.css 里各配色保持一致），模型和服务品牌图标（`@lobehub/icons`）SVG 自带的原色（第三方数据，见「模型图标」）。
   - 字号（md 档）：xs 12 / sm 13 / base 14 / lg 16 / xl 20 / 2xl 26。用 rem 写，跟着「文字大小」缩放；xs 用 `max(12px, …rem)` 兜住中文最小 12px。2xl 只用在首页标题和用量页的统计数字。
   - 字重用 400、600、700，加粗按文字内容定，不按字号：只要可能含中文（固定文案或动态内容：页标题、弹窗和确认框标题、提醒和错误卡标题、完成卡结论词、模型服务名、markdown 标题等）一律用 700（`font-bold`），原语 `PopoverTitle` 也是 700；只有确定只出现拉丁字母和数字的（侧栏和关于页的「Diffra」、用量页的数字、日期和合计列）用 600。雅黑只有 300、400、700：没有 500，`font-medium` 中英都按 400 画，表达不了层级，新代码不用（shadcn 原语和设计页里遗留的 `font-medium` 按 400 画，暂不清理）；层级靠字号、颜色和位置。600 时拉丁字母是 Segoe UI Semibold，中文画成雅黑 Bold 700，同一行中英粗细不一；用 700 时中文看起来不变，只有拉丁字母、数字和「·」粗一档，和中文一致。数字用 `tabular-nums`；等宽字体只给路径、命令、代码和模型 ID。
   - 字体栈 Segoe UI 在雅黑前面（D5），英文能用到真正的 600，代价是 600 的中文按 700 画，所以 600 只留给只有拉丁字母和数字的文字。以前只有 xl 及以上的标题用 700，较小字号（弹窗标题、markdown 标题等）仍用 600，同一行里中文和拉丁字母粗细不一。

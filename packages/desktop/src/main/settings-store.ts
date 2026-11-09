@@ -25,6 +25,8 @@ export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId:
 
 export const providerFieldsSchema = z.object({
   presetId: z.string().nullable(),
+  // 第 131 步加的，旧设置文件里没有
+  icon: z.string().max(100).nullable().default(null),
   name: z.string().trim().min(1, '名称不能为空'),
   protocol: z.enum(PROTOCOLS),
   baseUrl: z.url({ protocol: /^https?$/, error: '地址必须是 http(s) 开头的完整 URL' }),

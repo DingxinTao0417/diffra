@@ -4,6 +4,7 @@ import { baseUrlHint, CUSTOM_PROTOCOLS, PROTOCOL_LABELS, PROVIDER_PRESETS } from
 import { modelDisplayName, MAX_MODEL_ID_LENGTH, MAX_PROVIDER_MODELS, type ModelConfig, type ProviderInput, type ProviderView, type SettingsView } from '../../../../shared/settings'
 import { Check, ChevronRight, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { cn } from 'cn'
+import { IconPicker } from './IconPicker'
 import { capabilitySummary, ModelCapabilities, validateModelCapabilities } from './ModelCapabilities'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -28,6 +29,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { errorMessage } from '@/lib/errors'
+import { useLobeIcons } from '@/lib/model-icons'
 
 const CUSTOM = 'custom'
 // 选了供应商后两步共用的最小高度，切步骤、出现报错时底栏不动。39.75rem 取只有一个模型 ID 时第 1 步的最高实测值（三行说明的预设），min() 让矮窗口里弹窗不出现外层滚动
@@ -79,6 +81,8 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
   const [models, setModels] = useState<Array<{ key: string; config: ModelConfig }>>(() =>
     (provider?.models.length ? provider.models : [{ id: '', contextWindow: null, images: false }]).map((config) => ({ key: crypto.randomUUID(), config })),
   )
+  const [icon, setIcon] = useState(provider?.icon ?? null)
+  const [iconPickerOpen, setIconPickerOpen] = useState(false)
   const [name, setName] = useState(provider?.name ?? '')
   const [protocol, setProtocol] = useState<Protocol>(provider?.protocol ?? 'openai-compatible')
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
@@ -87,9 +91,13 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
   const [error, setError] = useState<string | null>(null)
 
   const preset = PROVIDER_PRESETS.find((item) => item.id === presetId)
+  const icons = useLobeIcons()
+  const matchedIcon = icons?.matchProviderIcon({ icon: null, presetId: presetId === CUSTOM ? null : presetId, name, baseUrl }) ?? null
+  const iconUnrecognized = icons !== null && icon === null && matchedIcon === null && name.trim() !== ''
 
   const choosePreset = (id: string) => {
     setPresetId(id)
+    setIcon(null)
     const chosen = PROVIDER_PRESETS.find((item) => item.id === id)
     setName(chosen?.name ?? '')
     setProtocol(chosen?.protocol ?? 'openai-compatible')
@@ -112,7 +120,7 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
     if (step === 'connection') { setError(null); setStep('capabilities'); return }
     setSaving(true)
     setError(null)
-    const input: ProviderInput = { id: provider?.id, presetId: presetId === CUSTOM ? null : presetId, name: name.trim(), protocol, baseUrl: baseUrl.trim(), models: configured, apiKey: apiKey.trim() || undefined }
+    const input: ProviderInput = { id: provider?.id, presetId: presetId === CUSTOM ? null : presetId, icon, name: name.trim(), protocol, baseUrl: baseUrl.trim(), models: configured, apiKey: apiKey.trim() || undefined }
     try {
       for (const model of configured.filter((item) => item.enabled !== false)) {
         const result = await window.diffra.validateProviderModel(input, model.id)
@@ -171,9 +179,16 @@ function ProviderForm({ provider, onSaved, onCancel }: ProviderFormProps) {
               <AlertDescription>{preset.note}</AlertDescription>
             </Alert>
           )}
-          <Field id="provider-name" label="名称">
-            <Input id="provider-name" placeholder="例如 DeepSeek" value={name} onChange={(event) => setName(event.target.value)} required />
-          </Field>
+          <div className="space-y-1.5">
+            <div className="flex h-4 items-center justify-between">
+              <Label htmlFor="provider-name">名称</Label>
+              {iconUnrecognized && <Button type="button" size="xs" variant="link" className="h-auto px-0" onClick={() => setIconPickerOpen(true)}>没认出来，点这里选</Button>}
+            </div>
+            <div className="flex items-center gap-2">
+              <IconPicker value={icon} matched={matchedIcon} fallbackText={name} open={iconPickerOpen} onOpenChange={setIconPickerOpen} onChange={setIcon} />
+              <Input id="provider-name" placeholder="例如 DeepSeek" value={name} onChange={(event) => setName(event.target.value)} required />
+            </div>
+          </div>
           {presetId === CUSTOM ? (
             <Field id="provider-protocol" label="API 类型">
               <Select

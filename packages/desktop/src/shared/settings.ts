@@ -37,6 +37,8 @@ export function modelDisplayName(model: Pick<ModelConfig, 'id' | 'displayName'>)
 export interface ProviderConfig {
   id: string
   presetId: string | null
+  // Lobe Icons 的图标 id，用户自选的；null 表示按预设、名称和地址自动匹配
+  icon: string | null
   name: string
   protocol: Protocol
   baseUrl: string
@@ -178,6 +180,7 @@ export interface SettingsView {
 export interface ProviderInput {
   id?: string
   presetId: string | null
+  icon: string | null
   name: string
   protocol: Protocol
   baseUrl: string

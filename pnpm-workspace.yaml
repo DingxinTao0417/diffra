@@ -9,3 +9,9 @@ allowBuilds:
   '@ast-grep/lang-python': false
   # 设计页 PDF 导出（jspdf → canvg）带进来的；安装脚本只打印捐助横幅
   core-js: false
+packageExtensions:
+  # 模型匹配表会经品牌入口间接导入 Avatar 和 Combine，它们依赖 @lobehub/ui；这里标成可选 peer 不安装，构建时用 alias 指到 lib/lobe-ui-shim.tsx（见 docs/decisions.md）
+  '@lobehub/icons':
+    peerDependenciesMeta:
+      '@lobehub/ui':
+        optional: true

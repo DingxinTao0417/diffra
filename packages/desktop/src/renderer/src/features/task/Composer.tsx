@@ -1,4 +1,4 @@
-import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type CommandInfo, type PermissionMode, type PromptImage, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
 import { ArrowUp, Check, ChevronDown, File as FileIcon, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
@@ -20,9 +20,11 @@ import { Kbd } from '@/components/ui/kbd'
 import { Slider } from '@/components/ui/slider'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useMcpStatus } from '@/features/mcp/useMcpStatus'
+import { BrandIcon } from '@/features/models/BrandIcon'
 import { errorMessage } from '@/lib/errors'
 import { formatTokens } from '@/lib/format'
 import { imageUrl, MAX_PROMPT_IMAGES, prepareImage } from '@/lib/images'
+import { useLobeIcons } from '@/lib/model-icons'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
 import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
@@ -693,6 +695,13 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
   const requestedEffort = modelRef?.reasoningEffort ?? 'default'
   const effort = efforts.includes(requestedEffort) ? requestedEffort : 'default'
   const reasoningLabelId = useId()
+  const icons = useLobeIcons()
+  const selectedModelId = modelRef?.modelId
+  // 输入框每次按键都会重渲染，按名称匹配服务图标要扫一遍图标清单，触发按钮上的结果缓存起来
+  const selectedIcon = useMemo(
+    () => (icons && selectedProvider && selectedModelId ? (icons.matchModelIcon(selectedModelId) ?? icons.matchProviderIcon(selectedProvider)) : null),
+    [icons, selectedProvider, selectedModelId],
+  )
   return (
     <DropdownMenu onOpenChange={(open) => open && void refreshSettings()}>
       <DropdownMenuTrigger asChild>
@@ -707,25 +716,33 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
             'max-w-72 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
           )}
         >
+          {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
           <span className="truncate">{label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'}</span>
           {label && supportsReasoning && effort !== 'default' && <span className="shrink-0 text-muted-foreground">· {REASONING_LABELS[effort]}</span>}
           <ChevronDown className="size-3 shrink-0" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-96 w-72 overflow-y-auto">
-        {providers?.map((provider) => (
-          <div key={provider.id}>
-            <DropdownMenuLabel className="text-xs text-muted-foreground">{provider.name}</DropdownMenuLabel>
-            {provider.models.filter((model) => model.enabled !== false).map((model) => (
-              <DropdownMenuItem key={model.id} onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}>
-                <span title={model.id} className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
-                {model.contextWindow && <span className="text-xs text-muted-foreground">{formatTokens(model.contextWindow)}</span>}
-                {/* primary-color-allow: 选中标记 */}
-                <Check className={cn('size-4 text-primary', modelRef?.providerId === provider.id && modelRef.modelId === model.id ? 'visible' : 'invisible')} />
-              </DropdownMenuItem>
-            ))}
-          </div>
-        ))}
+        {providers?.map((provider) => {
+          const providerIcon = icons && icons.matchProviderIcon(provider)
+          return (
+            <div key={provider.id}>
+              <DropdownMenuLabel className="flex items-center gap-2 text-xs text-muted-foreground">
+                <BrandIcon id={providerIcon} fallbackText={provider.name} size={16} className="size-4" />
+                <span className="min-w-0 truncate">{provider.name}</span>
+              </DropdownMenuLabel>
+              {provider.models.filter((model) => model.enabled !== false).map((model) => (
+                <DropdownMenuItem key={model.id} onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}>
+                  <BrandIcon id={(icons && icons.matchModelIcon(model.id)) ?? providerIcon} fallbackText={provider.name} size={16} className="size-4" />
+                  <span title={model.id} className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
+                  {model.contextWindow && <span className="text-xs text-muted-foreground">{formatTokens(model.contextWindow)}</span>}
+                  {/* primary-color-allow: 选中标记 */}
+                  <Check className={cn('size-4 text-primary', modelRef?.providerId === provider.id && modelRef.modelId === model.id ? 'visible' : 'invisible')} />
+                </DropdownMenuItem>
+              ))}
+            </div>
+          )
+        })}
         {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
         {supportsReasoning && modelRef && (
           <>

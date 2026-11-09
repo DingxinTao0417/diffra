@@ -38,7 +38,12 @@ export default defineConfig({
   },
   renderer: {
     resolve: {
-      alias: { '@': resolve(import.meta.dirname, 'src/renderer/src'), '@acemir/cssom': cssomEntry },
+      alias: {
+        '@': resolve(import.meta.dirname, 'src/renderer/src'),
+        '@acemir/cssom': cssomEntry,
+        // @lobehub/icons 的 peer 依赖，没有安装，指到占位模块（见文件里的说明）
+        '@lobehub/ui': resolve(import.meta.dirname, 'src/renderer/src/lib/lobe-ui-shim.tsx'),
+      },
     },
     build: {
       rolldownOptions: {
@@ -47,6 +52,8 @@ export default defineConfig({
           // 设计页（OpenPencil 矢量编辑器，Vue）单独一个页面：要放开 WASM 和 eval，不能和主界面共用 CSP
           design: resolve(import.meta.dirname, 'src/renderer/design.html'),
         },
+        // @lobehub/icons 每个组件文件都带 "use client"，打包时逐个告警上千条；这里不是 React Server Components，指令没有意义
+        checks: { moduleLevelDirective: false },
       },
     },
     // Vue 编译出的虚拟模块（App.vue?vue&lang.ts）也以 .ts 结尾，不能让 React 插件处理

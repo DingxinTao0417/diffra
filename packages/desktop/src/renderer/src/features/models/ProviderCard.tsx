@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { type ListedModel } from '@diffra/core/types'
 import { Check, Ellipsis, ListPlus, LoaderCircle, Plus } from 'lucide-react'
+import { BrandIcon } from './BrandIcon'
 import { ModelCapabilityDialog } from './ModelCapabilityDialog'
 import { ROLE_INFO } from './RolesCard'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -15,6 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
+import { useLobeIcons } from '@/lib/model-icons'
 import { cn } from 'cn'
 
 // success-color-allow: success 只在用户主动点「测试连接」成功时写入（runTest）
@@ -49,6 +51,8 @@ export function ProviderCard({ provider, roles, onChange, onEdit }: ProviderCard
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const icons = useLobeIcons()
+  const providerIcon = icons?.matchProviderIcon(provider) ?? null
 
   const rolesOf = (modelId: string): Role[] =>
     ROLES.filter((role) => roles[role]?.providerId === provider.id && roles[role]?.modelId === modelId)
@@ -153,9 +157,7 @@ export function ProviderCard({ provider, roles, onChange, onEdit }: ProviderCard
   return (
     <Card data-testid="provider-card" className="gap-0 rounded-xl py-0 shadow-none">
       <div className="flex items-center gap-3 px-4 py-3">
-        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-bold text-muted-foreground">
-          {provider.name.trim().charAt(0).toUpperCase() || '?'}
-        </span>
+        <BrandIcon id={providerIcon} fallbackText={provider.name} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-base font-bold">{provider.name}</span>
@@ -200,6 +202,9 @@ export function ProviderCard({ provider, roles, onChange, onEdit }: ProviderCard
             const enabled = model.enabled !== false
             return (
               <li key={model.id} data-testid={`model-row-${model.id}`} className="flex min-h-11 items-center gap-3 px-4 py-2 text-sm hover:bg-muted/50">
+                <span className="flex w-8 shrink-0 justify-center">
+                  <BrandIcon id={icons?.matchModelIcon(model.id) ?? providerIcon} fallbackText={provider.name} size={16} />
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className={cn('truncate', !enabled && 'text-muted-foreground')}>{name}</span>

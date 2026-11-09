@@ -30,7 +30,7 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await expect(window.getByTestId('model-menu')).toHaveText('scripted')
+    await expect(window.getByTestId('model-menu').locator('span.truncate')).toHaveText('scripted')
 
     // 把 data 设为禁写目录；新任务按新设置运行
     await window.getByRole('button', { name: '未配置检查' }).click()
