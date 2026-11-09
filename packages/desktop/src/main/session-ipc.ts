@@ -31,7 +31,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { PROMPT_IMAGE_TYPES } from '@diffra/core/types'
+import { designStyleById, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -70,6 +70,11 @@ const sessionOptionsSchema = z.object({
   model: modelRefSchema.optional(),
   // 设计任务，只在新建时有效
   design: z.boolean().optional(),
+  // 设计任务的风格预设，只在新建设计任务时有效
+  designStyle: z
+    .string()
+    .refine((id) => designStyleById(id) !== null, '没有这个风格预设')
+    .optional(),
   // 无项目任务用它给文件夹起名，只在新建时有效
   title: z.string().max(200).optional(),
 })
@@ -263,6 +268,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         plugins: enabledPlugins(settings),
         browser: true,
         design: options.design ?? false,
+        designStyle: options.design ? (options.designStyle ?? null) : null,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
       },
       modelLabel: coder.label,

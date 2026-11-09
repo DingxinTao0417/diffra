@@ -193,6 +193,8 @@ export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
   design?: boolean
+  // 设计任务的风格预设 id（DESIGN_STYLES）；不填是不用预设。只在新建设计任务时有效
+  designStyle?: string
   // 任务标题，无项目任务用它给文件夹起名；只在新建时有效
   title?: string
 }

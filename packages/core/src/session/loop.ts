@@ -13,11 +13,13 @@ import {
   type BrowserAction,
   type BrowserActionResult,
   type CheckResult,
+  type AgentTag,
   type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
   EXTERNAL_ACCESS_SCOPE,
   type FinishVerification,
+  MODEL_SILENCE_META_KEY,
   TERMINAL_DEFAULT_LINES,
   TERMINAL_READ_PERMISSION_PREFIX,
   PERMISSION_OPTIONS,
@@ -39,6 +41,8 @@ import {
   toBrowserAction,
 } from './browser.js'
 import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
+import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
+import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -97,8 +101,8 @@ export interface TurnIO {
   browser?(action: BrowserAction, signal: AbortSignal): Promise<BrowserActionResult>
   // 在客户端的终端里起、看、停开发服务器
   devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
-  // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）
-  design?(tool: string, args: unknown, signal: AbortSignal): Promise<DesignActionResult>
+  // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）；agent 是调用的子智能体，主智能体自己调时不传
+  design?(tool: string, args: unknown, signal: AbortSignal, agent?: AgentTag): Promise<DesignActionResult>
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -260,6 +264,8 @@ export async function runTurn(
     // 调用签名 → 自上次成功编辑以来出现的次数
     const repeats = new Map<string, number>()
     let warnedStuck = false
+    // 这一轮派出的子智能体和它们的文件认领
+    const team = newTeam()
 
     for (let step = 0; step < maxSteps; step++) {
       const compacted = await compactIfNeeded(session, { window: contextWindow(), requestIndex, step, state: compaction, model: active }, signal, io)
@@ -323,7 +329,8 @@ export async function runTurn(
       let failedFinishCheck: string | null = null
       let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
-      for (const call of toolCalls) {
+      for (let index = 0; index < toolCalls.length; index++) {
+        const call = toolCalls[index]!
         // 参数不合法的调用，AI SDK 已经在返回消息里补了错误结果；再补一条会让同一调用出现两个结果
         if (answered.has(call.toolCallId)) {
           await reportInvalidCall(call, io)
@@ -331,6 +338,27 @@ export async function runTurn(
         }
         if (signal.aborted) {
           results.push(errorResult(call, 'Cancelled by the user.'))
+          continue
+        }
+        if (call.toolName === DELEGATE_TOOL && !call.invalid) {
+          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，之后照常跑快速检查
+          const batch = [call]
+          while (index + batch.length < toolCalls.length) {
+            const next = toolCalls[index + batch.length]!
+            if (next.toolName !== DELEGATE_TOOL || next.invalid || answered.has(next.toolCallId)) break
+            batch.push(next)
+          }
+          index += batch.length - 1
+          commandedThisTurn = true
+          for (const outcome of await runDelegates(session, team, batch, active, signal, io)) {
+            results.push(outcome.result)
+            if (!outcome.edited) continue
+            editedThisStep = true
+            editedThisTurn = true
+            editsCarried = false
+            session.taskState.needsVerification = true
+            repeats.clear()
+          }
           continue
         }
         if (call.toolName === 'pause_task' && !call.invalid) {
@@ -521,6 +549,8 @@ export async function runTurn(
       session.taskState = { ...session.taskState, status: 'cancelled', reason: '用户取消，任务并未完成。' }
     } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '本轮已停止，未通过完整任务完成门禁；可继续执行剩余步骤。' }
     session.activeTurn = null
+    // 设计页收起主智能体的光标
+    if (session.design) await endDesignAgent(io)
     await publishTaskState(session, io, { finish: turnFinish, stop })
   }
 }
@@ -619,31 +649,37 @@ export async function streamModelStep(
   let inputTokens = 0
   let cacheRead: number | null = null
   let cacheWrite: number | null = null
-  for await (const part of result.fullStream) {
-    switch (part.type) {
-      case 'text-delta':
-        await io.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: part.text } })
-        break
-      case 'reasoning-delta':
-        await io.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: part.text } })
-        break
-      case 'tool-call':
-        toolCalls.push({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: part.input,
-          invalid: 'invalid' in part && part.invalid ? String('error' in part ? part.error : 'invalid input') : null,
-        })
-        break
-      case 'finish-step':
-        inputTokens = part.usage.inputTokens ?? inputTokens
-        cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
-        cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
-        await io.recordUsage({ ...settings.usage, usage: part.usage })
-        break
-      case 'error':
-        throw part.error
+  const silence = watchModelSilence(io)
+  try {
+    for await (const part of result.fullStream) {
+      await silence.heard()
+      switch (part.type) {
+        case 'text-delta':
+          await io.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: part.text } })
+          break
+        case 'reasoning-delta':
+          await io.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: part.text } })
+          break
+        case 'tool-call':
+          toolCalls.push({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            invalid: 'invalid' in part && part.invalid ? String('error' in part ? part.error : 'invalid input') : null,
+          })
+          break
+        case 'finish-step':
+          inputTokens = part.usage.inputTokens ?? inputTokens
+          cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
+          cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
+          await io.recordUsage({ ...settings.usage, usage: part.usage })
+          break
+        case 'error':
+          throw part.error
+      }
     }
+  } finally {
+    await silence.stop()
   }
   const responseMessages = await result.responseMessages
   const answered = new Set(
@@ -652,6 +688,43 @@ export async function streamModelStep(
     ),
   )
   return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages }
+}
+
+// 模型这么久一点数据都没吐，就在界面上提示可能卡住了。不中断也不重试：不显示思考过程的模型可能真要想这么久。
+// DIFFRA_MODEL_SILENCE_MS 只给测试缩短用
+function modelSilenceMs(): number {
+  return Number(process.env.DIFFRA_MODEL_SILENCE_MS) || 3 * 60_000
+}
+
+function watchModelSilence(io: TurnIO): { heard(): Promise<void>; stop(): Promise<void> } {
+  const limit = modelSilenceMs()
+  let last = Date.now()
+  let shown = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const send = (since: string | null) => io.update({ sessionUpdate: 'session_info_update', _meta: { diffra: { [MODEL_SILENCE_META_KEY]: since } } })
+  // 收到数据时只记时间，不重设计时器；到点时按最后一次收到的时间再算还差多久
+  const arm = (delay: number) => {
+    timer = setTimeout(() => {
+      const quiet = Date.now() - last
+      if (quiet < limit) return arm(limit - quiet)
+      shown = true
+      send(new Date(last).toISOString()).catch((error: unknown) => console.error('[loop] 提示模型没有输出失败', error))
+    }, delay)
+  }
+  arm(limit)
+  return {
+    heard: async () => {
+      last = Date.now()
+      if (!shown) return
+      shown = false
+      arm(limit)
+      await send(null)
+    },
+    stop: async () => {
+      clearTimeout(timer)
+      if (shown) await send(null).catch((error: unknown) => console.error('[loop] 撤掉模型没有输出的提示失败', error))
+    },
+  }
 }
 
 export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise<void> {
@@ -664,17 +737,64 @@ export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise
   })
 }
 
+// 子智能体执行工具时的差别：自己的读文件记录（主智能体不能借它跳过阅读），写文件前按认领检查，改了哪些文件记下来
+export interface AgentScope {
+  readHashes: Map<string, string>
+  beforeWrite(target: { absolute: string; display: string }): void
+  onEdited(absolutePath: string): void
+}
+
+// 工具执行时的环境：项目目录、读过的文件、权限确认。项目外的路径按调用逐个问
+export function toolContext(session: Session, call: StepToolCall, signal: AbortSignal, io: TurnIO, scope?: AgentScope): ToolContext {
+  return {
+    cwd: session.cwd,
+    rgPath: session.environment.rgPath,
+    bashPath: session.environment.bashPath,
+    signal,
+    readHashes: scope?.readHashes ?? session.readHashes,
+    ...(scope ? { beforeWrite: (target) => scope.beforeWrite(target) } : {}),
+    trustedCommands: session.trustedCommands,
+    readOnlyPaths: session.config.readOnlyPaths,
+    readRoots: session.readRoots,
+    requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
+    requestExternalPermission: async (path, access) => {
+      const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
+      if (signal.aborted) return false
+      if (session.alwaysAllowed.has(allowKey)) return true
+      const choice = await io.requestPermission(
+        {
+          toolCallId: call.toolCallId,
+          title: `项目外${access === 'read' ? '读取' : '写入'}：${path}`,
+          kind: access === 'read' ? 'read' : 'edit',
+          status: 'pending',
+          rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE },
+        },
+        [
+          { optionId: PERMISSION_OPTIONS.allowOnce, name: '仅允许本次操作', kind: 'allow_once' },
+          { optionId: PERMISSION_OPTIONS.allowAlways, name: '本会话允许此路径的同类操作', kind: 'allow_always' },
+          { optionId: PERMISSION_OPTIONS.reject, name: '拒绝', kind: 'reject_once' },
+        ],
+      )
+      if (signal.aborted) return false
+      if (choice === PERMISSION_OPTIONS.allowAlways) session.alwaysAllowed.add(allowKey)
+      return choice === PERMISSION_OPTIONS.allowOnce || choice === PERMISSION_OPTIONS.allowAlways
+    },
+  }
+}
+
 export async function runToolCall(
   session: Session,
   call: StepToolCall,
   signal: AbortSignal,
   io: TurnIO,
+  scope?: AgentScope,
 ): Promise<{ result: ToolResultPart; edited: boolean; images?: PromptImage[] }> {
   const name = call.toolName
   const mcp = session.mcpTools?.byName.get(name)
   if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
   if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
+  if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
@@ -689,39 +809,7 @@ export async function runToolCall(
   try {
     if (call.invalid) throw new ToolError(`Invalid call to ${name}: ${call.invalid}`)
     if (!isToolName(name) || name === 'finish') throw new ToolError(`Unknown tool: ${name}`)
-    const context: ToolContext = {
-      cwd: session.cwd,
-      rgPath: session.environment.rgPath,
-      bashPath: session.environment.bashPath,
-      signal,
-      readHashes: session.readHashes,
-      trustedCommands: session.trustedCommands,
-      readOnlyPaths: session.config.readOnlyPaths,
-      readRoots: session.readRoots,
-      requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
-      requestExternalPermission: async (path, access) => {
-        const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
-        if (signal.aborted) return false
-        if (session.alwaysAllowed.has(allowKey)) return true
-        const choice = await io.requestPermission(
-          {
-            toolCallId: call.toolCallId,
-            title: `项目外${access === 'read' ? '读取' : '写入'}：${path}`,
-            kind: access === 'read' ? 'read' : 'edit',
-            status: 'pending',
-            rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE },
-          },
-          [
-            { optionId: PERMISSION_OPTIONS.allowOnce, name: '仅允许本次操作', kind: 'allow_once' },
-            { optionId: PERMISSION_OPTIONS.allowAlways, name: '本会话允许此路径的同类操作', kind: 'allow_always' },
-            { optionId: PERMISSION_OPTIONS.reject, name: '拒绝', kind: 'reject_once' },
-          ],
-        )
-        if (signal.aborted) return false
-        if (choice === PERMISSION_OPTIONS.allowAlways) session.alwaysAllowed.add(allowKey)
-        return choice === PERMISSION_OPTIONS.allowOnce || choice === PERMISSION_OPTIONS.allowAlways
-      },
-    }
+    const context = toolContext(session, call, signal, io, scope)
     if (name === 'edit_file' || name === 'run_command') session.verifiedSnapshot = null
     if (name === 'task_progress') {
       session.taskState = updateTask(session.taskState, call.input)
@@ -731,6 +819,7 @@ export async function runToolCall(
       return { result: textResult(call, text), edited: false }
     }
     const output = await executeTool(name, call.input, context)
+    if (output.edited && output.diff) scope?.onEdited(output.diff.path)
     if (name === 'run_command' && output.commandSucceeded && typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string') {
       session.taskState = recordTaskReceipt(session.taskState, call.toolCallId, call.input.command, output.text)
       output.text += `\nEvidence receipt id: ${call.toolCallId}`
@@ -783,7 +872,7 @@ async function runBrowserToolCall(
     await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: name, kind: 'other', status: 'in_progress', rawInput: call.input })
     return fail(error instanceof Error ? error.message : String(error))
   }
-  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'layout' || action.action === 'screenshot' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
+  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'layout' || action.action === 'screenshot' || action.action === 'images' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
   await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: browserTitle(action), kind, status: 'in_progress', rawInput: call.input })
   if (!io.browser) return fail('The built-in browser is not available in this client.')
   if (action.action === 'navigate') {

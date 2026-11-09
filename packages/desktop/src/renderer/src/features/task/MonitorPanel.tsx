@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import type { AgentTag } from '@diffra/core/types'
 import { Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
-import { DiffCounts } from '@/features/session/DiffView'
+import { DiffCounts, relativePath } from '@/features/session/DiffView'
 import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
@@ -49,6 +50,24 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   }
   const shownFailed = [...failedRows.values()].reverse().slice(0, FAILED_COMMAND_LIMIT)
   const hiddenFailed = failedCommands.length - shownFailed.reduce((total, row) => total + row.count, 0)
+  // 最近一轮派出的子智能体：在做什么、认领了哪些文件
+  const agentTurn = task.turns.findLast((turn) => turn.items.some((item) => item.kind === 'tool' && item.agentCard))
+  const agents = (agentTurn?.items ?? []).flatMap((item) =>
+    item.kind === 'tool' && item.agentCard ? [{ item, card: item.agentCard, steps: agentTurn!.items.flatMap((step) => (step.kind === 'tool' && step.parentId === item.id ? [step] : [])) }] : [],
+  )
+  // 改动文件是哪个子智能体改的（工人用 edit_file 改的；命令改的看不出是谁）
+  const owners = new Map<string, AgentTag[]>()
+  for (const turn of task.turns) {
+    for (const item of turn.items) {
+      if (item.kind !== 'tool' || !item.agent || item.status !== 'completed') continue
+      for (const content of item.content) {
+        if (content.type !== 'diff') continue
+        const path = relativePath(content.path, task.project)
+        const list = owners.get(path) ?? []
+        if (!list.some((owner) => owner.id === item.agent!.id)) owners.set(path, [...list, item.agent])
+      }
+    }
+  }
   // 有完成条件时下面的完成条件区已经写了这句原因，不重复
   const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
   const checks = task.info.checks ?? project?.checks
@@ -114,6 +133,33 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           </Section>
         )}
 
+        {agents.length > 0 && (
+          <Section title={`子智能体 · ${agents.length} 个`}>
+            <div className="flex flex-col">
+              {agents.map(({ item, card, steps }) => {
+                const running = item.status !== 'completed' && item.status !== 'failed'
+                const current = steps.at(-1)
+                const action = current ? splitTitle(current.title) : null
+                const state = running ? `第 ${Math.max(steps.length, 1)} 步${action ? ` · ${action.action}${action.target ? ` ${action.target}` : ''}` : ''}` : item.status === 'completed' ? '已交回' : '未完成'
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    title={[card.task, card.files.length > 0 ? `认领：${card.files.join('、')}` : ''].filter(Boolean).join('\n')}
+                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="monitor-agent"
+                    onClick={() => onLocate(item.id)}
+                  >
+                    <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: card.color }} aria-hidden="true" />
+                    <span className="shrink-0 text-foreground/90">{card.name}</span>
+                    <span className={cn('min-w-0 flex-1 truncate text-right text-xs', item.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>{state}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </Section>
+        )}
+
         {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
         {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
           <Section title="完成条件">
@@ -158,6 +204,12 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
                       </span>
                       <span className="max-w-full shrink-0 truncate text-foreground">{file.path.slice(nameStart)}</span>
                     </span>
+                    {(owners.get(file.path) ?? []).map((owner) => (
+                      <span key={owner.id} className="flex shrink-0 items-center gap-1 font-sans text-muted-foreground" title={`子智能体 ${owner.name} 改的`} data-testid="monitor-file-agent">
+                        <span className="size-2 rounded-full" style={{ backgroundColor: owner.color }} aria-hidden="true" />
+                        {owner.name}
+                      </span>
+                    ))}
                     {file.binary ? <span className="shrink-0 text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
                   </button>
                 )

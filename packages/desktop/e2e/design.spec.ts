@@ -1,11 +1,13 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
 import { answerOpenDialog, chooseProject, startDesignTask, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { lastToolResult, startScriptedModel } from './scripted-model'
 
 interface DesignToolResult {
   text: string
@@ -456,6 +458,85 @@ test('设计任务的对话栏较窄：模型名很长时截断，模型菜单�
   } finally {
     await app.close()
     await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+// 1x1 的 PNG
+const PHOTO = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+
+test('设计任务：选风格预设；放真实图片时由 Diffra 下载填进图层、存一份到 assets/；检查和设计变量工具都给了模型，列得出可用字体', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-image-'))
+  // 本地图片服务模拟网图：本地地址下载不用确认
+  const images = createServer((request, response) => {
+    if (request.url !== '/photos/cover.png') return void response.writeHead(404).end()
+    response.writeHead(200, { 'content-type': 'image/png' }).end(PHOTO)
+  })
+  await new Promise<void>((resolve) => images.listen(0, '127.0.0.1', resolve))
+  const imageUrl = `http://127.0.0.1:${(images.address() as AddressInfo).port}/photos/cover.png`
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'design_render', input: { jsx: '<Frame name="文章卡片" w={320} h={240} bg="#FFFFFF"><Frame name="封面" w={320} h={180} bg="#E5E7EB" /></Frame>' } }] },
+    { toolCalls: [{ name: 'design_find_nodes', input: { name: '封面' } }] },
+    {
+      toolCalls: [
+        {
+          name: 'design_place_image',
+          input: (messages: Parameters<typeof lastToolResult>[0]) => ({ id: (JSON.parse(lastToolResult(messages)) as { nodes: Array<{ id: string }> }).nodes[0]!.id, source: imageUrl }),
+        },
+      ],
+    },
+    { text: '封面换成真实图片了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '设计模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await window.getByTestId('sidebar').getByRole('button', { name: '设计', exact: true }).click()
+    // 设计首页选风格预设：下拉里列出各套预设和色板
+    await window.getByTestId('design-style').click()
+    await expect(window.getByRole('menuitemradio', { name: /自动/ })).toHaveAttribute('aria-checked', 'true')
+    await window.getByRole('menuitemradio', { name: /杂志排版/ }).click()
+    await expect(window.getByTestId('design-style')).toHaveText(/风格：杂志排版/)
+    await startTask(window, '做一张文章卡片，封面用真实图片')
+    await waitTaskDone(window)
+
+    // 选的预设、工作流、检查和变量工具、放图片和列图片的工具都给了模型
+    const first = model.bodies()[0]!
+    expect(first).toContain('Style preset: Magazine')
+    expect(first).toContain('Design workflow:')
+    for (const name of ['design_place_image', 'design_lint', 'design_lint_fix', 'design_analyze_colors', 'design_analyze_typography', 'design_create_variable', 'design_bind_variable', 'design_list_available_fonts', 'browser_images']) {
+      expect(first).toContain(`"name":"${name}"`)
+    }
+    // 只给 core 用的填图工具不给模型
+    expect(first).not.toContain('"name":"design_set_image_fill"')
+    // 图片数据不经过模型
+    for (const body of model.bodies()) expect(body).not.toContain(PHOTO.toString('base64'))
+
+    // 下载的图片存到项目的 assets/，图层名接上路径和来源，节点的填充换成了图片
+    const saved = readdirSync(join(project, 'assets'))
+    expect(saved).toHaveLength(1)
+    expect(readFileSync(join(project, 'assets', saved[0]!)).equals(PHOTO)).toBe(true)
+    const design = await findDesignPage(app)
+    const { nodes } = JSON.parse((await runTool(design, 'find_nodes', { name: '封面' })).text) as { nodes: Array<{ id: string; name: string }> }
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]!.name).toBe(`封面 · assets/${saved[0]} · ${imageUrl}`)
+    const node = JSON.parse((await runTool(design, 'get_node', { id: nodes[0]!.id, depth: 0 })).text) as { fills?: Array<{ type: string }> }
+    expect(node.fills?.[0]?.type).toBe('IMAGE')
+    // 可用字体是内置的 Inter 加系统字体（引擎默认一个都不列）
+    const fonts = JSON.parse((await runTool(design, 'list_available_fonts', {})).text) as { count: number; fonts: string[] }
+    expect(fonts.fonts).toContain('Inter')
+    expect(fonts.count).toBeGreaterThan(1)
+    // 对话里三次设计调用收成一组，展开能看到放图片的卡片
+    await window.getByRole('button', { name: '执行工具 3 次' }).click()
+    await expect(window.getByTestId('tool-call').filter({ hasText: '放入图片' })).toContainText('cover.png')
+  } finally {
+    await app.close()
+    await model.close()
+    await new Promise<void>((resolve) => images.close(() => resolve()))
     rmSync(userDataDir, { recursive: true, force: true })
     rmSync(project, { recursive: true, force: true })
   }

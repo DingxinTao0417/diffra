@@ -36,6 +36,8 @@ export interface SessionRecord {
   archived: boolean
   // 设计任务（见 SessionConfig.design）；旧记录没有
   design?: boolean
+  // 设计任务的风格预设（见 SessionConfig.designStyle）；旧记录没有
+  designStyle?: string | null
   // 无项目任务（见 SessionConfig.noProject）；旧记录没有
   noProject?: boolean
   turns: StoredTurnRecord[]
@@ -81,6 +83,8 @@ const recordSchema = z.object({
   archived: z.boolean(),
   // 设计模式加的，旧记录都是普通任务
   design: z.boolean().default(false),
+  // 风格预设加的，旧记录都没用预设
+  designStyle: z.string().nullable().default(null),
   // 无项目任务加的，旧记录都在项目里
   noProject: z.boolean().default(false),
   turns: z.array(

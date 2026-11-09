@@ -8,6 +8,7 @@ import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNo
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
+import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { browserTools } from './browser.js'
 import { designChars, designTools } from './design.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
@@ -71,6 +72,8 @@ export class Session {
   archived: boolean
   // 设计任务：建会话时定下，存进记录
   readonly designTask: boolean
+  // 设计任务的风格预设 id，没用预设时为 null
+  readonly designStyle: string | null
   // 无项目任务：建会话时定下，存进记录
   readonly noProject: boolean
   readonly turns: StoredTurn[] = []
@@ -123,6 +126,7 @@ export class Session {
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
     this.designTask = record?.design ?? options.config.design ?? false
+    this.designStyle = record ? (record.designStyle ?? null) : (options.config.designStyle ?? null)
     this.noProject = record?.noProject ?? options.config.noProject ?? false
     if (record) {
       this.taskState = record.taskState ?? newTaskState()
@@ -230,6 +234,7 @@ export class Session {
       updatedAt: new Date().toISOString(),
       archived: this.archived,
       design: this.designTask,
+      designStyle: this.designStyle,
       noProject: this.noProject,
       turns: this.turns.map((turn) => ({
         ...turn,
@@ -243,11 +248,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design)), ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + delegateChars(Boolean(this.design)) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数

@@ -1,4 +1,4 @@
-import { TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, MODEL_SILENCE_META_KEY, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -22,6 +22,11 @@ export type TranscriptItem =
       verification?: FinishVerification
       // 收到开始的时刻，运行中的行据此显示已用时间。重放历史记录时不带，免得没跑完的旧调用从打开时开始计时
       startedAt?: number
+      // 子智能体的卡片（主智能体的那次 delegate 调用）：名字、颜色、任务和认领的文件
+      agentCard?: AgentCardMeta
+      // 子智能体自己的工具调用：收进 parentId 那张卡片里，agent 是哪个工人
+      parentId?: string
+      agent?: AgentTag
     }
   | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
 
@@ -124,6 +129,18 @@ export function turnOutcomeOf(update: SessionUpdate): TurnOutcome | null {
   return { finish, stop }
 }
 
+// 模型没有输出的提示：key 是子智能体 id，主智能体是 main；since 为 null 是又有输出了
+export function modelSilenceOf(update: SessionUpdate): { key: string; agent: string | null; since: number | null } | null {
+  if (update.sessionUpdate !== 'session_info_update') return null
+  const diffra = diffraMetaOf(update)
+  if (!diffra || !(MODEL_SILENCE_META_KEY in diffra)) return null
+  const value = diffra[MODEL_SILENCE_META_KEY]
+  const since = typeof value === 'string' ? Date.parse(value) : null
+  if (value !== null && (since === null || Number.isNaN(since))) return null
+  const agent = agentTagFrom(diffra[AGENT_META_KEY])
+  return { key: agent?.id ?? 'main', agent: agent?.name ?? null, since }
+}
+
 function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverified'): boolean | undefined {
   const meta: unknown = update._meta
   if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return undefined
@@ -140,6 +157,42 @@ function diffraChoiceOf<T extends string>(update: SessionUpdate, key: 'result' |
   if (typeof diffra !== 'object' || diffra === null) return undefined
   const value: unknown = (diffra as Record<string, unknown>)[key]
   return oneOf(values, value) ? value : undefined
+}
+
+function diffraMetaOf(update: SessionUpdate): Record<string, unknown> | null {
+  const meta: unknown = update._meta
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return null
+  const diffra = meta.diffra
+  return typeof diffra === 'object' && diffra !== null ? (diffra as Record<string, unknown>) : null
+}
+
+function isStrings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function agentTagFrom(value: unknown): AgentTag | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { id, name, color } = value as Record<string, unknown>
+  return typeof id === 'string' && typeof name === 'string' && typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color) ? { id, name, color } : null
+}
+
+// 权限请求等带的 _meta：是哪个子智能体发起的；主智能体自己的没有
+export function agentOfMeta(meta: unknown): AgentTag | null {
+  if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return null
+  const diffra = meta.diffra
+  return typeof diffra === 'object' && diffra !== null ? agentTagFrom((diffra as Record<string, unknown>)[AGENT_META_KEY]) : null
+}
+
+// 卡片带完整的子智能体信息，工人自己的工具调用带所属卡片和工人
+function agentFieldsOf(update: SessionUpdate): { agentCard?: AgentCardMeta; parentId?: string; agent?: AgentTag } {
+  const diffra = diffraMetaOf(update)
+  if (!diffra) return {}
+  const tag = agentTagFrom(diffra[AGENT_META_KEY])
+  const parentId = diffra[PARENT_TOOL_CALL_META_KEY]
+  if (typeof parentId === 'string') return tag ? { parentId, agent: tag } : { parentId }
+  const raw = diffra[AGENT_META_KEY] as Record<string, unknown> | undefined
+  if (!tag || !raw || typeof raw.task !== 'string' || !isStrings(raw.files) || !isStrings(raw.nodes)) return {}
+  return { agentCard: { ...tag, task: raw.task, files: raw.files, nodes: raw.nodes } }
 }
 
 function tokenCount(value: unknown): number | null {
@@ -206,6 +259,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         unverified: diffraFlagOf(update, 'unverified'),
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS),
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS),
+        ...agentFieldsOf(update),
       }
       return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
@@ -222,6 +276,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS) ?? existing?.result,
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS) ?? existing?.verification,
         startedAt: existing?.startedAt ?? Date.now(),
+        ...agentFieldsKept(existing, agentFieldsOf(update)),
       }))
     case 'notice':
       return [
@@ -240,6 +295,14 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
 }
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
+
+// 更新里没带的子智能体信息沿用之前的；卡片的认领清单以最新一次为准
+function agentFieldsKept(existing: ToolItem | null, next: ReturnType<typeof agentFieldsOf>): ReturnType<typeof agentFieldsOf> {
+  const agentCard = next.agentCard ?? existing?.agentCard
+  const parentId = next.parentId ?? existing?.parentId
+  const agent = next.agent ?? existing?.agent
+  return { ...(agentCard ? { agentCard } : {}), ...(parentId ? { parentId } : {}), ...(agent ? { agent } : {}) }
+}
 
 function upsertTool(items: TranscriptItem[], id: string, build: (existing: ToolItem | null) => ToolItem): TranscriptItem[] {
   const index = items.findIndex((item) => item.kind === 'tool' && item.id === id)

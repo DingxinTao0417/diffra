@@ -4,13 +4,13 @@ import { join } from 'node:path'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
 import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
 import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity, SkillInfo, SkillSource, TaskProgressView, TurnOutcome } from '../src/protocol.js'
 import { normalizeUrl } from '../src/urls.js'
-import { runTurn, type TurnIO } from '../src/session/loop.js'
+import { runTurn, streamModelStep, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
 import { compactManually } from '../src/session/compact.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
@@ -2103,6 +2103,7 @@ describe('内置浏览器工具', () => {
       'browser_press_key',
       'browser_console',
       'browser_check_layout',
+      'browser_images',
     ])
     expect(Object.keys((await withBrowser(scriptedModel([]), true)).toolSet())).toContain('browser_screenshot')
   })
@@ -2174,5 +2175,58 @@ describe('内置浏览器工具', () => {
     expect(normalizeUrl('example.com')).toBe('https://example.com/')
     expect(normalizeUrl('http://example.com/x')).toBe('http://example.com/x')
     expect(() => normalizeUrl('file:///C:/secret.txt')).toThrow('Only http(s)')
+  })
+})
+
+describe('模型没有输出时的提示', () => {
+  const silenceOf = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => {
+      const diffra = (update.sessionUpdate === 'session_info_update' ? update._meta?.diffra ?? {} : {}) as Record<string, unknown>
+      return 'modelSilentSince' in diffra ? [diffra.modelSilentSince as string | null] : []
+    })
+  const textStream = (initialDelayInMs: number, chunkDelayInMs = 0, deltas = ['好了']) =>
+    simulateReadableStream<StreamPart>({
+      initialDelayInMs,
+      chunkDelayInMs,
+      chunks: [
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: 't' },
+        ...deltas.map((delta) => ({ type: 'text-delta' as const, id: 't', delta })),
+        { type: 'text-end', id: 't' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: usageOf() },
+      ],
+    })
+  const step = (stream: ReadableStream<StreamPart>, io: TurnIO) =>
+    streamModelStep(
+      { model: new MockLanguageModelV4({ doStream: { stream } }), system: '', messages: [{ role: 'user', content: '你好' }], tools: {}, usage: { role: 'coder', provider: null, modelId: 'mock' } },
+      new AbortController().signal,
+      io,
+    )
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  test('超过时限一点数据都没有，告诉界面从什么时候起没输出；又有数据时先撤掉提示再推文字，这一步照常跑完', async () => {
+    vi.stubEnv('DIFFRA_MODEL_SILENCE_MS', '100')
+    const io = recordingIO()
+    const started = Date.now()
+    await step(textStream(500), io)
+    const silence = silenceOf(io)
+    expect(silence).toHaveLength(2)
+    expect(Date.parse(silence[0]!)).toBeGreaterThanOrEqual(started)
+    expect(silence[1]).toBeNull()
+    const kinds = io.updates.map((update) => update.sessionUpdate)
+    expect(kinds.indexOf('agent_message_chunk')).toBeGreaterThan(kinds.lastIndexOf('session_info_update'))
+    expect(io.updates.some((update) => update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text' && update.content.text === '好了')).toBe(true)
+  })
+
+  test('数据断断续续、每段间隔都不到时限就不提示：按最后一次收到数据的时间算，不按这一步开始的时间', async () => {
+    vi.stubEnv('DIFFRA_MODEL_SILENCE_MS', '300')
+    const io = recordingIO()
+    const started = Date.now()
+    await step(textStream(40, 40, ['一', '二', '三', '四', '五']), io)
+    expect(Date.now() - started).toBeGreaterThan(300)
+    expect(silenceOf(io)).toEqual([])
   })
 })

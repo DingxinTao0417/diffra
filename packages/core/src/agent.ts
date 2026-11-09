@@ -277,11 +277,11 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
             }),
-        design: (tool, args, signal) =>
+        design: (tool, args, signal, agent) =>
           client
             .request<DesignActionResult, DesignActionParams>(
               CLIENT_EXT_METHODS.designAction,
-              { sessionId: session.id, tool, args },
+              { sessionId: session.id, tool, args, agent: agent ?? null },
               { cancellationSignal: signal, stopWaitingOnCancel: true },
             )
             .catch((error: unknown) => {

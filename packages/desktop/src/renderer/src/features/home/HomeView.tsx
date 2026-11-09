@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { PromptImage, StoredSessionSummary } from '@diffra/core/types'
-import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, GitBranch, LoaderCircle } from 'lucide-react'
+import { DESIGN_STYLES, type PromptImage, type StoredSessionSummary } from '@diffra/core/types'
+import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, GitBranch, LoaderCircle, Palette } from 'lucide-react'
 import { decodeStartTaskError, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -10,6 +10,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useProject } from '@/features/project/useProject'
@@ -54,6 +57,8 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
+  // 设计任务的风格预设；null 是「自动」，由模型按题材定
+  const [designStyle, setDesignStyle] = useState<string | null>(null)
 
   useEffect(() => setError(null), [projectPath])
 
@@ -78,7 +83,8 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const send = async (text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }) => {
     setError(null)
     try {
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...(design ? { design: true } : {}) }, { plan: planMode, ...extras })
+      const designOptions = design ? { design: true, ...(designStyle ? { designStyle } : {}) } : {}
+      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...designOptions }, { plan: planMode, ...extras })
       return true
     } catch (caught) {
       setError(decodeStartTaskError(errorMessage(caught)))
@@ -205,9 +211,10 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
             )}
           </div>
         )}
-        {projectPath && (
+        {(projectPath || design) && (
           <div className="flex flex-wrap items-center gap-1 px-2.5 text-sm">
-            {projectMenu}
+            {projectPath && projectMenu}
+            {design && <DesignStyleMenu value={designStyle} onChange={setDesignStyle} />}
           </div>
         )}
       </div>
@@ -222,6 +229,48 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
       )}
 
     </div>
+  )
+}
+
+// 设计首页的风格预设：选一套作为模型的起点，「自动」是不用预设
+function DesignStyleMenu({ value, onChange }: { value: string | null; onChange(id: string | null): void }) {
+  const selected = DESIGN_STYLES.find((style) => style.id === value) ?? null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" aria-label="设计风格" data-testid="design-style" className={clickableChipClass}>
+          <Palette className="size-3.5 shrink-0" />
+          <span className="truncate">风格：{selected?.name ?? '自动'}</span>
+          <ChevronDown className="size-3 shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-80">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">风格预设：作为起点，模型会按题材调整</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={value ?? 'auto'} onValueChange={(next) => onChange(next === 'auto' ? null : next)}>
+          <DropdownMenuRadioItem value="auto" className="items-start py-2">
+            <span className="flex min-w-0 flex-col">
+              <span>自动</span>
+              <span className="text-xs text-muted-foreground">不用预设，模型按题材自己定风格</span>
+            </span>
+          </DropdownMenuRadioItem>
+          {DESIGN_STYLES.map((style) => (
+            <DropdownMenuRadioItem key={style.id} value={style.id} className="items-start py-2">
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="flex items-center gap-2">
+                  {style.name}
+                  <span className="flex overflow-hidden rounded-sm border" aria-hidden="true">
+                    {style.swatches.map((color) => (
+                      <span key={color} className="size-3" style={{ backgroundColor: color }} />
+                    ))}
+                  </span>
+                </span>
+                <span className="text-xs text-muted-foreground">{style.summary}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

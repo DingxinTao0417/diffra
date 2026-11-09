@@ -239,14 +239,20 @@ export class DesignHost {
   }
 
   // 智能体调用设计工具。界面上把这个任务的设计面板打开，用户能看到在画什么
-  async act({ sessionId, tool, args }: DesignActionParams): Promise<DesignActionResult> {
+  async act({ sessionId, tool, args, agent }: DesignActionParams): Promise<DesignActionResult> {
+    // 子智能体认领节点、结束（释放锁、收起光标）是设计页里的内部动作：不打开面板、不等画布；页面没载入时没有锁和光标要处理
+    if (tool.startsWith('__agent_')) {
+      const page = this.pages.get(sessionId)
+      if (!page || !(await page.loaded.then(() => true, () => false))) return { text: JSON.stringify({ refused: tool === '__agent_claim' ? ['the design canvas is not open'] : [] }), image: null }
+      return designToolResultSchema.parse(await this.call(sessionId, 'run', tool, args, agent ?? null))
+    }
     this.window()?.webContents.send(IPC_CHANNELS.designActivity, { sessionId })
     const deadline = Date.now() + READY_WAIT_MS
     while (!(await this.call<boolean>(sessionId, 'ready'))) {
       if (Date.now() > deadline) throw new Error('设计面板的画布还没启动（这个任务不在前台），用户切到这个任务、打开设计面板后再试')
       await sleep(100)
     }
-    return designToolResultSchema.parse(await this.call(sessionId, 'run', tool, args))
+    return designToolResultSchema.parse(await this.call(sessionId, 'run', tool, args, agent ?? null))
   }
 
   // 删除任务：关掉设计页，存过的文档一起删

@@ -3,8 +3,10 @@ import { FigmaAPI } from '@open-pencil/core/figma-api'
 import { JSX_REFERENCE } from '@open-pencil/design-jsx'
 import { exportFigFile, parseFigFile } from '@open-pencil/core/io/formats/fig'
 import { createCanvasKitRasterCodec, renderNodesToImage } from '@open-pencil/core/io/formats/raster'
+import { fontManager } from '@open-pencil/core/text'
 import { ALL_TOOLS, CORE_TOOLS, isAtomicTool, parseToolArgs, type ToolDef, toolFailure, toolsToAI } from '@open-pencil/core/tools'
-import { preparePageFonts } from './fonts'
+import { reactive } from 'vue'
+import { preparePageFonts, requestLocalFonts } from './fonts'
 import { ICON_SET_HINT } from './icons'
 
 // 设计页对主进程的接口。主进程用 executeJavaScript 调 window.__diffraDesign，参数和返回值都是可以 JSON 化的数据
@@ -24,12 +26,113 @@ export interface DesignBridge {
   ready(): boolean
   // 配置给 core 会话的设计工具和说明（core 的 SessionDesign）
   session(): { tools: DesignToolSpec[]; instructions: string }
-  run(name: string, args: unknown): Promise<DesignToolResult>
+  // agent：调用的子智能体（加节点锁、画光标）；主智能体自己调时为 null
+  run(name: string, args: unknown, agent?: AgentTag | null): Promise<DesignToolResult>
   openFig(base64: string): Promise<void>
   saveFig(): Promise<string>
 }
 
 const MAX_RESULT_CHARS = 50_000
+
+// 智能体：core 的 AgentTag。主智能体自己调用时没有，光标按 MAIN_AGENT 画
+export interface AgentTag {
+  id: string
+  name: string
+  color: string
+}
+const MAIN_AGENT: AgentTag = { id: 'main', name: '主智能体', color: '#57534E' }
+const NODE_ID = /^-?\d+:\d+$/
+
+// 画布上每个智能体的光标：最近改的（或看的）节点。设计页的覆盖层按它画光标和图层框，智能体结束时收起
+export const agentCursors = reactive(new Map<string, { agent: AgentTag; nodeId: string }>())
+// 子智能体锁住的节点：节点 id → 子智能体。改到别人锁住的节点、它的下层，或者包含它的上层，都会被拒
+const locks = new Map<string, AgentTag>()
+
+function isAgentTag(value: unknown): value is AgentTag {
+  if (typeof value !== 'object' || value === null) return false
+  const { id, name, color } = value as Record<string, unknown>
+  return typeof id === 'string' && typeof name === 'string' && typeof color === 'string'
+}
+
+// 参数里出现的节点 id：字段名各工具不一样（id、ids、parent_id、replace_id、批量操作里的 id……），按值认；JSON 字符串里的也算
+function nodeIdsIn(value: unknown, found = new Set<string>(), depth = 0): Set<string> {
+  if (depth > 8) return found
+  if (typeof value === 'string') {
+    const parts = value.split(/[\s,]+/).filter(Boolean)
+    if (parts.length > 0 && parts.every((part) => NODE_ID.test(part))) for (const part of parts) found.add(part)
+    else if (/^\s*[[{]/.test(value)) {
+      try {
+        nodeIdsIn(JSON.parse(value), found, depth + 1)
+      } catch {
+        // 不是 JSON 就不是节点 id
+      }
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) nodeIdsIn(item, found, depth + 1)
+  } else if (typeof value === 'object' && value !== null) {
+    for (const item of Object.values(value)) nodeIdsIn(item, found, depth + 1)
+  }
+  return found
+}
+
+function ancestorsOf(editor: Editor, id: string): string[] {
+  const chain: string[] = []
+  let current = editor.graph.getNode(id)?.parentId ?? null
+  while (current && !chain.includes(current)) {
+    chain.push(current)
+    current = editor.graph.getNode(current)?.parentId ?? null
+  }
+  return chain
+}
+
+// 节点本身或上层被别的子智能体锁住，或者它包含别人锁住的节点：返回那个子智能体
+function lockOwner(editor: Editor, agent: AgentTag, id: string): AgentTag | null {
+  for (const node of [id, ...ancestorsOf(editor, id)]) {
+    const owner = locks.get(node)
+    if (owner && owner.id !== agent.id) return owner
+  }
+  for (const [locked, owner] of locks) {
+    if (owner.id !== agent.id && ancestorsOf(editor, locked).includes(id)) return owner
+  }
+  return null
+}
+
+function claimNodes(editor: Editor, agent: AgentTag, nodes: string[]): { refused: string[] } {
+  const refused: string[] = []
+  for (const id of nodes) {
+    if (!editor.graph.getNode(id)) {
+      refused.push(`node ${id} does not exist`)
+      continue
+    }
+    const owner = lockOwner(editor, agent, id)
+    if (owner) refused.push(`node ${id} overlaps nodes owned by worker "${owner.name}"`)
+  }
+  if (refused.length > 0) return { refused }
+  for (const id of nodes) locks.set(id, agent)
+  if (nodes[0]) agentCursors.set(agent.id, { agent, nodeId: nodes[0] })
+  return { refused }
+}
+
+function endAgent(agent: AgentTag | null): void {
+  const id = agent?.id ?? MAIN_AGENT.id
+  agentCursors.delete(id)
+  for (const [node, owner] of locks) if (owner.id === id) locks.delete(node)
+}
+
+// 这次调用新建的节点里最上层的那些（父节点不是新建的）
+function createdRoots(editor: Editor, before: Set<string>): string[] {
+  const created = [...editor.graph.nodes.keys()].filter((id) => !before.has(id))
+  const fresh = new Set(created)
+  return created.filter((id) => !fresh.has(editor.graph.getNode(id)?.parentId ?? ''))
+}
+
+// 同一时间只执行一个调用：几个子智能体并行时，调用在这里排队，不会互相打断（比如 render 等字体时）
+let queue: Promise<unknown> = Promise.resolve()
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task)
+  queue = run.catch(() => undefined)
+  return run
+}
 
 // 接在 core 的设计说明后面：怎么在这个编辑器里干活，加上 render 用的设计 JSX 参考（OpenPencil 从渲染器元数据生成）
 const INSTRUCTIONS = [
@@ -44,8 +147,8 @@ const INSTRUCTIONS = [
 ].join('\n')
 
 // 上游 AI 对话默认的核心工具，加上常用的扩展工具：export_image（能看图的模型靠它看自己画出来的样子，core 只给能看图的模型）、
-// 页面、编组、组件、布尔运算、效果和图标。外部网络在主进程拦掉了，要联网（图库、网页搜索）或读写设置的工具不给；
-// 图标工具例外，它们走内置的 Lucide 图标数据（见 icons.ts）
+// 页面、编组、组件、布尔运算、效果和图标，设计变量（颜色、字号、间距规范），以及检查和分析（lint、analyze_*）。
+// 外部网络在主进程拦掉了，要联网（图库、网页搜索）或读写设置的工具不给；图标工具例外，它们走内置的 Lucide 图标数据（见 icons.ts）
 const EXTRA_TOOLS = new Set([
   'export_image',
   'export_svg',
@@ -67,12 +170,33 @@ const EXTRA_TOOLS = new Set([
   'boolean_intersect',
   'search_icons',
   'insert_icon',
+  'list_available_fonts',
+  'list_collections',
+  'get_collection',
+  'create_collection',
+  'delete_collection',
+  'list_variables',
+  'find_variables',
+  'get_variable',
+  'create_variable',
+  'set_variable',
+  'delete_variable',
+  'bind_variable',
+  'unbind_variable',
+  'lint',
+  'lint_fix',
+  'analyze_colors',
+  'analyze_typography',
+  'analyze_spacing',
+  'analyze_overlaps',
 ])
 const OFFLINE_ICON_TOOLS = new Set(['search_icons', 'insert_icon'])
 const BLOCKED_CAPABILITIES = new Set(['network:access', 'filesystem:read', 'filesystem:write', 'settings:read', 'settings:write'])
 const TOOLS: ToolDef[] = [...CORE_TOOLS, ...ALL_TOOLS.filter((def) => EXTRA_TOOLS.has(def.name) && !CORE_TOOLS.includes(def))].filter(
   (def) => OFFLINE_ICON_TOOLS.has(def.name) || !def.capabilities.some((capability) => BLOCKED_CAPABILITIES.has(capability)),
 )
+// 不给模型、只给 core 调的工具：放图片由 core 下载或读文件后调 set_image_fill，图片数据不经过模型
+const INTERNAL_TOOLS: ToolDef[] = ALL_TOOLS.filter((def) => def.name === 'set_image_fill')
 
 function toBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -122,6 +246,14 @@ function makeFigma(editor: Editor): FigmaAPI {
     })
   }
   if (editor.renderer) figma.rasterCodec = createCanvasKitRasterCodec(editor.renderer.ck)
+  // 引擎默认一个字体都不列，要宿主自己补：内置的 Inter 加系统字体（在线字体源没接）。
+  // 系统字体被拒时（面板不可见）报错，免得模型以为只有 Inter 能用
+  figma.listAvailableFontsAsync = async () => {
+    await requestLocalFonts()
+    if (fontManager.localAccessState() === 'denied') throw new Error('读不到系统字体（设计面板不可见时浏览器会拒绝），面板显示出来后再列')
+    const families = await fontManager.listFamilyOptions()
+    return families.flatMap(({ family }) => (fontManager.familyFacesSync(family) ?? [{ style: 'Regular' }]).map(({ style }) => ({ fontName: { family, style } })))
+  }
   return figma
 }
 
@@ -157,7 +289,7 @@ async function executeTool(editor: Editor, figma: FigmaAPI, def: ToolDef, args: 
 }
 
 export function installBridge(editor: Editor): void {
-  const byName = new Map(TOOLS.map((def) => [def.name, def]))
+  const byName = new Map([...TOOLS, ...INTERNAL_TOOLS].map((def) => [def.name, def]))
   window.__diffraDesign = {
     ready: () => editor.renderer !== null,
     session: () => {
@@ -174,20 +306,47 @@ export function installBridge(editor: Editor): void {
       }))
       return { tools, instructions: INSTRUCTIONS }
     },
-    run: async (name, rawArgs) => {
-      const def = byName.get(name)
-      if (!def) return { text: JSON.stringify({ error: `没有这个设计工具：${name}` }), image: null }
-      try {
-        const args = parseToolArgs(name, def.input, rawArgs) as Record<string, unknown>
-        const output = await runTool(editor, def, args)
-        // 改过文档就先备好字体再返回：排版尺寸和之后的截图才是按真实字体算的
-        if (def.mutates) await preparePageFonts(editor)
-        editor.requestRender()
-        return toResult(output)
-      } catch (error) {
-        return toResult(toolFailure(error))
-      }
-    },
+    run: (name, rawArgs, rawAgent) =>
+      enqueue(async () => {
+        const worker = isAgentTag(rawAgent) ? rawAgent : null
+        if (name === '__agent_claim') {
+          const nodes = (rawArgs as { nodes?: unknown } | null)?.nodes
+          if (!worker || !Array.isArray(nodes)) return toResult({ refused: ['invalid claim'] })
+          return toResult(claimNodes(editor, worker, nodes.map(String)))
+        }
+        if (name === '__agent_done') {
+          endAgent(worker)
+          return toResult({})
+        }
+        const def = byName.get(name)
+        if (!def) return { text: JSON.stringify({ error: `没有这个设计工具：${name}` }), image: null }
+        if (worker && name === 'eval') return toResult({ error: 'Workers cannot use eval: it can change nodes other workers own.' })
+        try {
+          const args = parseToolArgs(name, def.input, rawArgs) as Record<string, unknown>
+          const targets = [...nodeIdsIn(args)].filter((id) => editor.graph.getNode(id))
+          // 子智能体改文档：不能碰别人锁住的节点
+          if (worker && def.mutates) {
+            for (const id of targets) {
+              const owner = lockOwner(editor, worker, id)
+              if (owner) return toResult({ error: `Node ${id} belongs to worker "${owner.name}". Work inside your own nodes; mention what you need in your report.` })
+            }
+          }
+          const before = def.mutates ? new Set(editor.graph.nodes.keys()) : null
+          const output = await runTool(editor, def, args)
+          // 改过文档就先备好字体再返回：排版尺寸和之后的截图才是按真实字体算的
+          if (def.mutates) await preparePageFonts(editor)
+          editor.requestRender()
+          const created = before ? createdRoots(editor, before) : []
+          // 子智能体改过、新建的节点归它，别的子智能体不能再改
+          if (worker && def.mutates) for (const id of [...targets, ...created]) locks.set(id, worker)
+          const focus = created[0] ?? targets[0]
+          const agent = worker ?? MAIN_AGENT
+          if (focus) agentCursors.set(agent.id, { agent, nodeId: focus })
+          return toResult(output)
+        } catch (error) {
+          return toResult(toolFailure(error))
+        }
+      }),
     openFig: async (base64) => {
       const graph = await parseFigFile(fromBase64(base64).buffer)
       editor.replaceGraph(graph)

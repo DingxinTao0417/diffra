@@ -3,6 +3,7 @@ import { ShieldAlert } from 'lucide-react'
 import { EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
+import { agentOfMeta } from './transcript'
 
 interface PermissionCardProps {
   request: PermissionRequestEvent
@@ -14,6 +15,8 @@ const EXTERNAL_ACCESS_NOTE = '授权仅适用于上方确切路径和读/写操�
 export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   const command = commandOf(request.toolCall.rawInput)
   const external = isExternalAccess(request.toolCall.rawInput)
+  // 子智能体发起的请求写明是哪一个
+  const agent = agentOfMeta(request.toolCall._meta)
   const allowOnce = request.options.find((option) => option.kind === 'allow_once')
   const reject = request.options.find((option) => option.kind.startsWith('reject'))
   const allowOnceRef = useRef<HTMLButtonElement>(null)
@@ -48,7 +51,13 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
     >
       <div className="flex items-center gap-2 font-bold">
         <ShieldAlert className="size-4 text-warning" />
-        {titleOf(request.toolCall.kind, external)}
+        {titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
+        {agent && (
+          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground" data-testid="permission-agent">
+            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: agent.color }} aria-hidden="true" />
+            <span className="truncate">来自子智能体 {agent.name}</span>
+          </span>
+        )}
       </div>
       <pre className="overflow-auto rounded-md border bg-background/60 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-words">
         {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
@@ -76,9 +85,10 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   )
 }
 
-function titleOf(kind: PermissionRequestEvent['toolCall']['kind'], external: boolean): string {
+function titleOf(kind: PermissionRequestEvent['toolCall']['kind'], external: boolean, title: string): string {
   if (kind === 'execute') return '运行命令？'
   if (external) return '访问项目外的文件？'
+  if (kind === 'fetch' && title.startsWith('下载图片')) return '下载图片？'
   if (kind === 'fetch') return '打开网页？'
   return '需要你确认才能执行'
 }

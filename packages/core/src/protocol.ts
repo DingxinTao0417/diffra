@@ -3,6 +3,7 @@ import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/
 import type { ModelEndpoint } from './models/types.js'
 
 export * from './models/types.js'
+export * from './design-styles.js'
 export type {
   McpServer,
   PermissionOption,
@@ -97,6 +98,9 @@ export interface TurnOutcome {
   finish: 'verified' | 'unverified' | 'no-edits' | null
   stop: TurnStop | null
 }
+// 模型一直没吐数据时的 session_info_update._meta.diffra.modelSilentSince：最后一次收到数据的时刻（ISO），
+// 又收到数据或这一步结束时发 null。子智能体的同一条更新里带 agent（AgentTag），界面按智能体分开记
+export const MODEL_SILENCE_META_KEY = 'modelSilentSince'
 
 export const TERMINAL_DEFAULT_LINES = 80
 export const TERMINAL_MAX_LINES = 200
@@ -148,6 +152,8 @@ export interface SessionConfig {
   browser?: boolean
   // 设计任务：建会话时定下，存进会话记录；客户端在每轮开始前把设计面板的工具配置给它
   design?: boolean
+  // 设计任务的风格预设（DESIGN_STYLES 的 id）；null 是不用预设。建会话时定下，存进会话记录
+  designStyle?: string | null
   // 无项目任务：cwd 是客户端替任务建的文件夹，不是用户的项目。建会话时定下，存进会话记录
   noProject?: boolean
   // 检查点仓库的位置；null 表示不打检查点
@@ -249,6 +255,8 @@ export type BrowserAction =
   | { action: 'screenshot'; width: number | null }
   // 按手机和桌面两种宽度检查布局问题，结果是文字
   | { action: 'layout' }
+  // 列出页面上的图片：完整尺寸的网址、像素尺寸和替代文字（找图放进设计稿用）
+  | { action: 'images' }
 
 export type BrowserActionParams = BrowserAction & { sessionId: string }
 
@@ -292,6 +300,8 @@ export interface DesignActionParams {
   sessionId: string
   tool: string
   args: unknown
+  // 哪个子智能体在调用（设计页按它加节点锁、画光标）；主智能体自己调时为 null
+  agent?: AgentTag | null
 }
 
 // text 给模型看；导出图片的工具带 image
@@ -407,7 +417,29 @@ export interface CheckRunResult {
   summary: string
 }
 
-export type ModelRole = 'coder' | 'reviewer' | 'planner'
+// subagent：主智能体用 delegate 派出的子智能体（工人），用的是编码模型
+export type ModelRole = 'coder' | 'reviewer' | 'planner' | 'subagent'
+
+// 子智能体：主智能体用 delegate 派出的工人。它的卡片（那次 delegate 调用）在 _meta.diffra.agent 里带 AgentCardMeta；
+// 工人自己的工具调用在 _meta.diffra 里带 parentToolCallId（所属卡片）和 agent（AgentTag），界面据此收进卡片、标出是谁改的文件。
+// 权限请求的 toolCall 也带 _meta.diffra.agent，界面写明是哪个智能体在请求
+export const AGENT_META_KEY = 'agent'
+export const PARENT_TOOL_CALL_META_KEY = 'parentToolCallId'
+
+export interface AgentTag {
+  id: string
+  name: string
+  // 界面和设计画布上的标识色，#RRGGBB
+  color: string
+}
+
+export interface AgentCardMeta extends AgentTag {
+  task: string
+  // 认领的文件和目录（相对项目）；中途追加认领时整份重发
+  files: string[]
+  // 设计任务里负责的节点
+  nodes: string[]
+}
 
 // 用量记录的一行：一次模型调用。时间是调用结束时的 UTC 时刻；供应商没返回的数记成 null
 export interface UsageRecord {

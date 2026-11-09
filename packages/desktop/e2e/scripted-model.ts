@@ -2,10 +2,27 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 // 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复；
-// promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满
+// promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满。
+// 工具参数可以是函数：拿这次请求的对话（messages）算出来，比如用前一个工具返回的节点 id。
+// match：只回答第一条用户消息里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求
+export type ScriptMessages = Array<{ role: string; content: unknown; tool_calls?: unknown }>
+type ScriptInput = unknown | ((messages: ScriptMessages) => unknown)
+type StepTiming = { delayMs?: number; promptTokens?: number; cacheReadTokens?: number; match?: string }
 export type ScriptStep =
-  | { toolCalls: Array<{ name: string; input: unknown }>; text?: string; delayMs?: number; promptTokens?: number; cacheReadTokens?: number }
-  | { text: string; delayMs?: number; promptTokens?: number; cacheReadTokens?: number }
+  | ({ toolCalls: Array<{ name: string; input: ScriptInput }>; text?: string } & StepTiming)
+  | ({ text: string } & StepTiming)
+
+// 对话里最后一个工具结果（字符串）
+export function lastToolResult(messages: ScriptMessages): string {
+  const content = messages.filter((message) => message.role === 'tool').at(-1)?.content
+  return typeof content === 'string' ? content : JSON.stringify(content)
+}
+
+function firstUserText(messages: ScriptMessages): string {
+  const content = messages.find((message) => message.role === 'user')?.content
+  if (typeof content === 'string') return content
+  return Array.isArray(content) ? content.map((part) => (typeof part === 'object' && part !== null && 'text' in part ? String(part.text) : '')).join('') : ''
+}
 
 export interface ScriptedModel {
   baseUrl: string
@@ -31,6 +48,7 @@ export async function startScriptedModel(
   options: { securityReplies?: string[]; reviewReplies?: string[] } = {},
 ): Promise<ScriptedModel> {
   let served = 0
+  const used = new Set<number>()
   let reviews = 0
   let ruleReviews = 0
   const bodies: string[] = []
@@ -59,7 +77,15 @@ export async function startScriptedModel(
         step = { text: options.reviewReplies?.[ruleReviews] ?? 'NO_VIOLATIONS' }
         index = 2000 + ruleReviews++
       } else {
-        step = steps[served] ?? { text: '（剧本已结束）' }
+        const messages = (JSON.parse(body) as { messages: ScriptMessages }).messages
+        const first = firstUserText(messages)
+        const matches = (item: ScriptStep) => item.match !== undefined && first.includes(item.match)
+        // 第一条用户消息对得上某个 match 的请求只从这些步骤里取；其余请求取没写 match 的步骤
+        const own = steps.some(matches)
+        const at = steps.findIndex((item, position) => !used.has(position) && (own ? matches(item) : item.match === undefined))
+        if (at >= 0) used.add(at)
+        step = at >= 0 ? steps[at]! : { text: '（剧本已结束）' }
+        if ('toolCalls' in step) step = { ...step, toolCalls: step.toolCalls.map((call) => ({ ...call, input: typeof call.input === 'function' ? call.input(messages) : call.input })) }
         bodies.push(body)
         index = served++
       }

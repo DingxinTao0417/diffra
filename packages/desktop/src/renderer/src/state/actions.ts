@@ -1,7 +1,7 @@
 import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
-import { applyUpdate, lastUsage, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
+import { applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
 import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
@@ -148,8 +148,14 @@ export async function initialize(): Promise<void> {
 export function wireCoreEvents(): () => void {
   const offUpdate = window.diffra.onSessionUpdate(({ sessionId, update }) => {
     const usage = usageOf(update)
+    const silence = modelSilenceOf(update)
     updateLive(sessionId, (task) => {
       if (usage) return { ...task, usage }
+      if (silence) {
+        // 又有输出了就去掉这个智能体的那一条
+        const { [silence.key]: _previous, ...rest } = task.modelSilence ?? {}
+        return { ...task, modelSilence: silence.since === null ? rest : { ...rest, [silence.key]: { agent: silence.agent, since: silence.since } } }
+      }
       const last = task.turns.at(-1)
       if (!last) return task
       // 读文件、搜索不改项目文件，完成时不用重读改动
@@ -314,7 +320,7 @@ async function runTurnOnCore(
     const viewing = route.name === 'task' && route.sessionId === sessionId
     updateLive(sessionId, (current) => {
       next = current.queue[0]
-      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
+      return { ...current, running: false, permission: null, modelSilence: undefined, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
     })
     await refreshTasks()
     if (next) void sendMessage(sessionId, next.text, next.options)

@@ -7,6 +7,7 @@ import { useCanvas } from '@open-pencil/vue/canvas/surface'
 import { useTextEdit } from '@open-pencil/vue/canvas/text-edit'
 import { type EditorCommandId, useEditorCommands } from '@open-pencil/vue/editor/commands'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { agentCursors } from './bridge'
 import { lucideSvg } from './icons'
 import Inspector from './Inspector.vue'
 import LayersPanel from './LayersPanel.vue'
@@ -74,6 +75,34 @@ const SHIFT_COMMANDS: Record<string, EditorCommandId> = {
 const NUDGE: Record<string, [number, number]> = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }
 
 const zoomPercent = computed(() => `${Math.round(editor.state.zoom * 100)}%`)
+
+// 智能体的虚拟光标：每个在干活的智能体一个，指着它最近改（或看）的图层并框出来；画布缩放、平移时跟着走，图层不在当前页时不画
+function onCurrentPage(id: string): boolean {
+  let current = editor.graph.getNode(id)?.parentId ?? null
+  while (current) {
+    if (current === editor.state.currentPageId) return true
+    current = editor.graph.getNode(current)?.parentId ?? null
+  }
+  return false
+}
+const cursors = computed(() => {
+  const { zoom, panX, panY } = editor.state
+  // 子智能体在干活时主智能体在等它们，不画它的光标，免得和工人的叠在一起
+  const entries = [...agentCursors.values()]
+  const working = entries.some(({ agent }) => agent.id !== 'main')
+  const placed: Array<{ x: number; y: number }> = []
+  return entries.flatMap(({ agent, nodeId }) => {
+    const node = editor.graph.getNode(nodeId)
+    if ((working && agent.id === 'main') || !node || !onCurrentPage(nodeId)) return []
+    const position = editor.graph.getAbsolutePosition(nodeId)
+    const x = position.x * zoom + panX
+    const y = position.y * zoom + panY
+    // 几个光标落在同一个角上时往下错开，名字不叠在一起
+    const stacked = placed.filter((point) => Math.abs(point.x - x) < 8 && Math.abs(point.y - y) < 8).length
+    placed.push({ x, y })
+    return [{ agent, x, y, width: node.width * zoom, height: node.height * zoom, offset: stacked * 20 }]
+  })
+})
 const zoomBy = (factor: number) => editor.zoomToLevel(Math.min(256, Math.max(0.02, editor.state.zoom * factor)))
 
 function typing(target: EventTarget | null) {
@@ -267,6 +296,25 @@ onUnmounted(() => {
       <LayersPanel v-if="showLayers" />
       <div class="relative min-w-0 flex-1" @contextmenu="openMenu">
         <canvas ref="canvasRef" class="absolute inset-0 size-full" />
+        <div class="pointer-events-none absolute inset-0 overflow-hidden" data-testid="design-agent-cursors">
+          <template v-for="cursor in cursors" :key="cursor.agent.id">
+            <div
+              class="absolute rounded-[3px] border-[1.5px] transition-[left,top,width,height] duration-300 ease-out"
+              :style="{ left: `${cursor.x}px`, top: `${cursor.y}px`, width: `${cursor.width}px`, height: `${cursor.height}px`, borderColor: cursor.agent.color }"
+            />
+            <div
+              class="absolute flex items-start transition-[left,top] duration-300 ease-out"
+              :style="{ left: `${cursor.x - 2}px`, top: `${cursor.y - 2 + cursor.offset}px` }"
+              data-testid="design-agent-cursor"
+              :data-agent="cursor.agent.name"
+            >
+              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M2 2 L15.5 8 L9.2 9.6 L6.8 15.8 Z" :fill="cursor.agent.color" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+              </svg>
+              <span class="mt-3 -ml-1 rounded-full px-1.5 text-[11px] leading-[18px] font-medium whitespace-nowrap text-white shadow-sm" :style="{ backgroundColor: cursor.agent.color }">{{ cursor.agent.name }}</span>
+            </div>
+          </template>
+        </div>
         <div v-if="failure" class="absolute inset-0 flex items-center justify-center p-6 text-sm text-destructive" role="alert">画布启动失败：{{ failure }}</div>
       </div>
       <Inspector v-if="showInspector" />

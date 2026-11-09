@@ -120,6 +120,7 @@ export async function editFileTool(
         'Do not change anything there; ask the user if the task needs it.',
     )
   }
+  context.beforeWrite?.(target)
   const existing = await readFile(target.absolute, 'utf8').catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
     throw error

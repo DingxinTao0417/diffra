@@ -55,6 +55,7 @@ export const sessionConfigSchema = z.object({
   plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1) })).default([]),
   browser: z.boolean().default(false),
   design: z.boolean().default(false),
+  designStyle: z.string().min(1).nullable().default(null),
   noProject: z.boolean().default(false),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
@@ -72,6 +73,7 @@ export const browserActionParamsSchema = z.intersection(
     z.object({ action: z.literal('console') }),
     z.object({ action: z.literal('screenshot'), width: z.number().int().min(SCREENSHOT_MIN_WIDTH).max(SCREENSHOT_MAX_WIDTH).nullable() }),
     z.object({ action: z.literal('layout') }),
+    z.object({ action: z.literal('images') }),
   ]),
 )
 
@@ -88,7 +90,12 @@ export const sessionDesignSchema = z.object({
   instructions: z.string(),
 }) satisfies z.ZodType<SessionDesign>
 
-export const designActionParamsSchema = z.object({ sessionId: z.string().min(1), tool: z.string().min(1), args: z.unknown() })
+export const designActionParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  tool: z.string().min(1),
+  args: z.unknown(),
+  agent: z.object({ id: z.string().min(1), name: z.string().min(1), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }).nullable().optional(),
+})
 
 export const pluginRefSchema = z.object({ name: z.string().min(1), dir: z.string().min(1) })
 

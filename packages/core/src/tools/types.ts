@@ -17,6 +17,8 @@ export interface ToolContext {
   // 项目外可以只读访问的目录（Skill 目录），读文件、列文件、搜索、大纲能用绝对路径访问
   readRoots: string[]
   requestExternalPermission?(path: string, access: 'read' | 'write'): Promise<boolean>
+  // 写文件前的检查（子智能体用：文件归别的智能体时抛 ToolError，没人认领的先认领下来）
+  beforeWrite?(target: { absolute: string; display: string }): void
 }
 
 export interface ToolOutput {

@@ -22,7 +22,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent'; item: ToolItem }
 
 const STOP_LABELS: Partial<Record<StopReason, string>> = {
   cancelled: '已停止',
@@ -41,7 +41,8 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | null {
+  if (item.agentCard) return 'agent'
   if (item.title === '完成') return 'finish'
   if (item.title === '验证改动（不结束任务）') return 'verify'
   if (item.title === '计划') return 'plan'
@@ -54,7 +55,8 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security'
   return null
 }
 
-// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、中途验证、完成单独显示
+// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、中途验证、完成、子智能体单独显示。
+// 子智能体自己的工具调用收进它的卡片，不在这里排
 function toBlocks(items: TranscriptItem[]): Block[] {
   const blocks: Block[] = []
   for (const item of items) {
@@ -62,6 +64,7 @@ function toBlocks(items: TranscriptItem[]): Block[] {
       blocks.push({ type: 'item', item })
       continue
     }
+    if (item.parentId) continue
     const type = toolBlockType(item)
     if (type === 'edit') {
       const previous = blocks.at(-1)
@@ -272,6 +275,15 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
   const monitorOpen = useAppState((state) => state.panel === 'monitor')
+  // 每张子智能体卡片里的工具调用，按发生顺序
+  const agentSteps = useMemo(() => {
+    const steps = new Map<string, ToolItem[]>()
+    for (const item of turn.items) {
+      if (item.kind !== 'tool' || !item.parentId) continue
+      steps.set(item.parentId, [...(steps.get(item.parentId) ?? []), item])
+    }
+    return steps
+  }, [turn.items])
   // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
   // 目标模式一轮里有好几张完成卡片，每张只算上一张通过的卡之后的改动和失败的命令；打回的卡不切分，免得通过的卡漏掉打回前的改动
@@ -335,6 +347,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           case 'verify':
             // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
             return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
+          case 'agent':
+            return <AgentCard key={block.item.id} item={block.item} steps={agentSteps.get(block.item.id) ?? []} projectPath={task.project} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
@@ -346,6 +360,7 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           进行中…
         </p>
       )}
+      {active && <ModelSilenceHint silence={task.modelSilence} />}
       {stopLabel && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Square className="size-3.5" />
@@ -575,6 +590,78 @@ function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: b
       </DisclosureRow>
       {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
+  )
+}
+
+// 子智能体卡片：名字、颜色、交代的事和认领的文件。运行中显示第几步、在做什么；结束后是它交回的结果。
+// 展开看它的每一步，改动和主对话里一样能看代码
+function AgentCard({ item, steps, projectPath }: { item: ToolItem; steps: ToolItem[]; projectPath: string }) {
+  const card = item.agentCard!
+  const [open, setOpen] = useState(false)
+  const running = item.status !== 'completed' && item.status !== 'failed'
+  const elapsed = useElapsed(item.startedAt, running)
+  const current = steps.at(-1)
+  const action = current ? splitTitle(current.title) : null
+  const result = textOf(item)
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm" data-testid="agent-card" data-agent={card.name} data-status={item.status} data-item-id={item.id}>
+      <button type="button" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}子智能体 ${card.name} 的步骤`} className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-accent/60" onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
+        <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: card.color }} aria-hidden="true" />
+        <span className="shrink-0 font-bold">{card.name}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={card.task}>
+          {card.task}
+        </span>
+        <StatusIcon status={item.status} />
+      </button>
+      {running ? (
+        <p className="flex min-w-0 items-center gap-1.5 pl-5.5 text-xs text-muted-foreground" data-testid="agent-progress">
+          <span className="shrink-0">第 {Math.max(steps.length, 1)} 步</span>
+          {action && (
+            <span className="min-w-0 truncate">
+              · {action.action}
+              {action.target ? ` ${action.target}` : ''}
+            </span>
+          )}
+          {elapsed !== null && <span className="ml-auto shrink-0 tabular-nums">{formatDuration(elapsed)}</span>}
+        </p>
+      ) : (
+        result && <p className="pl-5.5 leading-relaxed break-words whitespace-pre-wrap text-foreground/85">{result}</p>
+      )}
+      {card.files.length > 0 && (
+        <p className="truncate pl-5.5 text-xs text-muted-foreground" title={card.files.join('\n')}>
+          认领：{card.files.join('、')}
+        </p>
+      )}
+      {open && (
+        <div className="ml-5.5 flex flex-col gap-1 border-l pl-3" data-testid="agent-steps">
+          {steps.length === 0 && <p className="text-xs text-muted-foreground">还没有动作</p>}
+          {/* 改动卡片的行自带 px-2，往左挪齐其他步骤的箭头 */}
+          {steps.map((step) =>
+            toolBlockType(step) === 'edit' ? (
+              <div key={step.id} className="-mx-2">
+                <EditBlock item={step} projectPath={projectPath} />
+              </div>
+            ) : (
+              <ToolStep key={step.id} item={step} />
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// 模型很久没有输出：可能卡住了，也可能还在想，不替用户停。几个子智能体同时没输出时提示最久的那个
+function ModelSilenceHint({ silence }: { silence: LiveTask['modelSilence'] }) {
+  const longest = Object.values(silence ?? {}).sort((a, b) => a.since - b.since)[0]
+  const elapsed = useElapsed(longest?.since, longest !== undefined)
+  if (!longest || elapsed === null) return null
+  return (
+    <p className="flex items-start gap-2 text-sm text-warning" data-testid="model-silence">
+      <CircleAlert className="mt-0.5 size-4 shrink-0" />
+      {longest.agent ? `子智能体「${longest.agent}」的模型` : '模型'}已 {formatDuration(elapsed)}没有输出，可能卡住了，可以停止后发「继续」
+    </p>
   )
 }
 
