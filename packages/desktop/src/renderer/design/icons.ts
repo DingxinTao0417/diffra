@@ -57,3 +57,10 @@ export function createLocalIcons(): IconProvider {
 
 // 给智能体的说明里用：内置的是哪套图标、名字怎么写
 export const ICON_SET_HINT = `Icons: only the built-in "${PREFIX}" set (Lucide, ${names.length} icons) works offline; name icons as ${PREFIX}:<name>, e.g. ${PREFIX}:house, ${PREFIX}:search, ${PREFIX}:bell. Other icon sets cannot be loaded.`
+
+// 设计页工具栏的图标，用同一份内置 Lucide 数据画成 SVG（描边是 currentColor，跟着按钮文字颜色走）
+export function lucideSvg(name: string): string {
+  const icon = lucide.icons[aliases[name]?.parent ?? name]
+  if (!icon) throw new Error(`内置 Lucide 里没有图标 ${name}`)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${icon.width ?? lucide.width ?? 24} ${icon.height ?? lucide.height ?? 24}" width="16" height="16" aria-hidden="true">${icon.body}</svg>`
+}

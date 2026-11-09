@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useRef, useState } from 'react'
 import type { CheckDetection, CheckRunResult, DetectedCheck } from '@diffra/core/types'
 import { Check, LoaderCircle, Play, ScanSearch, ShieldAlert, X } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
@@ -13,13 +13,11 @@ import { errorMessage } from '@/lib/errors'
 interface ProjectSettingsDialogProps {
   project: ProjectState | null
   open: boolean
-  // 打开时自动识别检查命令（首页提示「检测到检查命令」时）
-  detectOnOpen?: boolean
   onClose(): void
   onSaved(project: ProjectState): void
 }
 
-export function ProjectSettingsDialog({ project, open, detectOnOpen, onClose, onSaved }: ProjectSettingsDialogProps) {
+export function ProjectSettingsDialog({ project, open, onClose, onSaved }: ProjectSettingsDialogProps) {
   return (
     <Dialog open={open && project !== null} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="sm:max-w-xl">
@@ -32,7 +30,7 @@ export function ProjectSettingsDialog({ project, open, detectOnOpen, onClose, on
             保存在 Diffra 里，不往项目仓库写文件。改动对新任务生效。
           </DialogDescription>
         </DialogHeader>
-        {open && project && <ProjectSettingsForm project={project} detectOnOpen={detectOnOpen ?? false} onClose={onClose} onSaved={onSaved} />}
+        {open && project && <ProjectSettingsForm project={project} onClose={onClose} onSaved={onSaved} />}
       </DialogContent>
     </Dialog>
   )
@@ -56,12 +54,7 @@ function suggestionsOf(result: CheckDetection): { afterEdit: Suggestion | null; 
   return { afterEdit, beforeFinish }
 }
 
-function ProjectSettingsForm({
-  project,
-  detectOnOpen,
-  onClose,
-  onSaved,
-}: Omit<ProjectSettingsDialogProps, 'open' | 'project' | 'detectOnOpen'> & { project: ProjectState; detectOnOpen: boolean }) {
+function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettingsDialogProps, 'open' | 'project'> & { project: ProjectState }) {
   const [afterEdit, setAfterEdit] = useState(project.checks.afterEdit ?? '')
   const [beforeFinish, setBeforeFinish] = useState(project.checks.beforeFinish ?? '')
   const [readOnly, setReadOnly] = useState(project.readOnlyPaths.join(', '))
@@ -77,11 +70,6 @@ function ProjectSettingsForm({
       setDetection({ state: 'error', message: errorMessage(caught) })
     }
   }
-
-  // 只在打开时识别一次
-  useEffect(() => {
-    if (detectOnOpen) void detect()
-  }, [])
 
   const suggestions = detection?.state === 'ready' ? suggestionsOf(detection.result) : null
   const notes = detection?.state === 'ready' ? detection.result.notes : []

@@ -37,10 +37,8 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await window.getByRole('button', { name: '未配置检查' }).click()
-    await window.getByLabel('快速检查', { exact: true }).fill('echo check-ok')
-    await window.getByRole('button', { name: '保存项目设置' }).click()
-    await expect(window.getByRole('button', { name: '检查：echo check-ok' })).toBeVisible()
+    // 首页不再有检查入口；这里只关心任务页，直接按项目设置弹窗保存时走的接口配好快速检查
+    await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: 'echo check-ok', beforeFinish: null }, readOnlyPaths: [] })`)
 
     await startTask(window, '改问候语')
     await waitTaskDone(window)

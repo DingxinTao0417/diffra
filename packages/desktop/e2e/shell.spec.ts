@@ -45,9 +45,10 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     await expect(window.getByTestId('task-title')).toHaveText('改过的名字')
     await expect(window.getByTestId('sidebar-task')).toContainText('改过的名字')
 
-    // 首页的最近任务能打开
+    // 首页不列最近的任务，从侧栏打开
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
-    await window.getByRole('button', { name: /改过的名字/ }).first().click()
+    await expect(window.getByText('最近的任务')).toHaveCount(0)
+    await window.getByTestId('sidebar-task').filter({ hasText: '改过的名字' }).click()
     await expect(window.getByTestId('task-title')).toHaveText('改过的名字')
 
     // 归档后侧栏不显示，在「会话与存储」里取消归档

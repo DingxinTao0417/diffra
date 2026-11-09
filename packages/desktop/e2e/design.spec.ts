@@ -361,7 +361,7 @@ test('设计任务：从设计首页建任务，面板自动打开、画布占�
 
     // 属性面板：从图层树选中卡片，把宽改成 400
     // 两侧面板按设计页宽度自动显隐，没开着就用工具栏打开
-    for (const name of ['图层', '属性']) {
+    for (const name of ['图层面板', '属性面板']) {
       const button = design.getByRole('button', { name, exact: true })
       if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
     }
@@ -422,5 +422,41 @@ test('设计任务：从设计首页建任务，面板自动打开、画布占�
     await model.close()
     rmSync(project, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('设计任务的对话栏较窄：模型名很长时截断，模型菜单和发送、停止按钮不换行', async () => {
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-narrow-'))
+  const model = await startScriptedModel([{ text: '画好了', delayMs: 3000 }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'deepseek-reasoner-v4-flash-preview-2026' })
+    await chooseProject(app, window, project)
+    await startDesignTask(window, '画个卡片')
+    // 底栏是一行：权限菜单、模型菜单、发送或停止按钮的中线对齐
+    const composer = window.getByTestId('composer')
+    const sameRow = async (name: string) => {
+      const centers = await Promise.all(
+        [window.getByTestId('permission-mode'), window.getByTestId('model-menu'), composer.getByRole('button', { name, exact: true })].map(async (item) => {
+          const box = await item.boundingBox()
+          if (!box) throw new Error('底栏控件不可见')
+          return box.y + box.height / 2
+        }),
+      )
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(2)
+    }
+    await sameRow('停止')
+    await waitTaskDone(window)
+    await sameRow('发送')
+    // 只有模型名截断：权限菜单的文字保持一行（按钮是固定高度，挤成两行时会溢出）
+    expect(await window.evaluate(`(() => { const button = document.querySelector('[data-testid="permission-mode"]'); return button.scrollHeight <= button.clientHeight && button.scrollWidth <= button.clientWidth })()`)).toBe(true)
+    expect(await window.evaluate(`(() => { const name = document.querySelector('[data-testid="model-menu"] span.truncate'); return name.scrollWidth > name.clientWidth })()`)).toBe(true)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
   }
 })

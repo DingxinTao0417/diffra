@@ -7,6 +7,7 @@ import { useCanvas } from '@open-pencil/vue/canvas/surface'
 import { useTextEdit } from '@open-pencil/vue/canvas/text-edit'
 import { type EditorCommandId, useEditorCommands } from '@open-pencil/vue/editor/commands'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { lucideSvg } from './icons'
 import Inspector from './Inspector.vue'
 import LayersPanel from './LayersPanel.vue'
 
@@ -30,16 +31,21 @@ const { hitTestSectionTitle, hitTestComponentLabel, hitTestFrameTitle } = useCan
 useCanvasInput(canvasRef, editor, hitTestSectionTitle, hitTestComponentLabel, hitTestFrameTitle)
 useTextEdit(canvasRef, editor)
 
-const TOOLS: Array<{ tool: Tool; label: string; key: string }> = [
-  { tool: 'SELECT', label: '移动', key: 'V' },
-  { tool: 'FRAME', label: '画板', key: 'F' },
-  { tool: 'RECTANGLE', label: '矩形', key: 'R' },
-  { tool: 'ELLIPSE', label: '椭圆', key: 'O' },
-  { tool: 'LINE', label: '直线', key: 'L' },
-  { tool: 'PEN', label: '钢笔', key: 'P' },
-  { tool: 'TEXT', label: '文字', key: 'T' },
-  { tool: 'HAND', label: '抓手', key: 'H' },
+const TOOLS: Array<{ tool: Tool; label: string; key: string; icon: string }> = [
+  { tool: 'SELECT', label: '移动', key: 'V', icon: 'mouse-pointer-2' },
+  { tool: 'FRAME', label: '画板', key: 'F', icon: 'frame' },
+  { tool: 'RECTANGLE', label: '矩形', key: 'R', icon: 'square' },
+  { tool: 'ELLIPSE', label: '椭圆', key: 'O', icon: 'circle' },
+  { tool: 'LINE', label: '直线', key: 'L', icon: 'slash' },
+  { tool: 'PEN', label: '钢笔', key: 'P', icon: 'pen-tool' },
+  { tool: 'TEXT', label: '文字', key: 'T', icon: 'type' },
+  { tool: 'HAND', label: '抓手', key: 'H', icon: 'hand' },
 ]
+// 工具栏只放图标，名字和快捷键在悬停提示和读屏名称里
+const ICON = Object.fromEntries(
+  ['panel-left', 'panel-right', 'undo-2', 'redo-2', 'minus', 'plus', 'maximize', ...TOOLS.map((item) => item.icon)].map((name) => [name, lucideSvg(name)]),
+)
+const ICON_BUTTON = 'flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent aria-pressed:bg-soft aria-pressed:text-foreground'
 
 // Ctrl（Mac 上是 Cmd）组合键 → 编辑器命令；带 Shift、Alt 的单独列
 const MOD_COMMANDS: Record<string, EditorCommandId> = {
@@ -232,30 +238,30 @@ onUnmounted(() => {
 
 <template>
   <div class="flex size-full flex-col bg-background text-foreground">
-    <header class="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 text-xs whitespace-nowrap [&>*]:shrink-0" data-testid="design-toolbar">
-      <button type="button" class="rounded px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:bg-soft aria-pressed:text-foreground" :aria-pressed="showLayers" title="图层面板" @click="layersChoice = !showLayers">图层</button>
+    <header class="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 text-xs whitespace-nowrap [&>*]:shrink-0" data-testid="design-toolbar">
+      <button type="button" :class="ICON_BUTTON" :aria-pressed="showLayers" aria-label="图层面板" title="图层面板" @click="layersChoice = !showLayers" v-html="ICON['panel-left']" />
       <span aria-hidden class="mx-1 h-4 w-px bg-border" />
       <button
         v-for="item in TOOLS"
         :key="item.tool"
         type="button"
+        :class="ICON_BUTTON"
+        :aria-label="item.label"
         :title="`${item.label}（${item.key}）`"
         :aria-pressed="editor.state.activeTool === item.tool"
-        class="rounded-md px-2 py-1 whitespace-nowrap hover:bg-accent aria-pressed:bg-soft aria-pressed:text-foreground"
         @click="editor.setTool(item.tool)"
-      >
-        {{ item.label }}
-      </button>
+        v-html="ICON[item.icon]"
+      />
       <span aria-hidden class="mx-1 h-4 w-px bg-border" />
-      <button type="button" class="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" title="撤销（Ctrl+Z）" :disabled="!commands['edit.undo'].enabled.value" @click="runCommand('edit.undo')">撤销</button>
-      <button type="button" class="rounded px-2 py-1 hover:bg-accent disabled:opacity-40" title="重做（Ctrl+Shift+Z）" :disabled="!commands['edit.redo'].enabled.value" @click="runCommand('edit.redo')">重做</button>
+      <button type="button" :class="ICON_BUTTON" aria-label="撤销" title="撤销（Ctrl+Z）" :disabled="!commands['edit.undo'].enabled.value" @click="runCommand('edit.undo')" v-html="ICON['undo-2']" />
+      <button type="button" :class="ICON_BUTTON" aria-label="重做" title="重做（Ctrl+Shift+Z）" :disabled="!commands['edit.redo'].enabled.value" @click="runCommand('edit.redo')" v-html="ICON['redo-2']" />
       <div class="flex-1 !shrink" />
-      <button type="button" class="rounded px-2 py-1 hover:bg-accent" title="缩小（Ctrl+-）" @click="zoomBy(0.8)">−</button>
-      <button type="button" class="w-12 rounded py-1 text-center tabular-nums hover:bg-accent" title="缩放到 100%（Shift+0）" data-testid="design-zoom" @click="runCommand('view.zoom100')">{{ zoomPercent }}</button>
-      <button type="button" class="rounded px-2 py-1 hover:bg-accent" title="放大（Ctrl+=）" @click="zoomBy(1.25)">＋</button>
-      <button type="button" class="rounded px-2 py-1 hover:bg-accent" title="缩放到全部（Shift+1）" @click="runCommand('view.zoomFit')">适应</button>
+      <button type="button" :class="ICON_BUTTON" aria-label="缩小" title="缩小（Ctrl+-）" @click="zoomBy(0.8)" v-html="ICON.minus" />
+      <button type="button" class="h-7 w-12 rounded-md text-center text-muted-foreground tabular-nums hover:bg-accent hover:text-foreground" title="缩放到 100%（Shift+0）" data-testid="design-zoom" @click="runCommand('view.zoom100')">{{ zoomPercent }}</button>
+      <button type="button" :class="ICON_BUTTON" aria-label="放大" title="放大（Ctrl+=）" @click="zoomBy(1.25)" v-html="ICON.plus" />
+      <button type="button" :class="ICON_BUTTON" aria-label="适应" title="缩放到全部（Shift+1）" @click="runCommand('view.zoomFit')" v-html="ICON.maximize" />
       <span aria-hidden class="mx-1 h-4 w-px bg-border" />
-      <button type="button" class="rounded px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:bg-soft aria-pressed:text-foreground" :aria-pressed="showInspector" title="属性面板" @click="inspectorChoice = !showInspector">属性</button>
+      <button type="button" :class="ICON_BUTTON" :aria-pressed="showInspector" aria-label="属性面板" title="属性面板" @click="inspectorChoice = !showInspector" v-html="ICON['panel-right']" />
     </header>
     <div class="flex min-h-0 flex-1">
       <LayersPanel v-if="showLayers" />

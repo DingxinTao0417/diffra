@@ -18,7 +18,6 @@ test('内置规范全部生效：按项目语言选包，强制级和推荐级�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await expect(window.getByText('规范：内置规则 · 完成前审查')).toBeVisible()
 
     // 项目里只有 TypeScript：通用、安全、TS 三个包，Java 和 Python 不选
     await startTask(window, '看看项目')

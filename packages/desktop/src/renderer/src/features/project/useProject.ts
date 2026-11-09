@@ -26,9 +26,3 @@ export function useProject(path: string | null) {
 
   return { project, setProject, branch }
 }
-
-export function checksSummary(project: ProjectState): string {
-  const { afterEdit, beforeFinish } = project.checks
-  if (!afterEdit && !beforeFinish) return '未配置检查'
-  return `检查：${beforeFinish ?? afterEdit}`
-}

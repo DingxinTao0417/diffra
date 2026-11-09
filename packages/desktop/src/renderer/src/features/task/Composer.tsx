@@ -714,8 +714,9 @@ export function Composer(props: ComposerProps) {
           )}
         />
       </div>
-      {/* 底栏内边距加触发器的 px-2 等于输入框的 px，图标和占位符左缘对齐 */}
-      <div className={cn('flex flex-wrap items-center gap-2 pt-1.5 pb-2.5', large ? 'px-2.5' : 'pr-2.5 pl-1.5')}>
+      {/* 底栏内边距加触发器的 px-2 等于输入框的 px，图标和占位符左缘对齐。
+          不换行：输入框窄时（如设计任务的对话栏）模型名截断，发送/停止按钮始终在同一行 */}
+      <div className={cn('flex items-center gap-2 pt-1.5 pb-2.5', large ? 'px-2.5' : 'pr-2.5 pl-1.5')}>
         {props.leading}
         <PermissionModeMenu mode={props.permissionMode} onChange={props.onPermissionModeChange} />
 
@@ -849,7 +850,8 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
           type="button"
           aria-label="命令权限模式"
           data-testid="permission-mode"
-          className={cn(MENU_TRIGGER, mode === 'full' ? 'text-destructive' : 'text-muted-foreground hover:text-foreground aria-expanded:text-foreground')}
+          // 底栏不换行，窄的时候只让模型名截断，权限这里保持完整
+          className={cn(MENU_TRIGGER, 'shrink-0 whitespace-nowrap', mode === 'full' ? 'text-destructive' : 'text-muted-foreground hover:text-foreground aria-expanded:text-foreground')}
         >
           <TriggerIcon className="size-3.5" />
           {permissionModeLabel(mode)}
@@ -914,7 +916,7 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
           title={locked ? '运行中不能切换模型' : '切换模型'}
           className={cn(
             MENU_TRIGGER,
-            'max-w-72 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
+            'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
           )}
         >
           {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}

@@ -32,11 +32,8 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await chooseProject(app, window, project)
     await expect(window.getByTestId('model-menu').locator('span.truncate')).toHaveText('scripted')
 
-    // 把 data 设为禁写目录；新任务按新设置运行
-    await window.getByRole('button', { name: '未配置检查' }).click()
-    await window.getByLabel('禁止修改的目录').fill('data')
-    await window.getByRole('button', { name: '保存项目设置' }).click()
-    await expect(window.getByRole('dialog')).toBeHidden()
+    // 把 data 设为禁写目录；新任务按新设置运行。首页不再有项目设置入口，走项目设置弹窗保存时的同一个接口
+    await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: ['data'] })`)
 
     await startTask(window, '把 hello world 改成 hello diffra，再写一个 done.txt')
 

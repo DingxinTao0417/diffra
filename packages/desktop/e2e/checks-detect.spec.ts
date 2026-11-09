@@ -7,7 +7,7 @@ import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
 
-test('首页提示识别到的检查命令，确认、试运行后保存，任务里按它们检查', async () => {
+test('在任务监控里自动检测检查命令，确认、试运行后保存，新任务按它们检查', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-detect-'))
@@ -23,6 +23,7 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     }),
   )
   const model = await startScriptedModel([
+    { text: '看过了' },
     { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
     { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'old', new_string: 'new' } }] },
     { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
@@ -33,8 +34,12 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
 
-    // 没配检查时首页提示识别到的数量；打开后自动识别，每栏下面列出建议的命令、来源和脚本的实际内容，完成检查只列快速检查没列过的
-    await window.getByRole('button', { name: '检测到 2 个检查命令' }).click()
+    // 首页没有检查入口：先开一个任务，在任务监控里编辑检查命令。
+    // 自动检测后每栏下面列出建议的命令、来源和脚本的实际内容，完成检查只列快速检查没列过的
+    await startTask(window, '先看看')
+    await waitTaskDone(window)
+    await window.getByTestId('monitor-panel').getByRole('button', { name: '编辑检查命令' }).click()
+    await window.getByRole('button', { name: '自动检测' }).click()
     const quickSuggestion = window.getByTestId('check-after-edit-suggestion')
     const finishSuggestion = window.getByTestId('check-before-finish-suggestion')
     await expect(quickSuggestion).toContainText('npm run typecheck')
@@ -61,8 +66,10 @@ test('首页提示识别到的检查命令，确认、试运行后保存，任�
     // 去掉会失败的完成检查再保存
     await window.getByLabel('完成检查', { exact: true }).fill('')
     await window.getByRole('button', { name: '保存项目设置' }).click()
-    await expect(window.getByRole('button', { name: '检查：npm run typecheck' })).toBeVisible()
+    await expect(window.getByRole('dialog')).toBeHidden()
 
+    // 改动对新任务生效
+    await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
     await startTask(window, '把 old 改成 new')
     await waitTaskDone(window)
     const checks = cards(window, 'check')
