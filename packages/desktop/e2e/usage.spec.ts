@@ -63,6 +63,8 @@ test('用量页：每次模型调用都记上，按范围、模型、项目、�
 
     await window.getByRole('radiogroup', { name: '统计范围' }).getByRole('radio', { name: '近 30 天' }).click()
     await expect(bars).toHaveCount(30)
+    // 30 行的读屏表格不能把整个窗口撑出第二根滚动条，只有设置内容区自己滚
+    expect(await window.evaluate('document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight')).toBe(0)
   } finally {
     await app.close()
     await model.close()

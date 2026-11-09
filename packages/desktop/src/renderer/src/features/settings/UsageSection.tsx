@@ -493,27 +493,30 @@ function DailyChart({ days }: { days: UsageSummary['days'] }) {
           <span className="absolute bottom-0 left-0 translate-y-1/2">0</span>
         </div>
       </div>
-      <table className="sr-only">
-        <caption>每天的 token 用量</caption>
-        <thead>
-          <tr>
-            <th>日期</th>
-            <th>输入</th>
-            <th>输出</th>
-            <th>调用次数</th>
-          </tr>
-        </thead>
-        <tbody>
-          {days.map((day) => (
-            <tr key={day.date}>
-              <td>{day.date}</td>
-              <td>{day.input}</td>
-              <td>{day.output}</td>
-              <td>{day.calls}</td>
+      {/* sr-only 的 1px 宽高对表格不起作用，表格会按行数撑开、把整个窗口撑出滚动条，所以裁剪放在外层 div 上 */}
+      <div className="sr-only">
+        <table>
+          <caption>每天的 token 用量</caption>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>输入</th>
+              <th>输出</th>
+              <th>调用次数</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {days.map((day) => (
+              <tr key={day.date}>
+                <td>{day.date}</td>
+                <td>{day.input}</td>
+                <td>{day.output}</td>
+                <td>{day.calls}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }

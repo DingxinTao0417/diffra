@@ -6,6 +6,7 @@ import { type DesignActionParams, type DesignActionResult, PROMPT_IMAGE_TYPES, t
 import { app, BrowserWindow, dialog, session as electronSession, ipcMain, WebContentsView } from 'electron'
 import { z } from 'zod'
 import { type BrowserRect, IPC_CHANNELS } from '../shared/ipc'
+import { logEvent } from './app-log'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 
@@ -19,6 +20,8 @@ const RENDERER_DIR = join(import.meta.dirname, '../renderer')
 const READY_WAIT_MS = 15_000
 // 编辑停下来这么久后自动保存
 const SAVE_DELAY_MS = 1_500
+// 退出前保存最多等这么久
+const FLUSH_TIMEOUT_MS = 3_000
 // 每个设计页带一份 CanvasKit 和字体（实测一个约 300MB），同时最多留这么多个，最久没显示的先存盘再卸载（下次用到时从文件载入）
 const MAX_PAGES = 2
 // 会话 id 拼进文件名，只接受 UUID 这类字符
@@ -186,9 +189,12 @@ export class DesignHost {
     return [...this.pages.values()].some((page) => page.dirty || page.saving !== null)
   }
 
-  // 应用退出前把还没存的都存上
+  // 应用退出前把还没存的都存上。页面卡住时最多等 FLUSH_TIMEOUT_MS 就照样关窗：
+  // 窗口关不掉，更新安装时旧版会一直占着安装目录里的文件，卸载旧版失败
   async flushAll(): Promise<void> {
-    await Promise.all([...this.pages.keys()].map((id) => this.save(id).catch((error: unknown) => console.error('[design] 退出前保存失败', error))))
+    const saving = Promise.all([...this.pages.keys()].map((id) => this.save(id).catch((error: unknown) => logEvent('[design] 退出前保存失败', error))))
+    const finished = await Promise.race([saving.then(() => true), sleep(FLUSH_TIMEOUT_MS).then(() => false)])
+    if (!finished) logEvent(`[design] 退出前保存 ${FLUSH_TIMEOUT_MS / 1000} 秒没完成，不再等待`)
   }
 
   // 卸载设计页：先存盘，下次用到时从文件载入。设计工具的配置留着

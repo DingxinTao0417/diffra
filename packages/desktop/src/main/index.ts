@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { registerBrowserIpc } from './browser'
 import { designHost, registerDesignIpc } from './design'
+import { logEvent } from './app-log'
 import { registerAttachmentIpc } from './attachments'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
@@ -20,6 +21,18 @@ import { setupWindowChrome, titleBarOptions, watchAppCommands } from './window-c
 if (!app.isPackaged) {
   app.setPath('userData', process.env.DIFFRA_USER_DATA_DIR || join(app.getPath('appData'), 'Diffra-dev'))
 }
+
+// 同一份用户数据只跑一个主进程，再次启动时把已有窗口调到前面。
+// 两个实例会同时占着安装目录里的文件，更新时只有点了更新的那个会退出，卸载旧版就会失败
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) app.quit()
+app.on('second-instance', () => {
+  const window = BrowserWindow.getAllWindows()[0]
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+})
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -48,6 +61,7 @@ function createWindow(): void {
     if (designFlushed || !designHost.hasUnsaved()) return
     event.preventDefault()
     designFlushed = true
+    logEvent('[quit] 关窗前先保存设计页')
     void designHost.flushAll().finally(() => window.close())
   })
   // 回复里的链接等不在应用窗口里打开，需要时走 openExternal 用系统浏览器
@@ -66,6 +80,7 @@ function createWindow(): void {
 app
   .whenReady()
   .then(async () => {
+    if (!isPrimaryInstance) return
     const coreStatus = startCore(coreClientHandlers)
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
     ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
@@ -93,9 +108,14 @@ app
     app.quit()
   })
 
+app.on('before-quit', () => logEvent('[quit] 开始退出'))
+
 app.on('window-all-closed', () => app.quit())
 
 app.on('will-quit', () => {
+  logEvent('[quit] 窗口已全部关闭，结束终端和 core')
   killAllTerminals()
   stopCore()
 })
+
+app.on('quit', (_event, exitCode) => logEvent(`[quit] 主进程退出 code=${exitCode}`))

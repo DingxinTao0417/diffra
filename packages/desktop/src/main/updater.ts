@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { IPC_CHANNELS, type UpdateStatus } from '../shared/ipc'
+import { logEvent } from './app-log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
@@ -26,12 +27,20 @@ export function setupUpdater(): void {
   ipcMain.handle(IPC_CHANNELS.updateCheck, () => checkForUpdates())
   ipcMain.handle(IPC_CHANNELS.updateInstall, () => {
     // 静默安装后自动重新启动；不点按钮时，下次正常退出也会安装（autoInstallOnAppQuit 默认开启）
-    if (status.state === 'downloaded') autoUpdater.quitAndInstall(true, true)
+    if (status.state !== 'downloaded') return
+    logEvent(`[updater] 点了重启并更新，安装 ${status.version}`)
+    autoUpdater.quitAndInstall(true, true)
   })
 
   if (!app.isPackaged) return
 
   autoUpdater.disableWebInstaller = true
+  // electron-updater 自己的日志（下载到哪、用什么参数启动安装程序）一起记下来
+  autoUpdater.logger = {
+    info: (message?: unknown) => logEvent(`[updater] ${String(message)}`),
+    warn: (message?: unknown) => logEvent(`[updater] 警告 ${String(message)}`),
+    error: (message?: unknown) => logEvent('[updater] 错误', message),
+  }
   autoUpdater.on('checking-for-update', () => setStatus({ state: 'checking' }))
   autoUpdater.on('update-not-available', () => setStatus({ state: 'up-to-date' }))
   autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info.version, percent: 0 }))
