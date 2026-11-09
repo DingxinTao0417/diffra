@@ -26,7 +26,10 @@ export function launchApp(userDataDir: string): Promise<ElectronApplication> {
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'),
   )
   const executable = packagedExecutable()
+  // CI 的 Windows 机器屏幕只有 1024×768，1200 宽的窗口被压到屏幕宽，开着任务监控时对话列不够宽，侧栏会自动收起，
+  // 用例按侧栏一直在写的；缩到 0.8 倍后 1200×820 的窗口占 960×656 像素，布局和本机一致
+  const scale = process.env.CI ? ['--force-device-scale-factor=0.8'] : []
   // 打包版只认正式数据目录（不看 DIFFRA_USER_DATA_DIR），用 Chromium 的 --user-data-dir 换成临时目录
-  if (executable) return electron.launch({ executablePath: executable, args: [`--user-data-dir=${userDataDir}`], env })
-  return electron.launch({ args: ['.'], cwd: desktopDir, env: { ...env, DIFFRA_USER_DATA_DIR: userDataDir } })
+  if (executable) return electron.launch({ executablePath: executable, args: [`--user-data-dir=${userDataDir}`, ...scale], env })
+  return electron.launch({ args: ['.', ...scale], cwd: desktopDir, env: { ...env, DIFFRA_USER_DATA_DIR: userDataDir } })
 }
