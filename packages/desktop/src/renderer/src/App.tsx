@@ -9,9 +9,11 @@ import { openProjectFolder, Sidebar } from '@/features/shell/Sidebar'
 import { TitleBar } from '@/features/shell/TitleBar'
 import { TaskView } from '@/features/task/TaskView'
 import { toggleTerminalPanel, wireTerminalEvents } from '@/features/terminal/terminals'
+import { QuickTodo, TodosView } from '@/features/todos/TodosView'
 import { errorMessage } from '@/lib/errors'
 import { INSET_PANEL } from '@/lib/shell'
-import { initialize, moveHistory, openHome, openSettings, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
+import { initialize, moveHistory, openHome, openSettings, openTodos, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
+import { startTodoScheduler } from '@/state/todo-scheduler'
 import { hasWidePanel, isSidebarShown, showToast, store, useAppState } from '@/state/store'
 
 const TOAST_MS = 3000
@@ -39,6 +41,8 @@ function runCommand(command: MenuCommand): void {
       if (project) toggleTerminalPanel(project)
       return
     }
+    case 'quick-todo':
+      return store.set((state) => ({ ...state, quickTodoOpen: true }))
     case 'back':
       return void moveHistory(-1)
     case 'forward':
@@ -52,7 +56,7 @@ function runCommand(command: MenuCommand): void {
   }
 }
 
-const CTRL_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', '`': 'terminal' }
+const CTRL_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', '`': 'terminal', j: 'quick-todo' }
 
 function sidebarWidth(): number {
   // --sidebar-w 用 rem 写，跟着「文字大小」缩放
@@ -80,10 +84,18 @@ export function App() {
   useEffect(() => {
     const unwire = wireCoreEvents()
     const unwireTerminals = wireTerminalEvents()
+    const stopTodoScheduler = startTodoScheduler()
+    // 点了待办的系统通知：打开待办页，定位到那一条
+    const offTodoFocus = window.diffra.onTodoFocus((todoId) => {
+      openTodos()
+      store.set((state) => ({ ...state, todoFocus: todoId }))
+    })
     void initialize()
     return () => {
       unwire()
       unwireTerminals()
+      stopTodoScheduler()
+      offTodoFocus()
     }
   }, [])
 
@@ -126,12 +138,14 @@ export function App() {
                 {route.name === 'home' && <HomeView key="home" projectPath={route.project} />}
                 {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
+                {route.name === 'todos' && <TodosView />}
               </main>
             </>
           )}
         </div>
       </div>
       <SearchDialog />
+      <QuickTodo />
       <Toast />
     </TooltipProvider>
   )

@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { type LanguageModelUsage, streamText, tool, ToolChoiceViolationError } from 'ai'
 import { z } from 'zod'
 import { designStyleById } from './design-styles.js'
+import { rejectsToolChoice } from './models/errors.js'
 import { createLanguageModel, MODEL_CALL_HEADERS } from './models/operations.js'
 import type { PromptQuestion, SessionModel } from './protocol.js'
 import type { Session } from './session/session.js'
@@ -105,28 +106,35 @@ export async function enhancePrompt(request: EnhanceRequest, session: Session | 
   if (request.mentions.length > 0) context.push(`Attachments (keep these tokens exactly): ${request.mentions.join(' ')}`)
   const model = createLanguageModel(request.model.endpoint, request.model.modelId, request.model.reasoningEffort)
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
-  // 和其他模型调用一样走流式接口；强制只调 submit_prompt
-  const result = streamText({
-    model,
-    system: SYSTEM,
-    prompt: [...(context.length > 0 ? ['Context:', ...context, ''] : []), 'The request to improve:', request.text].join('\n'),
-    tools: { submit_prompt: tool({ description: 'Submit the improved request and the questions.', inputSchema: enhanceInput }) },
-    toolChoice: { type: 'tool', toolName: 'submit_prompt' },
-    maxRetries: 1,
-    abortSignal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    headers: MODEL_CALL_HEADERS,
-  })
-  let input: unknown
-  let usage: LanguageModelUsage | null = null
-  for await (const part of result.fullStream) {
-    if (part.type === 'tool-call' && part.toolName === 'submit_prompt') input = part.input
-    if (part.type === 'finish-step') usage = part.usage
-    if (part.type === 'error') {
-      // 模型只回了文字、没调 submit_prompt：和没交结果一样说
-      if (ToolChoiceViolationError.isInstance(part.error)) break
-      throw part.error
+  // 和其他模型调用一样走流式接口；强制只调 submit_prompt，服务不接受时改用 auto（系统提示词里也要求了调它）
+  const ask = async (toolChoice: 'auto' | { type: 'tool'; toolName: 'submit_prompt' }) => {
+    const result = streamText({
+      model,
+      system: SYSTEM,
+      prompt: [...(context.length > 0 ? ['Context:', ...context, ''] : []), 'The request to improve:', request.text].join('\n'),
+      tools: { submit_prompt: tool({ description: 'Submit the improved request and the questions.', inputSchema: enhanceInput }) },
+      toolChoice,
+      maxRetries: 1,
+      abortSignal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      headers: MODEL_CALL_HEADERS,
+    })
+    let input: unknown
+    let usage: LanguageModelUsage | null = null
+    for await (const part of result.fullStream) {
+      if (part.type === 'tool-call' && part.toolName === 'submit_prompt') input = part.input
+      if (part.type === 'finish-step') usage = part.usage
+      if (part.type === 'error') {
+        // 模型只回了文字、没调 submit_prompt：和没交结果一样说
+        if (ToolChoiceViolationError.isInstance(part.error)) break
+        throw part.error
+      }
     }
+    return { input, usage }
   }
+  const { input, usage } = await ask({ type: 'tool', toolName: 'submit_prompt' }).catch((error: unknown) => {
+    if (rejectsToolChoice(error)) return ask('auto')
+    throw error
+  })
   if (input === undefined) throw new Error('模型没有给出优化后的提示词')
   const parsed = enhanceInput.parse(input)
   let prompt = parsed.prompt.trim()

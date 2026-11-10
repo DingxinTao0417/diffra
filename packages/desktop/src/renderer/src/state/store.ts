@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react'
-import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView } from '@diffra/core/types'
+import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../shared/settings'
+import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
 export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
@@ -10,6 +11,7 @@ export type Route =
   | { name: 'home'; project: string | null }
   | { name: 'design'; project: string | null }
   | { name: 'task'; sessionId: string }
+  | { name: 'todos' }
   | { name: 'settings'; section: SettingsSection }
 
 export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | null
@@ -20,6 +22,8 @@ export interface MessageOptions {
   goal: boolean
   skills: string[]
   images: PromptImage[]
+  // 另一个任务的智能体发来的（任务互通）
+  from?: TaskSource
 }
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载
@@ -90,6 +94,13 @@ export interface AppState {
   terminals: TerminalTab[]
   activeTerminal: string | null
   toast: { id: number; text: string } | null
+  // 待办：启动时读一次，之后改了整份存回去；读到之前为 null
+  todos: Todo[] | null
+  // 快速记待办的小窗口（Ctrl+J）
+  quickTodoOpen: boolean
+  // 待办页：列表还是日历；点系统通知时要定位的那条待办
+  todosView: 'list' | 'calendar'
+  todoFocus: string | null
 }
 
 const initialState: AppState = {
@@ -113,6 +124,10 @@ const initialState: AppState = {
   terminals: [],
   activeTerminal: null,
   toast: null,
+  todos: null,
+  quickTodoOpen: false,
+  todosView: 'list',
+  todoFocus: null,
 }
 
 type Listener = () => void

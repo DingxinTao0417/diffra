@@ -54,6 +54,7 @@ function menuTemplate(): MenuItemConstructorOptions[] {
         command('侧栏', 'toggle-sidebar', 'Ctrl+B', false),
         command('搜索任务', 'search', 'Ctrl+K', false),
         command('终端', 'terminal', 'Ctrl+`', false),
+        command('记一条待办', 'quick-todo', 'Ctrl+J', false),
         { type: 'separator' },
         command('后退', 'back', 'Alt+Left', false),
         command('前进', 'forward', 'Alt+Right', false),

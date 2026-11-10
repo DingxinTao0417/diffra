@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, LoaderCircle, PenTool, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
-import { openDesign, openHome, openSettings, openTask, pickProject } from '@/state/actions'
+import { isDue } from '@/lib/todo-time'
+import { useNow } from '@/lib/use-now'
+import { loadTodos, openDesign, openHome, openSettings, openTask, openTodos, pickProject } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { BrandMark } from './BrandMark'
 import { TaskMenu } from './TaskMenu'
@@ -80,6 +82,15 @@ export function Sidebar() {
   const workspacePath = useAppState((state) => state.settings?.defaultWorkspace.path)
   const groups = useMemo(() => groupTasks(projects, tasks, live), [projects, tasks, live])
   const activeSession = route.name === 'task' ? route.sessionId : null
+  const todos = useAppState((state) => state.todos)
+  const openTodoCount = useMemo(() => todos?.filter((todo) => !todo.done).length ?? 0, [todos])
+  // 到了时间还没勾掉的，侧栏上多一个点
+  const now = useNow(60_000)
+  const dueTodoCount = todos?.filter((todo) => isDue(todo, now)).length ?? 0
+  // 侧栏要显示没做完的条数，启动时就读一次
+  useEffect(() => {
+    if (store.get().todos === null) void loadTodos()
+  }, [])
 
   return (
     <aside className="flex w-(--sidebar-w) shrink-0 flex-col bg-sidebar" data-testid="sidebar">
@@ -101,6 +112,12 @@ export function Sidebar() {
         <SidebarButton active={route.name === 'design'} onClick={() => openDesign()}>
           <PenTool className="size-4" />
           设计
+        </SidebarButton>
+        <SidebarButton active={route.name === 'todos'} onClick={() => openTodos()}>
+          <ListTodo className="size-4" />
+          <span className="flex-1">待办</span>
+          {dueTodoCount > 0 && <span className="size-1.5 rounded-full bg-warning" role="img" aria-label={`${dueTodoCount} 条到期`} title={`${dueTodoCount} 条到期`} data-testid="sidebar-todo-due" />}
+          {openTodoCount > 0 && <span className="text-xs text-muted-foreground tabular-nums" data-testid="sidebar-todo-count">{openTodoCount}</span>}
         </SidebarButton>
       </div>
 

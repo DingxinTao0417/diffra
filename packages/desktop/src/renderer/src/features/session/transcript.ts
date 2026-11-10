@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -29,6 +29,10 @@ export type TranscriptItem =
       agent?: AgentTag
       // 定位轮交回的「定位结果」卡
       diagnosis?: Diagnosis
+      // show_visual 画的可视化
+      visual?: { title: string; code: string }
+      // 任务互通的卡片指向的那个任务
+      taskLink?: TaskSource
     }
   | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
 
@@ -52,6 +56,8 @@ export interface Turn {
   // 模型从什么时候起没有输出，按智能体分开记（key 是子智能体 id，主智能体是 main）。
   // 又有输出就去掉；被停止时 core 不撤，留着说明停下时模型已经多久没输出
   silence: Record<string, { agent: string | null; since: number }>
+  // 另一个任务的智能体发来的消息
+  from?: TaskSource
 }
 
 export interface Usage {
@@ -65,8 +71,9 @@ export interface Usage {
   cacheInput: number
 }
 
-export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): Turn {
-  return { id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource): Turn {
+  return {
+    ...(from ? { from } : {}), id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -88,6 +95,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
     restoredAt: turn.restoredAt ? Date.parse(turn.restoredAt) || null : null,
     outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
+    ...(turn.from ? { from: turn.from } : {}),
     silence: turn.updates.reduce((silence, update) => {
       const change = modelSilenceOf(update)
       return change ? applySilence(silence, change) : silence
@@ -207,6 +215,16 @@ function diagnosisOf(update: SessionUpdate): { diagnosis?: Diagnosis } {
   return { diagnosis: { done: [], remaining: [], fallback: false, ...value } as Diagnosis }
 }
 
+function taskLinkOf(update: SessionUpdate): { taskLink?: TaskSource } {
+  const value = diffraMetaOf(update)?.taskLink as { sessionId?: unknown; title?: unknown } | undefined
+  return typeof value?.sessionId === 'string' && typeof value.title === 'string' ? { taskLink: { sessionId: value.sessionId, title: value.title } } : {}
+}
+
+function visualOf(update: SessionUpdate): { visual?: { title: string; code: string } } {
+  const value = diffraMetaOf(update)?.[VISUAL_META_KEY] as { title?: unknown; code?: unknown } | undefined
+  return typeof value?.title === 'string' && typeof value.code === 'string' ? { visual: { title: value.title, code: value.code } } : {}
+}
+
 // 卡片带完整的子智能体信息，工人自己的工具调用带所属卡片和工人
 function agentFieldsOf(update: SessionUpdate): { agentCard?: AgentCardMeta; parentId?: string; agent?: AgentTag } {
   const diffra = diffraMetaOf(update)
@@ -285,6 +303,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS),
         ...agentFieldsOf(update),
         ...diagnosisOf(update),
+        ...visualOf(update),
+        ...taskLinkOf(update),
       }
       return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
@@ -303,6 +323,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         startedAt: existing?.startedAt ?? Date.now(),
         ...agentFieldsKept(existing, agentFieldsOf(update)),
         ...(existing?.diagnosis ? { diagnosis: existing.diagnosis } : {}),
+        ...(existing?.visual ? { visual: existing.visual } : {}),
+        ...(taskLinkOf(update).taskLink ? taskLinkOf(update) : existing?.taskLink ? { taskLink: existing.taskLink } : {}),
       }))
     case 'notice':
       return [

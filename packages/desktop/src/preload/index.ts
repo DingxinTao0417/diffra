@@ -1,6 +1,6 @@
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
-import { type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type UpdateStatus } from '../shared/ipc'
+import { type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -62,6 +62,11 @@ const api: DiffraApi = {
   retryStep: (sessionId, agent) => ipcRenderer.invoke(IPC_CHANNELS.sessionRetryStep, sessionId, agent),
   diagnose: (sessionId, turnId, text, target) => ipcRenderer.invoke(IPC_CHANNELS.sessionDiagnose, sessionId, turnId, text, target),
   enhancePrompt: (request) => ipcRenderer.invoke(IPC_CHANNELS.promptEnhance, request),
+  saveVisualPng: (rect, title) => ipcRenderer.invoke(IPC_CHANNELS.visualSavePng, rect, title),
+  listTodos: () => ipcRenderer.invoke(IPC_CHANNELS.todosList),
+  saveTodos: (todos) => ipcRenderer.invoke(IPC_CHANNELS.todosSave, todos),
+  notifyTodo: (notice) => ipcRenderer.invoke(IPC_CHANNELS.todosNotify, notice),
+  onTodoFocus: (listener) => subscribe<string>(IPC_CHANNELS.todosFocus, listener),
   compactSession: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCompact, sessionId, turnId),
   listSkills: (target) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, target),
   saveMcpServer: (input) => ipcRenderer.invoke(IPC_CHANNELS.mcpSave, input),
@@ -90,6 +95,8 @@ const api: DiffraApi = {
   cancelSession: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCancel, sessionId),
   onSessionUpdate: (listener) => subscribe<SessionNotification>(IPC_CHANNELS.sessionUpdate, listener),
   onPermissionRequest: (listener) => subscribe<PermissionRequestEvent>(IPC_CHANNELS.sessionPermission, listener),
+  onTaskAction: (listener) => subscribe<TaskActionEvent>(IPC_CHANNELS.sessionTaskAction, listener),
+  respondTaskAction: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.sessionTaskActionRespond, requestId, result),
   respondPermission: (requestId, optionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionPermissionRespond, requestId, optionId),
   previewCheckpoint: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointPreview, sessionId, turnId),
   restoreCheckpoint: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointRestore, sessionId, turnId),

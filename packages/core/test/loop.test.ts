@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
-import { simulateReadableStream } from 'ai'
+import { APICallError, simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
@@ -1830,6 +1830,26 @@ describe('先出计划', () => {
     expect(planner.doStreamCalls[1]?.toolChoice).toEqual({ type: 'tool', toolName: 'submit_plan' })
   })
 
+  test('服务不接受指定工具的 tool_choice（DeepSeek 思考模式）：要求交计划的那一步改用 auto 再发一次', async () => {
+    const planner = scriptedModel([{ toolCalls: [{ name: 'search', input: { pattern: 'x' } }], inputTokens: 85_000 }, { toolCalls: [{ name: 'submit_plan', input: plan }] }])
+    const forward = planner.doStream.bind(planner)
+    let rejected = 0
+    planner.doStream = async (options) => {
+      if (options.toolChoice?.type === 'tool') {
+        rejected++
+        throw new APICallError({ message: 'Thinking mode does not support this tool_choice', url: 'http://model', requestBodyValues: {}, statusCode: 400, isRetryable: false })
+      }
+      return forward(options)
+    }
+    const session = await makeSession(scriptedModel([]), undefined, [], undefined, undefined, undefined, { plan: planner })
+    const io = recordingIO()
+
+    await expect(runPlan(session, { id: 'plan-1', text: '修复 a.txt' }, io)).resolves.toBe('end_turn')
+    expect(rejected).toBe(1)
+    expect(planner.doStreamCalls.map((call) => call.toolChoice)).toEqual([{ type: 'auto' }, { type: 'auto' }])
+    expect(planCards(io)).toHaveLength(1)
+  })
+
   test('没配规划模型时用编码模型；看得到之前的对话', async () => {
     const coder = scriptedModel([{ toolCalls: [{ name: 'submit_plan', input: plan }] }])
     const session = await makeSession(coder)
@@ -2343,4 +2363,121 @@ describe('定位问题', () => {
     expect(diagnosis.prompt).toContain('上一轮停在了')
     expect(diagnosis.prompt).toContain('已经完成的不要重做')
   })
+})
+
+describe('对话里的可视化', () => {
+  test('show_visual 把标题和代码交给界面；参数不对时这一步失败、告诉模型原因', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'show_visual', input: { title: '对比', code: '<p>A</p>' } }] },
+      { toolCalls: [{ name: 'show_visual', input: { title: '空的', code: '' } }] },
+      { text: '画好了' },
+    ])
+    const session = await makeSession(model)
+    expect(Object.keys(session.toolSet())).toContain('show_visual')
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '画个图' }, io)
+    const visual = io.updates.find((update) => update.sessionUpdate === 'tool_call' && update.title === '可视化 对比')
+    expect((visual?._meta?.diffra as { visual?: unknown } | undefined)?.visual).toEqual({ title: '对比', code: '<p>A</p>' })
+    // 参数不合法的调用走通用的失败卡片，模型拿到错误再改
+    expect(io.updates.some((update) => update.sessionUpdate === 'tool_call' && update.title === 'show_visual' && update.status === 'failed')).toBe(true)
+    expect(model.doStreamCalls).toHaveLength(3)
+  })
+})
+
+describe('等外面的事做完', () => {
+  test('wait_command 按间隔反复检查，期间不调模型；等到了把最后一次输出交给模型并记成证据', async () => {
+    // 第一次检查还在跑，第二次成功
+    const command = 'n=$(cat count 2>/dev/null || echo 0); n=$((n+1)); echo $n > count; if [ $n -ge 2 ]; then echo "conclusion: success"; else echo "status: in_progress"; fi'
+    const model = scriptedModel([{ toolCalls: [{ name: 'wait_command', input: { command, success: 'success', failure: 'failure', interval_seconds: 10 } }] }, { text: 'CI 过了' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '等 CI' }, io)
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(readFileSync(join(project, 'count'), 'utf8').trim()).toBe('2')
+    const progress = io.updates.filter((update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === 'call-0-0')
+    expect(JSON.stringify(progress)).toContain('第 1 次检查还没好')
+    expect(progress.at(-1)).toMatchObject({ status: 'completed' })
+    const result = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    expect(result).toContain('Done after 2 check(s)')
+    expect(result).toContain('conclusion: success')
+    expect(result).toContain('Evidence receipt id: call-0-0')
+    expect(session.taskState.receipts.some((receipt) => receipt.id === 'call-0-0')).toBe(true)
+  }, 30_000)
+
+  test('输出里出现失败的字样就马上停，交给模型的是失败', async () => {
+    const model = scriptedModel([{ toolCalls: [{ name: 'wait_command', input: { command: 'echo "conclusion: failure"', success: 'success', failure: 'failure' } }] }, { text: 'CI 挂了' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '等 CI' }, io)
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('Failed after 1 check(s)')
+    expect(session.taskState.receipts).toHaveLength(0)
+  })
+})
+
+describe('任务之间互通', () => {
+  const otherTurn = (prompt: string, reply: string, endedAt: string | null) => ({
+    id: 'o1',
+    kind: 'prompt' as const,
+    prompt,
+    startedAt: '2026-11-09T00:00:00.000Z',
+    endedAt,
+    stopReason: endedAt ? ('end_turn' as const) : null,
+    updates: [{ sessionUpdate: 'agent_message_chunk' as const, content: { type: 'text' as const, text: reply } }],
+    skills: [],
+    images: [],
+  })
+  // 发出消息后对方跑起来，下一次查的时候已经做完
+  function bridge(selfId: string) {
+    const acted: unknown[] = []
+    let busy = 0
+    const running = () => busy-- > 0
+    return {
+      acted,
+      tasks: {
+        list: async () => [
+          { id: selfId, cwd: project, title: '我自己', createdAt: '', updatedAt: '2026-11-09T01:00:00.000Z', archived: false, turnCount: 1, design: false, noProject: false },
+          { id: 'other', cwd: project, title: '别的任务', createdAt: '', updatedAt: '2026-11-09T00:00:00.000Z', archived: false, turnCount: 1, design: false, noProject: false },
+        ],
+        record: async (id: string) => (id === 'other' ? { title: '别的任务', cwd: project, running: running(), turns: [otherTurn('把 README 写完', 'README 写好了', running() ? null : '2026-11-09T00:05:00.000Z')] } : null),
+        act: async (params: unknown) => {
+          acted.push(params)
+          busy = 1
+          return { ok: true as const, sessionId: 'other', title: '别的任务', queued: false }
+        },
+      },
+    }
+  }
+
+  test('列出（不含自己）、读别的任务、发消息要确认并带上来源、等它做完；被别的任务叫起来的一轮不能再往外发', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'tasks_list', input: {} }] },
+      { toolCalls: [{ name: 'task_read', input: { task_id: 'other' } }] },
+      { toolCalls: [{ name: 'task_send', input: { task_id: 'other', message: '顺便加个目录' } }] },
+      { toolCalls: [{ name: 'task_wait', input: { task_id: 'other' } }] },
+      { text: '都好了' },
+      { toolCalls: [{ name: 'task_send', input: { task_id: 'other', message: '再来一次' } }] },
+      { text: '不能发' },
+    ])
+    const session = await makeSession(model)
+    const { acted, tasks } = bridge(session.id)
+    // 计数在 recordingIO 返回的对象上，不能展开成新对象
+    const io = Object.assign(recordingIO(), { tasks })
+    session.startTurn('t1', '协调一下')
+    await runTurn(session, { id: 't1', text: '协调一下' }, io)
+    const prompts = model.doStreamCalls.map((call) => JSON.stringify(call.prompt))
+    expect(prompts[1]).toContain('other · \\"别的任务\\"')
+    expect(prompts[1]).not.toContain('我自己')
+    expect(prompts[2]).toContain('README 写好了')
+    expect(io.permissionRequests).toBe(1)
+    expect(acted).toEqual([{ sessionId: session.id, action: 'send', target: 'other', message: '顺便加个目录', from: { sessionId: session.id, title: session.title } }])
+    // 等到对方这一轮结束，拿回它的回复
+    expect(prompts[4]).toContain('task_wait')
+    expect(prompts[4].split('task_wait').at(-1)).toContain('README 写好了')
+    // 这一轮是别的任务发来的：发送直接被拒，不问用户
+    session.startTurn('t2', '来自任务的消息', 'prompt', [], [], { sessionId: 'x', title: '上游' })
+    await runTurn(session, { id: 't2', text: '来自任务的消息' }, io)
+    expect(JSON.stringify(model.doStreamCalls[6]?.prompt)).toContain('started by a message from another task')
+    expect(acted).toHaveLength(1)
+    expect(io.permissionRequests).toBe(1)
+  }, 20_000)
 })

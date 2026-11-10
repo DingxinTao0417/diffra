@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 对话里可视化的容器：模型写的 HTML、脚本在这里跑。放开内联脚本、eval 和网络（CDN 上的库、网络图片），
+         所以不能和主界面共用 CSP；它在沙箱 iframe 里（没有 allow-same-origin），够不着应用的页面和接口 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src * data: blob: 'unsafe-inline' 'unsafe-eval'" />
+    <title>Diffra visual</title>
+  </head>
+  <body>
+    <script>
+      // 等主界面把代码和主题发过来，整页换成它；之后的事（报高度、填输入框、点链接）由写进去的那段脚本做
+      window.addEventListener('message', function (event) {
+        if (event.source !== window.parent) return
+        var data = event.data
+        if (!data || data.type !== 'diffra-visual' || typeof data.html !== 'string') return
+        document.open()
+        document.write(data.html)
+        document.close()
+      })
+      window.parent.postMessage({ type: 'diffra-visual-ready' }, '*')
+    </script>
+  </body>
+</html>

@@ -27,6 +27,12 @@ export function httpError(status: number, body: string, apiKey: string, listing:
   return buildError(kindFromStatus(status, listing), extractDetail(body) || `HTTP ${status}`, apiKey, status)
 }
 
+// 有的服务（比如 DeepSeek 的思考模式）不接受指定要调哪个工具的 tool_choice，直接回 400；调用方改用 auto 再请求一次
+export function rejectsToolChoice(error: unknown): boolean {
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  return APICallError.isInstance(cause) && cause.statusCode === 400 && /tool_choice/i.test(`${cause.message} ${cause.responseBody ?? ''}`)
+}
+
 export function toModelError(error: unknown, apiKey: string, timeoutMs: number): ModelError {
   const cause = RetryError.isInstance(error) ? error.lastError : error
 

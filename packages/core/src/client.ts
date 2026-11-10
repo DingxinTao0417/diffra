@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
@@ -13,6 +13,9 @@ import {
   type CommandInfo,
   type DesignActionParams,
   type DesignActionResult,
+  type TaskActionParams,
+  type TaskActionResult,
+  type TaskSource,
   type DevServerParams,
   type DevServerResult,
   type ListTarget,
@@ -51,6 +54,8 @@ export interface CoreClientHandlers {
   onDevServer?(params: DevServerParams): Promise<DevServerResult>
   // 智能体调用设计面板的工具；不提供时不要给会话配置设计工具
   onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
+  // 智能体给别的任务发消息、新建任务；不提供时任务互通的发送和新建会报错
+  onTaskAction?(params: TaskActionParams): Promise<TaskActionResult>
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -75,6 +80,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
     const onDesignAction = handlers.onDesignAction
     if (onDesignAction) app.onRequest(CLIENT_EXT_METHODS.designAction, designActionParamsSchema, ({ params }) => onDesignAction(params))
+    const onTaskAction = handlers.onTaskAction
+    if (onTaskAction) app.onRequest(CLIENT_EXT_METHODS.taskAction, taskActionParamsSchema, ({ params }) => onTaskAction(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
 }
@@ -99,6 +106,8 @@ export interface PromptOptions {
   skills?: string[]
   goal?: boolean
   images?: PromptImage[]
+  // 另一个任务发来的消息（任务互通）
+  from?: TaskSource
 }
 
 export function sendPrompt(
@@ -111,7 +120,7 @@ export function sendPrompt(
   return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
     prompt: [{ type: 'text', text }, ...(options.images ?? []).map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.data }))],
-    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false } },
+    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false, ...(options.from ? { from: options.from } : {}) } },
   })
 }
 

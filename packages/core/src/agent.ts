@@ -23,6 +23,9 @@ import {
   MANUAL_COMPACTION_PROMPT,
   type SessionInfo,
   type StoredSessionMeta,
+  type TaskActionParams,
+  type TaskActionResult,
+  type TaskSource,
   type TurnKind,
 } from './protocol.js'
 import { countLanguages, listProjectFiles } from './rules/languages.js'
@@ -51,7 +54,7 @@ import { buildSystemPrompt } from './session/prompt.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
 import { Session } from './session/session.js'
-import { type SessionRecord, SessionStore } from './session/store.js'
+import { type SessionRecord, SessionStore, toEntry } from './session/store.js'
 import { toUsageRecord, UsageLog } from './usage/log.js'
 import { isTimeZone, UsageAggregator } from './usage/summary.js'
 import { CORE_VERSION } from './version.js'
@@ -251,9 +254,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     skills: string[],
     images: PromptImage[],
     run: (io: TurnIO) => Promise<acp.StopReason>,
+    from?: TaskSource,
   ): Promise<acp.StopReason> => {
     const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
-    session.startTurn(turnId, text, kind, skills, images)
+    session.startTurn(turnId, text, kind, skills, images, from)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
     try {
@@ -287,6 +291,20 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
             }),
+        tasks: {
+          list: async () => (store ? store.list() : []),
+          record: async (id) => {
+            const live = sessions.get(id)
+            if (live) return { title: live.title, cwd: live.cwd, running: live.running, turns: live.turns }
+            if (!store) return null
+            const stored = await store.load(id).catch(() => null)
+            return stored ? { title: stored.title, cwd: stored.cwd, running: false, turns: stored.turns } : null
+          },
+          act: (params) =>
+            client
+              .request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, params, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+              .catch((error: unknown): TaskActionResult => ({ ok: false, error: clientErrorMessage(error) })),
+        },
         devServer: (params, signal) =>
           client
             .request<DevServerResult, DevServerParams>(
@@ -396,8 +414,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const skillNames = meta.success ? meta.data.diffra.skills : []
       const goal = meta.success && meta.data.diffra.goal
       const skills = await selectedSkills(session, skillNames)
+      const from = meta.success ? meta.data.diffra.from : undefined
       const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, images, (io) =>
         runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
+        from,
       )
       return { stopReason }
     })
@@ -487,8 +507,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return changes
     })
     .onRequest(SESSION_EXT_METHODS.sessionUpdate, sessionUpdateParams, async ({ params }) => {
-      const entry = await requireStore().update(params.sessionId, { title: params.title, archived: params.archived })
       const live = sessions.get(params.sessionId)
+      // 还没跑过一轮的任务没有存盘记录（比如任务互通刚新建的），只改内存里的，第一轮结束时一起存
+      if (live && live.turns.length === 0) {
+        live.title = params.title ?? live.title
+        live.archived = params.archived ?? live.archived
+        return toEntry(live.toRecord())
+      }
+      const entry = await requireStore().update(params.sessionId, { title: params.title, archived: params.archived })
       if (live) {
         live.title = entry.title
         live.archived = entry.archived

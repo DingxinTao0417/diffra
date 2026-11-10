@@ -31,6 +31,7 @@ import {
   type SessionChecks,
   type SessionConfig,
   sendPrompt,
+  type TaskActionResult,
   updateSession,
   usageSummary,
 } from '@diffra/core'
@@ -42,6 +43,7 @@ import {
   IPC_CHANNELS,
   type LoadedSessionHandle,
   type PermissionRequestEvent,
+  type TaskActionEvent,
   type ProjectState,
   type SessionDeleteResult,
   type SessionHandle,
@@ -87,7 +89,7 @@ const skillNamesSchema = z.array(z.string().min(1).max(200)).max(20)
 const promptImagesSchema = z
   .array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string().min(1).max(8_000_000).regex(/^[A-Za-z0-9+/]+=*$/) }))
   .max(6)
-const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean(), images: promptImagesSchema })
+const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean(), images: promptImagesSchema, from: z.object({ sessionId: z.string().min(1), title: z.string() }).optional() })
 
 const mcpTargetSchema = z.union([
   z.object({ sessionId: z.string().min(1) }),
@@ -103,6 +105,8 @@ interface PendingPermission {
 }
 
 const pendingPermissions = new Map<string, PendingPermission>()
+// 等界面替智能体给别的任务发消息、新建任务
+const pendingTaskActions = new Map<string, (result: TaskActionResult) => void>()
 
 // 模型配置导致的失败带上原因，新建任务时转成界面能识别的错误码；加载任务、换模型时照常只显示 message。
 // 不改 name：IPC 传过去的是「Error: message」，界面按这个前缀去掉
@@ -146,6 +150,16 @@ export const coreClientHandlers: CoreClientHandlers = {
   onBrowserAction: (params) => browserHost.act(params),
   onDevServer: (params) => devServer(params),
   onDesignAction: (params) => designHost.act(params),
+  onTaskAction: (params) =>
+    new Promise((resolve) => {
+      const requestId = randomUUID()
+      pendingTaskActions.set(requestId, resolve)
+      const event: TaskActionEvent = { requestId, params }
+      if (broadcast(IPC_CHANNELS.sessionTaskAction, event) === 0) {
+        pendingTaskActions.delete(requestId)
+        resolve({ ok: false, error: '应用窗口没有打开，发不了' })
+      }
+    }),
 }
 
 function settlePermission(requestId: string, optionId: string | null): void {
@@ -622,6 +636,21 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       if (pending.sessionId === sessionId) settlePermission(requestId, null)
     }
     await cancelSession(await coreConnection(), sessionId)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionTaskActionRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
+    const resolve = pendingTaskActions.get(parse(z.string().min(1), rawRequestId))
+    if (!resolve) return
+    pendingTaskActions.delete(parse(z.string().min(1), rawRequestId))
+    resolve(
+      parse(
+        z.union([
+          z.object({ ok: z.literal(true), sessionId: z.string().min(1), title: z.string(), queued: z.boolean() }),
+          z.object({ ok: z.literal(false), error: z.string() }),
+        ]),
+        rawResult,
+      ),
+    )
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPermissionRespond, (_event, rawRequestId: unknown, rawOptionId: unknown) => {

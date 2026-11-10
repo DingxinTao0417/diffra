@@ -51,6 +51,8 @@ export default defineConfig({
           index: resolve(import.meta.dirname, 'src/renderer/index.html'),
           // 设计页（OpenPencil 矢量编辑器，Vue）单独一个页面：要放开 WASM 和 eval，不能和主界面共用 CSP
           design: resolve(import.meta.dirname, 'src/renderer/design.html'),
+          // 对话里的可视化：模型写的 HTML 在这个页面里跑，要放开内联脚本和网络，同样不能和主界面共用 CSP
+          visual: resolve(import.meta.dirname, 'src/renderer/visual.html'),
         },
         // @lobehub/icons 每个组件文件都带 "use client"，打包时逐个告警上千条；这里不是 React Server Components，指令没有意义
         checks: { moduleLevelDirective: false },

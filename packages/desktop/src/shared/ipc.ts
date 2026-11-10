@@ -18,7 +18,10 @@ import type {
   SessionInfo,
   SessionNotification,
   StopReason,
+  TaskActionParams,
+  TaskActionResult,
   TaskProgressView,
+  TaskSource,
   TestModelResult,
   UsageQuery,
   UsageSummary,
@@ -35,6 +38,7 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
+import type { Todo } from './todos'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -89,6 +93,11 @@ export const IPC_CHANNELS = {
   sessionRetryStep: 'session:retry-step',
   sessionDiagnose: 'session:diagnose',
   promptEnhance: 'prompt:enhance',
+  todosList: 'todos:list',
+  visualSavePng: 'visual:save-png',
+  todosSave: 'todos:save',
+  todosNotify: 'todos:notify',
+  todosFocus: 'todos:focus',
   sessionCompact: 'session:compact',
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
@@ -119,6 +128,8 @@ export const IPC_CHANNELS = {
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
   sessionPermissionRespond: 'session:permission-respond',
+  sessionTaskAction: 'session:task-action',
+  sessionTaskActionRespond: 'session:task-action-respond',
   checkpointPreview: 'session:checkpoint-preview',
   checkpointRestore: 'session:checkpoint-restore',
 } as const
@@ -155,6 +166,7 @@ export type MenuCommand =
   | 'forward'
   | 'check-updates'
   | 'about'
+  | 'quick-todo'
 
 export type CoreStatus =
   | { state: 'connected'; agentName: string; agentVersion: string; protocolVersion: number }
@@ -244,6 +256,12 @@ export interface LoadedSessionHandle extends SessionHandle {
   taskState?: TaskProgressView
 }
 
+// 任务之间互通：智能体要给别的任务发消息、新建任务，界面载入任务、起一轮后回复
+export interface TaskActionEvent {
+  requestId: string
+  params: TaskActionParams
+}
+
 export interface PermissionRequestEvent {
   requestId: string
   sessionId: string
@@ -325,6 +343,14 @@ export interface DiffraApi {
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
+  // 对话里的可视化另存为 PNG：截主窗口里 rect 这块（CSS 像素），弹保存框
+  saveVisualPng(rect: { x: number; y: number; width: number; height: number }, title: string): Promise<void>
+  // 待办：整份读、整份存
+  listTodos(): Promise<Todo[]>
+  saveTodos(todos: Todo[]): Promise<Todo[]>
+  // 待办到时间的系统通知；点通知把窗口调到前面，onTodoFocus 收到这条待办的 id
+  notifyTodo(notice: { todoId: string; title: string; body: string }): Promise<void>
+  onTodoFocus(listener: (todoId: string) => void): () => void
   // 优化输入框里的提示词：用「规划」角色的模型，没配就用 model（输入框选的），再没有就用「编码」角色
   enhancePrompt(request: { text: string; project: string | null; sessionId: string | null; model?: ModelRef; mentions: string[]; design: boolean }): Promise<PromptEnhancement>
   // 定位问题：停下的那一轮（target.turnId），或其中一个子智能体（target.cardId 是它的卡片）
@@ -372,6 +398,8 @@ export interface DiffraApi {
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void
   respondPermission(requestId: string, optionId: string | null): Promise<void>
+  onTaskAction(listener: (event: TaskActionEvent) => void): () => void
+  respondTaskAction(requestId: string, result: TaskActionResult): Promise<void>
   previewCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
   restoreCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
 }

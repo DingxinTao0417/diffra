@@ -7,12 +7,16 @@ export interface ScriptedServer {
   baseUrl: string
   // 每次对话请求的原始请求体，用来检查模型看到了什么
   bodies: string[]
+  // rejectForcedToolChoice 时被拒掉的请求数，这些请求不占剧本的步骤
+  rejected(): number
   close(): Promise<void>
 }
 
-// OpenAI 兼容的流式接口：每收到一次 chat/completions 请求，按顺序返回剧本里的下一步
-export async function startScriptedServer(steps: ScriptStep[]): Promise<ScriptedServer> {
+// OpenAI 兼容的流式接口：每收到一次 chat/completions 请求，按顺序返回剧本里的下一步。
+// rejectForcedToolChoice：像 DeepSeek 的思考模式那样，指定了要调哪个工具的请求回 400
+export async function startScriptedServer(steps: ScriptStep[], options: { rejectForcedToolChoice?: boolean } = {}): Promise<ScriptedServer> {
   const bodies: string[] = []
+  let rejected = 0
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -21,8 +25,16 @@ export async function startScriptedServer(steps: ScriptStep[]): Promise<Scripted
         res.writeHead(404).end()
         return
       }
+      const raw = Buffer.concat(chunks).toString('utf8')
+      const toolChoice: unknown = (JSON.parse(raw) as { tool_choice?: unknown }).tool_choice
+      if (options.rejectForcedToolChoice && typeof toolChoice === 'object' && toolChoice !== null) {
+        rejected++
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'Thinking mode does not support this tool_choice', type: 'invalid_request_error' } }))
+        return
+      }
       const index = bodies.length
-      bodies.push(Buffer.concat(chunks).toString('utf8'))
+      bodies.push(raw)
       const step = steps[index] ?? { text: '（剧本已结束）' }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' })
       for (const chunk of chunksFor(step, index)) res.write(`data: ${JSON.stringify(chunk)}\n\n`)
@@ -34,6 +46,7 @@ export async function startScriptedServer(steps: ScriptStep[]): Promise<Scripted
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     bodies,
+    rejected: () => rejected,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()

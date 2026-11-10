@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
-import { toModelError } from '../models/errors.js'
+import { rejectsToolChoice, toModelError } from '../models/errors.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
@@ -43,6 +43,9 @@ import {
 import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
 import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
+import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
+import { runWaitCommand, WAIT_COMMAND_TOOL } from './wait.js'
+import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -103,6 +106,8 @@ export interface TurnIO {
   devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
   // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）；agent 是调用的子智能体，主智能体自己调时不传
   design?(tool: string, args: unknown, signal: AbortSignal, agent?: AgentTag): Promise<DesignActionResult>
+  // 任务之间互通：列出、读别的任务，替它发消息、新建任务；没有会话列表时不提供
+  tasks?: TaskBridge
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -648,6 +653,7 @@ export async function streamModelStep(
   io: TurnIO,
   retry?: StepRetry,
 ): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[] }> {
+  let toolChoice = settings.toolChoice
   for (;;) {
     const attempt = new AbortController()
     const forward = () => attempt.abort(signal.reason)
@@ -666,7 +672,7 @@ export async function streamModelStep(
         system: settings.system,
         messages: settings.messages,
         tools: settings.tools,
-        toolChoice: settings.toolChoice,
+        toolChoice,
         maxRetries: 2,
         abortSignal: attempt.signal,
         headers: MODEL_CALL_HEADERS,
@@ -706,6 +712,11 @@ export async function streamModelStep(
         }
       } catch (error) {
         if (retrying && !signal.aborted) continue
+        // 要求直接交结果（指定工具）被服务拒绝时改用 auto 再发一次；系统提示词和工具说明里都写了要交结果
+        if (typeof toolChoice === 'object' && rejectsToolChoice(error)) {
+          toolChoice = 'auto'
+          continue
+        }
         throw error
       }
       if (retrying && !signal.aborted) continue
@@ -830,6 +841,9 @@ export async function runToolCall(
   if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
+  if (name === SHOW_VISUAL_TOOL) return runShowVisual(call, io)
+  if (name === WAIT_COMMAND_TOOL && !scope) return runWaitCommand(session, call, signal, io)
+  if (isTaskTool(name) && !scope && !call.invalid) return runTaskTool(session, { ...call, toolName: name }, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
@@ -1413,7 +1427,7 @@ export function taskStateUpdate(session: Session, outcome?: TurnOutcome): Sessio
   }
 }
 
-async function publishTaskState(session: Session, io: TurnIO, outcome?: TurnOutcome): Promise<void> {
+export async function publishTaskState(session: Session, io: TurnIO, outcome?: TurnOutcome): Promise<void> {
   await io.update(taskStateUpdate(session, outcome))
 }
 

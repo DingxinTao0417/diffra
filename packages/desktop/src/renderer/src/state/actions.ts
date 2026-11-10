@@ -1,6 +1,7 @@
-import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
+import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
+import type { Todo, TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
@@ -172,6 +173,12 @@ export function wireCoreEvents(): () => void {
     }
     updateLive(request.sessionId, (task) => ({ ...task, permission: request }))
   })
+  const offTaskAction = window.diffra.onTaskAction(({ requestId, params }) => {
+    handleTaskAction(params)
+      .catch((error: unknown): TaskActionResult => ({ ok: false, error: errorMessage(error) }))
+      .then((result) => window.diffra.respondTaskAction(requestId, result))
+      .catch((error: unknown) => console.error('[tasks] 回复任务互通请求失败', error))
+  })
   const offBrowserState = window.diffra.onBrowserState((state) =>
     store.set((current) => ({ ...current, browsers: { ...current.browsers, [state.sessionId]: state } })),
   )
@@ -188,6 +195,7 @@ export function wireCoreEvents(): () => void {
   return () => {
     offUpdate()
     offPermission()
+    offTaskAction()
     offBrowserState()
     offBrowserActivity()
     offDesignActivity()
@@ -232,6 +240,58 @@ export async function startTask(project: string | null, text: string, options: S
   void sendMessage(handle.sessionId, text, message)
 }
 
+// 把任务载入界面（不切过去）：别的任务的智能体给它发消息时在后台起一轮
+async function loadLive(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): Promise<LiveTask> {
+  const existing = store.get().live[task.sessionId]
+  if (existing) return existing
+  const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
+  const live: LiveTask = {
+    ...liveFrom(loaded, loaded.title),
+    progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
+    turns: loaded.turns.map(turnFromStored),
+    usage: lastUsage(loaded.turns),
+  }
+  store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: state.live[task.sessionId] ?? live } }))
+  return store.get().live[task.sessionId]!
+}
+
+// 任务互通：另一个任务的智能体要给某个任务发消息，或新建任务。在后台载入、起一轮，不把用户从正在看的任务切走
+async function handleTaskAction(params: TaskActionParams): Promise<TaskActionResult> {
+  const text = `来自任务「${params.from.title}」的消息：\n\n${params.message}`
+  if (params.action === 'send') {
+    const sent = await sendInBackground(params.target, text, { from: params.from })
+    if (!sent) return { ok: false, error: `没有找到任务 ${params.target}` }
+    return { ok: true, sessionId: params.target, ...sent }
+  }
+  const created = await startInBackground(params.project, text, { title: params.title?.trim() || titleOf(params.message), design: params.design }, { from: params.from })
+  return { ok: true, ...created, queued: false }
+}
+
+// 在后台给任务发一条消息：载入任务、起一轮（正在跑就排队），不把用户从正在看的页面切走。任务不在了返回 null
+export async function sendInBackground(sessionId: string, text: string, options: Partial<MessageOptions> = {}): Promise<{ title: string; queued: boolean } | null> {
+  const summary = store.get().tasks.find((task) => task.sessionId === sessionId)
+  const target = store.get().live[sessionId] ?? (summary ? await loadLive(summary) : null)
+  if (!target) return null
+  const queued = target.running
+  void sendMessage(sessionId, text, options)
+  return { title: target.title, queued }
+}
+
+// 在后台新建任务并发第一条消息，不切过去；没给标题就取消息第一行
+export async function startInBackground(project: string | null, text: string, task: { title?: string; design: boolean }, options: Partial<MessageOptions> = {}): Promise<{ sessionId: string; title: string }> {
+  const title = task.title || titleOf(text)
+  const handle = await window.diffra.createSession(project, { title, ...(task.design ? { design: true } : {}) })
+  // 先定标题：不然第一轮会拿消息第一行（比如「来自任务…的消息：」）当标题
+  await window.diffra.updateSession(handle.sessionId, { title })
+  store.set((state) => ({
+    ...state,
+    projects: handle.noProject ? state.projects : addProject(state.projects, handle.cwd),
+    live: { ...state.live, [handle.sessionId]: liveFrom(handle, title) },
+  }))
+  void sendMessage(handle.sessionId, text, options)
+  return { sessionId: handle.sessionId, title }
+}
+
 export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>, record = true): Promise<void> {
   const existing = store.get().live[task.sessionId]
   if (existing) {
@@ -240,14 +300,8 @@ export async function openTask(task: Pick<StoredSessionSummary, 'sessionId' | 'c
     return
   }
   try {
-    const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
-    const live: LiveTask = {
-      ...liveFrom(loaded, loaded.title),
-      progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
-      turns: loaded.turns.map(turnFromStored),
-      usage: lastUsage(loaded.turns),
-    }
-    store.set((state) => ({ ...state, live: { ...state.live, [task.sessionId]: live }, ...(live.design ? { panel: 'design' as const } : {}) }))
+    const live = await loadLive(task)
+    if (live.design) store.set((state) => ({ ...state, panel: 'design' }))
     navigate({ name: 'task', sessionId: task.sessionId }, record)
   } catch (error) {
     showToast(`打不开这个任务：${errorMessage(error)}`)
@@ -266,8 +320,14 @@ export async function sendMessage(sessionId: string, text: string, options: Part
   const { skills, images } = message
   if (message.plan) await runTurnOnCore(sessionId, text, 'plan', skills, [], (turnId) => window.diffra.plan(sessionId, turnId, text, skills))
   else
-    await runTurnOnCore(sessionId, text, message.goal ? 'goal' : 'prompt', skills, images, (turnId) =>
-      window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images }),
+    await runTurnOnCore(
+      sessionId,
+      text,
+      message.goal ? 'goal' : 'prompt',
+      skills,
+      images,
+      (turnId) => window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images, ...(message.from ? { from: message.from } : {}) }),
+      message.from,
     )
 }
 
@@ -282,6 +342,76 @@ export async function runDeepScan(sessionId: string, scope: 'task' | 'project'):
   const task = store.get().live[sessionId]
   if (!task || task.running) return
   await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
+}
+
+export function openTodos(): void {
+  navigate({ name: 'todos' })
+  if (store.get().todos === null) void loadTodos()
+}
+
+export async function loadTodos(): Promise<void> {
+  try {
+    const todos = await window.diffra.listTodos()
+    store.set((state) => ({ ...state, todos }))
+  } catch (error) {
+    showToast(`读取待办失败：${errorMessage(error)}`)
+  }
+}
+
+// 改一条待办的定时；null 是取消定时。改了时间就是新的一次，之前的处理结果清掉
+export function setTodoSchedule(id: string, schedule: TodoSchedule | null): Promise<void> {
+  return saveTodos((todos) => todos.map((todo) => (todo.id === id ? { ...todo, schedule } : todo)))
+}
+
+// 先改界面再存；存失败时提示，界面上的改动留着，下次改动会连同它一起再存
+export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void> {
+  const current = store.get().todos ?? (await window.diffra.listTodos())
+  const next = change(current)
+  store.set((state) => ({ ...state, todos: next }))
+  try {
+    await window.diffra.saveTodos(next)
+  } catch (error) {
+    showToast(`保存待办失败：${errorMessage(error)}`)
+  }
+}
+
+// 记一条待办，带上当时所在的项目；at 有值时到时提醒
+export function addTodo(text: string, at?: Date): Promise<void> {
+  const todo: Todo = {
+    id: crypto.randomUUID(),
+    text: text.trim(),
+    project: currentProject(),
+    createdAt: new Date().toISOString(),
+    done: false,
+    sentTo: null,
+    ...(at ? { schedule: { at: at.toISOString(), action: { kind: 'remind' as const }, result: null } } : {}),
+  }
+  return saveTodos((todos) => [todo, ...todos])
+}
+
+// 把几条待办派给任务：新任务直接发出去；已有任务发送（运行中排队）或只填进输入框。记下派给了谁
+export async function dispatchTodos(
+  ids: string[],
+  text: string,
+  target: { kind: 'new'; project: string | null; design: boolean } | { kind: 'existing'; sessionId: string; cwd: string; mode: 'send' | 'fill' },
+): Promise<void> {
+  let sessionId: string
+  if (target.kind === 'new') {
+    // 模型和权限模式按设置里的默认来，和首页没选时一样
+    await startTask(target.project, text, target.design ? { design: true } : {})
+    const route = store.get().route
+    if (route.name !== 'task') return
+    sessionId = route.sessionId
+  } else {
+    await openTask({ sessionId: target.sessionId, cwd: target.cwd })
+    if (!store.get().live[target.sessionId]) return
+    sessionId = target.sessionId
+    if (target.mode === 'fill') fillComposer(sessionId, text)
+    else await sendMessage(sessionId, text)
+  }
+  const title = store.get().live[sessionId]?.title ?? ''
+  const at = new Date().toISOString()
+  await saveTodos((todos) => todos.map((todo) => (ids.includes(todo.id) ? { ...todo, sentTo: { sessionId, title, at } } : todo)))
 }
 
 // 把一段话填进这个任务的输入框：空着就直接填，有字就空一行接在后面；输入框上有「撤销」恢复原来的草稿
@@ -310,9 +440,10 @@ async function runTurnOnCore(
   skills: string[],
   images: PromptImage[],
   run: (turnId: string) => Promise<StopReason>,
+  from?: TaskSource,
 ): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏

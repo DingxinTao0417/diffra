@@ -114,6 +114,20 @@ export interface PromptQuestion {
 // 定位轮交回的结果，放在「定位结果」那张卡的 tool_call._meta.diffra.diagnosis 里。
 // evidence 的 itemId 是对话里那一步的 id（子智能体的步骤带它的前缀），点一下滚过去；
 // fallback 为 true 时是模型没交结果，按记录拼的通用版本
+// 对话里的可视化：show_visual 那张卡的 tool_call._meta.diffra.visual，{ title, code }；code 是 HTML 片段或 SVG
+export const VISUAL_META_KEY = 'visual'
+export const VISUAL_MAX_CHARS = 1_000_000
+// 任务之间互通（task_send、task_create）：消息是哪个任务发来的
+export interface TaskSource {
+  sessionId: string
+  title: string
+}
+export type TaskActionParams =
+  | { sessionId: string; action: 'send'; target: string; message: string; from: TaskSource }
+  | { sessionId: string; action: 'create'; project: string | null; title: string | null; design: boolean; message: string; from: TaskSource }
+// queued：对方正在跑，消息排在它这一轮后面
+export type TaskActionResult = { ok: true; sessionId: string; title: string; queued: boolean } | { ok: false; error: string }
+
 export const DIAGNOSIS_META_KEY = 'diagnosis'
 
 // 优化提示词交回的结果
@@ -349,6 +363,8 @@ export const CLIENT_EXT_METHODS = {
   browserAction: '_diffra/browser/action',
   devServer: '_diffra/devserver',
   designAction: '_diffra/design/action',
+  // 任务之间互通：智能体给别的任务发消息、新建任务，由客户端载入任务、起一轮
+  taskAction: '_diffra/task/action',
 } as const
 
 export interface McpPromptInfo {
@@ -388,6 +404,8 @@ export interface StoredTurn {
   images: PromptImage[]
   // 撤销到这一轮或更早的轮次之前时写入，多次撤销记最后一次。只说明之后撤销过，不代表这一轮的改动现在不在
   restoredAt?: string
+  // 这一轮的提问是另一个任务（智能体用 task_send、task_create）发来的；用户自己发的没有
+  from?: TaskSource
 }
 
 // session/load 响应的 _meta.diffra

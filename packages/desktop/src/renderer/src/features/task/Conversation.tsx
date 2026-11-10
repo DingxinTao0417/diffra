@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ModelErrorKind, PromptImage, TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -15,18 +15,19 @@ import { errorMessage } from '@/lib/errors'
 import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
-import { compactTask, diagnose, fillComposer, openSettings, sendMessage, setTaskModel } from '@/state/actions'
+import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
 import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
+import { VisualCard } from './VisualCard'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task'; item: ToolItem }
 
 // 模型接口出错时怎么说；auth、not-found 要去设置里改，其余可以接着发或者换个模型
 const MODEL_ERROR_TEXT: Record<ModelErrorKind, string> = {
@@ -78,9 +79,14 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | null {
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
+  if (item.visual) return 'visual'
+  // 等 CI 这类长时间等待单独一行、默认展开，看得到第几次检查
+  if (item.toolKind === 'execute' && item.title.startsWith('等待 ')) return 'wait'
+  // 指向别的任务的卡片（发消息、新建、等它做完）单独一行，「打开任务」不收进工具组
+  if (item.taskLink) return 'task'
   if (item.title === '完成') return 'finish'
   if (item.title === '验证改动（不结束任务）') return 'verify'
   if (item.title === '计划') return 'plan'
@@ -374,6 +380,7 @@ function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, o
 
   return (
     <section data-testid="turn" data-turn-id={turn.id} className="group/turn flex flex-col gap-3.5">
+      {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
@@ -415,6 +422,12 @@ function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, o
             )
           case 'diagnosis':
             return <DiagnosisCard key={block.item.id} item={block.item} task={task} onLocate={onLocate} />
+          case 'wait':
+            return <ToolStep key={block.item.id} item={block.item} defaultOpen />
+          case 'task':
+            return <ToolStep key={block.item.id} item={block.item} />
+          case 'visual':
+            return <VisualCard key={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
@@ -633,11 +646,11 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
   )
 }
 
-function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: boolean }) {
+function ToolStep({ item, unverified = false, defaultOpen = false }: { item: ToolItem; unverified?: boolean; defaultOpen?: boolean }) {
   // 命令失败的结果是跑完之后才到的，所以默认展开要跟着 item 算，不能只在挂载时定
   const [open, setOpen] = useState<boolean | null>(null)
   const commandFailed = item.succeeded === false
-  const expanded = open ?? (commandFailed || unverified)
+  const expanded = open ?? (commandFailed || unverified || defaultOpen)
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
   const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
@@ -649,8 +662,35 @@ function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: b
         {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
       </DisclosureRow>
+      {item.taskLink && (
+        <div className="mt-1 ml-5">
+          <TaskLink source={item.taskLink} label="打开任务" />
+        </div>
+      )}
       {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
+  )
+}
+
+// 指向另一个任务（任务互通）：点一下切过去
+function TaskLink({ source, label, className }: { source: { sessionId: string; title: string }; label: string; className?: string }) {
+  const summary = useAppState((state) => state.tasks.find((task) => task.sessionId === source.sessionId))
+  return (
+    <button
+      type="button"
+      className={cn('flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground', className)}
+      data-testid="task-link"
+      title={source.title}
+      onClick={(event) => {
+        event.stopPropagation()
+        const target = summary ?? store.get().tasks.find((task) => task.sessionId === source.sessionId)
+        if (target) void openTask(target)
+        else showToast('这个任务已经不在了')
+      }}
+    >
+      <ArrowUpRight className="size-3" />
+      {label}「{source.title.length > 20 ? `${source.title.slice(0, 20)}…` : source.title}」
+    </button>
   )
 }
 

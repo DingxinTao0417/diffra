@@ -51,6 +51,22 @@ describe('优化提示词', () => {
     }
   })
 
+  test('服务不接受指定工具的 tool_choice（DeepSeek 思考模式）：改用 auto 再问一次', async () => {
+    const server = await startScriptedServer(
+      [{ toolCalls: [{ name: 'submit_prompt', input: { prompt: '把 alpha 改成大写。', questions: [] } }] }],
+      { rejectForcedToolChoice: true },
+    )
+    try {
+      const result = await enhancePrompt({ model: modelAt(server.baseUrl), text: '改一下', cwd: null, mentions: [], design: false }, null)
+      expect(result.prompt).toBe('把 alpha 改成大写。')
+      expect(server.rejected()).toBe(1)
+      expect(server.bodies).toHaveLength(1)
+      expect(server.bodies[0]).toContain('"tool_choice":"auto"')
+    } finally {
+      await server.close()
+    }
+  })
+
   test('模型没调 submit_prompt：报错，不给半截结果', async () => {
     const server = await startScriptedServer([{ text: '我觉得挺好的' }])
     try {

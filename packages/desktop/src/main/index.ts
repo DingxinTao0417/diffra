@@ -1,5 +1,6 @@
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { registerBrowserIpc } from './browser'
@@ -12,6 +13,7 @@ import { registerPluginsIpc } from './plugins-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
+import { registerTodosIpc } from './todos-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { setupUpdater } from './updater'
@@ -25,6 +27,8 @@ if (!app.isPackaged) {
 // 同一份用户数据只跑一个主进程，再次启动时把已有窗口调到前面。
 // 两个实例会同时占着安装目录里的文件，更新时只有点了更新的那个会退出，卸载旧版就会失败
 const isPrimaryInstance = app.requestSingleInstanceLock()
+// Windows 的系统通知按 AppUserModelId 认应用，要和安装包的 appId 一致；开发版不设，免得和装好的 Diffra 混在一起
+if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('dev.diffra.desktop')
 if (!isPrimaryInstance) app.quit()
 app.on('second-instance', () => {
   const window = BrowserWindow.getAllWindows()[0]
@@ -69,6 +73,11 @@ function createWindow(): void {
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== window.webContents.getURL()) event.preventDefault()
   })
+  // 对话里的可视化在 iframe 里：只许加载自己的容器页，模型写的代码不能把这个框导航到别的网站
+  window.webContents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame) return
+    if (!/\/visual\.html(?:$|[?#])/.test(event.url)) event.preventDefault()
+  })
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL
   const loading = rendererUrl
@@ -84,6 +93,15 @@ app
     const coreStatus = startCore(coreClientHandlers)
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
     ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
+    ipcMain.handle(IPC_CHANNELS.visualSavePng, async (event, rawRect: unknown, rawTitle: unknown) => {
+      const rect = parse(z.object({ x: z.number().int(), y: z.number().int(), width: z.number().int().positive(), height: z.number().int().positive() }), rawRect)
+      const title = parse(z.string().max(200), rawTitle).replace(/[\\/:*?"<>|]/g, '_') || '可视化'
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      if (!owner) return
+      const image = await owner.webContents.capturePage(rect)
+      const picked = await dialog.showSaveDialog(owner, { title: '另存为 PNG', defaultPath: `${title}.png`, filters: [{ name: 'PNG 图片', extensions: ['png'] }] })
+      if (!picked.canceled && picked.filePath) await writeFile(picked.filePath, image.toPNG())
+    })
     ipcMain.handle(IPC_CHANNELS.openExternal, async (_event, raw: unknown) => {
       const url = new URL(parse(z.string().min(1), raw))
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('只能打开 http(s) 链接')
@@ -94,6 +112,7 @@ app
     const secrets = await SecretStore.open(userDataDir)
     registerSettingsIpc(settings, secrets)
     registerSessionIpc(settings, secrets, userDataDir)
+    registerTodosIpc(userDataDir)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
     registerDesignIpc()

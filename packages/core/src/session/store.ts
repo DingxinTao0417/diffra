@@ -104,6 +104,7 @@ const recordSchema = z.object({
   images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
       // 第 72 步加的，旧记录没有
       restoredAt: z.string().optional(),
+      from: z.object({ sessionId: z.string(), title: z.string() }).optional(),
     }),
   ),
   messages: z.array(z.unknown()),
@@ -238,7 +239,7 @@ export class SessionStore {
   }
 }
 
-function toEntry(record: SessionRecord): SessionIndexEntry {
+export function toEntry(record: SessionRecord): SessionIndexEntry {
   return {
     id: record.id,
     cwd: record.cwd,

@@ -4,11 +4,14 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TurnKind, type UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
+import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
+import { WAIT_COMMAND_TOOL, WAIT_TOOL_CHARS, waitCommandTool } from './wait.js'
+import { TASK_TOOL_CHARS, TASK_TOOLS } from './tasks.js'
 import { browserTools } from './browser.js'
 import { designChars, designTools } from './design.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
@@ -188,13 +191,13 @@ export class Session {
     this.activeTurn?.abort()
   }
 
-  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}) })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
@@ -250,11 +253,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design)), ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design)), [SHOW_VISUAL_TOOL]: showVisualTool, [WAIT_COMMAND_TOOL]: waitCommandTool, ...TASK_TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + delegateChars(Boolean(this.design)) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + VISUAL_TOOL_CHARS + WAIT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design)) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
