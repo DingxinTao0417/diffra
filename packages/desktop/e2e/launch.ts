@@ -4,7 +4,9 @@ import { join, resolve } from 'node:path'
 import { _electron as electron, type ElectronApplication, test } from '@playwright/test'
 
 export const desktopDir = resolve(import.meta.dirname, '..')
-export const APP_VERSION = (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
+// 应用窗口的缩放比（为什么 CI 里是 0.8 见 launchApp）。截图按它出图，按截图坐标点击的用例要用它换算
+export const DEVICE_SCALE = process.env.CI ? 0.8 : 1
+export const APP_VERSION =(JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
 
 // 每个测试用自己的临时数据目录，不碰开发和正式安装的数据
 export function makeUserDataDir(): string {
@@ -35,7 +37,7 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
   const executable = packagedExecutable()
   // CI 的 Windows 机器屏幕只有 1024×768，1200 宽的窗口被压到屏幕宽，开着任务监控时对话列不够宽，侧栏会自动收起，
   // 用例按侧栏一直在写的；缩到 0.8 倍后 1200×820 的窗口占 960×656 像素，布局和本机一致
-  const scale = process.env.CI ? ['--force-device-scale-factor=0.8'] : []
+  const scale = DEVICE_SCALE === 1 ? [] : [`--force-device-scale-factor=${DEVICE_SCALE}`]
   // 打包版只认正式数据目录（不看 DIFFRA_USER_DATA_DIR），用 Chromium 的 --user-data-dir 换成临时目录
   if (executable) return electron.launch({ executablePath: executable, args: [`--user-data-dir=${userDataDir}`, ...scale], env })
   return electron.launch({ args: ['.', ...scale], cwd: desktopDir, env: { ...env, DIFFRA_USER_DATA_DIR: userDataDir } })

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
-import { launchApp, makeUserDataDir } from './launch'
+import { DEVICE_SCALE, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
 import { lastToolResult, type ScriptMessages, startScriptedModel } from './scripted-model'
 
@@ -89,7 +89,8 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
     // 第二个任务：能看图的模型，按截图坐标点；整页截图后坐标对不上
     { toolCalls: [{ name: 'browser_navigate', input: { url: `${site.url}/tools` } }] },
     { toolCalls: [{ name: 'browser_screenshot', input: {} }] },
-    { toolCalls: [{ name: 'browser_click', input: { x: 360, y: 40 } }] },
+    // 截图按窗口缩放比出图：截图里的 (360, 40) × 缩放比 就是网页上的 (360, 40)，也就是画布里的 (60, 40)
+    { toolCalls: [{ name: 'browser_click', input: { x: 360 * DEVICE_SCALE, y: 40 * DEVICE_SCALE } }] },
     { toolCalls: [{ name: 'browser_evaluate', input: { expression: "document.getElementById('log').textContent" } }] },
     { toolCalls: [{ name: 'browser_screenshot', input: { full_page: true } }] },
     { toolCalls: [{ name: 'browser_click', input: { x: 360, y: 40 } }] },
@@ -148,7 +149,6 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
     await waitTaskDone(window, 30_000)
     const vision = model.bodies().map((body) => lastToolResult((JSON.parse(body) as { messages: ScriptMessages }).messages) ?? '')
     expect(vision.find((result) => result.includes('按坐标点击时用这张图里的像素坐标'))).toBeTruthy()
-    // 面板里的网页按 CSS 像素 1:1 截图，截图坐标 (360, 40) 就是画布里的 (60, 40)
     expect(vision.find((result) => result.includes('click 60,40;'))).toBeTruthy()
     expect(vision.find((result) => result.includes('整页'))).toBeTruthy()
     expect(vision.at(-1)).toContain('最近一张是整页截图，坐标对不上现在的页面')
