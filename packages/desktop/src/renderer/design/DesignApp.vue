@@ -7,7 +7,7 @@ import { useCanvas } from '@open-pencil/vue/canvas/surface'
 import { useTextEdit } from '@open-pencil/vue/canvas/text-edit'
 import { type EditorCommandId, useEditorCommands } from '@open-pencil/vue/editor/commands'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { agentCursors } from './bridge'
+import { agentClaims, agentCursors, agentFlashes } from './bridge'
 import { lucideSvg } from './icons'
 import Inspector from './Inspector.vue'
 import LayersPanel from './LayersPanel.vue'
@@ -85,24 +85,68 @@ function onCurrentPage(id: string): boolean {
   }
   return false
 }
-const cursors = computed(() => {
+// 图层在画布上的框（屏幕像素）；不在当前页时为 null
+function screenBox(id: string): { x: number; y: number; width: number; height: number } | null {
+  const node = editor.graph.getNode(id)
+  if (!node || !onCurrentPage(id)) return null
   const { zoom, panX, panY } = editor.state
+  const position = editor.graph.getAbsolutePosition(id)
+  return { x: position.x * zoom + panX, y: position.y * zoom + panY, width: node.width * zoom, height: node.height * zoom }
+}
+// 画布区域的大小：判断光标在不在视野里
+const view = ref({ width: 0, height: 0 })
+const viewObserver = new ResizeObserver(([entry]) => {
+  if (entry) view.value = { width: entry.contentRect.width, height: entry.contentRect.height }
+})
+const EDGE_ARROWS: Record<string, string> = { '-1,-1': '↖', '0,-1': '↑', '1,-1': '↗', '-1,0': '←', '1,0': '→', '-1,1': '↙', '0,1': '↓', '1,1': '↘' }
+const cursors = computed(() => {
   // 子智能体在干活时主智能体在等它们，不画它的光标，免得和工人的叠在一起
   const entries = [...agentCursors.values()]
-  const working = entries.some(({ agent }) => agent.id !== 'main')
+  const working = entries.some(({ agent, done }) => agent.id !== 'main' && !done)
   const placed: Array<{ x: number; y: number }> = []
-  return entries.flatMap(({ agent, nodeId }) => {
-    const node = editor.graph.getNode(nodeId)
-    if ((working && agent.id === 'main') || !node || !onCurrentPage(nodeId)) return []
-    const position = editor.graph.getAbsolutePosition(nodeId)
-    const x = position.x * zoom + panX
-    const y = position.y * zoom + panY
+  const { width, height } = view.value
+  return entries.flatMap(({ agent, nodeId, action, done }) => {
+    const box = screenBox(nodeId)
+    if ((working && agent.id === 'main') || !box) return []
+    // 图层整个在视野外：在画布边上放一个带方向的名字，点一下移过去
+    const side = (value: number, size: number, extent: number) => (value + extent < 0 ? -1 : width > 0 && value > size ? 1 : 0)
+    const dx = side(box.x, width, box.width)
+    const dy = side(box.y, height, box.height)
+    if (dx !== 0 || dy !== 0) {
+      const edge = { left: Math.min(Math.max(box.x, 8), Math.max(width - 120, 8)), top: Math.min(Math.max(box.y, 8), Math.max(height - 28, 8)) }
+      return [{ agent, nodeId, action, done, edge: { ...edge, arrow: EDGE_ARROWS[`${dx},${dy}`] ?? '' }, ...box, offset: 0 }]
+    }
     // 几个光标落在同一个角上时往下错开，名字不叠在一起
-    const stacked = placed.filter((point) => Math.abs(point.x - x) < 8 && Math.abs(point.y - y) < 8).length
-    placed.push({ x, y })
-    return [{ agent, x, y, width: node.width * zoom, height: node.height * zoom, offset: stacked * 20 }]
+    const stacked = placed.filter((point) => Math.abs(point.x - box.x) < 8 && Math.abs(point.y - box.y) < 8).length
+    placed.push({ x: box.x, y: box.y })
+    return [{ agent, nodeId, action, done, edge: null, ...box, offset: stacked * 20 }]
   })
 })
+// 子智能体认领的区块：同色虚线框
+const claimBoxes = computed(() =>
+  [...agentClaims.values()].flatMap(({ agent, nodes }) =>
+    nodes.flatMap((id) => {
+      const box = screenBox(id)
+      return box ? [{ key: `${agent.id}:${id}`, name: agent.name, color: agent.color, ...box }] : []
+    }),
+  ),
+)
+// 刚改过、新建的图层闪一下
+const flashBoxes = computed(() =>
+  [...agentFlashes.entries()].flatMap(([key, { color, nodeIds }]) =>
+    nodeIds.flatMap((id) => {
+      const box = screenBox(id)
+      return box ? [{ key: `${key}:${id}`, color, ...box }] : []
+    }),
+  ),
+)
+// 把视口中心移到智能体正在动的图层，缩放不变
+function focusNode(id: string) {
+  const node = editor.graph.getNode(id)
+  if (!node) return
+  const position = editor.graph.getAbsolutePosition(id)
+  editor.centerOn(position.x + node.width / 2, position.y + node.height / 2)
+}
 const zoomBy = (factor: number) => editor.zoomToLevel(Math.min(256, Math.max(0.02, editor.state.zoom * factor)))
 
 function typing(target: EventTarget | null) {
@@ -254,8 +298,10 @@ onMounted(() => {
   document.addEventListener('paste', onPaste)
   window.addEventListener('pointerdown', closeMenu)
   window.addEventListener('resize', onResize)
+  if (canvasRef.value) viewObserver.observe(canvasRef.value)
 })
 onUnmounted(() => {
+  viewObserver.disconnect()
   window.removeEventListener('keydown', onKeydown)
   document.removeEventListener('copy', onCopy)
   document.removeEventListener('cut', onCut)
@@ -297,22 +343,64 @@ onUnmounted(() => {
       <div class="relative min-w-0 flex-1" @contextmenu="openMenu">
         <canvas ref="canvasRef" class="absolute inset-0 size-full" />
         <div class="pointer-events-none absolute inset-0 overflow-hidden" data-testid="design-agent-cursors">
+          <div
+            v-for="box in claimBoxes"
+            :key="box.key"
+            class="absolute rounded-[3px] border border-dashed opacity-70"
+            :style="{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px`, height: `${box.height}px`, borderColor: box.color }"
+            data-testid="design-agent-claim"
+            :data-agent="box.name"
+          />
+          <div
+            v-for="box in flashBoxes"
+            :key="box.key"
+            class="design-flash absolute rounded-[3px]"
+            :style="{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px`, height: `${box.height}px`, backgroundColor: box.color }"
+            data-testid="design-agent-flash"
+          />
           <template v-for="cursor in cursors" :key="cursor.agent.id">
-            <div
-              class="absolute rounded-[3px] border-[1.5px] transition-[left,top,width,height] duration-300 ease-out"
-              :style="{ left: `${cursor.x}px`, top: `${cursor.y}px`, width: `${cursor.width}px`, height: `${cursor.height}px`, borderColor: cursor.agent.color }"
-            />
-            <div
-              class="absolute flex items-start transition-[left,top] duration-300 ease-out"
-              :style="{ left: `${cursor.x - 2}px`, top: `${cursor.y - 2 + cursor.offset}px` }"
-              data-testid="design-agent-cursor"
+            <button
+              v-if="cursor.edge"
+              type="button"
+              class="pointer-events-auto absolute rounded-full px-2 text-[11px] leading-5 font-medium whitespace-nowrap text-white shadow-sm"
+              :style="{ left: `${cursor.edge.left}px`, top: `${cursor.edge.top}px`, backgroundColor: cursor.agent.color }"
+              :title="`移到 ${cursor.agent.name} 正在动的图层`"
+              data-testid="design-agent-edge"
               :data-agent="cursor.agent.name"
+              @click="focusNode(cursor.nodeId)"
             >
-              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-                <path d="M2 2 L15.5 8 L9.2 9.6 L6.8 15.8 Z" :fill="cursor.agent.color" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
-              </svg>
-              <span class="mt-3 -ml-1 rounded-full px-1.5 text-[11px] leading-[18px] font-medium whitespace-nowrap text-white shadow-sm" :style="{ backgroundColor: cursor.agent.color }">{{ cursor.agent.name }}</span>
-            </div>
+              {{ cursor.edge.arrow }} {{ cursor.agent.name }}
+            </button>
+            <template v-else>
+              <div
+                class="absolute rounded-[3px] border-[1.5px] transition-[left,top,width,height] duration-[180ms] ease-out motion-reduce:transition-none"
+                :class="cursor.done && 'design-done'"
+                :style="{ left: `${cursor.x}px`, top: `${cursor.y}px`, width: `${cursor.width}px`, height: `${cursor.height}px`, borderColor: cursor.agent.color }"
+              />
+              <div
+                class="absolute flex items-start transition-[left,top] duration-[180ms] ease-out motion-reduce:transition-none"
+                :class="cursor.done && 'design-done'"
+                :style="{ left: `${cursor.x - 2}px`, top: `${cursor.y - 2 + cursor.offset}px` }"
+                data-testid="design-agent-cursor"
+                :data-agent="cursor.agent.name"
+                :data-node="cursor.nodeId"
+                :data-action="cursor.done ? 'done' : (cursor.action ?? '')"
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+                  <path d="M2 2 L15.5 8 L9.2 9.6 L6.8 15.8 Z" :fill="cursor.agent.color" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+                </svg>
+                <button
+                  type="button"
+                  class="pointer-events-auto mt-3 -ml-1 rounded-full px-1.5 text-[11px] leading-[18px] font-medium whitespace-nowrap text-white shadow-sm"
+                  :style="{ backgroundColor: cursor.agent.color }"
+                  :title="`移到 ${cursor.agent.name} 正在动的图层`"
+                  @click="focusNode(cursor.nodeId)"
+                >
+                  {{ cursor.agent.name }}<template v-if="cursor.done"> · ✓ 完成</template><template v-else-if="cursor.action"> · {{ cursor.action }}</template
+                  ><span v-else class="design-dots" aria-label="等模型"> · …</span>
+                </button>
+              </div>
+            </template>
           </template>
         </div>
         <div v-if="failure" class="absolute inset-0 flex items-center justify-center p-6 text-sm text-destructive" role="alert">画布启动失败：{{ failure }}</div>
@@ -344,3 +432,49 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 刚改过的图层闪一下；智能体结束时「完成」停一会儿再淡出；等模型时省略号一明一暗 */
+@keyframes design-flash {
+  from {
+    opacity: 0.32;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.design-flash {
+  animation: design-flash 600ms ease-out forwards;
+}
+@keyframes design-done {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.design-done {
+  animation: design-done 1000ms ease-out forwards;
+}
+@keyframes design-dots {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.design-dots {
+  animation: design-dots 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .design-flash,
+  .design-done,
+  .design-dots {
+    animation: none;
+  }
+}
+</style>

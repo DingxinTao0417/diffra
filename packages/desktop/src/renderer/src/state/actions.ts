@@ -1,7 +1,7 @@
 import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { ModelRef } from '../../../shared/settings'
-import { applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
+import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
 import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
@@ -151,13 +151,9 @@ export function wireCoreEvents(): () => void {
     const silence = modelSilenceOf(update)
     updateLive(sessionId, (task) => {
       if (usage) return { ...task, usage }
-      if (silence) {
-        // 又有输出了就去掉这个智能体的那一条
-        const { [silence.key]: _previous, ...rest } = task.modelSilence ?? {}
-        return { ...task, modelSilence: silence.since === null ? rest : { ...rest, [silence.key]: { agent: silence.agent, since: silence.since } } }
-      }
       const last = task.turns.at(-1)
       if (!last) return task
+      if (silence) return { ...task, turns: [...task.turns.slice(0, -1), { ...last, silence: applySilence(last.silence, silence) }] }
       // 读文件、搜索不改项目文件，完成时不用重读改动
       const filesMayChange = update.sessionUpdate === 'tool_call_update' && update.status === 'completed' && !last.items.some((item) => item.kind === 'tool' && item.id === update.toolCallId && (item.toolKind === 'read' || item.toolKind === 'search'))
       return {
@@ -288,6 +284,19 @@ export async function runDeepScan(sessionId: string, scope: 'task' | 'project'):
   await runTurnOnCore(sessionId, DEEP_SCAN_TITLES[scope], 'deep-scan', [], [], (turnId) => window.diffra.deepScan(sessionId, turnId, scope))
 }
 
+// 把一段话填进这个任务的输入框：空着就直接填，有字就空一行接在后面；输入框上有「撤销」恢复原来的草稿
+export function fillComposer(sessionId: string, text: string): void {
+  store.set((state) => ({ ...state, composerInsert: { target: sessionId, text, mode: 'fill' } }))
+}
+
+// 定位问题：停下的那一轮，或者其中一个子智能体（cardId 是它的卡片）。在界面上也是一轮，只读地查，不改文件
+export async function diagnose(sessionId: string, target: { turnId: string; cardId?: string; agent?: string }): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  const text = target.agent ? `定位问题：子智能体「${target.agent}」为什么没做完` : '定位问题：上一轮为什么停下'
+  await runTurnOnCore(sessionId, text, 'diagnose', [], [], (turnId) => window.diffra.diagnose(sessionId, turnId, text, { turnId: target.turnId, cardId: target.cardId ?? null }))
+}
+
 export async function compactTask(sessionId: string): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task || task.running) return
@@ -320,7 +329,7 @@ async function runTurnOnCore(
     const viewing = route.name === 'task' && route.sessionId === sessionId
     updateLive(sessionId, (current) => {
       next = current.queue[0]
-      return { ...current, running: false, permission: null, modelSilence: undefined, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
+      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
     })
     await refreshTasks()
     if (next) void sendMessage(sessionId, next.text, next.options)
@@ -406,12 +415,15 @@ export async function setPermissionMode(sessionId: string | null, mode: Permissi
   }
 }
 
-export async function setTaskModel(sessionId: string, model: ModelRef): Promise<void> {
+// 换成功返回 true；失败时提示原因
+export async function setTaskModel(sessionId: string, model: ModelRef): Promise<boolean> {
   try {
     const { modelLabel } = await window.diffra.configureSession(sessionId, { model })
     if (modelLabel) updateLive(sessionId, (task) => ({ ...task, modelLabel, modelRef: model }))
+    return true
   } catch (error) {
     showToast(errorMessage(error))
+    return false
   }
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { UsageSummary, UsageTotals } from '@diffra/core/types'
+import { PROMPT_ENHANCE_USAGE_ID, type UsageSummary, type UsageTotals } from '@diffra/core/types'
 import { Activity, BarChart3, Clock3, Plus, Zap } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -156,7 +156,8 @@ export function UsageSection() {
                 const stored = titles.get(task.sessionId)
                 return {
                   key: task.sessionId,
-                  name: stored?.title ?? '已删除的任务',
+                  // 首页还没建任务时优化提示词的用量记在一个固定的 id 下
+                  name: stored?.title ?? (task.sessionId === PROMPT_ENHANCE_USAGE_ID ? '首页的提示词优化' : '已删除的任务'),
                   hint: task.cwd,
                   totals: task,
                   onOpen: stored ? () => void openTask(stored) : undefined,

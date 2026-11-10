@@ -43,10 +43,72 @@ export interface AgentTag {
 const MAIN_AGENT: AgentTag = { id: 'main', name: '主智能体', color: '#57534E' }
 const NODE_ID = /^-?\d+:\d+$/
 
-// 画布上每个智能体的光标：最近改的（或看的）节点。设计页的覆盖层按它画光标和图层框，智能体结束时收起
-export const agentCursors = reactive(new Map<string, { agent: AgentTag; nodeId: string }>())
+// 画布上每个智能体的光标：指着它正在改（或看）的图层，名字后面写在干什么；两次调用之间在等模型，action 为 null。
+// 设计页的覆盖层按它画光标和图层框；智能体结束时先显示「完成」再收起
+export interface AgentCursor {
+  agent: AgentTag
+  nodeId: string
+  action: string | null
+  done: boolean
+  // 最后一次换图层的时刻：改动前按它等光标走到位
+  movedAt: number
+}
+export const agentCursors = reactive(new Map<string, AgentCursor>())
+// 子智能体认领的区块，画成同色虚线框；工人结束时去掉
+export const agentClaims = reactive(new Map<string, { agent: AgentTag; nodes: string[] }>())
+// 刚改过、新建的图层闪一下；闪完删掉
+export const agentFlashes = reactive(new Map<number, { color: string; nodeIds: string[] }>())
 // 子智能体锁住的节点：节点 id → 子智能体。改到别人锁住的节点、它的下层，或者包含它的上层，都会被拒
 const locks = new Map<string, AgentTag>()
+
+// 和设计页光标的移动过渡一样长
+export const CURSOR_MOVE_MS = 180
+const DONE_SHOWN_MS = 1000
+const FLASH_MS = 600
+const MAX_FLASHED = 20
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+function pointAt(agent: AgentTag, nodeId: string, action: string | null): void {
+  const current = agentCursors.get(agent.id)
+  const movedAt = current?.nodeId === nodeId ? current.movedAt : performance.now()
+  agentCursors.set(agent.id, { agent, nodeId, action, done: false, movedAt })
+}
+
+function setAction(agent: AgentTag, action: string | null): void {
+  const current = agentCursors.get(agent.id)
+  if (current) agentCursors.set(agent.id, { ...current, action, done: false })
+}
+
+// 改动前等光标走到位。调用一到设计页光标就开始挪，排队的时间里多半已经到了，只等剩下的；面板看不见或减少动态效果时不等
+async function arrive(agent: AgentTag): Promise<void> {
+  const cursor = agentCursors.get(agent.id)
+  if (!cursor || document.hidden || reducedMotion()) return
+  const left = cursor.movedAt + CURSOR_MOVE_MS - performance.now()
+  if (left > 0) await new Promise((resolve) => setTimeout(resolve, left))
+}
+
+let flashKey = 0
+function flash(agent: AgentTag, nodeIds: string[]): void {
+  if (nodeIds.length === 0 || reducedMotion()) return
+  const key = flashKey++
+  agentFlashes.set(key, { color: agent.color, nodeIds: nodeIds.slice(0, MAX_FLASHED) })
+  setTimeout(() => agentFlashes.delete(key), FLASH_MS)
+}
+
+// 光标名字后面的动作
+function actionLabel(name: string, mutates: boolean): string {
+  if (name === 'render') return '绘制'
+  if (name === 'set_image_fill') return '放图片'
+  if (name === 'export_image') return '截图'
+  if (name === 'eval') return '运行脚本'
+  if (name === 'lint_fix') return '修正'
+  if (name.startsWith('lint') || name.startsWith('analyze_')) return '检查'
+  if (!mutates) return '查看'
+  if (name.includes('text')) return '改文字'
+  if (name.startsWith('delete') || name.startsWith('remove')) return '删除'
+  if (name.startsWith('create')) return '新建'
+  return '修改'
+}
 
 function isAgentTag(value: unknown): value is AgentTag {
   if (typeof value !== 'object' || value === null) return false
@@ -109,14 +171,22 @@ function claimNodes(editor: Editor, agent: AgentTag, nodes: string[]): { refused
   }
   if (refused.length > 0) return { refused }
   for (const id of nodes) locks.set(id, agent)
-  if (nodes[0]) agentCursors.set(agent.id, { agent, nodeId: nodes[0] })
+  agentClaims.set(agent.id, { agent, nodes })
+  if (nodes[0]) pointAt(agent, nodes[0], null)
   return { refused }
 }
 
 function endAgent(agent: AgentTag | null): void {
   const id = agent?.id ?? MAIN_AGENT.id
-  agentCursors.delete(id)
+  agentClaims.delete(id)
   for (const [node, owner] of locks) if (owner.id === id) locks.delete(node)
+  const cursor = agentCursors.get(id)
+  if (!cursor) return
+  // 先显示「完成」一会儿再收起；这期间又开始干活（又认领、又调用）就不收
+  agentCursors.set(id, { ...cursor, action: null, done: true })
+  setTimeout(() => {
+    if (agentCursors.get(id)?.done) agentCursors.delete(id)
+  }, DONE_SHOWN_MS)
 }
 
 // 这次调用新建的节点里最上层的那些（父节点不是新建的）
@@ -306,9 +376,16 @@ export function installBridge(editor: Editor): void {
       }))
       return { tools, instructions: INSTRUCTIONS }
     },
-    run: (name, rawArgs, rawAgent) =>
-      enqueue(async () => {
-        const worker = isAgentTag(rawAgent) ? rawAgent : null
+    run: (name, rawArgs, rawAgent) => {
+      const worker = isAgentTag(rawAgent) ? rawAgent : null
+      const agent = worker ?? MAIN_AGENT
+      const def = byName.get(name)
+      // 一到设计页就把光标挪向这次要动的图层：排队等前面的调用时光标已经在路上。别人锁住的图层不去，这次调用会被拒
+      if (def) {
+        const early = [...nodeIdsIn(rawArgs)].find((id) => editor.graph.getNode(id))
+        if (early && !(worker && def.mutates && lockOwner(editor, worker, early))) pointAt(agent, early, actionLabel(name, def.mutates))
+      }
+      return enqueue(async () => {
         if (name === '__agent_claim') {
           const nodes = (rawArgs as { nodes?: unknown } | null)?.nodes
           if (!worker || !Array.isArray(nodes)) return toResult({ refused: ['invalid claim'] })
@@ -318,7 +395,6 @@ export function installBridge(editor: Editor): void {
           endAgent(worker)
           return toResult({})
         }
-        const def = byName.get(name)
         if (!def) return { text: JSON.stringify({ error: `没有这个设计工具：${name}` }), image: null }
         if (worker && name === 'eval') return toResult({ error: 'Workers cannot use eval: it can change nodes other workers own.' })
         try {
@@ -331,6 +407,11 @@ export function installBridge(editor: Editor): void {
               if (owner) return toResult({ error: `Node ${id} belongs to worker "${owner.name}". Work inside your own nodes; mention what you need in your report.` })
             }
           }
+          // 光标先到要改的图层（新建的内容先指父节点），走到位再改：画面上先看到光标，再看到变化
+          const action = actionLabel(name, def.mutates)
+          if (targets[0]) pointAt(agent, targets[0], action)
+          else setAction(agent, action)
+          if (def.mutates) await arrive(agent)
           const before = def.mutates ? new Set(editor.graph.nodes.keys()) : null
           const output = await runTool(editor, def, args)
           // 改过文档就先备好字体再返回：排版尺寸和之后的截图才是按真实字体算的
@@ -339,14 +420,17 @@ export function installBridge(editor: Editor): void {
           const created = before ? createdRoots(editor, before) : []
           // 子智能体改过、新建的节点归它，别的子智能体不能再改
           if (worker && def.mutates) for (const id of [...targets, ...created]) locks.set(id, worker)
-          const focus = created[0] ?? targets[0]
-          const agent = worker ?? MAIN_AGENT
-          if (focus) agentCursors.set(agent.id, { agent, nodeId: focus })
+          if (created[0]) pointAt(agent, created[0], action)
+          if (def.mutates) flash(agent, created.length > 0 ? created : targets)
           return toResult(output)
         } catch (error) {
           return toResult(toolFailure(error))
+        } finally {
+          // 这次调用做完了，在等模型的下一步
+          setAction(agent, null)
         }
-      }),
+      })
+    },
     openFig: async (base64) => {
       const graph = await parseFigFile(fromBase64(base64).buffer)
       editor.replaceGraph(graph)

@@ -123,8 +123,10 @@ test('子智能体：停止时工人一起停，卡片标成未完成', async ()
   }
 })
 
+// e2e 按 Node 的类型检查，页面里用到的那点 DOM 自己写
+type PageDom = { document: { querySelector(selector: string): { getAttribute(name: string): string | null } | null; querySelectorAll(selector: string): { length: number } } }
 // 设计页是主进程叠在面板上的单独视图，Playwright 里是另一个页面
-type DesignGlobal = typeof globalThis & { __diffraDesign?: { run(name: string, args: unknown): Promise<{ text: string }> } }
+type DesignGlobal = typeof globalThis & { __diffraDesign?: { run(name: string, args: unknown, agent?: unknown): Promise<{ text: string }> } }
 
 const frameIds = (messages: ScriptMessages) => {
   const { nodes } = JSON.parse(lastToolResult(messages)) as { nodes: Array<{ id: string; name: string }> }
@@ -189,6 +191,92 @@ test('设计子智能体：两个工人同时画同一页的不同区块，画�
     await expect(head).toContainText('待处理：列表不归我')
     const bodies = model.bodies().filter((body) => body.includes('WORKER-HEAD'))
     expect(bodies.some((body) => body.includes('belongs to worker'))).toBe(true)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('设计光标：先到要改的图层再改；名字后写着在干什么，认领的区块有虚线框，改完闪一下；图层在视野外时边上有名字，点一下移过去；结束时显示完成再收起', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-design-cursor-'))
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'design_render', input: { jsx: '<Frame name="首页" w={800} h={560} flex="col" bg="#FFFFFF"><Frame name="页眉" w="fill" h={120} bg="#F3F4F6" /><Frame name="列表" w="fill" h={400} bg="#F9FAFB" /></Frame>' } }] },
+    { text: '首页画好了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startDesignTask(window, '画个首页')
+    await waitTaskDone(window)
+    const design = app.context().pages().find((page) => page.url().includes('design.html'))!
+    const worker = { id: 'w-cursor', name: '甲', color: '#2563EB' }
+    const ids = await design.evaluate(async (agent) => {
+      const api = (globalThis as DesignGlobal).__diffraDesign!
+      const { nodes } = JSON.parse((await api.run('find_nodes', { type: 'FRAME' })).text) as { nodes: Array<{ id: string; name: string }> }
+      const byName = Object.fromEntries(nodes.map((node) => [node.name, node.id]))
+      await api.run('__agent_claim', { nodes: [byName['页眉'], byName['列表']] }, agent)
+      return byName as Record<string, string>
+    }, worker)
+    const cursor = design.locator('[data-testid="design-agent-cursor"][data-agent="甲"]')
+    await expect(cursor).toHaveAttribute('data-node', ids['页眉']!)
+    await expect(design.locator('[data-testid="design-agent-claim"][data-agent="甲"]')).toHaveCount(2)
+
+    // 改列表：光标先到列表、名字后写「修改」，走到位后才改（光标到了之后至少还等了一段才改完），改完闪一下
+    const seen = await design.evaluate(
+      async ({ agent, target }) => {
+        const api = (globalThis as DesignGlobal).__diffraDesign!
+        const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+        await pause(400)
+        const dom = (globalThis as unknown as PageDom).document
+        const cursorOf = () => dom.querySelector('[data-testid="design-agent-cursor"][data-agent="甲"]')
+        // 记下光标指到列表的时刻
+        let arrivedAt = 0
+        const watch = setInterval(() => {
+          if (!arrivedAt && cursorOf()?.getAttribute('data-node') === target) arrivedAt = performance.now()
+        }, 5)
+        const pending = api.run('rename_node', { id: target, name: '文章列表' }, agent)
+        await pause(40)
+        const action = cursorOf()?.getAttribute('data-action')
+        await pending
+        const doneAt = performance.now()
+        clearInterval(watch)
+        const flashes = dom.querySelectorAll('[data-testid="design-agent-flash"]').length
+        const { name } = JSON.parse((await api.run('get_node', { id: target, depth: 0 })).text) as { name: string }
+        return { arrived: arrivedAt > 0, lead: doneAt - arrivedAt, action, name, flashes }
+      },
+      { agent: worker, target: ids['列表']! },
+    )
+    expect(seen.arrived).toBe(true)
+    expect(seen.lead).toBeGreaterThan(120)
+    expect(seen.action).toBe('修改')
+    expect(seen.name).toBe('文章列表')
+    expect(seen.flashes).toBeGreaterThan(0)
+    // 做完这次调用在等模型：名字后面是省略号
+    await expect(cursor).toHaveAttribute('data-action', '')
+
+    // 把画布移开：图层不在视野里时，画布边上出现带方向的名字，点一下移回去
+    const canvas = design.locator('canvas').first()
+    await canvas.hover()
+    // 每次滚动最多移 120px
+    for (let index = 0; index < 40; index++) await design.mouse.wheel(0, 120)
+    const edge = design.locator('[data-testid="design-agent-edge"][data-agent="甲"]')
+    await expect(edge).toBeVisible()
+    await expect(cursor).toHaveCount(0)
+    await edge.click()
+    await expect(cursor).toBeVisible()
+    await expect(edge).toHaveCount(0)
+
+    // 结束：先显示「完成」，然后光标和认领框都收起
+    await design.evaluate((agent) => (globalThis as DesignGlobal).__diffraDesign!.run('__agent_done', {}, agent), worker)
+    await expect(cursor).toHaveAttribute('data-action', 'done')
+    await expect(design.locator('[data-testid="design-agent-claim"]')).toHaveCount(0)
+    await expect(cursor).toHaveCount(0)
   } finally {
     await app.close()
     await model.close()

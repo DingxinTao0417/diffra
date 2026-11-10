@@ -44,8 +44,6 @@ export interface LiveTask {
   running: boolean
   usage: Usage | null
   permission: PermissionRequestEvent | null
-  // 模型从什么时候起没有输出：按智能体分开记（key 是子智能体 id，主智能体是 main），这一轮结束时清空
-  modelSilence?: Record<string, { agent: string | null; since: number }>
   // 运行中发的消息，这一轮结束后依次发出
   queue: Array<{ id: string; text: string; options: MessageOptions }>
   // 文件可能变了就加一，任务监控和审阅面板据此刷新
@@ -87,7 +85,8 @@ export interface AppState {
   searchOpen: boolean
   panel: SidePanel
   terminalOpen: boolean
-  terminalAttachment?: { target: string; text: string }
+  // 往输入框塞文字：target 是任务 id 或 home。append 接在末尾（附加终端内容）；fill 空着就填、有字就空一行接上，带撤销（定位结果的「填入输入框」）
+  composerInsert?: { target: string; text: string; mode: 'append' | 'fill' }
   terminals: TerminalTab[]
   activeTerminal: string | null
   toast: { id: number; text: string } | null

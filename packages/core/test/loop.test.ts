@@ -10,6 +10,7 @@ import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
 import type { BrowserAction, BrowserActionResult, RulePack, SessionChecks, SessionLimits, SessionSecurity, SkillInfo, SkillSource, TaskProgressView, TurnOutcome } from '../src/protocol.js'
 import { normalizeUrl } from '../src/urls.js'
+import { runDiagnose } from '../src/session/diagnose.js'
 import { runTurn, streamModelStep, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
 import { compactManually } from '../src/session/compact.js'
@@ -779,7 +780,7 @@ describe('主循环', () => {
     const io = recordingIO()
     await expect(runTurn(await makeSession(model), { id: 't', text: '介绍一下' }, io)).resolves.toBe('end_turn')
     expect(io.updates.some((update) => update.sessionUpdate === 'notice' && update.title === '模型调用失败')).toBe(true)
-    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'model-error' }])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: 'model-error', errorKind: 'unknown' }])
   })
 })
 
@@ -2221,6 +2222,46 @@ describe('模型没有输出时的提示', () => {
     expect(io.updates.some((update) => update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text' && update.content.text === '好了')).toBe(true)
   })
 
+  test('点「重试这一步」只中断卡住的那次请求、原样再发一次，这一步照常跑完；提示随之撤掉', async () => {
+    vi.stubEnv('DIFFRA_MODEL_SILENCE_MS', '100')
+    const io = recordingIO()
+    const handles = new Map<string, () => void>()
+    const model = new MockLanguageModelV4({ doStream: [{ stream: textStream(20_000, 0, ['卡住的']) }, { stream: textStream(10, 0, ['重发后的']) }] })
+    const pending = streamModelStep(
+      { model, system: '', messages: [{ role: 'user', content: '你好' }], tools: {}, usage: { role: 'coder', provider: null, modelId: 'mock' } },
+      new AbortController().signal,
+      io,
+      { key: 'main', handles },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(silenceOf(io)).toHaveLength(1)
+    handles.get('main')!()
+    const result = await pending
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(JSON.stringify(result.responseMessages)).toContain('重发后的')
+    expect(JSON.stringify(result.responseMessages)).not.toContain('卡住的')
+    expect(silenceOf(io).at(-1)).toBeNull()
+    // 这一步结束后不再能重试
+    expect(handles.size).toBe(0)
+  })
+
+  test('模型没输出时被停止：不撤掉提示，记录里留着停下时已经多久没输出', async () => {
+    vi.stubEnv('DIFFRA_MODEL_SILENCE_MS', '100')
+    const io = recordingIO()
+    const controller = new AbortController()
+    const pending = streamModelStep(
+      { model: new MockLanguageModelV4({ doStream: { stream: textStream(20_000) } }), system: '', messages: [{ role: 'user', content: '你好' }], tools: {}, usage: { role: 'coder', provider: null, modelId: 'mock' } },
+      controller.signal,
+      io,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    controller.abort()
+    await pending.catch(() => null)
+    const silence = silenceOf(io)
+    expect(silence).toHaveLength(1)
+    expect(typeof silence[0]).toBe('string')
+  })
+
   test('数据断断续续、每段间隔都不到时限就不提示：按最后一次收到数据的时间算，不按这一步开始的时间', async () => {
     vi.stubEnv('DIFFRA_MODEL_SILENCE_MS', '300')
     const io = recordingIO()
@@ -2228,5 +2269,78 @@ describe('模型没有输出时的提示', () => {
     await step(textStream(40, 40, ['一', '二', '三', '四', '五']), io)
     expect(Date.now() - started).toBeGreaterThan(300)
     expect(silenceOf(io)).toEqual([])
+  })
+})
+
+describe('定位问题', () => {
+  const toolStream = (toolCallId: string, toolName: string, input: unknown) =>
+    simulateReadableStream<StreamPart>({
+      chunks: [
+        { type: 'stream-start', warnings: [] },
+        { type: 'tool-call', toolCallId, toolName, input: JSON.stringify(input) },
+        { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage: usageOf() },
+      ],
+    })
+  // 先跑一轮：读了 hello.txt，然后模型报错停下；会话照 core 的做法把这一轮记下来
+  async function stoppedTurn(diagnosisStep: ReadableStream<StreamPart> | 'throw') {
+    writeFileSync(join(project, 'hello.txt'), 'hello\n')
+    const steps: Array<ReadableStream<StreamPart> | 'throw'> = [toolStream('call-read', 'read_file', { path: 'hello.txt' }), 'throw', diagnosisStep]
+    let call = 0
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        const step = steps[call++]
+        if (!step || step === 'throw') throw new Error('coder down')
+        return { stream: step }
+      },
+    })
+    const session = await makeSession(model)
+    const io = recordingIO()
+    const recorded: TurnIO = { ...io, update: async (update) => (session.recordUpdate(update), io.update(update)) }
+    session.startTurn('t1', '读一下 hello.txt')
+    session.endTurn(await runTurn(session, { id: 't1', text: '读一下 hello.txt' }, recorded))
+    session.startTurn('d1', '定位问题：上一轮为什么停下', 'diagnose')
+    return { session, model }
+  }
+  const diagnosisOf = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update._meta?.diffra ? [(update._meta.diffra as { diagnosis?: Record<string, unknown> }).diagnosis] : [])).find(Boolean) as
+      | { cause: string; evidence: Array<{ itemId: string }>; prompt: string; fallback: boolean; target: { turnId: string } }
+      | undefined
+
+  test('带着停下的原因、提示和每一步问当前模型；证据对回对话里那一步，默认答案那一行一定在提示词里', async () => {
+    const { session, model } = await stoppedTurn(
+      toolStream('call-diagnose', 'submit_diagnosis', {
+        cause: '模型服务出错，任务本身没问题',
+        evidence: [{ step: 's1', note: '文件已经读过' }, { step: 's9', note: '不存在的步骤' }],
+        done: ['读过 hello.txt'],
+        remaining: ['回答用户'],
+        prompt: '继续，直接回答。',
+        questions: [{ question: '要改文件吗？', options: [{ label: '不改', text: '只回答，不改文件。' }, { label: '改', text: '顺手把 hello 改成大写。' }] }],
+      }),
+    )
+    const io = recordingIO()
+    expect(await runDiagnose(session, { turnId: 't1', cardId: null }, io)).toBe('end_turn')
+    const facts = JSON.stringify(model.doStreamCalls[2]?.prompt)
+    expect(facts).toContain('How it ended: 模型调用出错（unknown）')
+    expect(facts).toContain('s1 [completed]')
+    expect(facts).toContain('coder down')
+    const diagnosis = diagnosisOf(io)!
+    expect(diagnosis.cause).toBe('模型服务出错，任务本身没问题')
+    expect(diagnosis.evidence.map((item) => item.itemId)).toEqual(['call-read'])
+    expect(diagnosis.prompt).toBe('继续，直接回答。\n只回答，不改文件。')
+    expect(diagnosis.fallback).toBe(false)
+    expect(diagnosis.target.turnId).toBe('t1')
+    // 探索过程不进编码模型的对话
+    expect(JSON.stringify(session.messages)).not.toContain('submit_diagnosis')
+  })
+
+  test('定位时模型也出错：提示定位失败，给一份按记录拼的通用提示词', async () => {
+    const { session } = await stoppedTurn('throw')
+    const io = recordingIO()
+    expect(await runDiagnose(session, { turnId: 't1', cardId: null }, io)).toBe('end_turn')
+    expect(io.updates.some((update) => update.sessionUpdate === 'notice' && update.title === '定位失败')).toBe(true)
+    const diagnosis = diagnosisOf(io)!
+    expect(diagnosis.fallback).toBe(true)
+    expect(diagnosis.prompt).toContain('上一轮停在了')
+    expect(diagnosis.prompt).toContain('已经完成的不要重做')
   })
 })

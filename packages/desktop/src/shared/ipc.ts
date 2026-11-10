@@ -5,6 +5,7 @@ import type {
   CommandInfo,
   ListModelsResult,
   McpServerStatus,
+  PromptEnhancement,
   PromptImage,
   PermissionMode,
   PermissionOption,
@@ -85,6 +86,9 @@ export const IPC_CHANNELS = {
   sessionPrompt: 'session:prompt',
   sessionDeepScan: 'session:deep-scan',
   sessionPlan: 'session:plan',
+  sessionRetryStep: 'session:retry-step',
+  sessionDiagnose: 'session:diagnose',
+  promptEnhance: 'prompt:enhance',
   sessionCompact: 'session:compact',
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
@@ -321,6 +325,12 @@ export interface DiffraApi {
   deepScan(sessionId: string, turnId: string, scope: 'task' | 'project'): Promise<StopReason>
   // 先出计划：规划模型只读地出一份计划，作为一轮记进任务
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
+  // 优化输入框里的提示词：用「规划」角色的模型，没配就用 model（输入框选的），再没有就用「编码」角色
+  enhancePrompt(request: { text: string; project: string | null; sessionId: string | null; model?: ModelRef; mentions: string[]; design: boolean }): Promise<PromptEnhancement>
+  // 定位问题：停下的那一轮（target.turnId），或其中一个子智能体（target.cardId 是它的卡片）
+  diagnose(sessionId: string, turnId: string, text: string, target: { turnId: string; cardId: string | null }): Promise<StopReason>
+  // 模型很久没有输出时让卡住的那一步重发；agent 是 main 或子智能体的 id
+  retryStep(sessionId: string, agent: string): Promise<{ retried: boolean }>
   compactSession(sessionId: string, turnId: string): Promise<StopReason>
   // 项目、用户目录、插件和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个；任务里按建任务时开着的插件，首页按设置里开着的插件
   listSkills(target: McpStatusTarget): Promise<SkillInfo[]>

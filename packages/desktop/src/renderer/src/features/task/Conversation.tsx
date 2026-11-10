@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { PromptImage, StopReason, TaskProgressView } from '@diffra/core/types'
+import type { ModelErrorKind, PromptImage, TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
-import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
+import type { ModelRef } from '../../../../shared/settings'
+import { ArrowDown, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -10,25 +11,61 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
+import { errorMessage } from '@/lib/errors'
 import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
-import { sendMessage } from '@/state/actions'
+import { compactTask, diagnose, fillComposer, openSettings, sendMessage, setTaskModel } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
+import { ModelMenu } from './Composer'
 import { Markdown } from './Markdown'
+import { QuestionBar } from './QuestionBar'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis'; item: ToolItem }
 
-const STOP_LABELS: Partial<Record<StopReason, string>> = {
-  cancelled: '已停止',
-  max_tokens: '上下文快用完了，已停止',
-  max_turn_requests: '达到步数上限，已停止',
-  refusal: '模型拒绝了这个任务',
+// 模型接口出错时怎么说；auth、not-found 要去设置里改，其余可以接着发或者换个模型
+const MODEL_ERROR_TEXT: Record<ModelErrorKind, string> = {
+  auth: '模型的密钥无效或没有权限，这一轮停在这里',
+  'not-found': '找不到这个模型或接口地址，这一轮停在这里',
+  unsupported: '模型不支持这类请求，这一轮停在这里',
+  'rate-limit': '请求太多或额度用完了，这一轮停在这里',
+  server: '模型服务出错，这一轮停在这里',
+  timeout: '模型请求超时，这一轮停在这里',
+  network: '连不上模型服务，这一轮停在这里',
+  unknown: '模型调用失败，这一轮停在这里',
+}
+
+type StopAction = 'continue' | 'switch-model' | 'compact' | 'settings' | 'diagnose'
+
+// 一轮不正常停下时的一句话原因和下一步（第一个是主按钮）；正常结束、主动暂停等待时没有
+export function stopSummary(turn: Turn): { text: string; actions: StopAction[] } | null {
+  const stop = turn.outcome?.stop ?? null
+  if (turn.stopReason === 'cancelled' || stop === 'cancelled') {
+    const [, stalled] = Object.entries(turn.silence).sort(([, a], [, b]) => a.since - b.since)[0] ?? []
+    if (stalled && turn.endedAt) {
+      const who = stalled.agent ? `子智能体「${stalled.agent}」的模型` : '模型'
+      return { text: `${who}已 ${formatDuration(turn.endedAt - stalled.since)}没有输出，你停止了这一轮`, actions: ['switch-model', 'continue'] }
+    }
+    return { text: '你停止了这一轮', actions: ['continue', 'diagnose'] }
+  }
+  if (stop === 'model-error') {
+    const kind = turn.outcome?.errorKind ?? 'unknown'
+    return { text: MODEL_ERROR_TEXT[kind], actions: kind === 'auth' || kind === 'not-found' ? ['settings', 'switch-model'] : ['continue', 'switch-model'] }
+  }
+  if (stop === 'context-limit' || turn.stopReason === 'max_tokens') return { text: '上下文快用完了，这一轮停在这里', actions: ['compact', 'continue'] }
+  if (stop === 'step-limit' || turn.stopReason === 'max_turn_requests') return { text: '达到了单次任务的步数上限，这一轮停在这里', actions: ['continue', 'diagnose'] }
+  if (stop === 'check-exhausted') return { text: '快速检查一直没修好，这一轮停在这里', actions: ['diagnose', 'continue'] }
+  if (stop === 'gate-exhausted') return { text: '完成检查一直没通过，这一轮停在这里', actions: ['diagnose', 'continue'] }
+  if (stop === 'stuck') return { text: '一直在重复同样的操作，这一轮停在这里', actions: ['diagnose', 'continue'] }
+  if (stop === 'no-finish') return { text: '改了文件，但没有走完完成检查', actions: ['diagnose', 'continue'] }
+  if (stop === 'goal-exhausted') return { text: '目标模式的轮数用完了', actions: ['continue', 'diagnose'] }
+  if (turn.stopReason === 'refusal') return { text: '模型拒绝了这个任务', actions: ['switch-model'] }
+  return null
 }
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
@@ -41,8 +78,9 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | null {
   if (item.agentCard) return 'agent'
+  if (item.diagnosis) return 'diagnosis'
   if (item.title === '完成') return 'finish'
   if (item.title === '验证改动（不结束任务）') return 'verify'
   if (item.title === '计划') return 'plan'
@@ -118,11 +156,13 @@ function scrollBehavior(): ScrollBehavior {
 interface ConversationProps {
   task: LiveTask
   locate: { id: string; at: number } | null
+  // 定位结果里点了某一步：滚到对话里那一步
+  onLocate(id: string): void
   onRestore(turnId: string): void
   onRegenerate(turnId: string): void
 }
 
-export function Conversation({ task, locate, onRestore, onRegenerate }: ConversationProps) {
+export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // 用户停在底部时，新内容进来就跟着滚；往上翻了就不打扰
   const stickRef = useRef(true)
@@ -130,6 +170,7 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
   const locatingRef = useRef(false)
   const [atBottom, setAtBottom] = useState(true)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
+  const workIndex = lastWorkIndex(task.turns)
 
   const onScroll = () => {
     const element = scrollRef.current
@@ -243,6 +284,8 @@ export function Conversation({ task, locate, onRestore, onRegenerate }: Conversa
                 task={task}
                 active={task.running && last}
                 last={last}
+                latestWork={index === workIndex}
+                onLocate={onLocate}
                 onRestore={() => onRestore(turn.id)}
                 onRegenerate={() => onRegenerate(turn.id)}
               />
@@ -265,11 +308,24 @@ interface TurnViewProps {
   task: LiveTask
   active: boolean
   last: boolean
+  // 最后一个执行轮（后面只跟着定位轮时仍算）：停下说明的按钮、重新生成、子智能体卡片的「定位问题」都在它上面
+  latestWork: boolean
+  onLocate(id: string): void
   onRestore(): void
   onRegenerate(): void
 }
 
-function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnViewProps) {
+// 最后一个执行轮的下标；后面跟着别的轮次（出计划、压缩、深度扫描）时没有
+export function lastWorkIndex(turns: Turn[]): number {
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const kind = turns[index]!.kind
+    if (kind === 'prompt' || kind === 'goal') return index
+    if (kind !== 'diagnose') return -1
+  }
+  return -1
+}
+
+function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, onRegenerate }: TurnViewProps) {
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
@@ -300,9 +356,9 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
   }, [turn.items])
   const lastFinishId = last ? [...finishFiles.keys()].at(-1) : undefined
   const lastPassedId = last ? turn.items.filter((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0).at(-1)?.id : undefined
-  const stopLabel = turn.stopReason ? STOP_LABELS[turn.stopReason] : undefined
-  const canRegenerate = last && (turn.kind === 'prompt' || turn.kind === 'goal')
-  const canRestore = task.info.checkpoints && turn.kind !== 'compact'
+  const canRegenerate = latestWork
+  // 定位轮不改文件、没有检查点
+  const canRestore = task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
   // 和 FinishCard 显示撤销按钮的条件一致：撤销过但判成没改动的卡照样留着按钮
   const cardRestore = turn.items.some((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0 && (!turn.restoredAt || finishVerdict(item).tone === 'nochange'))
 
@@ -348,7 +404,17 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
             // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
             return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
           case 'agent':
-            return <AgentCard key={block.item.id} item={block.item} steps={agentSteps.get(block.item.id) ?? []} projectPath={task.project} />
+            return (
+              <AgentCard
+                key={block.item.id}
+                item={block.item}
+                steps={agentSteps.get(block.item.id) ?? []}
+                projectPath={task.project}
+                onDiagnose={latestWork && !task.running && block.item.status === 'failed' ? () => void diagnose(task.sessionId, { turnId: turn.id, cardId: block.item.id, agent: block.item.agentCard!.name }) : undefined}
+              />
+            )
+          case 'diagnosis':
+            return <DiagnosisCard key={block.item.id} item={block.item} task={task} onLocate={onLocate} />
           case 'finish':
             return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
         }
@@ -360,13 +426,8 @@ function TurnView({ turn, task, active, last, onRestore, onRegenerate }: TurnVie
           进行中…
         </p>
       )}
-      {active && <ModelSilenceHint silence={task.modelSilence} />}
-      {stopLabel && (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Square className="size-3.5" />
-          {stopLabel}
-        </p>
-      )}
+      {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} />}
+      {!active && <StopSummary turn={turn} task={task} actionable={latestWork && !task.running} />}
       {turn.error && (
         <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive-soft px-3.5 py-3 text-sm" role="alert" data-testid="turn-error">
           <div className="flex items-center gap-2 font-bold text-destructive">
@@ -595,7 +656,7 @@ function ToolStep({ item, unverified = false }: { item: ToolItem; unverified?: b
 
 // 子智能体卡片：名字、颜色、交代的事和认领的文件。运行中显示第几步、在做什么；结束后是它交回的结果。
 // 展开看它的每一步，改动和主对话里一样能看代码
-function AgentCard({ item, steps, projectPath }: { item: ToolItem; steps: ToolItem[]; projectPath: string }) {
+function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; steps: ToolItem[]; projectPath: string; onDiagnose?: () => void }) {
   const card = item.agentCard!
   const [open, setOpen] = useState(false)
   const running = item.status !== 'completed' && item.status !== 'failed'
@@ -604,7 +665,15 @@ function AgentCard({ item, steps, projectPath }: { item: ToolItem; steps: ToolIt
   const action = current ? splitTitle(current.title) : null
   const result = textOf(item)
   return (
-    <div className="flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm" data-testid="agent-card" data-agent={card.name} data-status={item.status} data-item-id={item.id}>
+    <div
+      className="flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm"
+      data-testid="agent-card"
+      data-agent={card.name}
+      data-status={item.status}
+      data-item-id={item.id}
+      // 定位结果指到工人的某一步、卡片收着时，滚到这张卡片
+      data-item-ids={steps.map((step) => step.id).join(' ')}
+    >
       <button type="button" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}子智能体 ${card.name} 的步骤`} className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-accent/60" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
         <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: card.color }} aria-hidden="true" />
@@ -627,6 +696,12 @@ function AgentCard({ item, steps, projectPath }: { item: ToolItem; steps: ToolIt
         </p>
       ) : (
         result && <p className="pl-5.5 leading-relaxed break-words whitespace-pre-wrap text-foreground/85">{result}</p>
+      )}
+      {onDiagnose && (
+        <Button variant="outline" size="sm" className="ml-5.5 h-7 gap-1 self-start" onClick={onDiagnose}>
+          <SearchCheck className="size-3.5" />
+          定位问题
+        </Button>
       )}
       {card.files.length > 0 && (
         <p className="truncate pl-5.5 text-xs text-muted-foreground" title={card.files.join('\n')}>
@@ -652,16 +727,89 @@ function AgentCard({ item, steps, projectPath }: { item: ToolItem; steps: ToolIt
   )
 }
 
-// 模型很久没有输出：可能卡住了，也可能还在想，不替用户停。几个子智能体同时没输出时提示最久的那个
-function ModelSilenceHint({ silence }: { silence: LiveTask['modelSilence'] }) {
-  const longest = Object.values(silence ?? {}).sort((a, b) => a.since - b.since)[0]
-  const elapsed = useElapsed(longest?.since, longest !== undefined)
-  if (!longest || elapsed === null) return null
+// 停下的原因和下一步。只有最后一个执行轮带按钮：继续、换个模型继续、压缩上下文、去设置、定位问题
+function StopSummary({ turn, task, actionable }: { turn: Turn; task: LiveTask; actionable: boolean }) {
+  const summary = stopSummary(turn)
+  if (!summary) return null
+  const resume = () => void sendMessage(task.sessionId, '继续')
+  const switchAndResume = async (model: ModelRef) => {
+    if (await setTaskModel(task.sessionId, model)) await sendMessage(task.sessionId, '继续')
+  }
+  const buttons: Record<StopAction, React.ReactNode> = {
+    continue: (
+      <Button key="continue" variant="outline" size="sm" className="h-7" onClick={resume}>
+        继续
+      </Button>
+    ),
+    'switch-model': (
+      <ModelMenu
+        key="switch-model"
+        label={task.modelLabel}
+        modelRef={task.modelRef}
+        modelsOnly
+        onChange={(model) => void switchAndResume(model)}
+        trigger={
+          <Button variant="outline" size="sm" className="h-7 gap-1">
+            换模型继续
+            <ChevronDown className="size-3" />
+          </Button>
+        }
+      />
+    ),
+    compact: (
+      <Button key="compact" variant="outline" size="sm" className="h-7" onClick={() => void compactTask(task.sessionId)}>
+        压缩上下文
+      </Button>
+    ),
+    settings: (
+      <Button key="settings" variant="outline" size="sm" className="h-7" onClick={() => openSettings('models')}>
+        打开模型设置
+      </Button>
+    ),
+    diagnose: (
+      <Button key="diagnose" variant="outline" size="sm" className="h-7 gap-1" onClick={() => void diagnose(task.sessionId, { turnId: turn.id })}>
+        <SearchCheck className="size-3.5" />
+        定位问题
+      </Button>
+    ),
+  }
   return (
-    <p className="flex items-start gap-2 text-sm text-warning" data-testid="model-silence">
-      <CircleAlert className="mt-0.5 size-4 shrink-0" />
-      {longest.agent ? `子智能体「${longest.agent}」的模型` : '模型'}已 {formatDuration(elapsed)}没有输出，可能卡住了，可以停止后发「继续」
-    </p>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted-foreground" data-testid="stop-summary">
+      <p className="flex items-center gap-2">
+        <Square className="size-3.5 shrink-0" />
+        {summary.text}
+      </p>
+      {actionable && <div className="flex flex-wrap items-center gap-1.5">{summary.actions.map((action) => buttons[action])}</div>}
+    </div>
+  )
+}
+
+// 模型很久没有输出：可能卡住了，也可能还在想，不替用户停；可以让卡住的那一步重发。几个子智能体同时没输出时提示最久的那个
+function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }) {
+  const [key, longest] = Object.entries(turn.silence).sort(([, a], [, b]) => a.since - b.since)[0] ?? []
+  const elapsed = useElapsed(longest?.since, longest !== undefined)
+  const [retrying, setRetrying] = useState(false)
+  if (!key || !longest || elapsed === null) return null
+  const retry = () => {
+    setRetrying(true)
+    window.diffra
+      .retryStep(sessionId, key)
+      .then(({ retried }) => {
+        if (!retried) showToast('那一步已经有输出了，不用重发')
+      })
+      .catch((error: unknown) => showToast(`重发失败：${errorMessage(error)}`))
+      .finally(() => setRetrying(false))
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-warning" data-testid="model-silence">
+      <p className="flex items-start gap-2">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" />
+        {longest.agent ? `子智能体「${longest.agent}」的模型` : '模型'}已 {formatDuration(elapsed)}没有输出，可能卡住了
+      </p>
+      <Button variant="outline" size="sm" className="h-7" disabled={retrying} onClick={retry}>
+        重试这一步
+      </Button>
+    </div>
   )
 }
 
@@ -693,6 +841,87 @@ function DisclosureRow({ open, onToggle, className, children }: { open?: boolean
       {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
       {children}
     </button>
+  )
+}
+
+// 定位结果：原因、证据（点一下滚到那一步）、做完和没做完的、可以改的修复提示词，以及只有用户能回答的问题。
+// 修复提示词可以填进输入框再改、直接发送，或者重新定位一次
+function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: LiveTask; onLocate(id: string): void }) {
+  const diagnosis = item.diagnosis!
+  const [prompt, setPrompt] = useState(diagnosis.prompt)
+  const { target } = diagnosis
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="diagnosis">
+      <div className="flex items-center gap-2 font-bold">
+        <SearchCheck className="size-4 text-muted-foreground" />
+        定位结果
+        {diagnosis.fallback && <span className="text-xs font-normal text-muted-foreground">模型没有给出结论，这是按记录拼的通用版本</span>}
+      </div>
+      <p className="leading-relaxed" data-testid="diagnosis-cause">
+        {diagnosis.cause}
+      </p>
+      {diagnosis.evidence.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {diagnosis.evidence.map((evidence, index) => (
+            <li key={index} className="flex min-w-0 items-baseline gap-1.5 text-foreground/85">
+              <button type="button" className="shrink-0 rounded bg-muted px-1.5 font-mono text-xs hover:bg-accent" title="滚到这一步" onClick={() => onLocate(evidence.itemId)}>
+                {evidence.title.length > 40 ? `${evidence.title.slice(0, 40)}…` : evidence.title}
+              </button>
+              <span className="min-w-0">{evidence.note}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(diagnosis.done.length > 0 || diagnosis.remaining.length > 0) && (
+        <div className="grid gap-x-6 gap-y-1.5 text-foreground/85 sm:grid-cols-2">
+          {diagnosis.done.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground">已经完成</p>
+              <ul className="list-disc pl-4">
+                {diagnosis.done.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {diagnosis.remaining.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground">还没完成</p>
+              <ul className="list-disc pl-4">
+                {diagnosis.remaining.map((line, index) => (
+                  <li key={index}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      <QuestionBar questions={diagnosis.questions} text={prompt} onChange={setPrompt} />
+      <textarea
+        aria-label="修复提示词"
+        value={prompt}
+        rows={Math.min(12, prompt.split('\n').length + 1)}
+        onChange={(event) => setPrompt(event.target.value)}
+        className="w-full resize-y rounded-md border bg-background px-3 py-2 leading-relaxed outline-none focus:border-ring/60"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button className="px-3.5" disabled={prompt.trim() === ''} onClick={() => fillComposer(task.sessionId, prompt.trim())}>
+          填入输入框
+        </Button>
+        <Button variant="outline" disabled={task.running || prompt.trim() === ''} onClick={() => void sendMessage(task.sessionId, prompt.trim())}>
+          直接发送
+        </Button>
+        <Button
+          variant="ghost"
+          className="text-muted-foreground"
+          disabled={task.running}
+          onClick={() => void diagnose(task.sessionId, { turnId: target.turnId, cardId: target.cardId ?? undefined, agent: target.agent ?? undefined })}
+        >
+          <RefreshCw className="size-3.5" />
+          重新定位
+        </Button>
+      </div>
+    </div>
   )
 }
 

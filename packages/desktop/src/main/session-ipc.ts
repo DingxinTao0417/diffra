@@ -6,6 +6,9 @@ import { promisify } from 'node:util'
 import {
   cancelSession,
   checkpointDiff,
+  diagnose,
+  enhancePrompt,
+  retryStep,
   configureSession,
   compactSession,
   type CoreClientHandlers,
@@ -352,6 +355,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     rewindSession(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
 
+  ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
+    retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
+  )
+
   ipcMain.handle(IPC_CHANNELS.checkpointDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
     checkpointDiff(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
@@ -531,6 +538,41 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       parse(z.string().min(1), rawTurnId),
       parse(z.string().trim().min(1, '任务内容不能为空'), rawText),
       parse(skillNamesSchema, rawSkills),
+    )
+    return response.stopReason
+  })
+
+  ipcMain.handle(IPC_CHANNELS.promptEnhance, async (_event, rawRequest: unknown) => {
+    const request = parse(
+      z.object({
+        text: z.string().trim().min(1, '输入框是空的').max(20_000),
+        project: z.string().min(1).nullable(),
+        sessionId: z.string().min(1).nullable(),
+        model: modelRefSchema.optional(),
+        mentions: z.array(z.string()).max(50),
+        design: z.boolean(),
+      }),
+      rawRequest,
+    )
+    const resolved = (await resolveRole('planner', '规划')) ?? (request.model ? await resolveModel(request.model, '所选模型') : await resolveRole('coder', '编码'))
+    if (!resolved) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
+    return enhancePrompt(await coreConnection(), {
+      model: resolved.model,
+      text: request.text,
+      cwd: request.project,
+      sessionId: request.sessionId,
+      mentions: request.mentions,
+      design: request.design,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.sessionDiagnose, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawTarget: unknown) => {
+    const response = await diagnose(
+      await coreConnection(),
+      parse(z.string().min(1), rawSessionId),
+      parse(z.string().min(1), rawTurnId),
+      parse(z.string().trim().min(1), rawText),
+      parse(z.object({ turnId: z.string().min(1), cardId: z.string().min(1).nullable() }), rawTarget),
     )
     return response.stopReason
   })

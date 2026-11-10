@@ -21,11 +21,13 @@ import {
   type McpServerStatus,
   type McpTarget,
   type PluginInfo,
+  type PromptEnhancement,
   type PromptImage,
   type PermissionMode,
   SESSION_EXT_METHODS,
   type SessionConfig,
   type SessionDesign,
+  type SessionModel,
   type SessionInfo,
   type SessionSearchResult,
   type StoredSessionMeta,
@@ -138,6 +140,33 @@ export function plan(
     SESSION_EXT_METHODS.plan,
     { sessionId, turnId, prompt, skills },
   )
+}
+
+// 定位问题：和出计划一样是一轮，可能要一会儿，不设超时；用 cancelSession 停止
+export function diagnose(
+  connection: acp.ClientConnection,
+  sessionId: string,
+  turnId: string,
+  prompt: string,
+  target: { turnId: string; cardId: string | null },
+): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, { sessionId: string; turnId: string; prompt: string; target: { turnId: string; cardId: string | null } }>(
+    SESSION_EXT_METHODS.diagnose,
+    { sessionId, turnId, prompt, target },
+  )
+}
+
+// 优化输入框里的提示词。模型最多想 90 秒，等待时间比其他扩展请求长一点
+export function enhancePrompt(
+  connection: acp.ClientConnection,
+  params: { model: SessionModel; text: string; cwd: string | null; sessionId: string | null; mentions: string[]; design: boolean },
+): Promise<PromptEnhancement> {
+  return requestOf(connection)<PromptEnhancement, typeof params>(SESSION_EXT_METHODS.promptEnhance, params, { cancellationSignal: AbortSignal.timeout(100_000), stopWaitingOnCancel: true })
+}
+
+// 模型很久没有输出时，让卡住的那一步重发；agent 是 main 或子智能体的 id
+export function retryStep(connection: acp.ClientConnection, sessionId: string, agent: string): Promise<{ retried: boolean }> {
+  return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
 }
 
 // 用户手动压缩，和任务一样可取消；限制请求等待时间，不自动重试模型操作。

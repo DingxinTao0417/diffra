@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import * as acp from '@agentclientprotocol/sdk'
 import { z } from 'zod'
@@ -15,6 +16,7 @@ import {
   type DevServerParams,
   type DevServerResult,
   type LoadedSession,
+  PROMPT_ENHANCE_USAGE_ID,
   PROMPT_IMAGE_TYPES,
   type PromptImage,
   SESSION_EXT_METHODS,
@@ -38,6 +40,8 @@ import {
   sessionDesignSchema,
 } from './session/config.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
+import { enhancePrompt } from './prompt-enhance.js'
+import { runDiagnose } from './session/diagnose.js'
 import { runPlan } from './session/plan.js'
 import { compactManually } from './session/compact.js'
 import type { Session as SessionType } from './session/session.js'
@@ -79,6 +83,22 @@ const sessionConfigureParams = z.object({
 })
 
 const deepScanParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(['task', 'project']) })
+const promptEnhanceParams = z.object({
+  model: modelConfigSchema,
+  text: z.string().trim().min(1),
+  cwd: z.string().min(1).nullable(),
+  sessionId: z.string().min(1).nullable(),
+  mentions: z.array(z.string()),
+  design: z.boolean(),
+})
+
+const diagnoseParams = z.object({
+  sessionId: z.string().min(1),
+  turnId: z.string().min(1),
+  prompt: z.string().trim().min(1),
+  target: z.object({ turnId: z.string().min(1), cardId: z.string().min(1).nullable() }),
+})
+
 const planParams = z.object({
   sessionId: z.string().min(1),
   turnId: z.string().min(1),
@@ -428,6 +448,29 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         runPlan(session, { id: params.turnId, text: withSkills(params.prompt, skills) }, io),
       )
       return { stopReason }
+    })
+    .onRequest(SESSION_EXT_METHODS.diagnose, diagnoseParams, async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('上一个任务还没结束')
+      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'diagnose', [], [], (io) => runDiagnose(session, params.target, io))
+      return { stopReason }
+    })
+    .onRequest(SESSION_EXT_METHODS.promptEnhance, promptEnhanceParams, async ({ params }) => {
+      const session = params.sessionId ? (sessions.get(params.sessionId) ?? null) : null
+      const { usage, ...result } = await enhancePrompt(params, session)
+      if (usageLog && usage) {
+        // 首页还没有任务：记在固定的 id 下
+        const owner = session ?? { id: PROMPT_ENHANCE_USAGE_ID, cwd: params.cwd ?? homedir() }
+        const call = { role: 'planner' as const, provider: params.model.provider, modelId: params.model.modelId, usage }
+        await usageLog.append(toUsageRecord(call, owner, new Date())).catch((error: unknown) => console.error('[usage] 优化提示词的用量记录写入失败', error))
+      }
+      return result
+    })
+    .onRequest(SESSION_EXT_METHODS.retryStep, z.object({ sessionId: z.string().min(1), agent: z.string().min(1) }), ({ params }) => {
+      // 那一步可能刚好已经有输出、结束了，这时什么也不做
+      const retry = sessionOf(params.sessionId).stepRetries.get(params.agent)
+      retry?.()
+      return { retried: retry !== undefined }
     })
     .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
       sessions.get(params.sessionId)?.cancel()

@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, MODEL_SILENCE_META_KEY, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TurnOutcome, type TurnStop } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -27,6 +27,8 @@ export type TranscriptItem =
       // 子智能体自己的工具调用：收进 parentId 那张卡片里，agent 是哪个工人
       parentId?: string
       agent?: AgentTag
+      // 定位轮交回的「定位结果」卡
+      diagnosis?: Diagnosis
     }
   | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
 
@@ -47,6 +49,9 @@ export interface Turn {
   outcome?: TurnOutcome
   // 撤销到这一轮或更早的轮次之前的时刻。只说明之后撤销过，不代表这一轮的改动现在不在
   restoredAt?: number | null
+  // 模型从什么时候起没有输出，按智能体分开记（key 是子智能体 id，主智能体是 main）。
+  // 又有输出就去掉；被停止时 core 不撤，留着说明停下时模型已经多久没输出
+  silence: Record<string, { agent: string | null; since: number }>
 }
 
 export interface Usage {
@@ -61,7 +66,7 @@ export interface Usage {
 }
 
 export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = []): Turn {
-  return { id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null }
+  return { id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -83,7 +88,17 @@ export function turnFromStored(turn: StoredTurn): Turn {
     endedAt: turn.endedAt ? Date.parse(turn.endedAt) || null : null,
     restoredAt: turn.restoredAt ? Date.parse(turn.restoredAt) || null : null,
     outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
+    silence: turn.updates.reduce((silence, update) => {
+      const change = modelSilenceOf(update)
+      return change ? applySilence(silence, change) : silence
+    }, {} as Turn['silence']),
   }
+}
+
+// 某个智能体又有输出了就去掉它那一条，开始没输出就记下从什么时候起
+export function applySilence(silence: Turn['silence'], { key, agent, since }: { key: string; agent: string | null; since: number | null }): Turn['silence'] {
+  const { [key]: _previous, ...rest } = silence
+  return since === null ? rest : { ...rest, [key]: { agent, since } }
 }
 
 export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
@@ -109,6 +124,7 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
 
 const FINISH_OUTCOMES = ['verified', 'unverified', 'no-edits'] as const satisfies readonly NonNullable<TurnOutcome['finish']>[]
 const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted'] as const satisfies readonly TurnStop[]
+const MODEL_ERROR_KINDS = ['auth', 'not-found', 'unsupported', 'rate-limit', 'server', 'timeout', 'network', 'unknown'] as const satisfies readonly ModelErrorKind[]
 const CHECK_RESULTS = ['passed', 'warned', 'partial', 'error', 'failed'] as const satisfies readonly CheckResult[]
 const FINISH_VERIFICATIONS = ['verified', 'reused', 'unverified', 'no-edits', 'failed'] as const satisfies readonly FinishVerification[]
 
@@ -126,7 +142,8 @@ export function turnOutcomeOf(update: SessionUpdate): TurnOutcome | null {
   const { finish, stop } = outcome
   if (finish !== null && !oneOf(FINISH_OUTCOMES, finish)) return null
   if (stop !== null && !oneOf(TURN_STOPS, stop)) return null
-  return { finish, stop }
+  const errorKind = 'errorKind' in outcome && oneOf(MODEL_ERROR_KINDS, outcome.errorKind) ? outcome.errorKind : undefined
+  return errorKind ? { finish, stop, errorKind } : { finish, stop }
 }
 
 // 模型没有输出的提示：key 是子智能体 id，主智能体是 main；since 为 null 是又有输出了
@@ -181,6 +198,13 @@ export function agentOfMeta(meta: unknown): AgentTag | null {
   if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return null
   const diffra = meta.diffra
   return typeof diffra === 'object' && diffra !== null ? agentTagFrom((diffra as Record<string, unknown>)[AGENT_META_KEY]) : null
+}
+
+// 定位结果：core 交的结构化内容，字段不全时当普通卡片显示
+function diagnosisOf(update: SessionUpdate): { diagnosis?: Diagnosis } {
+  const value = diffraMetaOf(update)?.[DIAGNOSIS_META_KEY] as Partial<Diagnosis> | undefined
+  if (!value || typeof value.cause !== 'string' || typeof value.prompt !== 'string' || !value.target || !Array.isArray(value.evidence) || !Array.isArray(value.questions)) return {}
+  return { diagnosis: { done: [], remaining: [], fallback: false, ...value } as Diagnosis }
 }
 
 // 卡片带完整的子智能体信息，工人自己的工具调用带所属卡片和工人
@@ -260,6 +284,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS),
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS),
         ...agentFieldsOf(update),
+        ...diagnosisOf(update),
       }
       return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
@@ -277,6 +302,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS) ?? existing?.verification,
         startedAt: existing?.startedAt ?? Date.now(),
         ...agentFieldsKept(existing, agentFieldsOf(update)),
+        ...(existing?.diagnosis ? { diagnosis: existing.diagnosis } : {}),
       }))
     case 'notice':
       return [

@@ -118,6 +118,8 @@ export class Session {
   readonly consumedChecks = new Map<string, UnresolvedCheck>()
   taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
+  // 正在等模型输出的那一步：智能体（主智能体是 main，子智能体是它的 id）→ 让它重发请求
+  readonly stepRetries = new Map<string, () => void>()
 
   constructor(options: SessionOptions) {
     const record = options.record

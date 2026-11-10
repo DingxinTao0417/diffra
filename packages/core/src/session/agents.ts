@@ -255,6 +255,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
       { model: active.language, system, messages, tools, toolChoice, usage: { role: 'subagent', provider: active.config.provider, modelId: active.config.modelId } },
       signal,
       wio,
+      { key: worker.tag.id, handles: session.stepRetries },
     )
     messages.push(...responseMessages)
     nearLimit = inputTokens > window * CONTEXT_STOP_RATIO

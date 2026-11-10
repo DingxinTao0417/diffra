@@ -63,7 +63,8 @@ test('模型很久没有输出时提示可能卡住了，又有输出后提示�
     await chooseProject(app, window, project)
     await startTask(window, '慢慢想')
     const hint = window.getByTestId('model-silence')
-    await expect(hint).toContainText(/模型已 \d+ 秒没有输出，可能卡住了，可以停止后发「继续」/)
+    await expect(hint).toContainText(/模型已 \d+ 秒没有输出，可能卡住了/)
+    await expect(hint.getByRole('button', { name: '重试这一步' })).toBeVisible()
     // 不替用户停：还在进行中，等到模型回了提示就撤掉
     await expect(window.getByText('进行中…')).toBeVisible()
     await expect(hint).toBeHidden({ timeout: 15_000 })

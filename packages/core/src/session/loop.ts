@@ -198,6 +198,7 @@ export async function runTurn(
   // 本轮被接受的 finish 合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
   let turnFinish: TurnOutcome['finish'] = null
   let stop: TurnStop | null = null
+  let errorKind: TurnOutcome['errorKind']
   // 检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
   const checkStuck = async (label: '快速检查' | '完成检查', command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
     const stalled = exhaustion === 'stalled'
@@ -541,6 +542,7 @@ export async function runTurn(
     console.error('[session] 任务出错', error)
     await notice(io, 'error', '模型调用失败', detail.message)
     stop = 'model-error'
+    errorKind = detail.kind
     return 'end_turn'
   } finally {
     // 返回 cancelled 的地方都在 signal 中止之后，stop 统一在这里记
@@ -551,7 +553,7 @@ export async function runTurn(
     session.activeTurn = null
     // 设计页收起主智能体的光标
     if (session.design) await endDesignAgent(io)
-    await publishTaskState(session, io, { finish: turnFinish, stop })
+    await publishTaskState(session, io, { finish: turnFinish, stop, ...(errorKind ? { errorKind } : {}) })
   }
 }
 
@@ -605,6 +607,7 @@ async function streamStep(session: Session, active: ActiveModel, signal: AbortSi
     },
     signal,
     io,
+    { key: MAIN_AGENT_KEY, handles: session.stepRetries },
   )
   session.messages.push(...step.responseMessages)
   return step
@@ -629,65 +632,96 @@ export interface StepSettings {
   usage: Omit<ModelCallUsage, 'usage'>
 }
 
-// 调一次模型：文字和思考实时推给界面，收集工具调用，记用量；回复的消息由调用方追加到对话里
+// 用户可以让正在等输出的那一步重发：key 是智能体（主智能体 main，子智能体是它的 id），handles 是会话的 stepRetries
+export interface StepRetry {
+  key: string
+  handles: Map<string, () => void>
+}
+
+export const MAIN_AGENT_KEY = 'main'
+
+// 调一次模型：文字和思考实时推给界面，收集工具调用，记用量；回复的消息由调用方追加到对话里。
+// 用户点了「重试这一步」时只中断这次请求、原样再发一次，这一轮不停；已经推给界面的半截文字留着
 export async function streamModelStep(
   settings: StepSettings,
   signal: AbortSignal,
   io: TurnIO,
+  retry?: StepRetry,
 ): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[] }> {
-  const result = streamText({
-    model: settings.model,
-    system: settings.system,
-    messages: settings.messages,
-    tools: settings.tools,
-    toolChoice: settings.toolChoice,
-    maxRetries: 2,
-    abortSignal: signal,
-    headers: MODEL_CALL_HEADERS,
-  })
-  const toolCalls: StepToolCall[] = []
-  let inputTokens = 0
-  let cacheRead: number | null = null
-  let cacheWrite: number | null = null
-  const silence = watchModelSilence(io)
-  try {
-    for await (const part of result.fullStream) {
-      await silence.heard()
-      switch (part.type) {
-        case 'text-delta':
-          await io.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: part.text } })
-          break
-        case 'reasoning-delta':
-          await io.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: part.text } })
-          break
-        case 'tool-call':
-          toolCalls.push({
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-            invalid: 'invalid' in part && part.invalid ? String('error' in part ? part.error : 'invalid input') : null,
-          })
-          break
-        case 'finish-step':
-          inputTokens = part.usage.inputTokens ?? inputTokens
-          cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
-          cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
-          await io.recordUsage({ ...settings.usage, usage: part.usage })
-          break
-        case 'error':
-          throw part.error
-      }
+  for (;;) {
+    const attempt = new AbortController()
+    const forward = () => attempt.abort(signal.reason)
+    if (signal.aborted) attempt.abort(signal.reason)
+    else signal.addEventListener('abort', forward, { once: true })
+    let retrying = false
+    const handle = () => {
+      retrying = true
+      attempt.abort()
     }
-  } finally {
-    await silence.stop()
+    retry?.handles.set(retry.key, handle)
+    const silence = watchModelSilence(io)
+    try {
+      const result = streamText({
+        model: settings.model,
+        system: settings.system,
+        messages: settings.messages,
+        tools: settings.tools,
+        toolChoice: settings.toolChoice,
+        maxRetries: 2,
+        abortSignal: attempt.signal,
+        headers: MODEL_CALL_HEADERS,
+      })
+      const toolCalls: StepToolCall[] = []
+      let inputTokens = 0
+      let cacheRead: number | null = null
+      let cacheWrite: number | null = null
+      try {
+        for await (const part of result.fullStream) {
+          // 中断后流里还会出一条 abort，那不是模型的输出
+          if (!attempt.signal.aborted) await silence.heard()
+          switch (part.type) {
+            case 'text-delta':
+              await io.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: part.text } })
+              break
+            case 'reasoning-delta':
+              await io.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: part.text } })
+              break
+            case 'tool-call':
+              toolCalls.push({
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                input: part.input,
+                invalid: 'invalid' in part && part.invalid ? String('error' in part ? part.error : 'invalid input') : null,
+              })
+              break
+            case 'finish-step':
+              inputTokens = part.usage.inputTokens ?? inputTokens
+              cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
+              cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
+              await io.recordUsage({ ...settings.usage, usage: part.usage })
+              break
+            case 'error':
+              throw part.error
+          }
+        }
+      } catch (error) {
+        if (retrying && !signal.aborted) continue
+        throw error
+      }
+      if (retrying && !signal.aborted) continue
+      const responseMessages = await result.responseMessages
+      const answered = new Set(
+        responseMessages.flatMap((message) =>
+          message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
+        ),
+      )
+      return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages }
+    } finally {
+      signal.removeEventListener('abort', forward)
+      if (retry?.handles.get(retry.key) === handle) retry.handles.delete(retry.key)
+      await silence.stop(signal.aborted)
+    }
   }
-  const responseMessages = await result.responseMessages
-  const answered = new Set(
-    responseMessages.flatMap((message) =>
-      message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
-    ),
-  )
-  return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages }
 }
 
 // 模型这么久一点数据都没吐，就在界面上提示可能卡住了。不中断也不重试：不显示思考过程的模型可能真要想这么久。
@@ -696,7 +730,7 @@ function modelSilenceMs(): number {
   return Number(process.env.DIFFRA_MODEL_SILENCE_MS) || 3 * 60_000
 }
 
-function watchModelSilence(io: TurnIO): { heard(): Promise<void>; stop(): Promise<void> } {
+function watchModelSilence(io: TurnIO): { heard(): Promise<void>; stop(aborted: boolean): Promise<void> } {
   const limit = modelSilenceMs()
   let last = Date.now()
   let shown = false
@@ -720,9 +754,10 @@ function watchModelSilence(io: TurnIO): { heard(): Promise<void>; stop(): Promis
       arm(limit)
       await send(null)
     },
-    stop: async () => {
+    // 被停止时不撤：记录里留着「停下时模型已经多久没输出」，界面按它说明停下的原因
+    stop: async (aborted: boolean) => {
       clearTimeout(timer)
-      if (shown) await send(null).catch((error: unknown) => console.error('[loop] 撤掉模型没有输出的提示失败', error))
+      if (shown && !aborted) await send(null).catch((error: unknown) => console.error('[loop] 撤掉模型没有输出的提示失败', error))
     },
   }
 }

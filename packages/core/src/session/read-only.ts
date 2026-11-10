@@ -1,6 +1,6 @@
 import type { LanguageModel, ModelMessage, ToolChoice, ToolResultPart, ToolSet } from 'ai'
 import type { ModelCallUsage } from '../usage/log.js'
-import { CONTEXT_STOP_RATIO, errorResult, reportInvalidCall, runToolCall, streamModelStep, type TurnIO } from './loop.js'
+import { CONTEXT_STOP_RATIO, errorResult, MAIN_AGENT_KEY, reportInvalidCall, runToolCall, streamModelStep, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
 
 // 只读的一轮：深度扫描和出计划共用。模型只能用 readTools 里的工具，最后调一次 finalTool 交结果
@@ -31,6 +31,7 @@ export async function runReadOnlyLoop(session: Session, loop: ReadOnlyLoop, sign
       { model: loop.model, system: loop.system, messages: loop.messages, tools: loop.tools, toolChoice, usage: loop.usage },
       signal,
       io,
+      { key: MAIN_AGENT_KEY, handles: session.stepRetries },
     )
     loop.messages.push(...responseMessages)
     nearLimit = inputTokens > loop.window * CONTEXT_STOP_RATIO

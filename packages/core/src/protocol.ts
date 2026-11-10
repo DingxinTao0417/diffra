@@ -1,6 +1,6 @@
 // core 与桌面端共用的纯类型和常量（桌面端界面也会引用，不能依赖 Node API）。
 import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
-import type { ModelEndpoint } from './models/types.js'
+import type { ModelEndpoint, ModelErrorKind } from './models/types.js'
 
 export * from './models/types.js'
 export * from './design-styles.js'
@@ -97,10 +97,43 @@ export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' |
 export interface TurnOutcome {
   finish: 'verified' | 'unverified' | 'no-edits' | null
   stop: TurnStop | null
+  // stop 是 model-error 时模型接口出错的类型，界面按它说明原因、给出下一步
+  errorKind?: ModelErrorKind
 }
 // 模型一直没吐数据时的 session_info_update._meta.diffra.modelSilentSince：最后一次收到数据的时刻（ISO），
-// 又收到数据或这一步结束时发 null。子智能体的同一条更新里带 agent（AgentTag），界面按智能体分开记
+// 又收到数据、重发了这一步或这一步正常结束时发 null；被停止时不发，记录里留着「停下时模型已经多久没输出」。
+// 子智能体的同一条更新里带 agent（AgentTag），界面按智能体分开记
 export const MODEL_SILENCE_META_KEY = 'modelSilentSince'
+
+// 只有用户能回答的问题：第一个选项是默认答案，它的 text 原样是提示词里的一行；换成别的选项就把那一行换成那个选项的 text
+export interface PromptQuestion {
+  question: string
+  options: Array<{ label: string; text: string }>
+}
+
+// 定位轮交回的结果，放在「定位结果」那张卡的 tool_call._meta.diffra.diagnosis 里。
+// evidence 的 itemId 是对话里那一步的 id（子智能体的步骤带它的前缀），点一下滚过去；
+// fallback 为 true 时是模型没交结果，按记录拼的通用版本
+export const DIAGNOSIS_META_KEY = 'diagnosis'
+
+// 优化提示词交回的结果
+export interface PromptEnhancement {
+  prompt: string
+  questions: PromptQuestion[]
+}
+// 首页（还没有任务）优化提示词的用量记在这个任务 id 下，用量页按它写名字
+export const PROMPT_ENHANCE_USAGE_ID = 'prompt-enhance'
+export interface Diagnosis {
+  // 定位的是哪一轮、哪个子智能体（agent 是它的名字），「重新定位」照着再来一次
+  target: { turnId: string; cardId: string | null; agent: string | null }
+  cause: string
+  evidence: Array<{ itemId: string; title: string; note: string }>
+  done: string[]
+  remaining: string[]
+  prompt: string
+  questions: PromptQuestion[]
+  fallback: boolean
+}
 
 export const TERMINAL_DEFAULT_LINES = 80
 export const TERMINAL_MAX_LINES = 200
@@ -205,7 +238,8 @@ export interface UsageCache {
 
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
-export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact'
+// diagnose：停下或子智能体失败后的「定位问题」，只读地查原因、给修复提示词，不改文件、不改变任务结论
+export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact' | 'diagnose'
 export const MANUAL_COMPACTION_PROMPT = '/compact'
 
 // Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，兼容读取的 Claude Code、Codex 的目录，以及随 Diffra 带的
@@ -508,6 +542,12 @@ export const SESSION_EXT_METHODS = {
   deepScan: '_diffra/security/deep-scan',
   // 先出计划：规划模型只读地看代码，交一份计划，不改文件
   plan: '_diffra/session/plan',
+  // 模型很久没有输出时，用户让卡住的那一步重发请求（主智能体或某个子智能体），这一轮不停
+  retryStep: '_diffra/session/retry-step',
+  // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
+  diagnose: '_diffra/session/diagnose',
+  // 优化输入框里的提示词：一次调用交回改写稿和只有用户能回答的问题，不进任何对话
+  promptEnhance: '_diffra/prompt/enhance',
   // 列出这个任务或项目能用的 Skill
   skillsList: '_diffra/skills/list',
   // MCP 服务器状态；retry 为 true 时连不上的马上重连

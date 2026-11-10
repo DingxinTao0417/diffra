@@ -1,6 +1,6 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { type CommandInfo, type PermissionMode, type PromptImage, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, ChevronRight, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, RotateCcw, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, X, Zap } from 'lucide-react'
+import { type CommandInfo, type PermissionMode, type PromptImage, type PromptQuestion, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
+import { ArrowUp, Check, ChevronDown, ChevronRight, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, RotateCcw, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X, Zap } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../../shared/attachments'
 import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
@@ -29,6 +29,7 @@ import { useLobeIcons } from '@/lib/model-icons'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
 import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
+import { QuestionBar } from './QuestionBar'
 import { clearComposerDraft, type ComposerDraft, type ComposerFile, type ComposerImage, readComposerDraft, writeComposerDraft } from './composer-drafts'
 import { showToast, store, useAppState } from '@/state/store'
 
@@ -179,15 +180,35 @@ export function Composer(props: ComposerProps) {
   const [dismissed, setDismissed] = useState<number | null>(null)
   const [active, setActive] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const attachment = useAppState((state) => state.terminalAttachment)
+  // 填入、优化提示词之后可以撤销：after 是那时的草稿，用户再改字就不能撤销了
+  const [undo, setUndo] = useState<{ label: string; before: string; after: string } | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
   useEffect(() => {
-    if (!attachment) return
-    const target = props.mcpTarget && 'sessionId' in props.mcpTarget ? props.mcpTarget.sessionId : 'home'
-    if (attachment.target !== target) return
-    setDraft((current) => current + attachment.text)
-    store.set((state) => ({ ...state, terminalAttachment: undefined }))
+    if (undo && draft !== undo.after) setUndo(null)
+  }, [draft, undo])
+  const replaceDraft = (text: string, label: string) => {
+    setUndo({ label, before: draftRef.current, after: text })
+    setDraft(text)
     textareaRef.current?.focus()
-  }, [attachment, props.mcpTarget])
+  }
+  const insert = useAppState((state) => state.composerInsert)
+  useEffect(() => {
+    if (!insert) return
+    const target = props.mcpTarget && 'sessionId' in props.mcpTarget ? props.mcpTarget.sessionId : 'home'
+    if (insert.target !== target) return
+    store.set((state) => ({ ...state, composerInsert: undefined }))
+    if (insert.mode === 'append') {
+      setDraft((current) => current + insert.text)
+      textareaRef.current?.focus()
+      return
+    }
+    const current = draftRef.current
+    replaceDraft(current.trim() === '' ? insert.text : `${current.trimEnd()}\n\n${insert.text}`, '撤销填入')
+  }, [insert, props.mcpTarget])
+  // 优化提示词：一次调用拿到改写稿和问题，改写稿直接替换草稿（可撤销），问题放在输入框上方的问题条里
+  const [enhancing, setEnhancing] = useState(false)
+  const [questions, setQuestions] = useState<{ key: number; items: PromptQuestion[] }>({ key: 0, items: [] })
   // 首页没选项目时项目菜单在底栏里，选好后菜单挪走，焦点会掉到 body；放回输入框，草稿还在这里
   const previousProject = useRef(props.projectPath)
   useEffect(() => {
@@ -495,6 +516,34 @@ export function Composer(props: ComposerProps) {
     void addAttachments([...event.dataTransfer.files], true)
   }
 
+  const canEnhance = !disabled && !enhancing && draft.trim() !== '' && !draft.trimStart().startsWith('/')
+  const enhance = async () => {
+    if (!canEnhance) return
+    const original = draft
+    const tokens = mentions.map(({ token }) => token)
+    setEnhancing(true)
+    try {
+      const result = await window.diffra.enhancePrompt({
+        text: original,
+        project: props.projectPath,
+        sessionId: props.mcpTarget && 'sessionId' in props.mcpTarget ? props.mcpTarget.sessionId : null,
+        model: props.modelRef,
+        mentions: tokens,
+        design: props.draftKey.startsWith('design:'),
+      })
+      // 等结果的时候又改了草稿：不覆盖用户刚写的
+      if (draftRef.current !== original) return showToast('优化期间草稿改过了，没有替换')
+      const lost = tokens.filter((token) => !result.prompt.includes(token))
+      if (lost.length > 0) return showToast(`优化结果里少了附件 ${lost.join('、')}，没有替换`)
+      replaceDraft(result.prompt, '撤销优化')
+      setQuestions((current) => ({ key: current.key + 1, items: result.questions }))
+    } catch (error) {
+      showToast(`优化失败：${errorMessage(error)}`)
+    } finally {
+      setEnhancing(false)
+    }
+  }
+
   const send = async (raw = false) => {
     if (!(raw ? ready : canSend) || attachmentBusy.current) return
     if (props.planMode && images.length > 0) return showToast('出计划暂时不能带图片，请移除图片或计划标签后再发送')
@@ -510,6 +559,7 @@ export function Composer(props: ComposerProps) {
         setSkills([])
         setImages([])
         setFileReferences([])
+        setQuestions((current) => ({ ...current, items: [] }))
         clearComposerDraft(props.draftKey)
       }
     } catch (error) {
@@ -673,6 +723,26 @@ export function Composer(props: ComposerProps) {
           ))}
         </div>
       )}
+      {questions.items.length > 0 && (
+        <div className={cn('flex flex-col gap-1.5 border-b pb-2.5', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')} data-testid="composer-questions">
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>优化时按选中的答案写的；选别的只改提示词里对应的那一行</span>
+            <button type="button" aria-label="收起问题" className="rounded p-0.5 hover:bg-accent hover:text-foreground" onClick={() => setQuestions((current) => ({ ...current, items: [] }))}>
+              <X className="size-3.5" />
+            </button>
+          </div>
+          <QuestionBar
+            key={questions.key}
+            questions={questions.items}
+            text={draft}
+            onChange={(text) => {
+              setDraft(text)
+              // 换答案不算手动改：「撤销优化」还能回到优化前
+              setUndo((current) => current && { ...current, after: text })
+            }}
+          />
+        </div>
+      )}
       <div className="relative">
         {/* 着色层只画文字颜色和背景，不加内外边距，换行位置才和下面的 textarea 一致 */}
         <div aria-hidden className={cn('pointer-events-none absolute inset-0 overflow-hidden', composing && 'invisible')}>
@@ -719,8 +789,38 @@ export function Composer(props: ComposerProps) {
       <div className={cn('flex items-center gap-2 pt-1.5 pb-2.5', large ? 'px-2.5' : 'pr-2.5 pl-1.5')}>
         {props.leading}
         <PermissionModeMenu mode={props.permissionMode} onChange={props.onPermissionModeChange} />
+        {undo && (
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            data-testid="composer-undo"
+            onClick={() => {
+              setDraft(undo.before)
+              setUndo(null)
+              setQuestions((current) => ({ ...current, items: [] }))
+              textareaRef.current?.focus()
+            }}
+          >
+            <Undo2 className="size-3.5" />
+            {undo.label}
+          </button>
+        )}
 
         <div className="flex-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="优化提示词"
+              disabled={!canEnhance}
+              className={cn(MENU_TRIGGER, 'shrink-0 px-1.5 text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent')}
+              onClick={() => void enhance()}
+            >
+              {enhancing ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>优化提示词：写得更具体，并列出需要你定的地方</TooltipContent>
+        </Tooltip>
         <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} />
         <ArgumentsDialog
           request={argumentsRequest?.request ?? null}
@@ -880,7 +980,22 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
 
 const REASONING_LABELS: Record<ReasoningEffort, string> = { default: '默认', none: '关闭', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' }
 
-function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null; modelRef?: ModelRef; locked?: boolean; onChange(ref: ModelRef): void }) {
+// trigger：换掉默认的按钮（停下说明里的「换模型继续」）；modelsOnly：只列模型，不出思考强度
+export function ModelMenu({
+  label,
+  modelRef,
+  locked,
+  onChange,
+  trigger,
+  modelsOnly,
+}: {
+  label: string | null
+  modelRef?: ModelRef
+  locked?: boolean
+  onChange(ref: ModelRef): void
+  trigger?: ReactNode
+  modelsOnly?: boolean
+}) {
   const providers = useAppState((state) => state.settings?.providers ?? null)
   const selectedProvider = providers?.find((provider) => provider.id === modelRef?.providerId)
   const selectedModel = selectedProvider?.models.find((model) => model.id === modelRef?.modelId)
@@ -904,26 +1019,28 @@ function ModelMenu({ label, modelRef, locked, onChange }: { label: string | null
       onOpenChange={(open) => {
         if (!open) return
         void refreshSettings()
-        setView(supportsReasoning && modelRef ? 'effort' : 'models')
+        setView(supportsReasoning && modelRef && !modelsOnly ? 'effort' : 'models')
       }}
     >
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="模型"
-          data-testid="model-menu"
-          disabled={locked}
-          title={locked ? '运行中不能切换模型' : '切换模型'}
-          className={cn(
-            MENU_TRIGGER,
-            'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
-          )}
-        >
-          {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
-          <span className="truncate">{modelName}</span>
-          {label && supportsReasoning && <span className="shrink-0 text-xs text-muted-foreground">{REASONING_LABELS[effort]}</span>}
-          <ChevronDown className="size-3 shrink-0" />
-        </button>
+        {trigger ?? (
+          <button
+            type="button"
+            aria-label="模型"
+            data-testid="model-menu"
+            disabled={locked}
+            title={locked ? '运行中不能切换模型' : '切换模型'}
+            className={cn(
+              MENU_TRIGGER,
+              'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground',
+            )}
+          >
+            {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
+            <span className="truncate">{modelName}</span>
+            {label && supportsReasoning && <span className="shrink-0 text-xs text-muted-foreground">{REASONING_LABELS[effort]}</span>}
+            <ChevronDown className="size-3 shrink-0" />
+          </button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-[28rem] w-64">
         {view === 'effort' && supportsReasoning && modelRef ? (

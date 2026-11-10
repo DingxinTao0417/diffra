@@ -56,11 +56,12 @@ function isStoppedBy(stop: TurnStop | null): stop is StoppedBy {
 }
 
 // 顶栏和任务监控共用的本轮结论，按顺序取第一条命中的，同一时刻只显示一个词。
-// 结论看最后一个 prompt 或 goal 轮；plan、deep-scan、compact 轮不经过主循环、没有 turnOutcome，只参与出错和用户停止的判定
+// 结论看最后一个 prompt 或 goal 轮；plan、deep-scan、compact 轮不经过主循环、没有 turnOutcome，只参与出错和用户停止的判定。
+// 定位轮（diagnose）只是查原因，完全不算：它出错、被停止都不改变任务结论
 export function turnVerdict(task: Pick<LiveTask, 'permission' | 'running' | 'turns' | 'progress'>): Verdict {
   if (task.permission) return verdict('confirm')
   if (task.running) return verdict('running')
-  const last = task.turns.at(-1)
+  const last = task.turns.findLast((turn) => turn.kind !== 'diagnose')
   if (!last) return verdict('idle')
   const subject = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
   const outcome = subject?.outcome
