@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { StoredSessionSummary } from '@diffra/core/types'
+import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
+import type { SessionSearchResult, StoredSessionSummary } from '@diffra/core/types'
 import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
@@ -16,6 +16,8 @@ import { useNow } from '@/lib/use-now'
 import { loadTodos, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { BrandMark } from './BrandMark'
+import { highlightMatch } from './SearchDialog'
+import { useSessionSearch } from './session-search'
 import { TaskMenu } from './TaskMenu'
 
 interface SidebarTask {
@@ -125,11 +127,7 @@ export function Sidebar() {
           <Plus className="size-4" />
           新任务
         </SidebarButton>
-        <SidebarButton onClick={() => store.set((state) => ({ ...state, searchOpen: true }))}>
-          <Search className="size-4" />
-          <span className="flex-1">搜索</span>
-          <Kbd>Ctrl+K</Kbd>
-        </SidebarButton>
+        <SidebarSearch />
         <SidebarButton active={route.name === 'design'} onClick={() => openDesign()}>
           <PenTool className="size-4" />
           设计
@@ -160,7 +158,7 @@ export function Sidebar() {
           const GroupIcon = group.path === null ? FolderDot : Folder
           return (
             <div key={group.key} className="space-y-px" data-testid="sidebar-project">
-              <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg px-2 hover:bg-accent">
+              <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent" data-testid="sidebar-project-row">
                 <span className="relative size-4 shrink-0">
                   <GroupIcon
                     className={cn(
@@ -186,15 +184,13 @@ export function Sidebar() {
                 >
                   <span className="truncate">{name}</span>
                 </button>
-                <span className={cn(trailingClass, 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')}>
-                  {group.tasks.length || ''}
-                </span>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
                       aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
-                      className={cn(rowActionClass, 'group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100')}
+                      className={projectActionClass}
+                      data-testid="sidebar-project-action"
                       onClick={() => openHome(group.path)}
                     >
                       <Plus className="size-3.5" />
@@ -247,6 +243,113 @@ const rowButtonClass =
 const trailingClass = 'flex min-w-5 shrink-0 justify-end text-xs text-muted-foreground tabular-nums transition-opacity'
 const rowActionClass =
   'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100'
+// 项目行的加号一直显示，不用悬停；不显示任务条数
+const projectActionClass =
+  'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
+
+// 侧栏里可以直接输入的搜索：没输入时列最近任务，输入后用和搜索弹窗同一套会话搜索
+function SidebarSearch() {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [selected, setSelected] = useState(0)
+  const search = useSessionSearch(open ? query : '')
+  const listId = useId()
+  const optionId = (index: number) => `${listId}-option-${index}`
+  useEffect(() => setSelected(0), [search.text, search.list.length])
+
+  const pick = (item: SessionSearchResult | undefined) => {
+    if (!item) return
+    setOpen(false)
+    setQuery('')
+    void openTask(item)
+  }
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setSelected((current) => Math.min(current + 1, Math.max(0, search.list.length - 1)))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setSelected((current) => Math.max(current - 1, 0))
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      pick(search.list[selected])
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      event.currentTarget.blur()
+    }
+  }
+
+  const heading = !search.text ? '最近的任务' : search.searching ? '搜索中…' : '搜索结果'
+  const emptyText = !search.text ? '还没有任务' : search.searching ? '' : search.failed ? '搜索失败，请重试' : '没有找到相关任务'
+
+  return (
+    <div
+      className="relative"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
+      }}
+    >
+      <div className="flex h-8.5 items-center gap-2 rounded-lg border border-input bg-background px-2 focus-within:border-ring/60">
+        <Search className="size-4 shrink-0 text-muted-foreground" />
+        <input
+          id="sidebar-search"
+          role="combobox"
+          aria-label="侧栏搜索"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={open && search.list[selected] ? optionId(selected) : undefined}
+          value={query}
+          placeholder="搜索任务"
+          className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+            setSelected(0)
+          }}
+          onKeyDown={onKeyDown}
+        />
+        <Kbd>Ctrl+K</Kbd>
+      </div>
+      {open && (
+        <div className="absolute inset-x-0 top-full z-40 mt-1 max-h-96 overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-overlay">
+          <div aria-live="polite" className="px-2 py-1 text-xs text-muted-foreground">
+            {heading}
+          </div>
+          <div id={listId} role="listbox" aria-label="侧栏搜索结果" className="flex flex-col">
+            {search.list.map((item, index) => {
+              const snippet = item.snippet !== '' && item.snippet !== item.title ? item.snippet : null
+              return (
+                <div
+                  key={item.sessionId}
+                  id={optionId(index)}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={index === selected}
+                  className={cn('flex cursor-default flex-col gap-0.5 rounded-md px-2 py-1.5', index === selected && 'bg-accent')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onPointerMove={() => setSelected(index)}
+                  onClick={() => pick(item)}
+                >
+                  <span className="truncate text-sm">{highlightMatch(item.title, search.highlight)}</span>
+                  <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                    <span className="max-w-32 truncate">{search.noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}</span>
+                    <span className="ml-auto shrink-0 tabular-nums">{formatTime(item.updatedAt)}</span>
+                  </span>
+                  {snippet && <span className="truncate text-xs text-muted-foreground">{highlightMatch(snippet, search.highlight)}</span>}
+                </div>
+              )
+            })}
+          </div>
+          {search.list.length === 0 && emptyText && <p className="px-2 py-4 text-center text-xs text-muted-foreground">{emptyText}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function SidebarButton({ active, onClick, children }: { active?: boolean; onClick(): void; children: React.ReactNode }) {
   return (

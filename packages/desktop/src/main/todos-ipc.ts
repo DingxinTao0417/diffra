@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { BrowserWindow, ipcMain, Notification } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { type Todo, TODO_MAX_ITEMS, TODO_MAX_TEXT } from '../shared/todos'
+import { type Todo, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT } from '../shared/todos'
 import { parse } from './ipc-input'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
@@ -10,6 +10,8 @@ const todoSchema = z.object({
   id: z.string().min(1).max(64),
   text: z.string().trim().min(1).max(TODO_MAX_TEXT),
   project: z.string().min(1).nullable(),
+  // 旧数据没有 tags，读出来补成空数组
+  tags: z.array(z.string().trim().min(1).max(TODO_MAX_TAG_LENGTH)).max(TODO_MAX_TAGS).default([]),
   createdAt: z.iso.datetime(),
   done: z.boolean(),
   sentTo: z.object({ sessionId: z.string().min(1), title: z.string(), at: z.iso.datetime() }).nullable(),

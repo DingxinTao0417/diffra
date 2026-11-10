@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, settingsNav, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
@@ -23,6 +23,23 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     await waitTaskDone(window)
     await expect(window.getByTestId('sidebar-task')).toHaveCount(1)
     await expect(window.getByTestId('sidebar-task')).toContainText('第一个任务')
+
+    // 项目条目右侧不显示任务数字，加号一直可见；点加号回到这个项目的首页
+    const projectRow = window.getByTestId('sidebar-project-row').filter({ hasText: basename(project) })
+    const projectAction = projectRow.getByTestId('sidebar-project-action')
+    await expect(projectAction).toBeVisible()
+    expect((await projectRow.textContent())?.replace(basename(project), '').trim()).toBe('')
+    await projectAction.click()
+    await expect(window.getByTestId('project-path')).toContainText(basename(project))
+
+    // 侧栏搜索框直接输入并打开结果
+    const sidebarSearch = window.getByLabel('侧栏搜索', { exact: true })
+    await sidebarSearch.click()
+    await sidebarSearch.fill('独角兽')
+    const sidebarResults = window.getByRole('listbox', { name: '侧栏搜索结果' })
+    await expect(sidebarResults.getByRole('option').filter({ hasText: '第一个任务' })).toHaveCount(1)
+    await sidebarResults.getByRole('option').filter({ hasText: '第一个任务' }).click()
+    await expect(window.getByTestId('task-title')).toHaveText('第一个任务')
 
     // Ctrl+K 按对话内容搜
     await taskInput(window).click()

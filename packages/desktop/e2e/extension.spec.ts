@@ -150,7 +150,8 @@ test('用户自己的浏览器：设置成 Chrome 后，智能体经扩展在浏
     await popup.goto(POPUP_URL)
     await expect(popup.locator('body')).toContainText('已连接 Diffra（测试）')
     await popup.screenshot({ path: 'test-results/extension-popup.png' })
-    const sessionId = await popup.evaluate<string>(`chrome.runtime.sendMessage({ kind: 'state', tabId: null }).then((state) => state.links.find((link) => link.connected).tasks[0].sessionId)`)
+    // 机器上可能还开着开发版 Diffra，扩展会连上不止一个宿主；只认测试宿主
+    const sessionId = await popup.evaluate<string>(`chrome.runtime.sendMessage({ kind: 'state', tabId: null }).then((state) => state.links.find((link) => link.host === '${TEST_HOST}' && link.connected).tasks[0].sessionId)`)
 
     // 用户自己开一个页面，在扩展里交给这个任务：进了任务的分组，智能体在它上面读
     const shared = await browser.newPage()
@@ -219,7 +220,7 @@ test('用户自己的浏览器：智能体开的第二个标签页、别的窗�
     const worker = browser.serviceWorkers()[0] ?? (await browser.waitForEvent('serviceworker'))
     const popup = await browser.newPage()
     await popup.goto(POPUP_URL)
-    const sessionId = await popup.evaluate<string>(`chrome.runtime.sendMessage({ kind: 'state', tabId: null }).then((state) => state.links.find((link) => link.connected).tasks[0].sessionId)`)
+    const sessionId = await popup.evaluate<string>(`chrome.runtime.sendMessage({ kind: 'state', tabId: null }).then((state) => state.links.find((link) => link.host === '${TEST_HOST}' && link.connected).tasks[0].sessionId)`)
     const shared = await worker.evaluate<{ tabId: number; windowId: number }>(`chrome.windows.create({ url: '${site.url}color/green', focused: true }).then((created) => ({ tabId: created.tabs[0].id, windowId: created.id }))`)
     await expect.poll(() => worker.evaluate<string>(`chrome.tabs.get(${shared.tabId}).then((tab) => tab.status)`)).toBe('complete')
     expect(await popup.evaluate<{ ok: boolean }>(`chrome.runtime.sendMessage({ kind: 'share', host: '${TEST_HOST}', tabId: ${shared.tabId}, sessionId: '${sessionId}' })`)).toEqual({ ok: true })

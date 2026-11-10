@@ -31,6 +31,7 @@ export function TodosView() {
   const view = useAppState((state) => state.todosView)
   const now = useNow()
   const [filter, setFilter] = useState(ALL)
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [sending, setSending] = useState<Sending | null>(null)
@@ -39,7 +40,19 @@ export function TodosView() {
   const [calendarDay, setCalendarDay] = useState<Date | null>(null)
 
   const projects = useMemo(() => [...new Set((todos ?? []).map((todo) => todo.project ?? NO_PROJECT))], [todos])
-  const visible = useMemo(() => (todos ?? []).filter((todo) => filter === ALL || (todo.project ?? NO_PROJECT) === filter), [todos, filter])
+  const allTags = useMemo(
+    () => [...new Set((todos ?? []).flatMap((todo) => todo.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [todos],
+  )
+  const visible = useMemo(
+    () =>
+      (todos ?? []).filter(
+        (todo) =>
+          (filter === ALL || (todo.project ?? NO_PROJECT) === filter) &&
+          (tagFilter === null || todo.tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())),
+      ),
+    [todos, filter, tagFilter],
+  )
   const groups = useMemo(() => groupTodos(visible, now), [visible, now])
   const openCount = visible.filter((todo) => !todo.done).length
   const toggleSelected = (id: string) => setSelected((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
@@ -87,6 +100,23 @@ export function TodosView() {
                 {value === ALL ? '全部' : value === NO_PROJECT ? '无项目' : folderName(value)}
               </button>
             ))}
+            {allTags.length > 0 && (
+              <>
+                <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-pressed={tagFilter?.toLowerCase() === tag.toLowerCase()}
+                    className="rounded-full border px-2.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:border-foreground/30 aria-pressed:bg-soft aria-pressed:text-foreground"
+                    data-testid="todo-tag-filter"
+                    onClick={() => setTagFilter((current) => (current?.toLowerCase() === tag.toLowerCase() ? null : tag))}
+                  >
+                    #{tag}
+                  </button>
+                ))}
+              </>
+            )}
             <div className="flex-1" />
             {view === 'list' &&
               (selecting ? (

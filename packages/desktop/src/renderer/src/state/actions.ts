@@ -1,7 +1,7 @@
 import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
-import type { Todo, TodoSchedule } from '../../../shared/todos'
+import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
@@ -422,12 +422,13 @@ export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void
   }
 }
 
-// 记一条待办，带上当时所在的项目；at 有值时到时提醒
-export function addTodo(text: string, at?: Date): Promise<void> {
+// 记一条待办；不传 project 时带上所在页面当前的项目，at 有值时到时提醒
+export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[] } = {}): Promise<void> {
   const todo: Todo = {
     id: crypto.randomUUID(),
     text: text.trim(),
-    project: currentProject(),
+    project: options.project === undefined ? currentProject() : options.project,
+    tags: normalizeTodoTags(options.tags ?? []),
     createdAt: new Date().toISOString(),
     done: false,
     sentTo: null,

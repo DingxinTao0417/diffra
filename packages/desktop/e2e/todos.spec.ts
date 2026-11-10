@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
@@ -28,8 +28,16 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
     await chooseProject(app, window, project)
 
-    // 侧栏进待办页，回车记两条；侧栏显示没做完的条数
+    // 侧栏进待办页，选固定项目和自定义标签后回车记两条；侧栏显示没做完的条数
     await window.getByTestId('sidebar').getByRole('button', { name: /待办/ }).click()
+    const projectPicker = window.getByTestId('todo-project-picker')
+    await projectPicker.click()
+    await window.getByRole('menuitem', { name: new RegExp(basename(project)) }).click()
+    await expect(projectPicker).toContainText(basename(project))
+    const tagInput = window.getByLabel('添加标签')
+    await tagInput.fill('重要')
+    await tagInput.press('Enter')
+    await expect(window.getByTestId('todo-tag-editor').getByTestId('todo-tag')).toContainText('#重要')
     const input = window.getByLabel('新待办')
     await input.fill('给首页加暗色模式开关')
     await input.press('Enter')
@@ -38,6 +46,8 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
     let rows = window.getByTestId('todo-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('设置页加导出按钮')
+    await expect(rows.filter({ hasText: '给首页加暗色模式开关' })).toContainText(basename(project))
+    await expect(rows.filter({ hasText: '给首页加暗色模式开关' }).getByTestId('todo-tag')).toContainText('#重要')
     await expect(window.getByTestId('sidebar-todo-count')).toHaveText('2')
 
     // 任何页面 Ctrl+J 快速记
@@ -54,6 +64,15 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
     window = await app.firstWindow()
     await window.getByTestId('sidebar').getByRole('button', { name: /待办/ }).click()
     rows = window.getByTestId('todo-row')
+    await expect(rows).toHaveCount(3)
+    // 固定项目和自定义标签都存进了 todos.json，重启后还在；标签也能用来筛选
+    const tagged = rows.filter({ hasText: '给首页加暗色模式开关' })
+    await expect(tagged).toContainText(basename(project))
+    await expect(tagged.getByTestId('todo-tag')).toContainText('#重要')
+    const tagFilter = window.getByTestId('todo-tag-filter').filter({ hasText: '#重要' })
+    await tagFilter.click()
+    await expect(rows).toHaveCount(1)
+    await tagFilter.click()
     await expect(rows).toHaveCount(3)
     await rows.filter({ hasText: '顺手修一下标题栏' }).getByRole('checkbox').click()
     await expect(window.getByTestId('sidebar-todo-count')).toHaveText('2')

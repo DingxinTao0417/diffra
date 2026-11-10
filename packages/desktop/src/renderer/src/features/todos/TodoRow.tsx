@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlarmClock, Bell, Pencil, Send, Trash2 } from 'lucide-react'
+import { AlarmClock, Bell, Pencil, Send, Tags, Trash2 } from 'lucide-react'
 import type { Todo, TodoSendTarget } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import { openTask, saveTodos, setTodoSchedule } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
 import { sendScheduleNow } from '@/state/todo-scheduler'
 import { SchedulePicker } from './SchedulePicker'
+import { TodoTagEditor } from './TodoTagEditor'
 
 const FINISHED = new Set<VerdictTone>(['verified', 'unverified', 'nochange', 'done'])
 
@@ -39,6 +40,7 @@ export function TodoRow({
   onScheduleSend(at: Date): void
 }) {
   const [editing, setEditing] = useState<string | null>(null)
+  const [editingTags, setEditingTags] = useState(false)
   const row = useRef<HTMLLIElement>(null)
   const focused = useAppState((state) => state.todoFocus === todo.id)
   const task = useAppState((state) => (todo.sentTo ? state.tasks.find((item) => item.sessionId === todo.sentTo!.sessionId) : undefined))
@@ -111,6 +113,18 @@ export function TodoRow({
           </p>
         )}
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {todo.tags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className="rounded-full bg-soft px-1.5 py-0.5 text-xs text-foreground hover:bg-accent"
+              aria-label={`编辑标签 ${tag}`}
+              data-testid="todo-tag"
+              onClick={() => setEditingTags(true)}
+            >
+              #{tag}
+            </button>
+          ))}
           {layout === 'list' && schedule?.action.kind === 'send' && <span className="max-w-60 truncate">发给 {sendTargetLabel(schedule.action.target)}</span>}
           {layout === 'compact' && schedule && (
             <SchedulePicker
@@ -156,6 +170,20 @@ export function TodoRow({
             </span>
           )}
         </div>
+        {editingTags && (
+          <div
+            className="mt-1"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setEditingTags(false)
+            }}
+          >
+            <TodoTagEditor
+              autoFocus
+              tags={todo.tags}
+              onChange={(tags) => void saveTodos((todos) => todos.map((item) => (item.id === todo.id ? { ...item, tags } : item)))}
+            />
+          </div>
+        )}
         {!todo.done && schedule?.action.kind === 'send' && (result?.kind === 'missed' || result?.kind === 'failed') && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs" data-testid="todo-missed">
             <span className="text-warning">{result.kind === 'missed' ? '错过了定时发送' : `定时发送失败：${result.error ?? '未知原因'}`}</span>
@@ -180,6 +208,9 @@ export function TodoRow({
               </Button>
             </SchedulePicker>
           )}
+          <RowAction label="标签" onClick={() => setEditingTags(true)}>
+            <Tags className="size-3.5" />
+          </RowAction>
           <RowAction label="发送给任务" onClick={onSend}>
             <Send className="size-3.5" />
           </RowAction>

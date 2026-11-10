@@ -4,6 +4,8 @@ export interface Todo {
   id: string
   text: string
   project: string | null
+  // 自定义标签；旧数据没有这个字段，读出来时补成空数组
+  tags: string[]
   createdAt: string
   done: boolean
   sentTo: { sessionId: string; title: string; at: string } | null
@@ -25,3 +27,25 @@ export interface TodoSchedule {
 
 export const TODO_MAX_ITEMS = 1000
 export const TODO_MAX_TEXT = 4000
+export const TODO_MAX_TAGS = 12
+export const TODO_MAX_TAG_LENGTH = 30
+// 一次输入里允许写多个标签（用逗号分开）时，输入框能容纳的字数
+export const TODO_MAX_TAG_INPUT = TODO_MAX_TAG_LENGTH * TODO_MAX_TAGS
+
+// 标签去掉首尾空白和开头的 #，不区分大小写去重；逗号分隔的一次拆成多个
+export function normalizeTodoTags(values: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const value of values) {
+    for (const part of value.split(/[,，]/)) {
+      const tag = part.trim().replace(/^#+/, '').slice(0, TODO_MAX_TAG_LENGTH)
+      if (tag === '') continue
+      const key = tag.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      tags.push(tag)
+      if (tags.length >= TODO_MAX_TAGS) return tags
+    }
+  }
+  return tags
+}

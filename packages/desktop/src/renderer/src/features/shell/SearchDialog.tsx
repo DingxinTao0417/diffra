@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useState } from 'react'
 import type { SessionSearchResult } from '@diffra/core/types'
 import { Search } from 'lucide-react'
 import { cn } from 'cn'
@@ -7,14 +7,7 @@ import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { folderName, formatTime } from '@/lib/format'
 import { openTask } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
-
-const RECENT_LIMIT = 8
-
-interface Searched {
-  text: string
-  items: SessionSearchResult[]
-  failed: boolean
-}
+import { useSessionSearch } from './session-search'
 
 export function SearchDialog() {
   const open = useAppState((state) => state.searchOpen)
@@ -31,61 +24,16 @@ export function SearchDialog() {
 }
 
 function SearchBody({ onClose }: { onClose(): void }) {
-  const tasks = useAppState((state) => state.tasks)
   const [query, setQuery] = useState('')
-  const [searched, setSearched] = useState<Searched | null>(null)
   const [selected, setSelected] = useState(0)
   const listId = useId()
   const optionId = (index: number) => `${listId}-option-${index}`
+  const search = useSessionSearch(query)
+  const { text, list, searching, highlight, noProject } = search
+  useEffect(() => setSelected(0), [text, list.length])
 
-  // 没输入时列出最近的任务
-  const recent = useMemo<SessionSearchResult[]>(
-    () =>
-      [...tasks]
-        .filter((task) => !task.archived)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, RECENT_LIMIT)
-        .map((task) => ({ sessionId: task.sessionId, cwd: task.cwd, title: task.title, updatedAt: task.updatedAt, snippet: '' })),
-    [tasks],
-  )
-
-  // 搜索结果不带无项目标记，按已知任务查
-  const noProject = useMemo(() => new Set(tasks.filter((task) => task.noProject).map((task) => task.sessionId)), [tasks])
-
-  const text = query.trim()
-  useEffect(() => {
-    if (!text) {
-      setSearched(null)
-      return
-    }
-    let stale = false
-    const timer = setTimeout(() => {
-      window.diffra.searchSessions(text).then(
-        (found) => {
-          if (stale) return
-          setSearched({ text, items: found, failed: false })
-          setSelected(0)
-        },
-        (error: unknown) => {
-          console.error('搜索任务失败', error)
-          if (stale) return
-          setSearched({ text, items: [], failed: true })
-          setSelected(0)
-        },
-      )
-    }, 150)
-    return () => {
-      stale = true
-      clearTimeout(timer)
-    }
-  }, [text])
-
-  // 搜索期间继续显示上一次的结果，不回落到最近任务，列表不会来回跳
-  const searching = text !== '' && searched?.text !== text
-  const list = text ? (searched?.items ?? []) : recent
-  const highlight = text ? (searched?.text ?? '') : ''
   const heading = !text ? '最近的任务' : searching ? '搜索中…' : '搜索结果'
-  const emptyText = !text ? '还没有任务' : searching ? '' : searched?.failed ? '搜索失败，请重试' : '没有找到相关任务'
+  const emptyText = !text ? '还没有任务' : searching ? '' : search.failed ? '搜索失败，请重试' : '没有找到相关任务'
 
   const pick = (item: SessionSearchResult | undefined) => {
     if (!item) return
@@ -189,7 +137,7 @@ function SearchBody({ onClose }: { onClose(): void }) {
 }
 
 // 和 core 的搜索一致：不区分大小写的子串匹配
-function highlightMatch(value: string, needle: string): ReactNode {
+export function highlightMatch(value: string, needle: string): ReactNode {
   if (!needle) return value
   const lower = value.toLowerCase()
   const target = needle.toLowerCase()
