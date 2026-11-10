@@ -200,8 +200,8 @@ export type CoreStatus =
 export type UpdateNotes = { added: string[]; fixed: string[] } | null
 
 export type UpdateStatus =
-  // 未打包运行（开发模式、e2e）时 electron-updater 不工作
-  | { state: 'disabled' }
+  // 不检查更新：未打包运行（开发模式、e2e），或者是没经过安装的免安装版（更新包只会装到已安装的那份，换不掉它自己）
+  | { state: 'disabled'; reason: 'development' | 'portable' }
   | { state: 'idle' }
   | { state: 'checking' }
   | { state: 'up-to-date' }

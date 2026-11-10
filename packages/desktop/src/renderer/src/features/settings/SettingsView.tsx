@@ -751,7 +751,7 @@ function checkBlockedReason(status: UpdateStatus | null): string | null {
     case 'error':
       return null
     case 'disabled':
-      return '开发模式不检查更新'
+      return disabledUpdateText(status.reason)
     case 'checking':
       return '正在检查更新'
     case 'downloading':
@@ -769,10 +769,14 @@ function useCoreStatus(): CoreStatus | null {
   return status
 }
 
+function disabledUpdateText(reason: 'development' | 'portable'): string {
+  return reason === 'portable' ? '免安装版不检查更新，请用安装版' : '开发模式不检查更新'
+}
+
 function describeUpdateStatus(status: UpdateStatus): string {
   switch (status.state) {
     case 'disabled':
-      return '开发模式不检查更新'
+      return disabledUpdateText(status.reason)
     case 'idle':
       return '尚未检查更新'
     case 'checking':

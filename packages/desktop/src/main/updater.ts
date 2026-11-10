@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { parseNotes } from '../shared/changelog'
@@ -6,7 +8,17 @@ import { logEvent } from './app-log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
-let status: UpdateStatus = app.isPackaged ? { state: 'idle' } : { state: 'disabled' }
+// 安装版的程序目录里有 NSIS 卸载程序。没有的就是免安装版（比如本地打包出来的 release/win-unpacked）：
+// 更新包只会装到已安装的那份，免安装版下载、安装了也换不掉自己，重开还是旧版，还会一直提示有新版本
+const UNINSTALLER = 'Uninstall Diffra.exe'
+
+function disabledReason(): 'development' | 'portable' | null {
+  if (!app.isPackaged) return 'development'
+  return existsSync(join(dirname(app.getPath('exe')), UNINSTALLER)) ? null : 'portable'
+}
+
+const disabled = disabledReason()
+let status: UpdateStatus = disabled ? { state: 'disabled', reason: disabled } : { state: 'idle' }
 
 function setStatus(next: UpdateStatus): void {
   status = next
@@ -23,7 +35,7 @@ function notesOf(info: UpdateInfo): UpdateNotes {
 }
 
 function checkForUpdates(): void {
-  if (!app.isPackaged) return
+  if (disabled) return
   // 已在下载或已下载完时不再检查，避免把「重启并更新」的状态覆盖掉
   if (status.state === 'checking' || status.state === 'downloading' || status.state === 'downloaded') return
   // 失败会同时触发 error 事件和 reject；error 事件里已经记录日志并更新状态，这里只接住 reject
@@ -40,7 +52,8 @@ export function setupUpdater(): void {
     autoUpdater.quitAndInstall(true, true)
   })
 
-  if (!app.isPackaged) return
+  if (disabled === 'portable') logEvent(`[updater] 程序目录里没有 ${UNINSTALLER}，是免安装版，不检查更新`)
+  if (disabled) return
 
   autoUpdater.disableWebInstaller = true
   // electron-updater 自己的日志（下载到哪、用什么参数启动安装程序）一起记下来
