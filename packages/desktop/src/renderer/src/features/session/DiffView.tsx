@@ -16,15 +16,16 @@ export function diffStats(oldText: string | null, newText: string) {
   return { patch, added, removed }
 }
 
-// 标题行由调用方画（对话里是 EditBlock 那一行），这里只画代码区
-export function DiffView({ oldText, newText }: { oldText: string | null; newText: string }) {
-  const hunks = useMemo(() => diffStats(oldText, newText).patch.hunks.map(toDiffLines), [oldText, newText])
+// 标题行由调用方画（对话里是 EditBlock 那一行），这里只画代码区。
+// 改动卡片只带变化的那段时，startLine 是这一段在文件里从第几行开始，行号按它换成文件里的行号
+export function DiffView({ oldText, newText, startLine = 1 }: { oldText: string | null; newText: string; startLine?: number }) {
+  const hunks = useMemo(() => diffStats(oldText, newText).patch.hunks.map((hunk) => toDiffLines(hunk, startLine - 1)), [oldText, newText, startLine])
   return <DiffLines hunks={hunks} className="max-h-96 overflow-y-auto" data-testid="diff-view" />
 }
 
-function toDiffLines(hunk: { oldStart: number; newStart: number; lines: string[] }): DiffLine[] {
-  let oldLine = hunk.oldStart
-  let newLine = hunk.newStart
+function toDiffLines(hunk: { oldStart: number; newStart: number; lines: string[] }, offset: number): DiffLine[] {
+  let oldLine = hunk.oldStart + offset
+  let newLine = hunk.newStart + offset
   return hunk.lines.flatMap((line): DiffLine[] => {
     const text = line.slice(1)
     if (line.startsWith('+')) return [{ kind: 'add', text, oldLine: null, newLine: newLine++ }]

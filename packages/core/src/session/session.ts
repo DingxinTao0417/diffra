@@ -121,6 +121,8 @@ export class Session {
   readonly consumedChecks = new Map<string, UnresolvedCheck>()
   taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
+  // 这一轮里每个文件最近一次改完后的全文，压缩改动卡片用（见 edit-diff.ts）；只在内存里，每轮清空
+  readonly editedTexts = new Map<string, string>()
   // 正在等模型输出的那一步：智能体（主智能体是 main，子智能体是它的 id）→ 让它重发请求
   readonly stepRetries = new Map<string, () => void>()
 
@@ -197,6 +199,7 @@ export class Session {
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
+    this.editedTexts.clear()
     this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}) })
   }
 

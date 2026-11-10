@@ -4,6 +4,7 @@ import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSch
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
+  ACP_MAX_MESSAGE_BYTES,
   type CheckDetection,
   type CheckpointChange,
   type CheckRunResult,
@@ -84,7 +85,7 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     const onTaskAction = handlers.onTaskAction
     if (onTaskAction) app.onRequest(CLIENT_EXT_METHODS.taskAction, taskActionParamsSchema, ({ params }) => onTaskAction(params))
   }
-  return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout)))
+  return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout), { maxMessageBytes: ACP_MAX_MESSAGE_BYTES }))
 }
 
 export async function createSession(

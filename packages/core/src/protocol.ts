@@ -117,6 +117,20 @@ export interface PromptQuestion {
 // 对话里的可视化：show_visual 那张卡的 tool_call._meta.diffra.visual，{ title, code }；code 是 HTML 片段或 SVG
 export const VISUAL_META_KEY = 'visual'
 export const VISUAL_MAX_CHARS = 1_000_000
+
+// 改动卡片（diff 内容）的 _meta.diffra：oldText、newText 只是变化的那段（前后各留几行上下文），不是整份文件。
+// 长任务里每次改动都带整份文件，会话记录涨到几十 MB，载入时超过 ACP 单条消息的上限。
+// startLine 是这一段从第几行开始（1 起），oldLines、newLines 是两段各几行（空字符串分不清是 0 行还是 1 个空行）。
+// base 是改之前的整份文件：一轮里第一次改这个文件、或者它在两次改动之间被别处改过时才带。
+// 界面按顺序重放一轮的改动就能还原每次改动前后的全文，「本轮交付」照旧按第一次改之前和最后的全文算净改动。
+// 旧记录没有这个字段，oldText、newText 是整份文件
+export const EDIT_DIFF_META_KEY = 'edit'
+export interface EditDiffMeta {
+  startLine: number
+  oldLines: number
+  newLines: number
+  base?: string
+}
 // 任务之间互通（task_send、task_create）：消息是哪个任务发来的
 export interface TaskSource {
   sessionId: string
@@ -587,6 +601,10 @@ export interface UsageSummary {
   // 读到的格式不对的行（比如进程崩溃留下的半行）
   skippedLines: number
 }
+
+// ACP 单条消息的上限（两端都按它读）。SDK 默认 32 MiB，载入长任务时整份轮次记录走一条消息，
+// 2026-11 一个 41 轮的任务记录有 35 MB，打不开（MessageTooLargeError）。编辑卡片已不存整份文件，这里留足余量
+export const ACP_MAX_MESSAGE_BYTES = 256 * 1024 * 1024
 
 export const SESSION_EXT_METHODS = {
   compact: '_diffra/session/compact',

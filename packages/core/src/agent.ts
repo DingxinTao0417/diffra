@@ -46,6 +46,7 @@ import { setBrowserSites } from './session/browser.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { enhancePrompt } from './prompt-enhance.js'
 import { runDiagnose } from './session/diagnose.js'
+import { compactTurns } from './session/edit-diff.js'
 import { runPlan } from './session/plan.js'
 import { compactManually } from './session/compact.js'
 import type { Session as SessionType } from './session/session.js'
@@ -360,19 +361,20 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const { session, info } = await openSession(params.cwd, params._meta, params.mcpServers)
       return { sessionId: session.id, _meta: { diffra: info } }
     })
-    // Diffra 的界面一次拿到整段历史，所以历史放在响应的 _meta 里，不逐条回放 session/update
+    // Diffra 的界面一次拿到整段历史，所以历史放在响应的 _meta 里，不逐条回放 session/update。
+    // 旧记录的改动卡片带整份文件，发出去之前压缩（compactTurns），记录本身不动
     .onRequest(acp.methods.agent.session.load, async ({ params }) => {
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
-        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: live.turns, taskState: taskStateView(live), design: live.designTask, noProject: live.noProject }
+        const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: compactTurns(live.turns), taskState: taskStateView(live), design: live.designTask, noProject: live.noProject }
         return { _meta: { diffra: loaded } }
       }
       const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
       // 没在运行却是 running，说明还没有确定的任务状态，交给界面按轮次推导
-      const loaded: LoadedSession = { info, title: session.title, turns: session.turns, ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }), design: session.designTask, noProject: session.noProject }
+      const loaded: LoadedSession = { info, title: session.title, turns: compactTurns(session.turns), ...(session.taskState.status === 'running' ? {} : { taskState: taskStateView(session) }), design: session.designTask, noProject: session.noProject }
       return { _meta: { diffra: loaded } }
     })
     .onRequest(acp.methods.agent.session.list, async ({ params }) => ({

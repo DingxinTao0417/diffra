@@ -66,6 +66,7 @@ import { buildLightScanRequest, parseLightScanOutput } from '../security/light.j
 import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityFinding } from '../security/types.js'
 import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
+import { compactEdit } from './edit-diff.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, parseFinishInput, startTitle, TOOL_KINDS } from './tools.js'
 import {
@@ -883,7 +884,7 @@ export async function runToolCall(
       toolCallId: call.toolCallId,
       status: 'completed',
       title: output.title ?? name,
-      content: toolContent(output),
+      content: toolContent(session, output),
       // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
       ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
     })
@@ -1430,8 +1431,8 @@ async function runCheck(
   }
 }
 
-function toolContent(output: ToolOutput): ToolCallContent[] {
-  if (output.diff) return [{ type: 'diff', ...output.diff }]
+function toolContent(session: Session, output: ToolOutput): ToolCallContent[] {
+  if (output.diff) return [compactEdit(session.editedTexts, output.diff)]
   return [{ type: 'content', content: { type: 'text', text: output.terminalOutput ?? output.text } }]
 }
 

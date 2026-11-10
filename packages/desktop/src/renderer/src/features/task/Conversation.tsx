@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ModelErrorKind, PromptImage, TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
+import { editKey, editMeta, type EditTexts, replayEdits } from '@/features/session/edit-replay'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { TodoAcceptanceCard } from '@/features/todos/TodoAcceptanceCard'
 import { errorMessage } from '@/lib/errors'
@@ -178,6 +179,14 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
   const [atBottom, setAtBottom] = useState(true)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   const workIndex = lastWorkIndex(task.turns)
+  const { sessionId, project, running, permission, info, progress, modelLabel, modelRef } = task
+  const turnTask = useMemo<TurnTask>(() => ({ sessionId, project, running, permission, info, progress, modelLabel, modelRef }), [sessionId, project, running, permission, info, progress, modelLabel, modelRef])
+  // 上层每次都传新的回调；存进 ref、给每一轮一个不变的包装，已经结束的轮次才能跳过重画，调用时也总是最新的回调
+  const callbacks = useRef({ onLocate, onRestore, onRegenerate })
+  callbacks.current = { onLocate, onRestore, onRegenerate }
+  const locateItem = useCallback((id: string) => callbacks.current.onLocate(id), [])
+  const restoreTurn = useCallback((turnId: string) => callbacks.current.onRestore(turnId), [])
+  const regenerateTurn = useCallback((turnId: string) => callbacks.current.onRegenerate(turnId), [])
 
   const onScroll = () => {
     const element = scrollRef.current
@@ -288,13 +297,13 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
               <TurnView
                 key={turn.id}
                 turn={turn}
-                task={task}
+                task={turnTask}
                 active={task.running && last}
                 last={last}
                 latestWork={index === workIndex}
-                onLocate={onLocate}
-                onRestore={() => onRestore(turn.id)}
-                onRegenerate={() => onRegenerate(turn.id)}
+                onLocate={locateItem}
+                onRestore={restoreTurn}
+                onRegenerate={regenerateTurn}
               />
             )
           })}
@@ -311,16 +320,20 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
   )
 }
 
+// 每一轮用到的任务字段。只传这些（不传整个任务），流式输出时已经结束的轮次 props 不变，不用重画：
+// 长任务里每来一条更新就重画全部轮次，界面会卡住几十秒
+type TurnTask = Pick<LiveTask, 'sessionId' | 'project' | 'running' | 'permission' | 'info' | 'progress' | 'modelLabel' | 'modelRef'>
+
 interface TurnViewProps {
   turn: Turn
-  task: LiveTask
+  task: TurnTask
   active: boolean
   last: boolean
   // 最后一个执行轮（后面只跟着定位轮时仍算）：停下说明的按钮、重新生成、子智能体卡片的「定位问题」都在它上面
   latestWork: boolean
   onLocate(id: string): void
-  onRestore(): void
-  onRegenerate(): void
+  onRestore(turnId: string): void
+  onRegenerate(turnId: string): void
 }
 
 // 最后一个执行轮的下标；后面跟着别的轮次（出计划、压缩、深度扫描）时没有
@@ -333,12 +346,16 @@ export function lastWorkIndex(turns: Turn[]): number {
   return -1
 }
 
-function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, onRegenerate }: TurnViewProps) {
+const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
+  const onRestore = useCallback(() => restoreTurn(turn.id), [restoreTurn, turn.id])
+  const onRegenerate = useCallback(() => regenerateTurn(turn.id), [regenerateTurn, turn.id])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
   const monitorOpen = useAppState((state) => state.panel === 'monitor')
+  // 这一轮每次改动前后的全文（改动卡片只带变化的那段，按顺序重放还原），算改了哪些文件、净增删多少行
+  const edits = useMemo(() => replayEdits(turn.items), [turn.items])
   // 每张子智能体卡片里的工具调用，按发生顺序
   const agentSteps = useMemo(() => {
     const steps = new Map<string, ToolItem[]>()
@@ -357,7 +374,7 @@ function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, o
     turn.items.forEach((item, index) => {
       if (item.kind !== 'tool' || toolBlockType(item) !== 'finish') return
       const scope = turn.items.slice(start, index + 1)
-      result.set(item.id, { files: filesOf(scope), commandsFailed: scope.filter((entry) => entry.kind === 'tool' && entry.succeeded === false).length })
+      result.set(item.id, { files: filesOf(scope, edits), commandsFailed: scope.filter((entry) => entry.kind === 'tool' && entry.succeeded === false).length })
       if (item.status === 'completed') start = index + 1
     })
     return result
@@ -394,6 +411,7 @@ function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, o
               <EditGroup
                 key={block.id}
                 items={block.items}
+                edits={edits}
                 projectPath={task.project}
                 expanded={showEditDetails}
                 toggle={block.id === editToggleId ? <EditDetailsToggle expanded={showEditDetails} onToggle={() => setShowEditDetails(!showEditDetails)} /> : undefined}
@@ -486,7 +504,7 @@ function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore, o
       )}
     </section>
   )
-}
+})
 
 function PermissionPending({ toolCall }: { toolCall: PermissionRequestEvent['toolCall'] }) {
   const input = toolCall.rawInput
@@ -770,7 +788,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
 }
 
 // 停下的原因和下一步。只有最后一个执行轮带按钮：继续、换个模型继续、压缩上下文、去设置、定位问题
-function StopSummary({ turn, task, actionable }: { turn: Turn; task: LiveTask; actionable: boolean }) {
+function StopSummary({ turn, task, actionable }: { turn: Turn; task: TurnTask; actionable: boolean }) {
   const summary = stopSummary(turn)
   if (!summary) return null
   const resume = () => void sendMessage(task.sessionId, '继续')
@@ -888,7 +906,7 @@ function DisclosureRow({ open, onToggle, className, children }: { open?: boolean
 
 // 定位结果：原因、证据（点一下滚到那一步）、做完和没做完的、可以改的修复提示词，以及只有用户能回答的问题。
 // 修复提示词可以填进输入框再改、直接发送，或者重新定位一次
-function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: LiveTask; onLocate(id: string): void }) {
+function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTask; onLocate(id: string): void }) {
   const diagnosis = item.diagnosis!
   const [prompt, setPrompt] = useState(diagnosis.prompt)
   const { target } = diagnosis
@@ -968,7 +986,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: LiveTas
 }
 
 // 计划：可以直接改文字；点「按计划执行」，把这一轮的需求和改过的计划作为新的一轮发给编码模型
-function PlanCard({ item, request, task }: { item: ToolItem; request: string; task: LiveTask }) {
+function PlanCard({ item, request, task }: { item: ToolItem; request: string; task: TurnTask }) {
   const original = textOf(item)
   const [text, setText] = useState(original)
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
@@ -1019,11 +1037,11 @@ function CompactionRow({ item }: { item: ToolItem }) {
   )
 }
 
-function EditGroup({ items, projectPath, expanded, toggle }: { items: ToolItem[]; projectPath: string; expanded: boolean; toggle?: React.ReactNode }) {
+function EditGroup({ items, edits, projectPath, expanded, toggle }: { items: ToolItem[]; edits: Map<string, EditTexts>; projectPath: string; expanded: boolean; toggle?: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   useEffect(() => setOpen(expanded), [expanded])
+  const files = useMemo(() => filesOf(items, edits), [items, edits])
   if (items.length === 1 && items[0]) return <EditBlock item={items[0]} projectPath={projectPath} expanded={expanded} toggle={toggle} />
-  const files = filesOf(items)
   return (
     <div className="space-y-2" data-testid="edit-group">
       <div className="flex items-center gap-2">
@@ -1056,11 +1074,11 @@ function EditBlock({ item, projectPath, expanded = false, toggle }: { item: Tool
                 <StatusIcon status={item.status} />
                 <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>
                 <span title={path} className="min-w-0 flex-1 truncate font-mono text-xs">{path}</span>
-                <DiffCounts {...diffStats(content.oldText ?? null, content.newText)} />
+                <DiffCounts {...editCounts(content)} />
               </button>
               {index === 0 && toggle && <span className="flex pr-1">{toggle}</span>}
             </div>
-            {open && <DiffView oldText={content.oldText ?? null} newText={content.newText} />}
+            {open && <DiffView oldText={content.oldText ?? null} newText={content.newText} startLine={editMeta(content)?.startLine} />}
           </div>
         )
       })}
@@ -1313,7 +1331,7 @@ function parseReport(text: string): { summary: string; findings: ReportFinding[]
   return { summary, findings }
 }
 
-function DeepScanReport({ item, task }: { item: ToolItem; task: LiveTask }) {
+function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
   const { summary, findings } = useMemo(() => parseReport(textOf(item)), [item])
   // 默认勾上高危的
   const [selected, setSelected] = useState<Set<number>>(() => new Set(findings.flatMap((finding, index) => (finding.level === '高危' ? [index] : []))))
@@ -1371,14 +1389,29 @@ interface ChangedFile {
   removed: number
 }
 
-function filesOf(items: TranscriptItem[]): ChangedFile[] {
+// 一张改动卡片的增删行数：卡片内容不变就不重算（流式输出时运行中那一轮每来一条更新都会重画）
+const editCountsCache = new WeakMap<object, { added: number; removed: number }>()
+function editCounts(content: { oldText?: string | null; newText: string }): { added: number; removed: number } {
+  let counts = editCountsCache.get(content)
+  if (!counts) {
+    const { added, removed } = diffStats(content.oldText ?? null, content.newText)
+    counts = { added, removed }
+    editCountsCache.set(content, counts)
+  }
+  return counts
+}
+
+// 每个文件按第一次改之前和最后一次改之后的全文算净改动（edits 是 replayEdits 还原的全文）
+function filesOf(items: TranscriptItem[], edits: Map<string, EditTexts>): ChangedFile[] {
   const files = new Map<string, { oldText: string | null; newText: string }>()
   for (const item of items) {
     if (item.kind !== 'tool' || item.status !== 'completed') continue
     for (const content of item.content) {
       if (content.type !== 'diff') continue
+      const texts = edits.get(editKey(item.id, content.path))
+      if (!texts) continue
       const existing = files.get(content.path)
-      files.set(content.path, { oldText: existing ? existing.oldText : content.oldText ?? null, newText: content.newText })
+      files.set(content.path, { oldText: existing ? existing.oldText : texts.before, newText: texts.after })
     }
   }
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
