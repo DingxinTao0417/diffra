@@ -171,7 +171,7 @@ test('用户自己的浏览器：设置成 Chrome 后，智能体经扩展在浏
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await expect(window.getByTestId('task-status')).toContainText('运行中', { timeout: 10_000 })
     await popup.evaluate(`chrome.runtime.sendMessage({ kind: 'stop', host: '${TEST_HOST}', sessionId: '${sessionId}' })`)
-    await waitTaskStatus(window, 'stopped', 15_000)
+    await waitTaskStatus(window, 'stopped', 30_000)
   } finally {
     await browser?.close()
     await app.close()

@@ -437,6 +437,12 @@ export function addTodo(text: string, at?: Date, options: { project?: string | n
   return saveTodos((todos) => [todo, ...todos])
 }
 
+// 验收派给任务的待办：标记完成并记下验收时间，待办从待验收列表里消失
+export function acceptTodos(ids: string[]): Promise<void> {
+  const acceptedAt = new Date().toISOString()
+  return saveTodos((todos) => todos.map((todo) => (ids.includes(todo.id) && !todo.done ? { ...todo, done: true, acceptedAt } : todo)))
+}
+
 // 把几条待办派给任务：新任务直接发出去；已有任务发送（运行中排队）或只填进输入框。记下派给了谁
 export async function dispatchTodos(
   ids: string[],

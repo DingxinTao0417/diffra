@@ -37,7 +37,7 @@ export function TodoInput({
   const due = at ?? defaultAt ?? null
   const submit = () => {
     if (!draft.trim()) return
-    void addTodo(draft, due ?? undefined, { project, tags })
+    addTodo(draft, due ?? undefined, { project, tags }).catch(() => showToast('保存待办失败，请重试'))
     setDraft('')
     setAt(null)
     setTags([])

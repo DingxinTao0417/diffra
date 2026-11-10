@@ -15,6 +15,7 @@ const todoSchema = z.object({
   createdAt: z.iso.datetime(),
   done: z.boolean(),
   sentTo: z.object({ sessionId: z.string().min(1), title: z.string(), at: z.iso.datetime() }).nullable(),
+  acceptedAt: z.iso.datetime().nullable().optional(),
   schedule: z
     .object({
       at: z.iso.datetime(),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlarmClock, Bell, Pencil, Send, Tags, Trash2 } from 'lucide-react'
+import { AlarmClock, Bell, CircleCheck, Pencil, Send, Tags, Trash2 } from 'lucide-react'
 import type { Todo, TodoSendTarget } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -7,14 +7,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { folderName, formatTime } from '@/lib/format'
 import { dueParts, formatDue, isDue } from '@/lib/todo-time'
-import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
-import { openTask, saveTodos, setTodoSchedule } from '@/state/actions'
-import { store, useAppState } from '@/state/store'
+import { acceptTodos, openTask, saveTodos, setTodoSchedule } from '@/state/actions'
+import { showToast, store, useAppState } from '@/state/store'
 import { sendScheduleNow } from '@/state/todo-scheduler'
 import { SchedulePicker } from './SchedulePicker'
+import { taskFinishedForTodo } from './todo-acceptance'
 import { TodoTagEditor } from './TodoTagEditor'
-
-const FINISHED = new Set<VerdictTone>(['verified', 'unverified', 'nochange', 'done'])
 
 // 一条待办：勾完成、双击改字、定时、派给任务、删除。到期时间、定时发送的结果写在下面一行
 export function TodoRow({
@@ -42,11 +40,14 @@ export function TodoRow({
   const [editing, setEditing] = useState<string | null>(null)
   const [editingTags, setEditingTags] = useState(false)
   const row = useRef<HTMLLIElement>(null)
+  const save = (change: (todos: Todo[]) => Todo[]) => {
+    saveTodos(change).catch(() => showToast('保存待办失败，请重试'))
+  }
   const focused = useAppState((state) => state.todoFocus === todo.id)
   const task = useAppState((state) => (todo.sentTo ? state.tasks.find((item) => item.sessionId === todo.sentTo!.sessionId) : undefined))
   // 派出去的任务在这次打开过（还在内存里）并且做完了，提示可以勾掉；不自动勾
   const live = useAppState((state) => (todo.sentTo ? state.live[todo.sentTo.sessionId] : undefined))
-  const finished = !todo.done && live !== undefined && FINISHED.has(turnVerdict(live).tone)
+  const finished = !todo.done && taskFinishedForTodo(live)
   const schedule = todo.schedule ?? null
   const overdue = isDue(todo, now)
   const result = schedule?.result ?? null
@@ -62,7 +63,7 @@ export function TodoRow({
   const saveText = () => {
     const text = editing?.trim()
     setEditing(null)
-    if (text && text !== todo.text) void saveTodos((todos) => todos.map((item) => (item.id === todo.id ? { ...item, text } : item)))
+    if (text && text !== todo.text) save((todos) => todos.map((item) => (item.id === todo.id ? { ...item, text } : item)))
   }
   const pickTime = (at: Date, kind: 'remind' | 'send') => {
     if (kind === 'send') onScheduleSend(at)
@@ -87,7 +88,13 @@ export function TodoRow({
         className="mt-0.5"
         aria-label={selecting ? `选中：${todo.text}` : `完成：${todo.text}`}
         checked={selecting ? selected : todo.done}
-        onCheckedChange={() => (selecting ? onSelect?.() : void saveTodos((todos) => todos.map((item) => (item.id === todo.id ? { ...item, done: !item.done } : item))))}
+        onCheckedChange={() =>
+          selecting
+            ? onSelect?.()
+            : save((todos) =>
+                todos.map((item) => (item.id === todo.id ? { ...item, done: !item.done, acceptedAt: item.done ? null : item.acceptedAt } : item)),
+              )
+        }
       />
       <div className="min-w-0 flex-1">
         {editing !== null ? (
@@ -165,10 +172,16 @@ export function TodoRow({
             </button>
           )}
           {finished && (
-            <span className="text-foreground" data-testid="todo-finished">
-              任务已完成，可以勾掉
+            <span className="flex items-center gap-1 rounded-md bg-soft px-1.5 py-0.5 text-foreground" data-testid="todo-finished">
+              <CircleCheck className="size-3" />
+              任务已完成，待验收
+              {/* primary-color-allow: 验收并完成待办，是下一步动作 */}
+              <button type="button" className="ml-0.5 font-semibold text-primary hover:underline" onClick={() => acceptTodos([todo.id]).catch(() => showToast('验收失败，请重试'))}>
+                验收
+              </button>
             </span>
           )}
+          {todo.acceptedAt && <span data-testid="todo-accepted">已验收</span>}
         </div>
         {editingTags && (
           <div
@@ -180,7 +193,7 @@ export function TodoRow({
             <TodoTagEditor
               autoFocus
               tags={todo.tags}
-              onChange={(tags) => void saveTodos((todos) => todos.map((item) => (item.id === todo.id ? { ...item, tags } : item)))}
+              onChange={(tags) => save((todos) => todos.map((item) => (item.id === todo.id ? { ...item, tags } : item)))}
             />
           </div>
         )}
@@ -214,7 +227,7 @@ export function TodoRow({
           <RowAction label="发送给任务" onClick={onSend}>
             <Send className="size-3.5" />
           </RowAction>
-          <RowAction label="删除" onClick={() => void saveTodos((todos) => todos.filter((item) => item.id !== todo.id))}>
+          <RowAction label="删除" onClick={() => save((todos) => todos.filter((item) => item.id !== todo.id))}>
             <Trash2 className="size-3.5" />
           </RowAction>
         </div>

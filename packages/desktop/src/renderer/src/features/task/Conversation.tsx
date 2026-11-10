@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DiffCounts, DiffView, diffStats, relativePath } from '@/features/session/DiffView'
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
+import { TodoAcceptanceCard } from '@/features/todos/TodoAcceptanceCard'
 import { errorMessage } from '@/lib/errors'
 import { formatDuration } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
@@ -297,6 +298,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
               />
             )
           })}
+          <TodoAcceptanceCard task={task} />
         </div>
       </div>
       {task.turns.length > 1 && <Timeline turns={task.turns} activeTurn={activeTurn ?? task.turns.at(-1)?.id ?? null} onJump={scrollToTurn} />}

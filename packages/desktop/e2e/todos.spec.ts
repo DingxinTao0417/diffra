@@ -87,7 +87,7 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
     await window.getByTestId('sidebar').getByRole('button', { name: /待办/ }).click()
     const sent = rows.filter({ hasText: '给首页加暗色模式开关' })
     await expect(sent.getByTestId('todo-sent')).toContainText('已派给 给首页加暗色模式开关')
-    await expect(sent.getByTestId('todo-finished')).toBeVisible()
+    await expect(sent.getByTestId('todo-finished')).toContainText('待验收')
 
     // 两条一起：选中后派给已有任务，优化后只填进输入框
     await window.getByRole('button', { name: '选几条一起发' }).click()

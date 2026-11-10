@@ -9,6 +9,8 @@ export interface Todo {
   createdAt: string
   done: boolean
   sentTo: { sessionId: string; title: string; at: string } | null
+  // 派出去的任务完成后，用户验收的时间；旧数据没有这个字段
+  acceptedAt?: string | null
   // 定了时间的待办；旧数据没有这个字段
   schedule?: TodoSchedule | null
 }
