@@ -24,6 +24,7 @@ import {
   Sun,
   TriangleAlert,
 } from 'lucide-react'
+import type { ChangelogRelease } from '../../../../shared/changelog'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
 import {
   type Appearance,
@@ -55,6 +56,7 @@ import { BrandMark } from '@/features/shell/BrandMark'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
 import { BrowserSection } from './BrowserSection'
+import { ReleaseItems, ReleaseList } from './Changelog'
 import { UsageSection } from './UsageSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -670,8 +672,13 @@ function ArchivedRow({ task }: { task: StoredSessionSummary }) {
 function AboutSection() {
   const [version, setVersion] = useState<string | null>(null)
   const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [releases, setReleases] = useState<ChangelogRelease[] | null>(null)
   useEffect(() => {
     window.diffra.getAppVersion().then(setVersion, (error: unknown) => console.error('读取版本号失败', error))
+    window.diffra.getChangelog().then(setReleases, (error: unknown) => {
+      console.error('读取更新日志失败', error)
+      setReleases([])
+    })
     const unsubscribe = window.diffra.onUpdateStatus(setStatus)
     window.diffra.getUpdateStatus().then(setStatus, (error: unknown) => setStatus({ state: 'error', message: errorMessage(error) }))
     return unsubscribe
@@ -716,6 +723,21 @@ function AboutSection() {
             </Tooltip>
           )}
         </SettingsRow>
+        {(status?.state === 'downloading' || status?.state === 'downloaded') && status.notes && (
+          <div className="px-4 py-3" data-testid="update-notes">
+            <div className="mb-2 text-sm font-medium tabular-nums">{status.version} 的改动</div>
+            <ReleaseItems added={status.notes.added} fixed={status.notes.fixed} />
+          </div>
+        )}
+      </SettingsGroup>
+      <SettingsGroup title="更新日志">
+        {releases === null ? (
+          <div className="px-4 py-3 text-sm text-muted-foreground">…</div>
+        ) : releases.length === 0 ? (
+          <div className="px-4 py-3 text-sm text-muted-foreground">这个版本没有附带更新日志。</div>
+        ) : (
+          <ReleaseList releases={releases} current={version} />
+        )}
       </SettingsGroup>
     </>
   )

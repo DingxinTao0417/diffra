@@ -167,6 +167,8 @@ const settingsSchema = z.object({
     .default([]),
   // 第 119 步加的
   defaultWorkspace: z.string().nullable().default(null),
+  // 第 293 步加的：上次启动的版本，升级后第一次启动提示改了什么
+  lastSeenVersion: z.string().nullable().default(null),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -184,6 +186,7 @@ const EMPTY_SETTINGS: Settings = {
   mcpServers: [],
   plugins: [],
   defaultWorkspace: null,
+  lastSeenVersion: null,
 }
 
 export class SettingsStore {

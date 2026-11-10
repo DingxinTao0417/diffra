@@ -41,6 +41,7 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
+import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
 
 export const IPC_CHANNELS = {
@@ -50,6 +51,8 @@ export const IPC_CHANNELS = {
   updateStatusChanged: 'update:status-changed',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
+  changelogGet: 'changelog:get',
+  changelogUpdateNotice: 'changelog:update-notice',
   settingsGet: 'settings:get',
   providerSave: 'settings:provider-save',
   providerDelete: 'settings:provider-delete',
@@ -193,15 +196,24 @@ export type CoreStatus =
   | { state: 'connected'; agentName: string; agentVersion: string; protocolVersion: number }
   | { state: 'failed'; error: string }
 
+// 新版本的说明从更新包的 latest.yml 来（旧客户端里没有新版本的日志）；没写的话是 null
+export type UpdateNotes = { added: string[]; fixed: string[] } | null
+
 export type UpdateStatus =
   // 未打包运行（开发模式、e2e）时 electron-updater 不工作
   | { state: 'disabled' }
   | { state: 'idle' }
   | { state: 'checking' }
   | { state: 'up-to-date' }
-  | { state: 'downloading'; version: string; percent: number }
-  | { state: 'downloaded'; version: string }
+  | { state: 'downloading'; version: string; percent: number; notes: UpdateNotes }
+  | { state: 'downloaded'; version: string; notes: UpdateNotes }
   | { state: 'error'; message: string }
+
+// from 为 null：升级前的版本还不记版本号，不知道从哪升上来的
+export interface UpdateNotice {
+  from: string | null
+  to: string
+}
 
 export interface ProjectState {
   path: string
@@ -302,6 +314,10 @@ export interface DiffraApi {
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void
   checkForUpdates(): Promise<void>
   installUpdate(): Promise<void>
+  // 这个版本带的更新日志（新的在前）
+  getChangelog(): Promise<ChangelogRelease[]>
+  // 升级后第一次启动：从哪个版本升上来的；只给一次，之后是 null
+  takeUpdateNotice(): Promise<UpdateNotice | null>
   getSettings(): Promise<SettingsView>
   saveProvider(input: ProviderInput): Promise<SettingsView>
   deleteProvider(providerId: string): Promise<SettingsView>

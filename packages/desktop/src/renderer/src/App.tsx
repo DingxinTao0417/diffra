@@ -3,6 +3,7 @@ import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { HomeView } from '@/features/home/HomeView'
+import { UpdateNoticeDialog } from '@/features/settings/Changelog'
 import { SettingsView } from '@/features/settings/SettingsView'
 import { SearchDialog } from '@/features/shell/SearchDialog'
 import { openProjectFolder, Sidebar } from '@/features/shell/Sidebar'
@@ -154,6 +155,7 @@ export function App() {
       </div>
       <SearchDialog />
       <QuickTodo />
+      <UpdateNoticeDialog />
       <Toast />
     </TooltipProvider>
   )

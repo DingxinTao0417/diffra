@@ -13,6 +13,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          # 更新日志按 tag 分版本、从提交信息生成，要完整历史和全部 tag
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
 
@@ -33,6 +36,11 @@ jobs:
             echo "tag $GITHUB_REF_NAME 与 packages/desktop/package.json 的 version $version 不一致"
             exit 1
           fi
+
+      # 这一版至少要有一条 feat 或 fix 提交，不然更新日志是空的
+      - name: 检查更新日志
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node packages/desktop/scripts/changelog.ts --check
 
       - run: pnpm --filter @diffra/desktop exec install-electron
 
@@ -60,8 +68,11 @@ jobs:
             "packages/desktop/release/Diffra-Setup-$version.exe.blockmap"
             "packages/desktop/release/latest.yml"
           )
+          # 说明用这一版的更新日志
+          node packages/desktop/scripts/changelog.ts --notes release-notes.md
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --notes-file release-notes.md
           else
-            gh release create "$tag" "${files[@]}" --draft --target "$GITHUB_SHA" --title "Diffra $version" --notes "CI 构建，提交 $GITHUB_SHA"
+            gh release create "$tag" "${files[@]}" --draft --target "$GITHUB_SHA" --title "Diffra $version" --notes-file release-notes.md
           fi

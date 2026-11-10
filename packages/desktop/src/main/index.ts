@@ -7,6 +7,7 @@ import { browserHost, registerBrowserIpc } from './browser'
 import { designHost, registerDesignIpc } from './design'
 import { logEvent } from './app-log'
 import { registerAttachmentIpc } from './attachments'
+import { recordVersion, registerChangelogIpc } from './changelog'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { registerPluginsIpc } from './plugins-ipc'
@@ -109,6 +110,9 @@ app
     })
     const userDataDir = app.getPath('userData')
     const settings = await SettingsStore.open(userDataDir)
+    registerChangelogIpc()
+    // 记不下版本号只是少一次「已更新」提示，不影响启动
+    await recordVersion(settings).catch((error: unknown) => console.error('[changelog] 记录版本号失败', error))
     const secrets = await SecretStore.open(userDataDir)
     registerSettingsIpc(settings, secrets)
     registerSessionIpc(settings, secrets, userDataDir)

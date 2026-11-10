@@ -2,7 +2,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, type Locator, type Page, test } from '@playwright/test'
 import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
-import { launchApp, makeUserDataDir } from './launch'
+import { APP_VERSION, launchApp, makeUserDataDir } from './launch'
 import { openModelsPage, providerCard } from './model-setup'
 
 // Lobe Icons 的每个 SVG 里都有 <title>品牌名</title>，首字母方块和 lucide 图标没有
@@ -32,7 +32,8 @@ function savedEnabled(userDataDir: string, name: string, modelId: string): boole
 // 应用启动前写好设置文件，只带必填项和 extra 里的字段
 function writeSettings(userDataDir: string, extra: Record<string, unknown> = {}): void {
   const roles = { coder: null, planner: null, reviewer: null, fallback: null }
-  writeFileSync(join(userDataDir, 'settings.json'), JSON.stringify({ version: 1, providers: [], roles, ...extra }))
+  // 记成已经看过这个版本：配了模型的旧设置文件会被当成老用户升级，弹「已更新」提示
+  writeFileSync(join(userDataDir, 'settings.json'), JSON.stringify({ version: 1, providers: [], roles, lastSeenVersion: APP_VERSION, ...extra }))
 }
 
 async function openMenuGroup(window: Page, providerName: string): Promise<{ label: Locator; menu: Locator }> {

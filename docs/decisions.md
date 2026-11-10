@@ -95,10 +95,18 @@ v2：
 - 发布流程（现阶段手动）：
   1. 改 `packages/desktop/package.json` 的 version；
   2. 提交后打 `vX.Y.Z` tag 并推送；
-  3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致，跑类型检查、测试并打包，产物传到 `v<版本号>` 的草稿 Release（已有就覆盖里面的文件）；
+  3. CI（`.github/workflows/release-windows.yml`）校验 tag 和版本号一致、这一版有中文更新日志，跑类型检查、测试并打包，产物传到 `v<版本号>` 的草稿 Release（已有就覆盖里面的文件，说明是这一版的更新日志）；
      - 不用 Actions 的产物存储：账号的存储配额按月累计，满了以后上传直接失败（2026-11 的一次构建就卡在这一步）。仓库私有，草稿 Release 只有有权限的人能下载。
   4. 本机运行 `pnpm --filter @diffra/desktop publish:release`（`scripts/publish-release.ts`，服务器连接方式写在不提交的 `publish.config.json`，样例 `publish.config.example.json`）：从 Release 下载三个文件，核对 `latest.yml` 的版本、文件名、sha512 和大小，先传安装包和 `.blockmap`、最后传 `latest.yml`，每个先传成 `.partial` 再改名；再把官网用的 `Diffra-Setup-latest.exe` 指向这个版本；传完从公网取回核对。
   - 旧版本的 `.blockmap` 要留在更新源上，客户端靠它做差分下载；找不到时会退回整包下载（约 116MB）。
+- 更新日志（第 290–297 步）：从提交信息自动生成，客户端、官网、更新包、GitHub Release 用同一份。
+  - 生成：`scripts/changelog.ts` 按 `v<版本号>` 的 tag 分版本，收每个版本和上一个 tag 之间的 `feat:`、`fix:` 提交；主题按「；」分条，去掉末尾的「（第 x–y 步）」；`fix:` 的和以「修」开头的条目算修复，其余算新增；`chore`、`docs`、`test`、`ci` 和合并提交不收。`package.json` 的版本比最新 tag 新时，最新 tag 之后的提交算这个版本，日期是生成那天。
+  - 所以 feat、fix 提交的主题就是用户看到的日志：用中文、写给用户看，一件事一条，用「；」分开，不写内部实现。早期几条英文提交按提交哈希在 `scripts/changelog-overrides.ts` 里配了中文说明（提交已推送，不改历史）。
+  - `build`、`package`、`dev`、`test` 都会先生成 `out/changelog.json`（不进仓库），客户端主进程从应用目录读它。
+  - 打包时把这一版的说明写进 `latest.yml` 的 `releaseNotes`（`electron-builder.config.ts` 的 `releaseInfo`）：旧客户端包里没有新版本的日志，下载新版时靠它在「更新与关于」里显示新版改了什么。
+  - 客户端：「更新与关于」按版本列出全部日志，当前版本标「当前」。设置里记 `lastSeenVersion`，升级后第一次启动弹窗列出这次升级带来的版本；全新安装不弹；以前的版本不记版本号，配过模型的当成老用户，只列当前版本。
+  - CI：checkout 要完整历史和 tag（`fetch-depth: 0`）；打 tag 发版时 `changelog.ts --check` 要求这一版至少一条日志、而且每条都是中文，不满足就失败；草稿 Release 的说明换成这一版的日志。
+  - 官网的 `changelog.html` 由 `scripts/build-website.ts` 生成，不进仓库；顶栏有链接。要在 `publish:release` 之后再发官网。
 - 打包版验收：`pnpm --filter @diffra/desktop test:packaged` 先打包，再把全部 e2e 跑在打包出来的 `release/win-unpacked/Diffra.exe` 上（Playwright 的 `packaged` 项目；`pnpm test` 只跑开发版）。
   - 打包版只认正式数据目录，不看 `DIFFRA_USER_DATA_DIR`；测试用 Chromium 的 `--user-data-dir` 启动参数换成临时目录，实测生效，正式目录不受影响。
   - 打包版启动就检查更新；更新源不通时「关于」里显示「检查更新失败：」加原始错误（比如 `net::ERR_NAME_NOT_RESOLVED`）。

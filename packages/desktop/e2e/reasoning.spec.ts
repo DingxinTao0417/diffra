@@ -2,7 +2,7 @@ import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
-import { launchApp, makeUserDataDir } from './launch'
+import { APP_VERSION, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
 import { reasoningEffortsFor } from '../src/shared/reasoning'
 
@@ -100,7 +100,8 @@ test('模型多于 8 个时面板上方有搜索框，按名称或服务商筛�
   const models = Array.from({ length: 9 }, (_, index) => ({ id: `model-${index + 1}`, contextWindow: 128_000, images: false }))
   const providers = [{ id: 'many', presetId: null, icon: null, name: '很多模型', protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', models }]
   const roles = { coder: { providerId: 'many', modelId: 'model-1' }, planner: null, reviewer: null, fallback: null }
-  writeFileSync(join(userDataDir, 'settings.json'), JSON.stringify({ version: 1, providers, roles }))
+  // 记成已经看过这个版本：配了模型的设置文件会被当成老用户升级，弹「已更新」提示
+  writeFileSync(join(userDataDir, 'settings.json'), JSON.stringify({ version: 1, providers, roles, lastSeenVersion: APP_VERSION }))
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()

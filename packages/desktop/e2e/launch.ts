@@ -1,9 +1,10 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron, type ElectronApplication, test } from '@playwright/test'
 
 export const desktopDir = resolve(import.meta.dirname, '..')
+export const APP_VERSION = (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
 
 // 每个测试用自己的临时数据目录，不碰开发和正式安装的数据
 export function makeUserDataDir(): string {

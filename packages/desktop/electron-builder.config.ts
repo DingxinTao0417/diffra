@@ -1,6 +1,8 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import type { Configuration } from 'electron-builder'
+import { type ChangelogRelease, formatNotes } from './src/shared/changelog.ts'
 
 // 更新地址会写进已安装客户端的 resources/app-update.yml，发布后就不能再改。
 // DIFFRA_UPDATE_URL 只在本地验证更新流程时使用，指向临时更新源；正式构建不要设置它。
@@ -9,6 +11,16 @@ const updateUrl = process.env.DIFFRA_UPDATE_URL || 'https://update.diffra.dev/wi
 // rg 二进制随 core 的依赖 @vscode/ripgrep 按平台下载；打包时拷到 resources，主进程通过 DIFFRA_RG_PATH 告诉 core
 const requireFromCore = createRequire(fileURLToPath(new URL('../core/package.json', import.meta.url)))
 const { rgPath } = requireFromCore('@vscode/ripgrep') as { rgPath: string }
+
+// 这一版的更新日志写进 latest.yml 的 releaseNotes，旧客户端下载好新版时能看到改了什么。
+// out/changelog.json 由 package 脚本在打包前生成；单独读这个配置（publish-release.ts）时没有也没关系
+function releaseNotes(): string | null {
+  const file = fileURLToPath(new URL('./out/changelog.json', import.meta.url))
+  if (!existsSync(file)) return null
+  const { version } = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')) as { version: string }
+  const release = (JSON.parse(readFileSync(file, 'utf8')) as ChangelogRelease[]).find((item) => item.version === version)
+  return release ? formatNotes(release) || null : null
+}
 
 const config: Configuration = {
   appId: 'dev.diffra.desktop',
@@ -39,6 +51,7 @@ const config: Configuration = {
     include: 'build/installer.nsh',
   },
   publish: [{ provider: 'generic', url: updateUrl }],
+  releaseInfo: { releaseNotes: releaseNotes() },
 }
 
 export default config

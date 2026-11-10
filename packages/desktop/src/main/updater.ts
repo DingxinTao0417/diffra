@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { autoUpdater } from 'electron-updater'
-import { IPC_CHANNELS, type UpdateStatus } from '../shared/ipc'
+import { autoUpdater, type UpdateInfo } from 'electron-updater'
+import { parseNotes } from '../shared/changelog'
+import { IPC_CHANNELS, type UpdateNotes, type UpdateStatus } from '../shared/ipc'
 import { logEvent } from './app-log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
@@ -12,6 +13,13 @@ function setStatus(next: UpdateStatus): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(IPC_CHANNELS.updateStatusChanged, next)
   }
+}
+
+// latest.yml 里的 releaseNotes 是打包时写进去的这版说明（scripts/changelog.ts 的 formatNotes）
+function notesOf(info: UpdateInfo): UpdateNotes {
+  const text = typeof info.releaseNotes === 'string' ? info.releaseNotes : (info.releaseNotes?.[0]?.note ?? '')
+  const notes = parseNotes(text)
+  return notes.added.length + notes.fixed.length > 0 ? notes : null
 }
 
 function checkForUpdates(): void {
@@ -43,11 +51,11 @@ export function setupUpdater(): void {
   }
   autoUpdater.on('checking-for-update', () => setStatus({ state: 'checking' }))
   autoUpdater.on('update-not-available', () => setStatus({ state: 'up-to-date' }))
-  autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info.version, percent: 0 }))
+  autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info.version, percent: 0, notes: notesOf(info) }))
   autoUpdater.on('download-progress', (progress) => {
     if (status.state === 'downloading') setStatus({ ...status, percent: Math.floor(progress.percent) })
   })
-  autoUpdater.on('update-downloaded', (info) => setStatus({ state: 'downloaded', version: info.version }))
+  autoUpdater.on('update-downloaded', (info) => setStatus({ state: 'downloaded', version: info.version, notes: notesOf(info) }))
   autoUpdater.on('error', (error) => {
     console.error('[updater] 更新失败', error)
     setStatus({ state: 'error', message: error.message })

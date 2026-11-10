@@ -184,6 +184,8 @@ export interface Settings {
   plugins: InstalledPlugin[]
   // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
   defaultWorkspace: string | null
+  // 上次启动的版本；升级后第一次启动据此提示改了什么，界面不显示
+  lastSeenVersion: string | null
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
