@@ -1,6 +1,6 @@
 import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
-import type { ModelRef } from '../../../shared/settings'
+import type { Layout, ModelRef } from '../../../shared/settings'
 import type { Todo, TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyAppearance } from '../lib/appearance'
@@ -192,6 +192,16 @@ export function wireCoreEvents(): () => void {
     const { route, panel, live } = store.get()
     if (route.name === 'task' && route.sessionId === sessionId && live[sessionId]?.design && panel !== 'design') store.set((current) => ({ ...current, panel: 'design' }))
   })
+  // 用户自己的浏览器：扩展连上、断开；扩展里点了停止；扩展弹窗里能选的任务
+  window.diffra.getBrowserBridgeStatus().then(
+    (bridge) => store.set((current) => ({ ...current, bridge })),
+    (error: unknown) => console.error('[browser] 读取扩展连接状态失败', error),
+  )
+  const offBridge = window.diffra.onBrowserBridgeStatus((bridge) => store.set((current) => ({ ...current, bridge })))
+  const offStopRequest = window.diffra.onBrowserStopRequest(({ sessionId }) => {
+    if (store.get().live[sessionId]?.running) cancelTask(sessionId)
+  })
+  const offTasks = syncBridgeTasks()
   return () => {
     offUpdate()
     offPermission()
@@ -199,6 +209,43 @@ export function wireCoreEvents(): () => void {
     offBrowserState()
     offBrowserActivity()
     offDesignActivity()
+    offBridge()
+    offStopRequest()
+    offTasks()
+  }
+}
+
+const BRIDGE_TASKS = 30
+const BRIDGE_SYNC_MS = 300
+
+// 扩展弹窗里「交给 Diffra」列出最近的任务（没归档的，运行中的排前面）；任务标题也用作浏览器里分组的名字
+function syncBridgeTasks(): () => void {
+  let last = ''
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const push = () => {
+    timer = null
+    const { tasks, live } = store.get()
+    // 刚建的任务可能还不在任务列表里，先从正在开着的任务里补上
+    const stored = new Set(tasks.map((task) => task.sessionId))
+    const fresh = Object.values(live).filter((task) => !stored.has(task.sessionId))
+    const list = [
+      ...fresh.map((task) => ({ sessionId: task.sessionId, title: task.title, running: task.running })),
+      ...tasks.filter((task) => !task.archived).map((task) => ({ sessionId: task.sessionId, title: live[task.sessionId]?.title ?? task.title, running: live[task.sessionId]?.running ?? false })),
+    ]
+      .slice(0, BRIDGE_TASKS)
+      .sort((a, b) => Number(b.running) - Number(a.running))
+    const key = JSON.stringify(list)
+    if (key === last) return
+    last = key
+    window.diffra.setBrowserBridgeTasks(list)
+  }
+  const off = store.subscribe(() => {
+    if (!timer) timer = setTimeout(push, BRIDGE_SYNC_MS)
+  })
+  push()
+  return () => {
+    off()
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -543,6 +590,23 @@ export async function setPermissionMode(sessionId: string | null, mode: Permissi
     }
   } catch (error) {
     showToast(errorMessage(error))
+  }
+}
+
+// 拖动分栏时只改内存，松手后 saveLayout 再存；设置还没读到时不动
+export function setLayout(change: Partial<Layout>): void {
+  store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, layout: { ...state.settings.layout, ...change } } } : state))
+}
+
+// 不拿返回的设置覆盖内存：存的时候可能又拖过一次
+export async function saveLayout(change: Partial<Layout>): Promise<void> {
+  setLayout(change)
+  const layout = store.get().settings?.layout
+  if (!layout) return
+  try {
+    await window.diffra.savePreferences({ layout })
+  } catch (error) {
+    showToast(`保存布局失败：${errorMessage(error)}`)
   }
 }
 

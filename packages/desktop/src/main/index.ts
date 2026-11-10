@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { registerBrowserIpc } from './browser'
+import { browserHost, registerBrowserIpc } from './browser'
 import { designHost, registerDesignIpc } from './design'
 import { logEvent } from './app-log'
 import { registerAttachmentIpc } from './attachments'
@@ -115,6 +115,8 @@ app
     registerTodosIpc(userDataDir)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
+    // 浏览器扩展的宿主登记和管道：失败了只影响用户自己的浏览器，内置浏览器照常
+    browserHost.start(settings, userDataDir).catch((error: unknown) => console.error('[browser] 启动浏览器扩展通道失败', error))
     registerDesignIpc()
     registerAttachmentIpc()
     registerTerminalIpc()
@@ -135,6 +137,7 @@ app.on('will-quit', () => {
   logEvent('[quit] 窗口已全部关闭，结束终端和 core')
   killAllTerminals()
   stopCore()
+  browserHost.stop()
 })
 
 app.on('quit', (_event, exitCode) => logEvent(`[quit] 主进程退出 code=${exitCode}`))

@@ -1,0 +1,66 @@
+name: 浏览器扩展发布
+
+# 推 ext-v<版本号> 的 tag：打商店包，放进草稿 Release，再传到 Chrome 应用商店和 Edge 加载项商店提交审核。
+# 商店凭据放在仓库的 Actions secrets 里，没配的商店跳过（见 packages/desktop/scripts/publish-extension.ts）
+on:
+  push:
+    tags: ['ext-v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tag 和扩展清单的版本不一致会传错版本；商店还要求版本号比线上的大
+      - name: 校验 tag 与扩展版本号一致
+        if: startsWith(github.ref, 'refs/tags/ext-v')
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/desktop/browser-extension/manifest.json').version")
+          if [ "ext-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME 与 browser-extension/manifest.json 的 version $version 不一致"
+            exit 1
+          fi
+
+      - run: pnpm typecheck
+
+      - run: pnpm --filter @diffra/desktop package:extension
+
+      - name: 上传到草稿 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./packages/desktop/browser-extension/manifest.json').version")
+          tag="ext-v$version"
+          file="packages/desktop/release/diffra-browser-extension-$version.zip"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$file" --clobber
+          else
+            gh release create "$tag" "$file" --draft --target "$GITHUB_SHA" --title "Diffra 浏览器扩展 $version" --notes "CI 构建，提交 $GITHUB_SHA"
+          fi
+
+      - name: 传到商店并提交审核
+        run: pnpm --filter @diffra/desktop publish:extension
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}

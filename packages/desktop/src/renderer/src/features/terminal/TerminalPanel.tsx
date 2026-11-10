@@ -1,13 +1,15 @@
-import { type PointerEvent, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react'
 import { cn } from 'cn'
 import { folderName } from '@/lib/format'
+import { saveLayout, setLayout } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
 import { attachTerminal, closeTerminal, fitTerminal, newTerminal, terminalAttachment } from './terminals'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Kbd } from '@/components/ui/kbd'
+import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TERMINAL_ATTACHMENT_MAX_CHARS } from '../../../../shared/terminal-output'
 
@@ -26,10 +28,8 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
   const active = useAppState((state) => state.activeTerminal)
   const panelRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
-  const [height, setHeight] = useState(DEFAULT_HEIGHT)
-  const [dragging, setDragging] = useState(false)
+  const height = useAppState((state) => state.settings?.layout.terminalHeight ?? DEFAULT_HEIGHT)
   const [preview, setPreview] = useState<string | null>(null)
-  const drag = useRef<{ startY: number; startHeight: number } | null>(null)
 
   useLayoutEffect(() => {
     const host = hostRef.current
@@ -40,39 +40,21 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
     return () => observer.disconnect()
   }, [active])
 
-  // 对话区有最小高度，面板会被 flex 压得比 height 矮；拖动从实际高度算起，松手后再同步回去，避免拖动时出现空行程
-  const renderedHeight = () => panelRef.current?.getBoundingClientRect().height ?? height
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    drag.current = { startY: event.clientY, startHeight: renderedHeight() }
-    setDragging(true)
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return
-    const max = Math.round(window.innerHeight * 0.7)
-    setHeight(Math.min(max, Math.max(MIN_HEIGHT, drag.current.startHeight + drag.current.startY - event.clientY)))
-  }
-  const onPointerEnd = () => {
-    if (!drag.current) return
-    drag.current = null
-    setDragging(false)
-    setHeight(Math.round(renderedHeight()))
-  }
+  // 对话区有最小高度，面板会被 flex 压得比 height 矮：拖动从实际高度算起，松手后存实际高度，避免下次拖动出现空行程
+  const renderedHeight = () => Math.round(panelRef.current?.getBoundingClientRect().height ?? height)
 
   return (
     <div ref={panelRef} className="flex flex-col border-t" style={{ height, minHeight: MIN_HEIGHT }} data-testid="terminal-panel">
-      <div
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="拖动调整终端高度"
-        className="group/resize relative z-10 -my-1 h-2 shrink-0 cursor-row-resize"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerEnd}
-        onPointerCancel={onPointerEnd}
-      >
-        <span className={cn('absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-muted-foreground/40 opacity-0 transition-opacity group-hover/resize:opacity-100', dragging && 'opacity-100')} />
-      </div>
+      <ResizeHandle
+        orientation="horizontal"
+        grow={-1}
+        label="拖动调整终端高度"
+        className="relative -my-1 shrink-0"
+        measure={() => ({ size: renderedHeight(), min: MIN_HEIGHT, max: Math.max(MIN_HEIGHT, Math.round(window.innerHeight * 0.7)) })}
+        onResize={(size) => setLayout({ terminalHeight: size })}
+        onCommit={() => void saveLayout({ terminalHeight: renderedHeight() })}
+        onReset={() => void saveLayout({ terminalHeight: null })}
+      />
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-3 text-sm">
         {/* overflow-x-auto 会连带裁掉纵向溢出：撑满栏高并留出左右内边距，焦点环才不会被切掉 */}
         <div className="-ml-1 flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto px-1" role="tablist" aria-label="终端">

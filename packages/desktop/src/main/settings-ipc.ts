@@ -9,9 +9,12 @@ import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRe
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
+import { browserHost } from './browser'
 import type { SecretStore } from './secret-store'
 import {
   appearanceSchema,
+  layoutSchema,
+  browserSettingsSchema,
   executionSchema,
   MCP_NAME_PATTERN,
   modelRefSchema,
@@ -76,13 +79,15 @@ export function workspaceRoot(settings: SettingsStore): { path: string; isDefaul
 
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
-    const { providers, roles, appearance, defaultPermissionMode, security, execution, mcpServers } = settings.get()
+    const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers } = settings.get()
     return {
       providers: await Promise.all(
         providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
       ),
       roles,
       appearance,
+      layout,
+      browser,
       defaultPermissionMode,
       security,
       execution,
@@ -100,6 +105,8 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     const change = parse(
       z.object({
         appearance: appearanceSchema.optional(),
+        layout: layoutSchema.optional(),
+        browser: browserSettingsSchema.optional(),
         defaultPermissionMode: permissionModeSchema.optional(),
         security: securitySchema.optional(),
         execution: executionSchema.optional(),
@@ -107,6 +114,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       raw,
     )
     await settings.update((current) => ({ ...current, ...change }))
+    if (change.browser) browserHost.pushSites()
     return view()
   })
 

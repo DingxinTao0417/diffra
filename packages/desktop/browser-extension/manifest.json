@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Diffra",
+  "description": "让 Diffra 的智能体在你的浏览器里打开网页、读页面、点击和输入。需要这台电脑上装着 Diffra。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "permissions": ["nativeMessaging", "debugger", "tabs", "tabGroups", "storage", "alarms"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": {
+    "default_title": "Diffra",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png" }
+  },
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
+}

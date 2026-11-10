@@ -19,6 +19,8 @@ export default defineConfig({
           index: resolve(import.meta.dirname, 'src/main/index.ts'),
           // core 以独立子进程运行：打成 out/main/core.js，由主进程 spawn。
           core: resolve(import.meta.dirname, '../core/src/index.ts'),
+          // 浏览器扩展的本机宿主：浏览器按 native messaging 启动，Diffra.exe 以 node 模式运行它（见 native-host-registry.ts）
+          'native-host': resolve(import.meta.dirname, 'src/main/native-host.ts'),
         },
       },
     },

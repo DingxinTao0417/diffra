@@ -36,6 +36,9 @@ jobs:
 
       - run: pnpm --filter @diffra/desktop exec install-electron
 
+      # 浏览器扩展的 e2e 要用 Playwright 的 Chromium 加载扩展（正式版 Chrome 不让命令行加载）
+      - run: pnpm --filter @diffra/desktop exec playwright install chromium
+
       - run: pnpm typecheck
 
       - run: pnpm test

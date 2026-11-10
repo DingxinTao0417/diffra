@@ -1,0 +1,15 @@
+{
+  // Diffra 浏览器扩展：跑在 Chrome、Edge 的扩展环境里，只认 chrome.* 的类型
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "types": ["chrome"],
+    "noEmit": true
+  },
+  "include": ["browser-extension/src", "src/shared/browser-bridge.ts"]
+}

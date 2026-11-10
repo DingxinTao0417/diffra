@@ -291,20 +291,66 @@ export interface CommandInfo {
   body: string
 }
 
-// 智能体操作内置浏览器，core 通过 CLIENT_EXT_METHODS.browserAction 请求客户端执行
+// 页面上的一个位置：最近一次读页面给的 ref，或最近一张截图里的像素坐标（没截过图时就是页面的 CSS 像素）
+export type BrowserPoint = { ref: string } | { x: number; y: number }
+
+// 用户在设置里列的网站：主机名，也管它的子域名
+export interface BrowserSites {
+  allow: string[]
+  block: string[]
+}
+
+export const BROWSER_MODIFIERS = ['Alt', 'Control', 'Meta', 'Shift'] as const
+export type BrowserModifier = (typeof BROWSER_MODIFIERS)[number]
+
+export const BROWSER_WAIT_MAX_SECONDS = 30
+export const BROWSER_KEY_REPEAT_MAX = 50
+export const BROWSER_KEY_HOLD_MAX_MS = 10_000
+export const BROWSER_UPLOAD_MAX_FILES = 10
+
+// 智能体用哪个浏览器：Diffra 内置的，或用户自己的 Chrome、Edge（带着用户的登录状态）
+export const BROWSER_BACKENDS = ['builtin', 'chrome', 'edge'] as const
+export type BrowserBackend = (typeof BROWSER_BACKENDS)[number]
+
+// 智能体操作浏览器（内置浏览器，或用户的 Chrome、Edge），core 通过 CLIENT_EXT_METHODS.browserAction 请求客户端执行
 export type BrowserAction =
   | { action: 'navigate'; url: string }
+  | { action: 'history'; direction: 'back' | 'forward' | 'reload' }
+  // 一个任务可以开多个标签页；index 从 1 开始
+  | { action: 'tabs'; op: 'list' | 'new' | 'select' | 'close'; url: string | null; index: number | null }
   | { action: 'snapshot' }
-  | { action: 'click'; ref: string }
-  | { action: 'type'; ref: string; text: string; submit: boolean }
-  | { action: 'press'; key: string }
+  // 按文字找元素：只列出名字或文字里含 query 的行，带 ref
+  | { action: 'find'; query: string }
+  // 页面上看得到的文字
+  | { action: 'text' }
+  | { action: 'click'; at: BrowserPoint; button: 'left' | 'right' | 'middle'; double: boolean; modifiers: BrowserModifier[] }
+  | { action: 'hover'; at: BrowserPoint }
+  | { action: 'drag'; from: BrowserPoint; to: BrowserPoint }
+  // at 为 null 时在页面正中滚
+  | { action: 'scroll'; at: BrowserPoint | null; deltaX: number; deltaY: number }
+  // ref 为 null 时输入到当前有焦点的地方，不清空原内容
+  | { action: 'type'; ref: string | null; text: string; submit: boolean }
+  // key 可以是组合键（Control+A）；holdMs 按住多久再松开（游戏用）
+  | { action: 'press'; key: string; repeat: number; holdMs: number }
+  | { action: 'select'; ref: string; values: string[] }
+  // paths 已经由 core 解析成绝对路径并征得同意
+  | { action: 'upload'; ref: string; paths: string[] }
+  // 等文字出现、消失，或者只是等几秒
+  | { action: 'wait'; text: string | null; textGone: string | null; seconds: number }
+  // 处理 alert、confirm、prompt
+  | { action: 'dialog'; accept: boolean; promptText: string | null }
   | { action: 'console' }
-  // width：按这个视口宽度（CSS 像素）渲染后截图，截完恢复；null 是面板里用户看到的样子
-  | { action: 'screenshot'; width: number | null }
+  | { action: 'network'; filter: string | null; failedOnly: boolean }
+  // 在页面里运行脚本，core 已经征得同意
+  | { action: 'evaluate'; expression: string }
+  // width：按这个视口宽度（CSS 像素）渲染后截图，截完恢复；null 是用户看到的样子。fullPage：整页长图
+  | { action: 'screenshot'; width: number | null; fullPage: boolean }
   // 按手机和桌面两种宽度检查布局问题，结果是文字
   | { action: 'layout' }
   // 列出页面上的图片：完整尺寸的网址、像素尺寸和替代文字（找图放进设计稿用）
   | { action: 'images' }
+  // 这个任务改用哪个浏览器（只改这个任务，不改设置里的默认）；换到用户的浏览器 core 已经征得同意
+  | { action: 'switch'; browser: BrowserBackend }
 
 export type BrowserActionParams = BrowserAction & { sessionId: string }
 
@@ -564,6 +610,8 @@ export const SESSION_EXT_METHODS = {
   retryStep: '_diffra/session/retry-step',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
+  // 浏览器的站点名单（设置里管理）：允许的直接打开，禁止的不打开也不问；所有会话共用
+  browserSites: '_diffra/browser/sites',
   // 优化输入框里的提示词：一次调用交回改写稿和只有用户能回答的问题，不进任何对话
   promptEnhance: '_diffra/prompt/enhance',
   // 列出这个任务或项目能用的 Skill

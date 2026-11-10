@@ -1,6 +1,19 @@
 import { z } from 'zod'
 import { PROTOCOLS } from '../models/types.js'
-import { REASONING_EFFORTS, SCREENSHOT_MAX_WIDTH, SCREENSHOT_MIN_WIDTH, TERMINAL_MAX_LINES, type SessionConfig, type SessionDesign } from '../protocol.js'
+import {
+  BROWSER_BACKENDS,
+  BROWSER_KEY_HOLD_MAX_MS,
+  BROWSER_KEY_REPEAT_MAX,
+  BROWSER_MODIFIERS,
+  BROWSER_UPLOAD_MAX_FILES,
+  BROWSER_WAIT_MAX_SECONDS,
+  REASONING_EFFORTS,
+  SCREENSHOT_MAX_WIDTH,
+  SCREENSHOT_MIN_WIDTH,
+  TERMINAL_MAX_LINES,
+  type SessionConfig,
+  type SessionDesign,
+} from '../protocol.js'
 
 export const endpointSchema = z.object({
   protocol: z.enum(PROTOCOLS),
@@ -62,18 +75,34 @@ export const sessionConfigSchema = z.object({
 
 export const newSessionMetaSchema = z.object({ diffra: sessionConfigSchema })
 
+const browserPointSchema = z.union([z.object({ ref: z.string().min(1) }), z.object({ x: z.number().finite(), y: z.number().finite() })])
+
 export const browserActionParamsSchema = z.intersection(
   z.object({ sessionId: z.string().min(1) }),
   z.discriminatedUnion('action', [
     z.object({ action: z.literal('navigate'), url: z.url() }),
+    z.object({ action: z.literal('history'), direction: z.enum(['back', 'forward', 'reload']) }),
+    z.object({ action: z.literal('tabs'), op: z.enum(['list', 'new', 'select', 'close']), url: z.url().nullable(), index: z.number().int().min(1).nullable() }),
     z.object({ action: z.literal('snapshot') }),
-    z.object({ action: z.literal('click'), ref: z.string().min(1) }),
-    z.object({ action: z.literal('type'), ref: z.string().min(1), text: z.string(), submit: z.boolean() }),
-    z.object({ action: z.literal('press'), key: z.string().min(1) }),
+    z.object({ action: z.literal('find'), query: z.string().min(1).max(200) }),
+    z.object({ action: z.literal('text') }),
+    z.object({ action: z.literal('click'), at: browserPointSchema, button: z.enum(['left', 'right', 'middle']), double: z.boolean(), modifiers: z.array(z.enum(BROWSER_MODIFIERS)) }),
+    z.object({ action: z.literal('hover'), at: browserPointSchema }),
+    z.object({ action: z.literal('drag'), from: browserPointSchema, to: browserPointSchema }),
+    z.object({ action: z.literal('scroll'), at: browserPointSchema.nullable(), deltaX: z.number().finite(), deltaY: z.number().finite() }),
+    z.object({ action: z.literal('type'), ref: z.string().min(1).nullable(), text: z.string(), submit: z.boolean() }),
+    z.object({ action: z.literal('press'), key: z.string().min(1).max(60), repeat: z.number().int().min(1).max(BROWSER_KEY_REPEAT_MAX), holdMs: z.number().int().min(0).max(BROWSER_KEY_HOLD_MAX_MS) }),
+    z.object({ action: z.literal('select'), ref: z.string().min(1), values: z.array(z.string()).min(1) }),
+    z.object({ action: z.literal('upload'), ref: z.string().min(1), paths: z.array(z.string().min(1)).min(1).max(BROWSER_UPLOAD_MAX_FILES) }),
+    z.object({ action: z.literal('wait'), text: z.string().min(1).nullable(), textGone: z.string().min(1).nullable(), seconds: z.number().min(0).max(BROWSER_WAIT_MAX_SECONDS) }),
+    z.object({ action: z.literal('dialog'), accept: z.boolean(), promptText: z.string().nullable() }),
     z.object({ action: z.literal('console') }),
-    z.object({ action: z.literal('screenshot'), width: z.number().int().min(SCREENSHOT_MIN_WIDTH).max(SCREENSHOT_MAX_WIDTH).nullable() }),
+    z.object({ action: z.literal('network'), filter: z.string().min(1).nullable(), failedOnly: z.boolean() }),
+    z.object({ action: z.literal('evaluate'), expression: z.string().min(1).max(20_000) }),
+    z.object({ action: z.literal('screenshot'), width: z.number().int().min(SCREENSHOT_MIN_WIDTH).max(SCREENSHOT_MAX_WIDTH).nullable(), fullPage: z.boolean() }),
     z.object({ action: z.literal('layout') }),
     z.object({ action: z.literal('images') }),
+    z.object({ action: z.literal('switch'), browser: z.enum(BROWSER_BACKENDS) }),
   ]),
 )
 

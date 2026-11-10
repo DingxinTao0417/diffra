@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Diffra</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1c1c1a;
+        --muted: #6b6b66;
+        --line: #e7e6e1;
+        --soft: #f5f5f2;
+        --accent: #22ad7a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b1b19;
+          --fg: #ececea;
+          --muted: #a3a39e;
+          --line: #2f2f2c;
+          --soft: #262624;
+        }
+      }
+      body {
+        margin: 0;
+        width: 320px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.5 system-ui, 'Microsoft YaHei UI', sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        font-weight: 600;
+      }
+      header img {
+        width: 18px;
+        height: 18px;
+      }
+      section {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      section:last-child {
+        border-bottom: 0;
+      }
+      h2 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      p {
+        margin: 0;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .actions {
+        margin-top: 8px;
+      }
+      .dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        margin-right: 6px;
+        border-radius: 50%;
+        background: var(--muted);
+        vertical-align: 1px;
+      }
+      .dot.on {
+        background: var(--accent);
+      }
+      select,
+      button {
+        font: inherit;
+        color: inherit;
+      }
+      select {
+        width: 100%;
+        margin: 6px 0;
+        padding: 5px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+      }
+      button {
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+      button:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+      }
+      li span {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header><img src="icons/icon-32.png" alt="" />Diffra</header>
+    <main id="app"><section class="muted">正在读取…</section></main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

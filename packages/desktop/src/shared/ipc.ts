@@ -28,6 +28,9 @@ import type {
 } from '@diffra/core/types'
 import type {
   Appearance,
+  Layout,
+  BrowserSettings,
+  AgentBrowser,
   ExecutionSettings,
   McpServerInput,
   ModelRef,
@@ -116,6 +119,14 @@ export const IPC_CHANNELS = {
   browserBounds: 'browser:bounds',
   browserNavigate: 'browser:navigate',
   browserCommand: 'browser:command',
+  browserTab: 'browser:tab',
+  browserSetBackend: 'browser:set-backend',
+  browserResume: 'browser:resume',
+  browserFrame: 'browser:frame',
+  browserStopRequest: 'browser:stop-request',
+  browserBridgeStatus: 'browser:bridge-status',
+  browserBridgeGetStatus: 'browser:bridge-get-status',
+  browserBridgeTasks: 'browser:bridge-tasks',
   browserGetState: 'browser:get-state',
   browserState: 'browser:state',
   browserActivity: 'browser:activity',
@@ -142,7 +153,7 @@ export interface BrowserRect {
   height: number
 }
 
-// 一个任务的浏览器标签页；还没打开过网页时 url 为空
+// 一个任务的浏览器：当前标签页的状态，还没打开过网页时 url 为空；tabs 是这个任务的所有标签页，activeTab 从 0 开始
 export interface BrowserState {
   sessionId: string
   url: string
@@ -150,9 +161,19 @@ export interface BrowserState {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
+  tabs: Array<{ title: string; url: string }>
+  activeTab: number
+  // 这个任务的智能体用哪个浏览器；用户的 Chrome、Edge 时 external 是扩展连没连上、用户有没有在浏览器里点过取消
+  backend: AgentBrowser
+  external: { connected: boolean; paused: string | null } | null
 }
 
 export type BrowserCommand = 'back' | 'forward' | 'reload' | 'stop' | 'external'
+
+// 连着的 Diffra 浏览器扩展（每个浏览器的每个配置文件一条）
+export interface BridgeStatus {
+  connections: Array<{ id: number; browser: 'chrome' | 'edge' | 'chromium'; version: string; outdated: boolean }>
+}
 
 // 中文菜单里交给页面处理的命令
 export type MenuCommand =
@@ -321,6 +342,8 @@ export interface DiffraApi {
   onTerminalOpened(listener: (event: { id: string; cwd: string; shell: string }) => void): () => void
   savePreferences(change: {
     appearance?: Appearance
+    layout?: Layout
+    browser?: BrowserSettings
     defaultPermissionMode?: PermissionMode
     security?: SecuritySettings
     execution?: ExecutionSettings
@@ -378,6 +401,20 @@ export interface DiffraApi {
   setBrowserBounds(sessionId: string, rect: BrowserRect | null): void
   browserNavigate(sessionId: string, url: string): Promise<void>
   browserCommand(sessionId: string, command: BrowserCommand): void
+  // 面板上的标签条：切到、关闭第几个标签页（从 0 开始）
+  browserTab(sessionId: string, op: 'select' | 'close', index: number): void
+  // 给这个任务换浏览器：内置、用户的 Chrome 或 Edge
+  browserSetBackend(sessionId: string, backend: AgentBrowser): void
+  // 用户在浏览器的调试提示条上点了取消之后，在面板上点「继续」
+  browserResume(sessionId: string): void
+  // 用户 Chrome、Edge 里智能体那个标签页的画面（JPEG base64）
+  onBrowserFrame(listener: (event: { sessionId: string; data: string }) => void): () => void
+  // 用户在扩展里停下某个任务
+  onBrowserStopRequest(listener: (event: { sessionId: string }) => void): () => void
+  getBrowserBridgeStatus(): Promise<BridgeStatus>
+  onBrowserBridgeStatus(listener: (status: BridgeStatus) => void): () => void
+  // 扩展弹窗里「交给 Diffra」能选的任务
+  setBrowserBridgeTasks(tasks: Array<{ sessionId: string; title: string; running: boolean }>): void
   getBrowserState(sessionId: string): Promise<BrowserState | null>
   onBrowserState(listener: (state: BrowserState) => void): () => void
   // 智能体在用某个任务的浏览器，界面把面板打开

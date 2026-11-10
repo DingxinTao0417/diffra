@@ -88,7 +88,7 @@ test('内置浏览器：智能体打开本地页面、读页面、输入、点�
 
     // 打开外部网站要确认，这里拒绝
     const permission = window.getByTestId('permission-card')
-    await expect(permission).toContainText('在内置浏览器里打开 example.com', { timeout: 30_000 })
+    await expect(permission).toContainText('在浏览器里打开 example.com', { timeout: 30_000 })
     await permission.getByRole('button', { name: '拒绝' }).click()
     await waitTaskDone(window)
 

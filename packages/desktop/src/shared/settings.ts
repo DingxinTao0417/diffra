@@ -1,4 +1,4 @@
-import type { PermissionMode, PluginInfo, Protocol, ReasoningEffort, SessionChecks } from '@diffra/core/types'
+import { BROWSER_BACKENDS, type BrowserBackend, type PermissionMode, type PluginInfo, type Protocol, type ReasoningEffort, type SessionChecks } from '@diffra/core/types'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
@@ -66,6 +66,33 @@ export interface Appearance {
 }
 
 export const DEFAULT_APPEARANCE: Appearance = { theme: 'system', palette: 'forest', fontSize: 'md', contentWidth: 'standard' }
+
+// 拖过的分栏尺寸，单位像素；null 是默认尺寸（侧栏、监控面板、设计模式的对话列按 rem 跟着文字大小，宽面板取主区一半）
+export interface Layout {
+  sidebarWidth: number | null
+  // 审阅和浏览器共用，两者互切时对话列不动
+  widePanelWidth: number | null
+  monitorWidth: number | null
+  designChatWidth: number | null
+  terminalHeight: number | null
+}
+
+export const DEFAULT_LAYOUT: Layout = { sidebarWidth: null, widePanelWidth: null, monitorWidth: null, designChatWidth: null, terminalHeight: null }
+
+// 和智能体的 browser_switch 用同一份清单
+export const AGENT_BROWSERS = BROWSER_BACKENDS
+export type AgentBrowser = BrowserBackend
+export const MAX_BROWSER_SITES = 500
+
+// 智能体用哪个浏览器：内置浏览器，或用户自己的 Chrome、Edge（要装 Diffra 浏览器扩展）；
+// allowSites 直接打开不问，blockSites 不让打开。写主机名，也管子域名
+export interface BrowserSettings {
+  agent: AgentBrowser
+  allowSites: string[]
+  blockSites: string[]
+}
+
+export const DEFAULT_BROWSER: BrowserSettings = { agent: 'builtin', allowSites: [], blockSites: [] }
 
 // 完成前的安全检查，所有项目共用；深度扫描是在任务页手动发起的，这里只控制入口
 export interface SecuritySettings {
@@ -147,6 +174,8 @@ export interface Settings {
   projects: Record<string, ProjectSettings>
   lastProject: string | null
   appearance: Appearance
+  layout: Layout
+  browser: BrowserSettings
   // 新任务默认的命令权限模式；在输入框里改了会记住
   defaultPermissionMode: PermissionMode
   security: SecuritySettings
@@ -166,6 +195,8 @@ export interface SettingsView {
   providers: ProviderView[]
   roles: Settings['roles']
   appearance: Appearance
+  layout: Layout
+  browser: BrowserSettings
   defaultPermissionMode: PermissionMode
   security: SecuritySettings
   execution: ExecutionSettings

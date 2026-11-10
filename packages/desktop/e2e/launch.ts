@@ -27,6 +27,8 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
       // Electron 宿主启动测试时可能继承该变量；被测应用必须以桌面模式启动。
       Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'),
     ),
+    // 不往真实浏览器的注册表里登记浏览器扩展的宿主；要测扩展的用例自己换成 chromium
+    DIFFRA_BROWSER_HOST_TARGETS: 'none',
     ...extraEnv,
   }
   const executable = packagedExecutable()

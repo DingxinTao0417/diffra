@@ -4,6 +4,7 @@ import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
+import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProject } from '@/features/project/useProject'
 import { BrowserPanel } from '@/features/browser/BrowserPanel'
@@ -15,8 +16,9 @@ import { TerminalPanel } from '@/features/terminal/TerminalPanel'
 import { toggleTerminalPanel } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { folderName } from '@/lib/format'
+import { remPx } from '@/lib/shell'
 import { turnVerdict, type Verdict, type VerdictTone } from '@/lib/turn-verdict'
-import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, sendMessage, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
+import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, saveLayout, sendMessage, setLayout, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
 import { composerDraftKey } from './composer-drafts'
@@ -26,6 +28,10 @@ import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReviewPanel } from './ReviewPanel'
 import { useTaskDiff } from './useTaskDiff'
 
+// 设计模式下对话列和画布各自至少留的宽度
+const DESIGN_CHAT_MIN_REM = 20
+const DESIGN_CANVAS_MIN_REM = 30
+
 export function TaskView({ sessionId, columnRef }: { sessionId: string; columnRef?: Ref<HTMLElement> }) {
   const task = useAppState((state) => state.live[sessionId])
   if (!task) return <p className="p-6 text-sm text-muted-foreground">正在打开任务…</p>
@@ -34,6 +40,7 @@ export function TaskView({ sessionId, columnRef }: { sessionId: string; columnRe
 
 function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLElement> }) {
   const panel = useAppState((state) => state.panel)
+  const designChatWidth = useAppState((state) => state.settings?.layout.designChatWidth ?? null)
   const terminalOpen = useAppState((state) => state.terminalOpen)
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
   const { project, setProject, branch } = useProject(task.project)
@@ -129,8 +136,29 @@ function TaskPage({ task, columnRef }: { task: LiveTask; columnRef?: Ref<HTMLEle
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* 开着设计面板时画布占主区，对话列固定宽度放左边 */}
-        <section ref={columnRef} className={cn('@container flex min-w-0 flex-col', panel === 'design' ? 'w-[26rem] shrink-0' : 'flex-1')}>
+        {/* 开着设计面板时画布占主区，对话列放左边，宽度可拖 */}
+        <section
+          ref={columnRef}
+          className={cn('@container relative flex min-w-0 flex-col', panel === 'design' ? 'w-[26rem] shrink-0' : 'flex-1')}
+          style={panel === 'design' && designChatWidth !== null ? { width: designChatWidth, maxWidth: `calc(100% - ${DESIGN_CANVAS_MIN_REM}rem)` } : undefined}
+        >
+          {panel === 'design' && (
+            // 和右侧面板一样，拖动条放在画布那一侧（对话列贴边的是滚动条），画布左边留出 ml-2（见 DesignPanel）
+            <ResizeHandle
+              orientation="vertical"
+              grow={1}
+              label="拖动调整对话列宽度"
+              className="absolute inset-y-0 -right-2"
+              measure={(handle) => {
+                const column = handle.parentElement!
+                const min = remPx(DESIGN_CHAT_MIN_REM)
+                return { size: column.getBoundingClientRect().width, min, max: Math.max(min, column.parentElement!.clientWidth - remPx(DESIGN_CANVAS_MIN_REM)) }
+              }}
+              onResize={(size) => setLayout({ designChatWidth: size })}
+              onCommit={(size) => void saveLayout({ designChatWidth: size })}
+              onReset={() => void saveLayout({ designChatWidth: null })}
+            />
+          )}
           {/* 终端在对话列底部，右侧面板保持全高；对话区留出最小高度，终端拉高时由 flex 压缩终端而不是对话 */}
           {/* 对话列变窄时对话区和输入框一起收窄左右留白，两边才对齐；对话区的滚动层在 Conversation 里 */}
           <div className="flex min-h-40 flex-1 flex-col @max-[600px]:[&>div>.overflow-y-auto]:px-5">

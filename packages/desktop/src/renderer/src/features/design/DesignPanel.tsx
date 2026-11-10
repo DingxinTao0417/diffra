@@ -59,7 +59,8 @@ export function DesignPanel({ sessionId, project, noProject }: { sessionId: stri
         </>
       }
     >
-      <div ref={body} className="relative min-h-0 flex-1 bg-background" data-testid="design-viewport" />
+      {/* 左边 ml-2 留给对话列的拖动条：原生视图盖在上面时拖动条点不到 */}
+      <div ref={body} className="relative ml-2 min-h-0 flex-1 bg-background" data-testid="design-viewport" />
     </SidePanel>
   )
 }

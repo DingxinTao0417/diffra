@@ -4,12 +4,16 @@ import { z } from 'zod'
 import {
   COMPACT_AT_PERCENTS,
   CONTENT_WIDTHS,
+  AGENT_BROWSERS,
   DEFAULT_APPEARANCE,
+  DEFAULT_BROWSER,
   DEFAULT_EXECUTION,
+  DEFAULT_LAYOUT,
   DEFAULT_SECURITY,
   FONT_SIZES,
   FONT_STYLES,
   GOAL_ROUND_OPTIONS,
+  MAX_BROWSER_SITES,
   MAX_STEP_OPTIONS,
   MAX_MODEL_ID_LENGTH,
   MAX_MODEL_DISPLAY_NAME_LENGTH,
@@ -74,6 +78,30 @@ export const appearanceSchema = z.object({
   contentWidth: z.enum(CONTENT_WIDTHS),
 })
 
+const layoutSizeSchema = z.number().int().min(0).max(10_000).nullable().default(null)
+
+export const layoutSchema = z.object({
+  sidebarWidth: layoutSizeSchema,
+  widePanelWidth: layoutSizeSchema,
+  monitorWidth: layoutSizeSchema,
+  designChatWidth: layoutSizeSchema,
+  terminalHeight: layoutSizeSchema,
+})
+
+// 主机名：小写，去掉协议、路径和端口，写成 example.com
+const siteSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .transform((value) => value.replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').replace(/:\d+$/, '').replace(/^\*\./, ''))
+  .pipe(z.string().regex(/^[a-z0-9.-]+$/, '网站要写主机名，比如 example.com').min(1).max(253))
+
+export const browserSettingsSchema = z.object({
+  agent: z.enum(AGENT_BROWSERS),
+  allowSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
+  blockSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
+})
+
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
 export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean() })
@@ -113,6 +141,10 @@ const settingsSchema = z.object({
   lastProject: z.string().nullable().default(null),
   // 第 11 步加的
   appearance: appearanceSchema.default(() => ({ ...DEFAULT_APPEARANCE })),
+  // 第 263 步加的
+  layout: layoutSchema.default(() => ({ ...DEFAULT_LAYOUT })),
+  // 第 273 步加的
+  browser: browserSettingsSchema.default(() => ({ ...DEFAULT_BROWSER })),
   defaultPermissionMode: permissionModeSchema.default('ask'),
   // 第 14 步加的
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),
@@ -144,6 +176,8 @@ const EMPTY_SETTINGS: Settings = {
   projects: {},
   lastProject: null,
   appearance: DEFAULT_APPEARANCE,
+  layout: DEFAULT_LAYOUT,
+  browser: DEFAULT_BROWSER,
   defaultPermissionMode: 'ask',
   security: DEFAULT_SECURITY,
   execution: DEFAULT_EXECUTION,

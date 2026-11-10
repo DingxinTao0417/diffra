@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useLayoutEffect } from 'react'
 import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -59,14 +59,22 @@ function runCommand(command: MenuCommand): void {
 const CTRL_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', '`': 'terminal', j: 'quick-todo' }
 
 function sidebarWidth(): number {
-  // --sidebar-w 用 rem 写，跟着「文字大小」缩放
+  // 默认的 --sidebar-w 用 rem 写，跟着「文字大小」缩放；拖过之后是像素
   const root = getComputedStyle(document.documentElement)
-  return parseFloat(root.getPropertyValue('--sidebar-w')) * parseFloat(root.fontSize)
+  const value = root.getPropertyValue('--sidebar-w').trim()
+  return value.endsWith('px') ? parseFloat(value) : parseFloat(value) * parseFloat(root.fontSize)
 }
 
 export function App() {
   const route = useAppState((state) => state.route)
   const sidebarShown = useAppState(isSidebarShown)
+  const sidebarPx = useAppState((state) => state.settings?.layout.sidebarWidth ?? null)
+
+  useLayoutEffect(() => {
+    const root = document.documentElement.style
+    if (sidebarPx === null) root.removeProperty('--sidebar-w')
+    else root.setProperty('--sidebar-w', `${sidebarPx}px`)
+  }, [sidebarPx])
 
   const columnRef = useCallback((element: HTMLElement | null) => {
     if (!element) return

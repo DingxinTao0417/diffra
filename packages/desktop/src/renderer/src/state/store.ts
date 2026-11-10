@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from 'react'
 import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
-import type { BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
+import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
 
 export type Route =
   | { name: 'home'; project: string | null }
@@ -77,6 +77,8 @@ export interface AppState {
   live: Record<string, LiveTask>
   // 各任务内置浏览器标签页的状态
   browsers: Record<string, BrowserState>
+  // 连着的 Diffra 浏览器扩展（用户自己的 Chrome、Edge）
+  bridge: BridgeStatus
   settings: SettingsView | null
   sidebarOpen: boolean
   // 窄窗口自动收起是布局上的派生结果，不写回 sidebarOpen：宽度回来后侧栏自己出现，用户自己收起的除外。
@@ -112,6 +114,7 @@ const initialState: AppState = {
   projects: [],
   live: {},
   browsers: {},
+  bridge: { connections: [] },
   settings: null,
   sidebarOpen: true,
   sidebarNarrow: false,

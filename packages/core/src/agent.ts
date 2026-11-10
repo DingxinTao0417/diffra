@@ -42,6 +42,7 @@ import {
   promptMetaSchema,
   sessionDesignSchema,
 } from './session/config.js'
+import { setBrowserSites } from './session/browser.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { enhancePrompt } from './prompt-enhance.js'
 import { runDiagnose } from './session/diagnose.js'
@@ -76,6 +77,8 @@ const sessionUpdateParams = z.object({
   title: z.string().trim().min(1).max(100).optional(),
   archived: z.boolean().optional(),
 })
+
+const browserSitesParams = z.object({ allow: z.array(z.string().trim().min(1).max(253)).max(500), block: z.array(z.string().trim().min(1).max(253)).max(500) })
 
 const sessionConfigureParams = z.object({
   sessionId: z.string().min(1),
@@ -522,6 +525,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return entry
     })
     .onRequest(SESSION_EXT_METHODS.sessionSearch, z.object({ query: z.string() }), ({ params }) => requireStore().search(params.query))
+    .onRequest(SESSION_EXT_METHODS.browserSites, browserSitesParams, ({ params }) => {
+      setBrowserSites(params)
+      return {}
+    })
     .onRequest(SESSION_EXT_METHODS.sessionConfigure, sessionConfigureParams, ({ params }) => {
       const session = sessionOf(params.sessionId)
       if (params.permissionMode) session.permissionMode = params.permissionMode

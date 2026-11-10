@@ -9,6 +9,7 @@ import {
   type CheckRunResult,
   type BrowserActionParams,
   type BrowserActionResult,
+  type BrowserSites,
   CLIENT_EXT_METHODS,
   type CommandInfo,
   type DesignActionParams,
@@ -295,6 +296,10 @@ export function updateSession(
   change: { title?: string; archived?: boolean },
 ): Promise<unknown> {
   return requestOf(connection)(SESSION_EXT_METHODS.sessionUpdate, { sessionId, ...change }, extRequestOptions())
+}
+
+export async function setBrowserSites(connection: acp.ClientConnection, sites: BrowserSites): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.browserSites, sites, extRequestOptions())
 }
 
 export async function configureSession(

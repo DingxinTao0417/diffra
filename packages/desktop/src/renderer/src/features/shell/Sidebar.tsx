@@ -5,13 +5,15 @@ import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
+import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
+import { remPx } from '@/lib/shell'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { isDue } from '@/lib/todo-time'
 import { useNow } from '@/lib/use-now'
-import { loadTodos, openDesign, openHome, openSettings, openTask, openTodos, pickProject } from '@/state/actions'
+import { loadTodos, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { BrandMark } from './BrandMark'
 import { TaskMenu } from './TaskMenu'
@@ -28,6 +30,11 @@ interface SidebarTask {
 
 // 无项目任务都归到这一组；真实路径小写后不会是这个值
 const NO_PROJECT_KEY = '<no-project>'
+
+// 侧栏宽度的上下限，右边主区至少留 MAIN_MIN_REM
+const SIDEBAR_MIN_REM = 13
+const SIDEBAR_MAX_REM = 32
+const MAIN_MIN_REM = 30
 
 // 侧栏的项目分组：有任务的项目按最近更新排，只选过还没建任务的项目排在后面。
 // 无项目任务按标记归到「无项目」一组（path 为 null），和其他项目一起按最近更新排
@@ -93,7 +100,21 @@ export function Sidebar() {
   }, [])
 
   return (
-    <aside className="flex w-(--sidebar-w) shrink-0 flex-col bg-sidebar" data-testid="sidebar">
+    <aside className="relative flex w-(--sidebar-w) shrink-0 flex-col bg-sidebar" data-testid="sidebar">
+      {/* 宽度写在根元素的 --sidebar-w 上（App 里），设置页的分区导航跟着一起变 */}
+      <ResizeHandle
+        orientation="vertical"
+        grow={1}
+        label="拖动调整侧栏宽度"
+        className="absolute inset-y-0 -right-1"
+        measure={(handle) => {
+          const min = remPx(SIDEBAR_MIN_REM)
+          return { size: handle.parentElement!.getBoundingClientRect().width, min, max: Math.max(min, Math.min(remPx(SIDEBAR_MAX_REM), window.innerWidth - remPx(MAIN_MIN_REM))) }
+        }}
+        onResize={(size) => setLayout({ sidebarWidth: size })}
+        onCommit={(size) => void saveLayout({ sidebarWidth: size })}
+        onReset={() => void saveLayout({ sidebarWidth: null })}
+      />
       <div className="flex h-10.5 items-center gap-2 px-4 pt-3 pb-2">
         <BrandMark className="size-5.5" />
         <span className="font-semibold">Diffra</span>

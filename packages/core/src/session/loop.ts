@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { rejectsToolChoice, toModelError } from '../models/errors.js'
@@ -32,11 +33,13 @@ import {
 } from '../protocol.js'
 import {
   allowNavigation,
+  allowSensitiveBrowserAction,
   type BrowserToolName,
   browserTitle,
   type DevServerToolName,
   isBrowserTool,
   isDevServerTool,
+  isReadOnlyBrowserAction,
   screenshotMessage,
   toBrowserAction,
 } from './browser.js'
@@ -55,6 +58,7 @@ import {
   reviewRulePacks,
 } from '../rules/review.js'
 import { runShell } from '../tools/command.js'
+import { resolveToolPath } from '../tools/workspace.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 import { staticScan } from '../security/static.js'
 import { auditDependencies, dependenciesChanged } from '../security/deps.js'
@@ -921,13 +925,38 @@ async function runBrowserToolCall(
     await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: name, kind: 'other', status: 'in_progress', rawInput: call.input })
     return fail(error instanceof Error ? error.message : String(error))
   }
-  const kind = action.action === 'snapshot' || action.action === 'console' || action.action === 'layout' || action.action === 'screenshot' || action.action === 'images' ? 'read' : action.action === 'navigate' ? 'fetch' : 'other'
+  const kind = isReadOnlyBrowserAction(action) ? 'read' : action.action === 'navigate' || (action.action === 'tabs' && action.url) ? 'fetch' : 'other'
   await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: browserTitle(action), kind, status: 'in_progress', rawInput: call.input })
   if (!io.browser) return fail('The built-in browser is not available in this client.')
-  if (action.action === 'navigate') {
-    const permission = await allowNavigation(session, action.url, (title) =>
-      io.requestPermission({ toolCallId: call.toolCallId, title, kind: 'fetch', status: 'pending', rawInput: call.input }, PERMISSION_CHOICES),
-    )
+  const ask = (title: string, permissionKind: 'fetch' | 'execute' | 'read') =>
+    io.requestPermission({ toolCallId: call.toolCallId, title, kind: permissionKind, status: 'pending', rawInput: call.input }, PERMISSION_CHOICES)
+  const url = action.action === 'navigate' ? action.url : action.action === 'tabs' ? action.url : null
+  if (url) {
+    const permission = await allowNavigation(session, url, (title) => ask(title, 'fetch'))
+    if (!permission.allowed) return fail(permission.reason)
+  }
+  if (action.action === 'upload') {
+    // 项目外的文件照常按「项目外读取」逐个问；再问一次要不要传到网页上
+    const files: string[] = []
+    try {
+      for (const path of action.paths) files.push((await resolveToolPath(toolContext(session, call, signal, io), path, 'read')).absolute)
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error))
+    }
+    const names = files.map((file) => basename(file)).join('、')
+    const permission = await allowSensitiveBrowserAction(session, 'upload', `在浏览器里上传文件：${names}`, (title) => ask(title, 'read'))
+    if (!permission.allowed) return fail(permission.reason)
+    action = { ...action, paths: files }
+  }
+  if (action.action === 'evaluate') {
+    const preview = action.expression.replace(/\s+/g, ' ').trim()
+    const title = `在网页里运行脚本：${preview.length > 80 ? `${preview.slice(0, 80)}…` : preview}`
+    const permission = await allowSensitiveBrowserAction(session, 'evaluate', title, (text) => ask(text, 'execute'))
+    if (!permission.allowed) return fail(permission.reason)
+  }
+  if (action.action === 'switch' && action.browser !== 'builtin') {
+    const name = action.browser === 'chrome' ? 'Chrome' : 'Edge'
+    const permission = await allowSensitiveBrowserAction(session, 'switch', `让智能体改用你的 ${name}（会用你在那里的登录状态）`, (text) => ask(text, 'execute'))
     if (!permission.allowed) return fail(permission.reason)
   }
   try {

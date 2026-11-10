@@ -7,6 +7,7 @@ import {
   Bot,
   Check,
   Ellipsis,
+  Globe,
   HardDrive,
   Info,
   ListChecks,
@@ -53,6 +54,7 @@ import { PluginSettings } from '@/features/plugins/PluginSettings'
 import { BrandMark } from '@/features/shell/BrandMark'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
+import { BrowserSection } from './BrowserSection'
 import { UsageSection } from './UsageSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -77,6 +79,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'permissions', label: '命令权限', icon: ShieldCheck, keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
+      { id: 'browser', label: '浏览器', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 网站 允许 禁止 登录' },
       { id: 'mcp', label: 'MCP 服务器', icon: Plug, keywords: 'MCP 工具 提示词模板 prompt 外部工具' },
       { id: 'plugins', label: '插件', icon: Puzzle, keywords: '插件 自定义命令 斜杠 Skill MCP 安装 Git' },
     ],
@@ -157,6 +160,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <SecuritySection />
     case 'execution':
       return <ExecutionSection />
+    case 'browser':
+      return <BrowserSection />
     case 'mcp':
       return <McpSettings />
     case 'plugins':

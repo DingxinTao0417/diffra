@@ -1,6 +1,6 @@
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
-import { type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
+import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -81,6 +81,14 @@ const api: DiffraApi = {
   setBrowserBounds: (sessionId, rect) => ipcRenderer.send(IPC_CHANNELS.browserBounds, sessionId, rect),
   browserNavigate: (sessionId, url) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, sessionId, url),
   browserCommand: (sessionId, command) => ipcRenderer.send(IPC_CHANNELS.browserCommand, sessionId, command),
+  browserTab: (sessionId, op, index) => ipcRenderer.send(IPC_CHANNELS.browserTab, sessionId, op, index),
+  browserSetBackend: (sessionId, backend) => ipcRenderer.send(IPC_CHANNELS.browserSetBackend, sessionId, backend),
+  browserResume: (sessionId) => ipcRenderer.send(IPC_CHANNELS.browserResume, sessionId),
+  onBrowserFrame: (listener) => subscribe<{ sessionId: string; data: string }>(IPC_CHANNELS.browserFrame, listener),
+  onBrowserStopRequest: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.browserStopRequest, listener),
+  getBrowserBridgeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.browserBridgeGetStatus),
+  onBrowserBridgeStatus: (listener) => subscribe<BridgeStatus>(IPC_CHANNELS.browserBridgeStatus, listener),
+  setBrowserBridgeTasks: (tasks) => ipcRenderer.send(IPC_CHANNELS.browserBridgeTasks, tasks),
   getBrowserState: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.browserGetState, sessionId),
   onBrowserState: (listener) => subscribe<BrowserState>(IPC_CHANNELS.browserState, listener),
   onBrowserActivity: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.browserActivity, listener),

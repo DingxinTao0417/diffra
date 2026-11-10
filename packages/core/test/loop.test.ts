@@ -2118,13 +2118,27 @@ describe('内置浏览器工具', () => {
     const text = await withBrowser(scriptedModel([]))
     expect(Object.keys(text.toolSet()).filter((name) => name.startsWith('browser_'))).toEqual([
       'browser_navigate',
+      'browser_history',
+      'browser_tabs',
       'browser_snapshot',
+      'browser_find',
+      'browser_get_text',
       'browser_click',
+      'browser_hover',
+      'browser_drag',
+      'browser_scroll',
       'browser_type',
       'browser_press_key',
+      'browser_select_option',
+      'browser_upload_file',
+      'browser_wait_for',
+      'browser_handle_dialog',
       'browser_console',
+      'browser_network',
+      'browser_evaluate',
       'browser_check_layout',
       'browser_images',
+      'browser_switch',
     ])
     expect(Object.keys((await withBrowser(scriptedModel([]), true)).toolSet())).toContain('browser_screenshot')
   })
@@ -2144,7 +2158,7 @@ describe('内置浏览器工具', () => {
     ])
     const io = Object.assign(recordingIO(), { browser: fake.browser })
     await runTurn(session, { id: 'turn-1', text: '看看手机上的样子' }, io)
-    expect(fake.actions).toEqual([{ action: 'screenshot', width: 375 }, { action: 'screenshot', width: null }, { action: 'layout' }])
+    expect(fake.actions).toEqual([{ action: 'screenshot', width: 375, fullPage: false }, { action: 'screenshot', width: null, fullPage: false }, { action: 'layout' }])
     const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
     expect(titles).toEqual(['浏览器 截图 375px 宽', '浏览器 截图', '浏览器 检查布局'])
     expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('横向溢出：页面内容宽 600px')
@@ -2168,13 +2182,125 @@ describe('内置浏览器工具', () => {
     const io = Object.assign(recordingIO('reject'), { browser: fake.browser })
     await runTurn(session, { id: 'turn-1', text: '看看页面' }, io)
 
-    expect(fake.actions).toEqual([{ action: 'navigate', url: 'http://localhost:5173/' }, { action: 'snapshot' }, { action: 'click', ref: 'e2' }])
+    expect(fake.actions).toEqual([
+      { action: 'navigate', url: 'http://localhost:5173/' },
+      { action: 'snapshot' },
+      { action: 'click', at: { ref: 'e2' }, button: 'left', double: false, modifiers: [] },
+    ])
     expect(io.permissionRequests).toBe(1)
     expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain('- button \\"保存\\" [ref=e2]')
     expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain('Browser action failed: 页面上没有 e2')
     expect(JSON.stringify(model.doStreamCalls[4]?.prompt)).toContain('did not allow opening example.com')
     const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
     expect(titles).toEqual(['浏览器 打开 http://localhost:5173/', '浏览器 读取页面', '浏览器 点击 e2', '浏览器 打开 https://example.com/docs'])
+  })
+
+  test('按坐标点、拖动、滚动、组合键、等待都转成浏览器操作；没有 ref 也没有完整坐标时告诉模型', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_click', input: { x: 120, y: 80, double: true, modifiers: ['Shift'] } }] },
+      { toolCalls: [{ name: 'browser_drag', input: { from_ref: 'e3', to_x: 400, to_y: 300 } }] },
+      { toolCalls: [{ name: 'browser_scroll', input: {} }] },
+      { toolCalls: [{ name: 'browser_press_key', input: { key: 'ArrowUp', repeat: 3, hold_ms: 200 } }] },
+      { toolCalls: [{ name: 'browser_wait_for', input: { text: '加载完成' } }] },
+      { toolCalls: [{ name: 'browser_tabs', input: { action: 'new', url: 'localhost:3000' } }] },
+      { toolCalls: [{ name: 'browser_click', input: { x: 10 } }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model)
+    const fake = fakeBrowser([])
+    const io = Object.assign(recordingIO(), { browser: fake.browser })
+    await runTurn(session, { id: 'turn-1', text: '玩一下' }, io)
+    expect(fake.actions).toEqual([
+      { action: 'click', at: { x: 120, y: 80 }, button: 'left', double: true, modifiers: ['Shift'] },
+      { action: 'drag', from: { ref: 'e3' }, to: { x: 400, y: 300 } },
+      { action: 'scroll', at: null, deltaX: 0, deltaY: 600 },
+      { action: 'press', key: 'ArrowUp', repeat: 3, holdMs: 200 },
+      { action: 'wait', text: '加载完成', textGone: null, seconds: 10 },
+      { action: 'tabs', op: 'new', url: 'http://localhost:3000/', index: null },
+    ])
+    // 本地地址的新标签页不用问
+    expect(io.permissionRequests).toBe(0)
+    expect(JSON.stringify(model.doStreamCalls[7]?.prompt)).toContain('give ref, or both x and y')
+    const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
+    expect(titles.slice(0, 6)).toEqual(['浏览器 双击 (120, 80)', '浏览器 拖动 e3 → (400, 300)', '浏览器 滚动', '浏览器 按键 ArrowUp ×3', '浏览器 等待「加载完成」出现', '浏览器 新标签页 http://localhost:3000/'])
+  })
+
+  test('上传文件：路径解析成项目里的绝对路径，先问用户；拒绝了不上传', async () => {
+    writeFileSync(join(project, 'avatar.png'), 'png')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_upload_file', input: { ref: 'e5', paths: ['avatar.png'] } }] },
+      { toolCalls: [{ name: 'browser_upload_file', input: { ref: 'e5', paths: ['avatar.png'] } }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model)
+    const fake = fakeBrowser([])
+    const choices = ['allow_once', 'reject_once']
+    const asked: string[] = []
+    const io = Object.assign(recordingIO(), {
+      browser: fake.browser,
+      requestPermission: async (call: { title?: string | null }) => {
+        asked.push(call.title ?? '')
+        return choices.shift() ?? null
+      },
+    })
+    await runTurn(session, { id: 'turn-1', text: '传头像' }, io)
+    expect(asked).toEqual(['在浏览器里上传文件：avatar.png', '在浏览器里上传文件：avatar.png'])
+    expect(fake.actions).toEqual([{ action: 'upload', ref: 'e5', paths: [join(project, 'avatar.png')] }])
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain('did not allow uploading these files')
+  })
+
+  test('在页面里运行脚本：先问用户，选了本会话允许后不再问；完全放行模式不问', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_evaluate', input: { expression: 'document.title' } }] },
+      { toolCalls: [{ name: 'browser_evaluate', input: { expression: 'location.href' } }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model)
+    const fake = fakeBrowser([])
+    const io = Object.assign(recordingIO('allow_always'), { browser: fake.browser })
+    await runTurn(session, { id: 'turn-1', text: '看标题' }, io)
+    expect(io.permissionRequests).toBe(1)
+    expect(fake.actions).toEqual([
+      { action: 'evaluate', expression: 'document.title' },
+      { action: 'evaluate', expression: 'location.href' },
+    ])
+
+    const full = await withBrowser(scriptedModel([{ toolCalls: [{ name: 'browser_evaluate', input: { expression: '1 + 1' } }] }, { text: '好' }]))
+    full.permissionMode = 'full'
+    const fullIO = Object.assign(recordingIO(), { browser: fakeBrowser([]).browser })
+    await runTurn(full, { id: 'turn-1', text: '算一下' }, fullIO)
+    expect(fullIO.permissionRequests).toBe(0)
+  })
+
+  test('换浏览器：换到用户的 Chrome 先问，拒绝了不换；换回内置浏览器不问', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'browser_switch', input: { browser: 'chrome' } }] },
+      { toolCalls: [{ name: 'browser_switch', input: { browser: 'chrome' } }] },
+      { toolCalls: [{ name: 'browser_switch', input: { browser: 'builtin' } }] },
+      { toolCalls: [{ name: 'browser_switch', input: { browser: 'firefox' } }] },
+      { text: '好' },
+    ])
+    const session = await withBrowser(model)
+    const fake = fakeBrowser([])
+    const choices = ['reject_once', 'allow_once']
+    const asked: string[] = []
+    const io = Object.assign(recordingIO(), {
+      browser: fake.browser,
+      requestPermission: async (call: { title?: string | null }) => {
+        asked.push(call.title ?? '')
+        return choices.shift() ?? null
+      },
+    })
+    await runTurn(session, { id: 'turn-1', text: '用我的 Chrome' }, io)
+    expect(asked).toEqual(['让智能体改用你的 Chrome（会用你在那里的登录状态）', '让智能体改用你的 Chrome（会用你在那里的登录状态）'])
+    expect(fake.actions).toEqual([
+      { action: 'switch', browser: 'chrome' },
+      { action: 'switch', browser: 'builtin' },
+    ])
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('did not allow using their own browser')
+    expect(JSON.stringify(model.doStreamCalls[4]?.prompt)).toContain('Invalid')
+    const titles = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
+    expect(titles.slice(0, 3)).toEqual(['浏览器 改用你的 Chrome', '浏览器 改用你的 Chrome', '浏览器 改用内置浏览器'])
   })
 
   test('截图跟在工具结果后面作为一条带图片的消息，工具结果里只有文字', async () => {

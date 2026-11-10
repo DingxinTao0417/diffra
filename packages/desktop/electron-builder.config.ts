@@ -35,6 +35,8 @@ const config: Configuration = {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     perMachine: false,
+    // 卸载时删掉浏览器扩展本机宿主的注册表登记
+    include: 'build/installer.nsh',
   },
   publish: [{ provider: 'generic', url: updateUrl }],
 }
