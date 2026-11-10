@@ -4,11 +4,11 @@
 
 ## 产品身份
 
-- 名字：Diffra。定位是自用为主、小范围分发的桌面端编程 agent。
+- 名字：Diffra。定位是个人开发者（艾特）开发的桌面端编程 agent，2026-11 起对外公开、公测期间免费（第 298 步，之前是自用为主、小范围分发）。
 - appId：`dev.diffra.desktop`；`productName`：`Diffra`，它决定用户数据目录（`%APPDATA%\Diffra`）。
 - 打包后的包名：`diffra`（`electron-builder.config.ts` 里的 `extraMetadata.name`）。它决定每用户安装目录（`%LOCALAPPDATA%\Programs\diffra`）和更新缓存目录（`%LOCALAPPDATA%\diffra-updater`）。不覆盖的话，会用 workspace 包名 `@diffra/desktop`，变成 `@diffradesktop`。
 - 以上三项发布后都不能改：NSIS 安装包靠 appId 识别同一个应用，改了会断掉自动更新；改 productName 或包名，用户数据目录、安装目录会换位置。
-- 域名：`diffra.dev`（2026-11 买下，DNS 在 Cloudflare），兼做更新源 `update.diffra.dev`。现阶段只给自己和朋友用，不做备案，原定做更新下载的 `diffra.net` 不买了。
+- 域名：`diffra.dev`（2026-11 买下，DNS 在 Cloudflare），兼做更新源 `update.diffra.dev`。不做备案（服务器在美国），原定做更新下载的 `diffra.net` 不买了。国内下载慢的问题暂不处理。
 
 ## v1 / v2 范围
 
@@ -86,10 +86,17 @@ v2：
   - HTTPS 证书来自 Let's Encrypt（没留邮箱），certbot 的定时任务自动续期；HTTP 跳转到 HTTPS。`.dev` 域名浏览器只允许 HTTPS。
   - Cloudflare 上是「仅 DNS」，不走它的代理：要保证多段 Range 能直接到 nginx，差分下载才不退回整包。
   - 上传用 root 和专用密钥（`~/.ssh/diffra_server_ed25519`）；服务器原本只允许密码登录，密钥是用户自己加的。没有建单独的部署账号。
-- 官网 `https://diffra.dev`：同一台服务器，只有一个静态下载页（仓库的 `website/`，纯 HTML 和 CSS，不放统计、不用 Cookie）。http 和 `www` 都跳到 `https://diffra.dev`，页面不缓存。
+- 官网 `https://diffra.dev`（第 298–308 步改版）：同一台服务器上的静态网站，纯 HTML 和 CSS，不用网站框架、不用 Cookie、不加载第三方脚本。http 和 `www` 都跳到 `https://diffra.dev`，页面不缓存。
+  - 页面：首页、下载、快速开始、更新日志、隐私政策、用户协议、第三方许可、浏览器扩展隐私政策、404。署名是个人开发者「艾特」，联系邮箱 2034994530@qq.com；口径是「公测、免费，模型用你自己的 API Key」。
+  - 源文件：`website/layout.html` 是公共页头页脚，`website/pages/*.html` 是各页正文，`website/public/` 原样拷到网站根目录。`scripts/build-website.ts` 拼成 `out/website/`，同时生成更新日志页（按 tag）、第三方许可页（从 `NOTICE.md`）、`sitemap.xml`、`robots.txt`，并检查站内链接和锚点，有错就失败。
+  - 产品截图：`pnpm --filter @diffra/desktop website:shots`（`scripts/shots/website.shots.ts`）用演示项目和脚本模型在开发版里摆场景，浅色、深色各截一套 2 倍 WebP，连同分享卡片 `og.png` 和图标一起生成到 `website/public/`。界面改了就重跑，不用真实数据。页面里写 `width="{{shot:名字}}"`，构建时换成图片的真实宽高。
+  - 颜色和圆角沿用应用的令牌，深色跟系统走；产品截图用 `<picture>` 按系统配色换浅色、深色那一套。
   - 下载按钮指向固定地址 `https://update.diffra.dev/win/Diffra-Setup-latest.exe`，它是指向最新安装包的软链接，由发布脚本维护，nginx 对它不缓存；每次发版不用改网页。
-  - 页面读更新源上的 `latest.yml` 显示版本号和大小（更新源只允许 `https://diffra.dev` 跨域读 `.yml`）；还没有发布版本时按钮变灰，读不到时保留默认文字、按钮照样能用。
-  - 更新网页：`pnpm --filter @diffra/desktop publish:website`（`scripts/publish-website.ts`），传完从公网取回首页核对。
+  - 页面读更新源上的 `latest.yml` 显示版本号、大小、发布日期和 SHA-512（`website/public/site.js`；更新源只允许 `https://diffra.dev` 跨域读 `.yml`，本地预览读不到，显示默认文字）；还没有发布版本时下载按钮变灰。
+  - 更新网页：`pnpm --filter @diffra/desktop publish:website`（`scripts/publish-website.ts`）先生成再上传 `out/website/` 里的全部文件，传完从公网取回每个页面核对。
+  - 访问统计：只用服务器的 nginx 访问日志，不在页面里加统计脚本。日志保留 180 天（隐私政策里写了），`pnpm --filter @diffra/desktop stats`（`scripts/website-stats.ts`）经 SSH 用 GoAccess 生成报表下载到 `out/stats/`，并打出安装包下载次数、每天检查更新的不同 IP 数（大致等于在用的安装数）。报表只在本机看，不公开。
+  - 服务器上配合的三处（2026-11-10 改好，原文件备份在 `/root/backup/`）：`/etc/logrotate.d/nginx` 改成保留 180 天（原来 14 天）、装了 GoAccess 1.8.1、`/etc/nginx/sites-available/diffra.dev` 加了 `error_page 404 /404.html`。官网和更新源共用 `/var/log/nginx/access.log`，按路径区分（`/win/` 是更新源）。日志路径变了就在 `publish.config.json` 的 `accessLogs` 里写。
+  - 不做：国内下载源、定价页、英文版、完整文档、演示视频。
   - 环境变量 `DIFFRA_UPDATE_URL` 只用于本地验证更新流程，正式构建不要设置；发布脚本发现它设了就拒绝发布。
 - 客户端行为：启动时检查一次，之后每 4 小时检查一次，有新版本就后台下载。下载完后界面出现「重启并更新」，点击后静默安装并自动重启；不点的话，下次正常退出时也会安装。未打包运行（开发模式、e2e）时不检查更新。
 - 发布流程（现阶段手动）：

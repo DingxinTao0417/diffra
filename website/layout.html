@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<link rel="canonical" href="{{url}}">
+{{head}}
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Diffra">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="{{url}}">
+<meta property="og:image" content="https://diffra.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="/" aria-label="Diffra 首页">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="brand-gradient" gradientUnits="userSpaceOnUse" x1="5.44" y1="3" x2="17.059" y2="29"><stop offset="0" stop-color="#3fd8c8"/><stop offset="0.5" stop-color="#22ad7a"/><stop offset="1" stop-color="#187a4e"/></linearGradient></defs><path fill="url(#brand-gradient)" d="M6.14 3H13.565A13 13 0 0 1 23.444 7.55H6.14Q5.44 7.55 5.44 6.85V3.7Q5.44 3 6.14 3ZM6.14 10.15H25.174A13 13 0 0 1 26.5 14.7H6.14Q5.44 14.7 5.44 14V10.85Q5.44 10.15 6.14 10.15ZM6.14 17.3H26.5A13 13 0 0 1 25.174 21.85H6.14Q5.44 21.85 5.44 21.15V18Q5.44 17.3 6.14 17.3ZM6.14 24.45H23.444A13 13 0 0 1 13.565 29H6.14Q5.44 29 5.44 28.3V25.15Q5.44 24.45 6.14 24.45Z"/></svg>
+      Diffra
+    </a>
+    <nav class="nav" aria-label="主导航">
+{{nav}}
+    </nav>
+  </div>
+</header>
+<main id="main">
+{{body}}
+</main>
+<footer class="site-footer">
+  <div class="container">
+    <div class="columns">
+      <div class="about">
+        <a class="brand" href="/">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><path fill="url(#brand-gradient)" d="M6.14 3H13.565A13 13 0 0 1 23.444 7.55H6.14Q5.44 7.55 5.44 6.85V3.7Q5.44 3 6.14 3ZM6.14 10.15H25.174A13 13 0 0 1 26.5 14.7H6.14Q5.44 14.7 5.44 14V10.85Q5.44 10.15 6.14 10.15ZM6.14 17.3H26.5A13 13 0 0 1 25.174 21.85H6.14Q5.44 21.85 5.44 21.15V18Q5.44 17.3 6.14 17.3ZM6.14 24.45H23.444A13 13 0 0 1 13.565 29H6.14Q5.44 29 5.44 28.3V25.15Q5.44 24.45 6.14 24.45Z"/></svg>
+          Diffra
+        </a>
+        <p>Windows 上的编程智能体。由个人开发者艾特开发和维护，公测期间免费。</p>
+      </div>
+      <div>
+        <h4>产品</h4>
+        <ul>
+          <li><a href="/#features">功能</a></li>
+          <li><a href="/download.html">下载</a></li>
+          <li><a href="/changelog.html">更新日志</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>资源</h4>
+        <ul>
+          <li><a href="/docs.html">快速开始</a></li>
+          <li><a href="/#faq">常见问题</a></li>
+          <li><a href="mailto:2034994530@qq.com">反馈与联系</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>条款</h4>
+        <ul>
+          <li><a href="/privacy.html">隐私政策</a></li>
+          <li><a href="/terms.html">用户协议</a></li>
+          <li><a href="/licenses.html">第三方许可</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span>© {{year}} 艾特 · Diffra</span>
+      <span>联系：<a href="mailto:2034994530@qq.com">2034994530@qq.com</a></span>
+    </div>
+  </div>
+</footer>
+<script src="/site.js" defer></script>
+</body>
+</html>

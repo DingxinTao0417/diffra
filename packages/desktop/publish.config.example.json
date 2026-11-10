@@ -5,5 +5,6 @@
     "identityFile": "~/.ssh/diffra_server_ed25519"
   },
   "remoteDir": "/var/www/diffra-update/win",
-  "siteDir": "/var/www/diffra-site"
+  "siteDir": "/var/www/diffra-site",
+  "accessLogs": "/var/log/nginx/access.log*"
 }

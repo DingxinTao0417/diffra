@@ -20,7 +20,10 @@
     "test:packaged": "pnpm run package && node scripts/build-extension.ts && playwright test --project=packaged",
     "publish:release": "node scripts/publish-release.ts",
     "publish:website": "node scripts/publish-website.ts",
-    "changelog": "node scripts/changelog.ts"
+    "changelog": "node scripts/changelog.ts",
+    "build:website": "node scripts/build-website.ts",
+    "website:shots": "playwright test -c playwright.shots.config.ts",
+    "stats": "node scripts/website-stats.ts"
   },
   "devDependencies": {
     "@diffra/core": "workspace:*",

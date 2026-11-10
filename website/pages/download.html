@@ -1,0 +1,45 @@
+<div class="container narrow">
+  <header class="page-head">
+    <h1>下载 Diffra</h1>
+    <p>免费下载，公测期间所有功能都能用。</p>
+  </header>
+
+  <div class="download-card">
+    <div>
+      <h2>Diffra for Windows</h2>
+      <p data-release="summary">Windows 10 / 11 · 64 位</p>
+    </div>
+    <a class="button large" href="https://update.diffra.dev/win/Diffra-Setup-latest.exe" data-download>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+      下载安装包
+    </a>
+  </div>
+
+  <dl class="specs">
+    <dt>版本</dt><dd data-release="version">—</dd>
+    <dt>发布日期</dt><dd data-release="date">—</dd>
+    <dt>安装包大小</dt><dd data-release="size">约 120 MB</dd>
+    <dt>系统要求</dt><dd>Windows 10 / 11，64 位</dd>
+    <dt>SHA-512</dt><dd><code data-release="sha512">—</code></dd>
+  </dl>
+
+  <div class="prose">
+    <h2 id="install">安装</h2>
+    <ol>
+      <li>运行下载好的 <code>Diffra-Setup-版本号.exe</code>。</li>
+      <li>安装包还没有代码签名，Windows 可能提示「Windows 已保护你的电脑」：点「更多信息」，再点「仍要运行」。</li>
+      <li>按向导选好安装位置（默认装在当前用户的 <code>AppData\Local\Programs\diffra</code>，不需要管理员权限）。</li>
+      <li>装好后打开 Diffra，按<a href="/docs.html">快速开始</a>接入模型，就能开始第一个任务。</li>
+    </ol>
+
+    <h2 id="verify">核对安装包</h2>
+    <p>想确认安装包完整、没被改过，可以在 PowerShell 里算一下它的 SHA-512，和上面列的值比对：</p>
+    <pre><code>[Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::ReadAllBytes("Diffra-Setup-版本号.exe")))</code></pre>
+
+    <h2 id="update">更新和卸载</h2>
+    <ul>
+      <li>有新版本时 Diffra 会在后台下载，「设置 → 更新与关于」里点「重启并更新」，或者下次退出时自动装好。每个版本改了什么见<a href="/changelog.html">更新日志</a>。</li>
+      <li>卸载：Windows「设置 → 应用」里找到 Diffra 卸载。你的任务记录和设置留在 <code>%APPDATA%\Diffra</code>，重装后还在；不需要的话可以手动删掉这个文件夹。</li>
+    </ul>
+  </div>
+</div>

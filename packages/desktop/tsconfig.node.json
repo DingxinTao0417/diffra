@@ -16,6 +16,7 @@
     "electron.vite.config.ts",
     "electron-builder.config.ts",
     "playwright.config.ts",
+    "playwright.shots.config.ts",
     "e2e",
     "scripts",
     "src/main",

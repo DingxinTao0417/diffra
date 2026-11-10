@@ -1,0 +1,90 @@
+<div class="container narrow">
+  <header class="page-head">
+    <h1>快速开始</h1>
+    <p>五分钟用上 Diffra：安装、接入模型、开始第一个任务。</p>
+  </header>
+  <div class="prose">
+    <nav class="toc" aria-label="本页目录">
+      <strong>本页内容</strong>
+      <ol>
+        <li><a href="#install">安装</a></li>
+        <li><a href="#model">接入模型</a></li>
+        <li><a href="#first-task">第一个任务</a></li>
+        <li><a href="#review">审阅和撤销</a></li>
+        <li><a href="#permissions">权限模式</a></li>
+        <li><a href="#browser">浏览器</a></li>
+        <li><a href="#design">设计任务</a></li>
+        <li><a href="#shortcuts">快捷键</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="install">1. 安装</h2>
+    <p>从<a href="/download.html">下载页</a>下载安装包并运行。Windows 如果提示「Windows 已保护你的电脑」，点「更多信息」，再点「仍要运行」。之后有新版本会自动下载，重启就更新好了。</p>
+
+    <h2 id="model">2. 接入模型</h2>
+    <p>Diffra 不自带模型，用的是你自己的 API Key，费用直接付给模型服务商。</p>
+    <ol>
+      <li>打开「设置 → 模型与角色」，点「添加模型服务」。</li>
+      <li>在「供应商」里选一个预置的服务，比如 DeepSeek、Kimi、智谱、阿里云百炼、OpenAI、Anthropic、Google Gemini；用编程套餐的，选对应的 Coding Plan。其他兼容 OpenAI 或 Anthropic 接口的服务选「自定义」，自己填地址。</li>
+      <li>填上 API Key，点「下一步」，确认模型能力后点「校验并添加模型」。Diffra 会真的调用一次，确认能用。</li>
+      <li>在「角色」里，把「编码」选成刚加的模型。「规划」和「备用」可以先不设。</li>
+    </ol>
+    <div class="callout"><p>API Key 用 Windows 系统的加密存储保存在你的电脑上，只会发给对应的服务商。</p></div>
+
+    <h2 id="first-task">3. 第一个任务</h2>
+    <ol>
+      <li>回到首页，在输入框下面的项目下拉里点「选择文件夹…」，选你的项目。</li>
+      <li>用平常的话描述要做什么，比如「给待办加上优先级，列表按优先级排序」。可以把文件、截图拖进输入框，或者用 @ 引用文件。</li>
+      <li>点发送（或按 <code>Ctrl</code> + <code>Enter</code>）。Diffra 会读项目、改代码，每次改完跑一遍检查。</li>
+    </ol>
+    <p>检查命令在任务页右侧「任务监控」的「检查」里设置：Diffra 能从项目里检测出来（比如 <code>package.json</code> 里的 test 脚本），你确认、试运行一次后保存；也可以点「编辑检查命令」自己写。设好以后每次改完都会跑，没通过它会读回错误接着修。</p>
+
+    <h2 id="review">4. 审阅和撤销</h2>
+    <p>任务做完会出现「本轮交付」：改了哪些文件、增删多少行、过了哪些检查。</p>
+    <ul>
+      <li>点「审阅改动」，逐个文件看差异。</li>
+      <li>不满意就点「撤销改动」，这一轮的改动全部退回。撤销用的是 Diffra 自己的检查点，不碰你的 Git。</li>
+      <li>任务页右侧的「任务监控」随时显示进度、改动的文件和检查结果。</li>
+    </ul>
+    <div class="shot">
+      <picture>
+        <source srcset="/assets/shots/review-dark.webp" media="(prefers-color-scheme: dark)">
+        <img src="/assets/shots/review-light.webp" width="{{shot:review}}" loading="lazy" alt="审阅面板：按文件列出改动和逐行差异">
+      </picture>
+    </div>
+
+    <h2 id="permissions">5. 权限模式</h2>
+    <p>输入框左下角可以切换权限模式，也能在「设置 → 命令权限」里改默认值。</p>
+    <table>
+      <thead><tr><th>模式</th><th>行为</th></tr></thead>
+      <tbody>
+        <tr><td>每次询问</td><td>只读命令和检查命令自动执行，其余命令执行前都问你。</td></tr>
+        <tr><td>自动审批</td><td>普通命令自动执行；涉及密钥文件、禁写目录、git 推送或重置、安装依赖、下载、递归删除时仍然问你。</td></tr>
+        <tr><td>完全访问</td><td>命令不再询问。危险命令清单、受保护文件和禁写目录照旧拦截。</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="browser">6. 浏览器</h2>
+    <p>前端项目里，Diffra 会自己启动开发服务器，在任务页右侧的内置浏览器里打开页面，点一点、看控制台和网络请求，确认改动真的能用。打开外部网站前会先问你；「设置 → 浏览器」里可以列出直接打开、不让打开的网站。</p>
+    <p>想让它用你自己的 Chrome 或 Edge（带着你的登录状态），在「设置 → 浏览器」里选「我的 Chrome」，再装上 Diffra 浏览器扩展。扩展正在上架应用商店，上架后会在这里给出安装链接。</p>
+
+    <h2 id="design">7. 设计任务</h2>
+    <p>点侧栏的「设计」进入设计首页，描述你要的界面。Diffra 会在矢量画布上画出来：布局、文字、图标、网上的真实图片都能放，你可以在画布上接着改，或者导出 PNG。</p>
+
+    <h2 id="shortcuts">8. 快捷键</h2>
+    <table>
+      <thead><tr><th>操作</th><th>快捷键</th></tr></thead>
+      <tbody>
+        <tr><td>新任务</td><td><code>Ctrl</code> + <code>N</code></td></tr>
+        <tr><td>搜索任务</td><td><code>Ctrl</code> + <code>K</code></td></tr>
+        <tr><td>发送消息</td><td><code>Ctrl</code> + <code>Enter</code></td></tr>
+        <tr><td>收起或展开侧栏</td><td><code>Ctrl</code> + <code>B</code></td></tr>
+        <tr><td>打开或收起终端（任务页）</td><td><code>Ctrl</code> + <code>`</code></td></tr>
+        <tr><td>打开设置</td><td><code>Ctrl</code> + <code>,</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>还有问题？</h2>
+    <p>先看看首页的<a href="/#faq">常见问题</a>；没找到答案的话，发邮件到 <a href="mailto:2034994530@qq.com">2034994530@qq.com</a>。</p>
+  </div>
+</div>

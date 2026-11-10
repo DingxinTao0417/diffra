@@ -19,6 +19,8 @@ const configSchema = z.object({
   remoteDir: remotePath,
   // 官网文件目录
   siteDir: remotePath,
+  // nginx 访问日志（含轮转出来的旧文件），统计用；默认是 Ubuntu 上 nginx 的位置
+  accessLogs: z.string().regex(/^\/[\w./*-]+$/).default('/var/log/nginx/access.log*'),
 })
 
 export type PublishConfig = z.infer<typeof configSchema>
@@ -57,5 +59,7 @@ export function remote(config: PublishConfig) {
     await scp(local, `${target}.partial`)
     await ssh(`mv -f '${target}.partial' '${target}'`)
   }
-  return { ssh, upload }
+  const download = (source: string, local: string) =>
+    run('scp', ['-i', identityFile, '-P', String(config.ssh.port), '-o', 'BatchMode=yes', `${config.ssh.target}:${source}`, local], UPLOAD_TIMEOUT_MS)
+  return { ssh, upload, download }
 }

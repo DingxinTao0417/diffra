@@ -1,0 +1,57 @@
+<div class="container narrow">
+  <header class="page-head">
+    <h1>Diffra 浏览器扩展隐私政策</h1>
+    <p>适用于 Chrome 应用商店和 Microsoft Edge 加载项商店里的「Diffra」扩展。</p>
+  </header>
+  <div class="prose">
+    <p class="meta">最后更新：2026 年 11 月 10 日</p>
+
+    <h2>扩展做什么</h2>
+    <p>扩展让你电脑上的 Diffra 桌面应用里的 AI 智能体能操作你的浏览器：打开网页、读取页面、点击和输入。扩展本身只做转发：通过浏览器的 native messaging 连接同一台电脑上的 Diffra，把 Diffra 发来的调试命令转给标签页，把结果转回去。</p>
+
+    <h2>能操作哪些标签页</h2>
+    <ul>
+      <li>Diffra 为任务新开的标签页（放在「Diffra · 任务名」分组里），以及这些页面自己弹出的新窗口；</li>
+      <li>你在扩展弹窗里主动「交给 Diffra」的标签页。</li>
+    </ul>
+    <p>其他标签页扩展不读取、不操作。智能体操作时浏览器顶部会显示调试提示条，点提示条上的「取消」会立刻停止。</p>
+
+    <h2>处理哪些数据，发到哪里</h2>
+    <ul>
+      <li>上面这些标签页的内容（网址、标题、页面结构和文字、截图、控制台消息、网络请求的网址和状态）会发给同一台电脑上的 Diffra 应用，不经过任何服务器。</li>
+      <li>Diffra 会把其中任务需要的部分，连同你的指令，发给你在 Diffra 里自己配置的 AI 模型服务（用你自己的 API Key）。这些服务怎么处理数据，以各服务的隐私政策为准。</li>
+      <li>扩展只在浏览器的会话存储里记下哪些标签页交给了哪个任务，浏览器关闭后清空。</li>
+    </ul>
+
+    <h2>不做的事</h2>
+    <ul>
+      <li>不收集统计数据、不做广告追踪、不出售或转让任何数据；</li>
+      <li>不向 Diffra 开发者或任何第三方服务器发送数据；</li>
+      <li>不从网络加载和运行远程代码；</li>
+      <li>不读取浏览历史、书签、已保存的密码；智能体不会在密码框里输入。</li>
+    </ul>
+
+    <h2>权限说明</h2>
+    <ul>
+      <li><strong>nativeMessaging</strong>：连接同一台电脑上的 Diffra 应用。</li>
+      <li><strong>debugger</strong>：在交给 Diffra 的标签页里读页面、点击、输入、截图。</li>
+      <li><strong>tabs、tabGroups</strong>：为任务开标签页、放进分组，知道交给 Diffra 的标签页有没有关掉。</li>
+      <li><strong>storage</strong>：在会话存储里记下标签页和任务的对应关系。</li>
+      <li><strong>alarms</strong>：Diffra 没打开时，定时重新尝试连接。</li>
+    </ul>
+
+    <h2>联系</h2>
+    <p>对本政策有疑问，请发邮件到 <a href="mailto:2034994530@qq.com">2034994530@qq.com</a>（开发者：艾特）。Diffra 整体的隐私政策见<a href="/privacy.html">这里</a>。</p>
+
+    <hr>
+
+    <h2 lang="en">Diffra Browser Extension Privacy Policy</h2>
+    <div lang="en">
+      <p class="meta">Last updated: November 10, 2026.</p>
+      <p>The extension lets the AI agent in the Diffra desktop app on the same computer open pages, read them, click and type in your browser. It relays debugging commands from Diffra (connected through native messaging) to tabs, and relays the results back.</p>
+      <p>It only works with tabs Diffra opened for a task (in a "Diffra · task name" group) and windows those pages open, and tabs you explicitly hand over from the extension popup. Page content from those tabs (URL, title, page structure and text, screenshots, console messages, request URLs and statuses) is sent to the Diffra app on the same computer, never to a server. Diffra may send the parts a task needs, with your instructions, to the AI model provider you configured in Diffra with your own API key.</p>
+      <p>The extension collects no analytics, does no tracking, sends nothing to the Diffra developer or other third parties, runs no remote code, and does not read history, bookmarks or saved passwords. It keeps only a session-scoped mapping of tabs to tasks, cleared when the browser closes.</p>
+      <p>Contact: <a href="mailto:2034994530@qq.com">2034994530@qq.com</a></p>
+    </div>
+  </div>
+</div>

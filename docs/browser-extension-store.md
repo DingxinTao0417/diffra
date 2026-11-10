@@ -5,7 +5,7 @@
 ## 第一次上架（手动，只做一次）
 
 1. 注册开发者账号：Chrome 应用商店（一次性 5 美元，要做身份验证）、Microsoft 合作伙伴中心的 Edge 计划（免费）。
-2. 把隐私政策页 `website/browser-extension-privacy.html` 发到官网（`pnpm --filter @diffra/desktop publish:website`），网址是 `https://diffra.dev/browser-extension-privacy.html`。
+2. 把隐私政策页（`website/pages/browser-extension-privacy.html`）随官网一起发布（`pnpm --filter @diffra/desktop publish:website`），网址是 `https://diffra.dev/browser-extension-privacy.html`。
 3. 打商店包：`pnpm --filter @diffra/desktop package:extension`，得到 `packages/desktop/release/diffra-browser-extension-<版本>.zip`。
 4. 在两个商店后台新建条目，上传这个 zip，按下面的文案填写，提交审核。
 5. 商店分配的扩展 ID 填进 `packages/desktop/src/shared/browser-bridge.ts` 的 `EXTENSION_IDS.chromeWebStore`、`EXTENSION_IDS.edgeAddons`，发一版 Diffra。之后 Diffra 的本机宿主才会允许商店版扩展连接，设置页的「去安装」按钮才会出现。
