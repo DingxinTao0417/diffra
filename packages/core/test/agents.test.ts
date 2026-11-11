@@ -251,6 +251,7 @@ describe('子智能体', () => {
     expect(results).toContain('Read c.txt with read_file before editing it.')
   })
 
+  // 工人甲故意晚 4 秒才回（占着 a.txt 等乙跑命令），默认 5 秒只剩不到 1 秒给建会话、打检查点和经 bash 跑命令，Windows CI 上不够
   test('工人跑的命令改到别人认领的文件，告诉主智能体；权限确认带上是哪个工人', async () => {
     const { model } = routedModel(
       {
@@ -277,7 +278,7 @@ describe('子智能体', () => {
     expect((io.permissions[0]!.agent as AgentTag).name).toBe('乙')
     const results = toolResults(session)
     expect(results).toContain('Its commands also changed files owned by other workers: a.txt (owned by \\"甲\\")')
-  })
+  }, 20_000)
 
   test('两个工人同时要确认权限时排队：同一时间只有一个请求在等用户（界面一个任务只显示一张确认卡）', async () => {
     const { model } = routedModel(
