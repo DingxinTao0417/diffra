@@ -41,6 +41,9 @@ export interface RemoteTask {
   epoch: string | null
   seq: number
   resumable: boolean
+  // 订阅失败后自动重试过几次；对方明确拒绝（关了总开关、没授权本机）时不自动重试
+  retries: number
+  refused: boolean
 }
 
 export const remoteKey = (deviceId: string, sessionId: string) => `${deviceId}/${sessionId}`
@@ -99,6 +102,8 @@ export async function subscribeRemote(deviceId: string, sessionId: string): Prom
           epoch: null,
           seq: 0,
           resumable: false,
+          retries: 0,
+          refused: false,
         }
     return { ...state, remoteTasks: { ...state.remoteTasks, [key]: task } }
   })
@@ -108,7 +113,7 @@ export async function subscribeRemote(deviceId: string, sessionId: string): Prom
     const result = await window.diffra.subscribeRemoteSession(deviceId, sessionId, resume)
     if ('resumed' in result) {
       // 续上了：内容留着，缺的随后补发过来
-      updateTask(key, (task) => ({ ...task, running: result.running, status: 'ready', error: null, resumable: false }))
+      updateTask(key, (task) => ({ ...task, running: result.running, status: 'ready', error: null, resumable: false, retries: 0, refused: false }))
       return
     }
     const page = result
@@ -130,11 +135,21 @@ export async function subscribeRemote(deviceId: string, sessionId: string): Prom
         epoch: page.epoch,
         seq: page.seq,
         resumable: false,
+        retries: 0,
+        refused: false,
       }
     })
   } catch (error) {
     updateTask(key, (task) => ({ ...task, status: 'error', error: errorMessage(error) }))
   }
+}
+
+// 订阅失败后再试一次（远程任务页的「重试」，或者对方在线时自动隔几秒重试），列表也一起重取
+export function retryRemote(key: string, auto: boolean): void {
+  const task = store.get().remoteTasks[key]
+  if (!task) return
+  updateTask(key, (current) => ({ ...current, generation: current.generation + 1, retries: auto ? current.retries + 1 : 0, refused: false }))
+  void loadRemoteList(task.deviceId)
 }
 
 export function unsubscribeRemote(deviceId: string, sessionId: string): void {
@@ -201,6 +216,18 @@ export function applyRemoteEvent(payload: RemoteSyncEvent): void {
     }))
     return
   }
+  if ('refused' in payload) {
+    // 对方明确拒绝本机（关了总开关、撤销了授权）：它开放的项目从侧栏收起，正在看的任务停在这个原因上、不自动重试。
+    // 互相配对时对方在中转上仍显示在线，所以不能只看在线状态
+    store.set((state) => ({
+      ...state,
+      remoteLists: { ...state.remoteLists, [deviceId]: { list: null, loading: false, error: payload.message } },
+      remoteTasks: Object.fromEntries(
+        Object.entries(state.remoteTasks).map(([key, task]) => [key, task.deviceId === deviceId ? { ...task, status: 'error', error: payload.message, refused: true, permission: null } : task]),
+      ),
+    }))
+    return
+  }
   const { event } = payload
   switch (event.event) {
     case 'session.updates': {
@@ -223,7 +250,12 @@ export function applyRemoteEvent(payload: RemoteSyncEvent): void {
       updateTask(remoteKey(deviceId, event.sessionId), (task) =>
         task.status !== 'ready' || task.turns.some((turn) => turn.id === event.turnId)
           ? task
-          : { ...task, running: true, totalTurns: task.totalTurns + 1, turns: [...task.turns, newTurn(event.turnId, event.prompt, event.kind as Turn['kind'], [], [], event.from, event.remote)] },
+          : {
+              ...task,
+              running: true,
+              totalTurns: task.totalTurns + 1,
+              turns: [...task.turns, { ...newTurn(event.turnId, event.prompt, event.kind as Turn['kind'], [], [], event.from, event.remote), ...(event.imageCount ? { pendingImages: event.imageCount } : {}) }],
+            },
       )
       return
     case 'session.reset':

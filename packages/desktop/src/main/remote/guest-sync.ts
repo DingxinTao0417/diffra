@@ -14,14 +14,26 @@ import {
 } from '@diffra/remote/messages'
 import type { z } from 'zod'
 import type { RemoteSyncEvent } from '../../shared/remote'
+import { logRemote } from '../app-log'
+import type { OpenFailure, OpenResult } from './links'
 
 // 连接端：向被连接端发请求、收它推来的动静。对方来的一律按 @diffra/remote/messages 校验，不合格的丢掉。
 // 订阅归界面管：通道断了告诉界面，等对方重新在线后界面自己重新订阅、整页换掉
 
 const REQUEST_TIMEOUT_MS = 30_000
 
+// 建不起通道时照实说原因
+const OPEN_FAILURES: Record<OpenFailure, string> = {
+  relay: '和中转服务断开了，或者对方刚掉线，正在重连',
+  timeout: '对方 10 秒没有回应：可能刚掉线，或者网络不好',
+  handshake: '和对方的加密握手失败：对方可能重置过本机身份，要重新配对',
+  off: '对方关掉了「允许连接本机」',
+  'not-granted': '对方没有授权本机，或者已经撤销，要对方重新开放',
+  'unknown-peer': '本机没有这台设备的密钥，要重新添加',
+}
+
 export interface GuestSyncDeps {
-  open(deviceId: string): Promise<boolean>
+  open(deviceId: string): Promise<OpenResult>
   send(deviceId: string, message: unknown): boolean
   publish(event: RemoteSyncEvent): void
 }
@@ -89,7 +101,7 @@ export class GuestSync {
     }
     const event = eventSchema.safeParse(raw)
     if (event.success) return this.deps.publish({ deviceId, event: event.data })
-    console.error('[remote] 对方发来的消息格式不对，丢掉')
+    logRemote('对方发来的消息格式不对，丢掉')
   }
 
   closed(deviceId: string): void {
@@ -103,7 +115,13 @@ export class GuestSync {
   }
 
   private async request<T>(deviceId: string, call: RequestCall, schema: z.ZodType<T> | null): Promise<T> {
-    if (!(await this.deps.open(deviceId))) throw new Error('对方不在线，或者对方已经不再授权本机')
+    const opened = await this.deps.open(deviceId)
+    if (!opened.ok) {
+      const message = OPEN_FAILURES[opened.reason]
+      // 被明确拒绝：告诉界面，它那边把这台设备的列表收起来、不自动重试
+      if (opened.reason === 'off' || opened.reason === 'not-granted') this.deps.publish({ deviceId, refused: opened.reason, message })
+      throw new Error(message)
+    }
     const id = this.nextId++
     const value = await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {

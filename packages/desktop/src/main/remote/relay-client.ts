@@ -1,6 +1,7 @@
 import { sign } from 'node:crypto'
 import { authPayload, CLOSE, encodeFrame, decodeFrame, type FrameKind, RELAY_PROTOCOL, type ServerMessage, serverMessageSchema } from '@diffra/relay/protocol'
 import type { RemoteRelayStatus } from '../../shared/remote'
+import { logRemote } from '../app-log'
 import type { DeviceIdentity } from './identity'
 
 // 主进程连中转的那条 WebSocket（Node 自带的客户端）：登录、白名单、在线状态、会合点、收发帧。
@@ -169,7 +170,7 @@ export class RelayClient {
     try {
       socket = new WebSocket(this.url)
     } catch (error) {
-      console.error('[remote] 中转地址不对', error)
+      logRemote('中转地址不对', error)
       return this.fail(`中转地址不对：${this.url}`)
     }
     socket.binaryType = 'arraybuffer'
@@ -199,7 +200,7 @@ export class RelayClient {
     try {
       message = serverMessageSchema.parse(JSON.parse(text))
     } catch (error) {
-      console.error('[remote] 中转发来的消息格式不对', error)
+      logRemote('中转发来的消息格式不对', error)
       socket.close()
       return
     }

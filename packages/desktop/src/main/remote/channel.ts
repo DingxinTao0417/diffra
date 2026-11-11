@@ -1,8 +1,8 @@
 import { encodeMessage, MessageAssembler, type Transport } from '@diffra/remote'
 
-// 两台设备之间直发帧的第一个字节：配对时被连接端的回信、会话通道的握手和数据。
+// 两台设备之间直发帧的第一个字节：配对时被连接端的回信、会话通道的握手和数据，被连接端拒绝建通道（带原因）、关掉通道的通知。
 // 会话通道按方向各一条：A 看 B 的会话（A 是连接端，B 是被连接端）和 B 看 A 的互不相干，两台设备可以同时互相看
-export const DIRECT = { pairing: 0, open: 1, accept: 2, toHost: 3, toGuest: 4 } as const
+export const DIRECT = { pairing: 0, open: 1, accept: 2, toHost: 3, toGuest: 4, deny: 5, closed: 6 } as const
 
 export function withKind(kind: number, payload: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from([kind]), payload])

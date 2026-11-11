@@ -219,12 +219,12 @@ test('设备连接：抄错的、自己的、被拒绝的、用过的、过期�
 // 测试用的假密钥在运行时拼出来，仓库里不出现完整的密钥格式
 const fakeKey = (prefix: string, body: string) => `${prefix}${body}`
 
-// 被连接端开总开关、生成邀请串，连接端添加，被连接端勾 project（可查看）和 controlled（可查看和操作）后允许
-async function pair(host: Device, guest: Device, project: string, controlled: string[] = []): Promise<void> {
+// 被连接端开总开关、生成邀请串，连接端添加，被连接端勾 view（可查看）和 controlled（可查看和操作）里的项目后允许
+async function pair(host: Device, guest: Device, view: string[], controlled: string[] = []): Promise<void> {
   await allowIncoming(host.window)
   await addDevice(guest.window, await newInvite(host.window), '主机')
   const request = host.window.getByTestId('pair-request')
-  await request.getByRole('checkbox', { name: `开放 ${basename(project)}` }).click()
+  for (const path of view) await request.getByRole('checkbox', { name: `开放 ${basename(path)}` }).click()
   for (const path of controlled) {
     await request.getByRole('checkbox', { name: `开放 ${basename(path)}` }).click()
     await request.getByRole('radiogroup', { name: `${basename(path)} 的权限` }).getByRole('radio', { name: '可查看和操作' }).click()
@@ -247,6 +247,22 @@ const DROP_PIXEL = `(async () => {
   element.dispatchEvent(new DragEvent('dragenter', { dataTransfer: data, bubbles: true, cancelable: true }))
   element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
 })()`
+// 在输入框上粘贴一张 3000x1500 的 PNG（本机发给模型前缩到长边 1600，发给远程设备时再压到长边 1024）
+const PASTE_BIG_IMAGE = `(async () => {
+  const element = document.querySelector('textarea[aria-label="任务"]')
+  const canvas = document.createElement('canvas')
+  canvas.width = 3000
+  canvas.height = 1500
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#2e6b57'
+  context.fillRect(0, 0, 3000, 1500)
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  const data = new DataTransfer()
+  data.items.add(new File([blob], 'big.png', { type: 'image/png' }))
+  element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+})()`
+const imageSizes = (window: Page, root: string) => window.evaluate<number[][]>(`[...document.querySelectorAll('${root} [data-testid="message-image"]')].map((image) => [image.naturalWidth, image.naturalHeight])`)
+
 // root 下每一轮的提问和回答文字、工具调用个数，用来比两边看到的是不是一样
 interface TurnTexts {
   messages: string[]
@@ -274,7 +290,7 @@ async function send(window: Page, text: string): Promise<void> {
   await window.keyboard.press('Control+Enter')
 }
 
-test('设备连接：连接端在侧栏看到授权项目里的会话（别的项目看不到、直接要也被拒），侧栏搜索也能找到；打开后看到脱敏的历史（图片只说带了几张）、实时看到对方正在跑的这一轮；只读；往前翻页；跑到一半中转断开，断线期间的输出重连后续传补发、不丢不重；两边逐轮内容一致；撤销后看到离线', async () => {
+test('设备连接：连接端在侧栏看到授权项目里的会话（别的项目看不到、直接要也被拒），侧栏搜索也能找到；打开后看到脱敏的历史（提问图片压缩后同步过来，正在跑的那一轮先说带了几张）、实时看到对方正在跑的这一轮；只读；往前翻页；跑到一半中转断开，断线期间的输出重连后续传补发、不丢不重；两边逐轮内容一致；撤销后看到离线', async () => {
   test.setTimeout(240_000)
   let { relay, port } = await startRelay()
   const granted = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-granted-'))
@@ -317,7 +333,7 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
 
     // 连接端本机也打开着同名的项目（同一个仓库在两台机器上）
     await chooseProject(guest.app, guest.window, granted)
-    await pair(host, guest, granted)
+    await pair(host, guest, [granted])
 
     // 侧栏「项目」：对方授权的项目排在本机项目后面，右边的设备图标标出是远程的；只列授权项目里的会话
     const sidebar = guest.window.getByTestId('sidebar')
@@ -356,19 +372,28 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     await expect(remoteTask.getByTestId('turn')).toHaveCount(12)
     await expect(remoteTask).toContainText('第 1 轮回答，密钥是 [已脱敏：模型服务的 API Key]')
     await expect(remoteTask).not.toContainText(secret)
-    await expect(remoteTask.getByTestId('turn').first()).toContainText('（带了 1 张图片，没有同步）')
-    await expect(remoteTask.getByTestId('message-image')).toHaveCount(0)
+    // 提问带的图片压缩后同步过来
+    await expect(remoteTask.getByTestId('turn').first().getByTestId('message-image')).toHaveCount(1)
+    await expect(remoteTask.getByTestId('turn').first()).not.toContainText('没有同步')
 
-    // 对方开始新的一轮：实时看到它在跑、回答到了
+    // 对方开始新的一轮（带一张大图）：实时看到它在跑、回答到了；图片这一轮跑完才过来，跑的时候先说带了几张
+    await taskInput(host.window).click()
+    await host.window.evaluate(PASTE_BIG_IMAGE)
+    await expect(host.window.getByTestId('composer-image')).toHaveCount(1)
     await send(host.window, '实时的一轮')
     await expect(remoteTask.getByTestId('remote-task-running')).toBeVisible()
     await expect(remoteTask.getByTestId('turn')).toHaveCount(13)
+    await expect(remoteTask.getByTestId('turn').last()).toContainText('（带了 1 张图片，这一轮跑完后显示）')
     await expect(remoteTask).toContainText('实时回答到了', { timeout: 15_000 })
     await waitTaskDone(host.window)
     await expect(remoteTask.getByTestId('remote-task-running')).toHaveCount(0)
+    await expect(remoteTask.getByTestId('turn').last().getByTestId('message-image')).toHaveCount(1)
+    await expect(remoteTask.getByTestId('turn').last()).not.toContainText('这一轮跑完后显示')
+    // 本机存的是长边 1600 的图，发给远程设备的压到长边 1024
+    await expect.poll(async () => (await imageSizes(host.window, '[data-testid="turn"]:last-of-type')).at(-1)).toEqual([1600, 800])
+    await expect.poll(async () => (await imageSizes(guest.window, '[data-testid="remote-task"]')).at(-1)).toEqual([1024, 512])
     await guest.window.screenshot({ path: 'test-results/devices-remote-task.png' })
 
-    // 跑到一半中转重启：重连后重新订阅，回答只出现一次
     // 跑到一半中转断了，断线期间对方把这一轮跑完：重连后续传补发这段输出（不重新取整页），不丢不重
     const hostLog: string[] = []
     host.app.process().stdout?.on('data', (chunk: Buffer) => hostLog.push(String(chunk)))
@@ -469,7 +494,7 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
 
     await guest.window.evaluate(`window.diffra.setRemoteName('同事的电脑')`)
     await guest.window.evaluate(RECORD_REMOTE_EVENTS)
-    await pair(host, guest, viewOnly, [controlled])
+    await pair(host, guest, [viewOnly], [controlled])
     // 本机横幅：能操作本机的设备在线
     await expect(host.window.getByTestId('remote-control-banner')).toContainText('「同事的电脑」在线，可以在本机的 1 个项目里')
 
@@ -627,5 +652,73 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     rmSync(controlled, { recursive: true, force: true })
     rmSync(viewOnly, { recursive: true, force: true })
     rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('设备连接：互相配对时，对方关掉「允许连接本机」、撤销授权后，连接端马上看到准确原因（中转上对方仍显示在线），侧栏收起它的项目、不自动重试；对方重新开放后点重试恢复成「可操作」；日志里记下拒绝', async () => {
+  test.setTimeout(180_000)
+  const { relay, port } = await startRelay()
+  const aProject = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-a-'))
+  const bProject = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-b-'))
+  const model = await startScriptedModel([{ text: 'A 的回答' }])
+  const a = await launchDevice(port)
+  const b = await launchDevice(port)
+  try {
+    await configureCoderModel(a.window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(a.app, a.window, aProject)
+    await startTask(a.window, 'A 的任务')
+    await waitTaskDone(a.window)
+    await chooseProject(b.app, b.window, bProject)
+    // 互相配对：A 把自己的项目开放给 B（可查看和操作），B 把自己的项目开放给 A（可查看）
+    await pair(a, b, [], [aProject])
+    await pair(b, a, [bProject])
+
+    // B 打开 A 的任务：可操作
+    const sidebar = b.window.getByTestId('sidebar')
+    const remoteProject = sidebar.getByTestId('sidebar-remote-project').filter({ hasText: basename(aProject) })
+    await remoteProject.getByTestId('sidebar-remote-task').click()
+    const remoteTask = b.window.getByTestId('remote-task')
+    await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('可操作')
+    await expect(remoteTask).toContainText('A 的回答')
+
+    // A 关掉「允许连接本机」：中转上 A 对 B 仍在线（B 是 A 自己连接的设备），B 马上看到准确原因，侧栏收起 A 的项目
+    const allow = a.window.getByRole('switch', { name: '允许连接本机' })
+    await openDevices(a.window, '允许连接本机')
+    await allow.click()
+    await expect(allow).not.toBeChecked()
+    const error = remoteTask.getByTestId('remote-error')
+    await expect(error).toContainText('对方关掉了「允许连接本机」', { timeout: 5_000 })
+    await expect(remoteTask.getByTestId('remote-offline')).toHaveCount(0)
+    await expect(remoteProject).toHaveCount(0)
+    expect(await b.window.evaluate<boolean>(`window.diffra.getRemoteState().then((state) => state.peers[0].online)`)).toBe(true)
+    // 被明确拒绝不自动重试：过了第一次自动重试的时间还停在这个原因上
+    await b.window.waitForTimeout(3_000)
+    await expect(error).toContainText('对方关掉了「允许连接本机」')
+
+    // A 重新打开，B 点重试：恢复，侧栏的项目回来
+    await allow.click()
+    await expect(allow).toBeChecked()
+    await error.getByRole('button', { name: '重试' }).click()
+    await expect(error).toHaveCount(0)
+    await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('可操作')
+    await expect(remoteTask).toContainText('A 的回答')
+    await expect(remoteProject).toHaveCount(1)
+    await b.window.screenshot({ path: 'test-results/devices-refused-recovered.png' })
+
+    // A 撤销 B：B 看到「没有授权本机」
+    await a.window.getByTestId('grants').getByRole('button', { name: '撤销' }).click()
+    await a.window.getByRole('alertdialog').getByRole('button', { name: '撤销' }).click()
+    await expect(error).toContainText('对方没有授权本机', { timeout: 5_000 })
+    await b.window.screenshot({ path: 'test-results/devices-refused.png' })
+
+    // 两边的日志里都记下了
+    await expect.poll(() => readFileSync(join(a.userDataDir, 'logs', 'remote.log'), 'utf8')).toContain('没开「允许连接本机」')
+    await expect.poll(() => readFileSync(join(b.userDataDir, 'logs', 'remote.log'), 'utf8')).toContain('对方没有授权本机')
+  } finally {
+    await close([a, b])
+    await relay.close()
+    await model.close()
+    rmSync(aProject, { recursive: true, force: true })
+    rmSync(bProject, { recursive: true, force: true })
   }
 })

@@ -6,6 +6,7 @@ import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
+import { shrinkImage } from '../lib/images'
 import { errorMessage } from '../lib/errors'
 import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
@@ -193,6 +194,12 @@ export function wireCoreEvents(): () => void {
   const offPermissionSettled = window.diffra.onPermissionSettled(({ requestId, sessionId }) =>
     updateLive(sessionId, (task) => (task.permission?.requestId === requestId ? { ...task, permission: null } : task)),
   )
+  // 本机是被连接端：提问图片压成发给远程设备看的小图（主进程解不了 WebP），压不了的回 null
+  const offRemoteCompress = window.diffra.onRemoteCompress(({ requestId, images }) => {
+    Promise.all(images.map((image) => shrinkImage(image).catch(() => null)))
+      .then((result) => window.diffra.respondRemoteCompress(requestId, result))
+      .catch((error: unknown) => console.error('[remote] 回复图片压缩失败', error))
+  })
   const offRemoteAction = window.diffra.onRemoteAction(({ requestId, action }) => {
     handleRemoteAction(action)
       .catch((error: unknown): RemoteActionResult => ({ ok: false, error: errorMessage(error) }))
@@ -240,6 +247,7 @@ export function wireCoreEvents(): () => void {
     offPermission()
     offPermissionSettled()
     offRemoteAction()
+    offRemoteCompress()
     offTaskAction()
     offBrowserState()
     offBrowserActivity()

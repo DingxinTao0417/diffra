@@ -60,8 +60,10 @@ export interface Turn {
   from?: TaskSource
   // 配对的远程设备发来的消息
   remote?: RemoteSource
-  // 远程会话：提问带的图片没同步，只知道有几张
+  // 远程会话：提问带的图片没同步过来的张数（太大、超出额度、对方压不了）；
+  // pendingImages 是对方正在跑的这一轮带的张数，跑完重新取快照时才过来
   omittedImages?: number
+  pendingImages?: number
 }
 
 export interface Usage {

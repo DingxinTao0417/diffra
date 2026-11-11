@@ -55,8 +55,12 @@ export interface RemoteView {
 
 export type RemoteAddResult = { ok: true; device: RemoteDeviceView } | { ok: false; error: string }
 
-// 被连接端推来的动静（已经校验过），或者和它的会话通道断了（界面等它重新在线后重新订阅）
-export type RemoteSyncEvent = { deviceId: string; event: RemoteEvent } | { deviceId: string; disconnected: true }
+// 被连接端推来的动静（已经校验过），或者和它的会话通道断了（界面等它重新在线后重新订阅），
+// 或者它明确拒绝本机建通道：关了「允许连接本机」（off）、没授权或撤销了本机（not-granted）。互相配对时对方在中转上仍显示在线
+export type RemoteSyncEvent =
+  | { deviceId: string; event: RemoteEvent }
+  | { deviceId: string; disconnected: true }
+  | { deviceId: string; refused: 'off' | 'not-granted'; message: string }
 
 // 被连接端：远程设备要做的操作，主进程交给界面去做（和任务互通同一条路：界面发送前自己建新的一轮，主进程直接调 core 的话这一轮会串进上一轮）
 export type RemoteAction =

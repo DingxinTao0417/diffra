@@ -63,6 +63,13 @@ describe('应用层消息', () => {
     for (const message of valid) expect(remoteMessageSchema.safeParse(message).success, JSON.stringify(message)).toBe(true)
     expect(sessionListSchema.safeParse({ projects: [{ id: 'p_1', name: 'diffra', level: 'control' }], sessions: [{ sessionId: SESSION, projectId: 'p_1', title: '任务', updatedAt: '2026-11-10T08:00:00.000Z', running: false, turnCount: 3 }] }).success).toBe(true)
     expect(snapshotSchema.safeParse({ sessionId: SESSION, projectId: 'p_1', title: '任务', running: true, taskState: { status: 'running', reason: null, requirements: [] }, totalTurns: 1, start: 0, turns: [turn], epoch: 'e1', seq: 5 }).success).toBe(true)
+    // 同步过来的提问图片：只认图片类型、base64、有大小上限
+    const withImage = (images: unknown) => snapshotSchema.safeParse({ sessionId: SESSION, projectId: 'p_1', title: '任务', running: false, totalTurns: 1, start: 0, turns: [{ ...turn, images, omittedImages: 1 }], epoch: 'e1', seq: 5 }).success
+    expect(withImage([{ mimeType: 'image/webp', data: 'UklGRg==' }])).toBe(true)
+    expect(withImage([{ mimeType: 'image/svg+xml', data: 'PHN2Zz4=' }])).toBe(false)
+    expect(withImage([{ mimeType: 'image/webp', data: 'not base64!' }])).toBe(false)
+    expect(withImage([{ mimeType: 'image/webp', data: 'A'.repeat(400_004) }])).toBe(false)
+    expect(withImage(Array(7).fill({ mimeType: 'image/webp', data: 'UklGRg==' }))).toBe(false)
     expect(promptResultSchema.safeParse({ queued: true }).success).toBe(true)
     expect(subscribeResultSchema.safeParse({ resumed: true, sessionId: SESSION, running: false }).success).toBe(true)
     expect(subscribeResultSchema.safeParse({ resumed: false, sessionId: SESSION, running: false }).success).toBe(false)
@@ -92,6 +99,7 @@ describe('应用层消息', () => {
       { type: 'event', event: 'permission.request', requestId: 'r-1', sessionId: SESSION, toolCall: { toolCallId: 't1' }, options: [{ optionId: 'allow_always', name: '始终允许' }] },
       { type: 'event', event: 'permission.request', requestId: 'r-1', sessionId: SESSION, toolCall: { toolCallId: 't1' }, options: [] },
       { type: 'event', event: 'turn.started', sessionId: SESSION, turnId: 't', kind: 'prompt', prompt: 'x', startedAt: '2026-11-10T08:01:00.000Z', remote: { deviceId: 'not-a-device', name: 'x' } },
+      { type: 'event', event: 'turn.started', sessionId: SESSION, turnId: 't', kind: 'prompt', prompt: 'x', startedAt: '2026-11-10T08:01:00.000Z', imageCount: 7 },
       { type: 'event', event: 'unknown' },
       { type: 'bye' },
     ]

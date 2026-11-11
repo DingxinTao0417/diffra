@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
-import { type RemoteEvent, type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
+import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PromptImage, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
+import { REMOTE_IMAGE_MAX_CHARS, type RemoteEvent, type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
 import { redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
 import type { RemoteAction, RemoteActionResult, RemoteProjectGrant } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
+import { logRemote } from '../app-log'
 import type { StoredGrant } from './state'
 
 // 被连接端的会话同步（docs/decisions.md「设备连接」）：给授权的设备列会话、发快照分页、推实时更新。
@@ -19,6 +20,9 @@ const BATCH_MAX = 500
 const CHANGED_INTERVAL_MS = 1000
 const PAGE_TURNS = 10
 const PAGE_CHARS = 1_000_000
+// 提问带的图片压缩后随快照发：一页最多这么多字（中转每秒约 200 KB，一页图片几秒内到），压过的结果缓存这么多字
+const PAGE_IMAGE_CHARS = 1_200_000
+const IMAGE_CACHE_CHARS = 8_000_000
 // 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个；读也限：取快照（订阅、翻页）60 次、列表 180 次（对方一轮跑着时每秒可能来一次）
 const OPS_PER_MINUTE = 30
 const CREATES_PER_MINUTE = 5
@@ -44,6 +48,8 @@ export interface HostSyncDeps {
   // 替本机的人回答权限请求；已经有人答过了返回 false
   answerPermission(requestId: string, optionId: string): boolean
   audit(deviceId: string, name: string, action: string): void
+  // 提问图片压缩成发给远程的小图（本机界面做，主进程解不了 WebP）；压不了的是 null
+  compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
   // 对方删除了本机：撤销它的授权
   forget(deviceId: string): void
 }
@@ -157,6 +163,9 @@ export class HostSync {
   private readonly histories = new Map<string, History>()
   // 每个会话最后一条更新的序号，记一轮开始时用
   private readonly lastSeqs = new Map<string, number>()
+  // 按轮次 id 缓存压过的图片（一轮的图片不会变）
+  private readonly imageCache = new Map<string, PromptImage[]>()
+  private imageCacheChars = 0
 
   constructor(private readonly deps: HostSyncDeps) {}
 
@@ -164,7 +173,7 @@ export class HostSync {
   async handle(deviceId: string, raw: unknown): Promise<void> {
     const parsed = requestSchema.safeParse(raw)
     if (!parsed.success) {
-      console.error('[remote] 对方发来的请求格式不对，断开', parsed.error.issues.slice(0, 3))
+      logRemote('对方发来的请求格式不对，断开', parsed.error.issues.slice(0, 3))
       this.deps.drop(deviceId)
       return
     }
@@ -387,7 +396,7 @@ export class HostSync {
 
   private async page(grant: StoredGrant, sessionId: string, before?: number): Promise<{ page: Page; cwd: string; epoch: string; seq: number; turnIds: Set<string> }> {
     const snapshot = await this.deps.snapshot({ sessionId, ...(before === undefined ? {} : { before }), maxTurns: PAGE_TURNS, maxChars: PAGE_CHARS }).catch((error: unknown) => {
-      console.error('[remote] 读会话快照失败', error)
+      logRemote('读会话快照失败', error)
       throw new Error('没有这个会话，或者读不出来')
     })
     const project = visible(grant, snapshot)
@@ -401,11 +410,51 @@ export class HostSync {
       ...(snapshot.taskState ? { taskState: snapshot.taskState } : {}),
       totalTurns: snapshot.totalTurns,
       start: snapshot.start,
-      turns: snapshot.turns.map(redactTurn),
+      turns: await this.withImages(snapshot.turns),
       epoch: snapshot.epoch,
       seq: snapshot.seq,
     }
     return { page, cwd: snapshot.cwd, epoch: snapshot.epoch, seq: snapshot.seq, turnIds: new Set(snapshot.turns.map((turn) => turn.id)) }
+  }
+
+  // 轮次脱敏，提问图片换成压过的小图：新的轮次先占这一页的额度，超出的、压不了的只说张数
+  private async withImages(turns: StoredTurn[]): Promise<Page['turns']> {
+    const result: Page['turns'] = turns.map(redactTurn)
+    let budget = PAGE_IMAGE_CHARS
+    for (let index = turns.length - 1; index >= 0; index--) {
+      const turn = turns[index]!
+      if (turn.images.length === 0) continue
+      const kept: PromptImage[] = []
+      for (const image of await this.compressed(turn.id, turn.images)) {
+        if (!image || image.data.length > REMOTE_IMAGE_MAX_CHARS || image.data.length > budget) continue
+        kept.push(image)
+        budget -= image.data.length
+      }
+      const { omittedImages: _omitted, ...rest } = result[index]!
+      const omitted = turn.images.length - kept.length
+      result[index] = { ...rest, images: kept, ...(omitted > 0 ? { omittedImages: omitted } : {}) }
+    }
+    return result
+  }
+
+  private async compressed(turnId: string, images: PromptImage[]): Promise<Array<PromptImage | null>> {
+    const cached = this.imageCache.get(turnId)
+    if (cached) return cached
+    const result = await this.deps.compressImages(images).catch((error: unknown) => {
+      logRemote('压缩提问图片失败', error)
+      return images.map(() => null)
+    })
+    // 压不了的（比如界面没回应）不缓存，下次再试
+    if (result.some((image) => image === null)) return result
+    const kept = result as PromptImage[]
+    this.imageCache.set(turnId, kept)
+    this.imageCacheChars += kept.reduce((sum, image) => sum + image.data.length, 0)
+    for (const [oldest, images] of this.imageCache) {
+      if (this.imageCacheChars <= IMAGE_CACHE_CHARS) break
+      this.imageCache.delete(oldest)
+      this.imageCacheChars -= images.reduce((sum, image) => sum + image.data.length, 0)
+    }
+    return kept
   }
 
   // 主进程里会话的动静
@@ -524,6 +573,7 @@ export class HostSync {
       startedAt: event.startedAt,
       ...(event.from ? { from: { sessionId: event.from.sessionId, title: redactText(event.from.title).slice(0, 200) } } : {}),
       ...(event.remote ? { remote: event.remote } : {}),
+      ...(event.imageCount ? { imageCount: event.imageCount } : {}),
     })
   }
 

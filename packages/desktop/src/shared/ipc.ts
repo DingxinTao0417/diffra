@@ -193,6 +193,8 @@ export const IPC_CHANNELS = {
   remotePermission: 'remote:permission',
   remoteAction: 'remote:action',
   remoteActionRespond: 'remote:action-respond',
+  remoteCompress: 'remote:compress',
+  remoteCompressRespond: 'remote:compress-respond',
 } as const
 
 // 内置浏览器面板在窗口里的位置（CSS 像素，相对窗口内容区）
@@ -558,4 +560,7 @@ export interface DiffraApi {
   // 本机是被连接端：远程设备的操作交给界面做（同任务互通），做完回结果
   onRemoteAction(listener: (event: { requestId: string; action: RemoteAction }) => void): () => void
   respondRemoteAction(requestId: string, result: RemoteActionResult): Promise<void>
+  // 本机是被连接端：把提问图片压成发给远程的小图，压不了的回 null
+  onRemoteCompress(listener: (event: { requestId: string; images: PromptImage[] }) => void): () => void
+  respondRemoteCompress(requestId: string, result: Array<PromptImage | null>): Promise<void>
 }

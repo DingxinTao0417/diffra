@@ -9,7 +9,7 @@ export type SessionEvent =
   | ({ type: 'permission' } & PermissionRequestEvent)
   | { type: 'permission-settled'; requestId: string; sessionId: string }
   | { type: 'update'; notification: SessionNotification }
-  | { type: 'turn-started'; sessionId: string; turnId: string; kind: TurnKind; prompt: string; startedAt: string; from?: TaskSource; remote?: RemoteSource }
+  | { type: 'turn-started'; sessionId: string; turnId: string; kind: TurnKind; prompt: string; startedAt: string; from?: TaskSource; remote?: RemoteSource; imageCount?: number }
   | { type: 'changed'; sessionId: string }
   | { type: 'reset'; sessionId: string }
 
@@ -30,8 +30,15 @@ export function emitSessionEvent(event: SessionEvent): void {
   }
 }
 
-// 把一轮交给 core：先说一声开始了，跑完（不管成败）再说列表可能变了。source：这一轮是别的任务或远程设备发来的
-export async function aroundTurn<T>(sessionId: string, turnId: string, kind: TurnKind, prompt: string, run: () => Promise<T>, source: { from?: TaskSource; remote?: RemoteSource } = {}): Promise<T> {
+// 把一轮交给 core：先说一声开始了，跑完（不管成败）再说列表可能变了。source：这一轮是别的任务或远程设备发来的、带了几张图片
+export async function aroundTurn<T>(
+  sessionId: string,
+  turnId: string,
+  kind: TurnKind,
+  prompt: string,
+  run: () => Promise<T>,
+  source: { from?: TaskSource; remote?: RemoteSource; imageCount?: number } = {},
+): Promise<T> {
   emitSessionEvent({ type: 'turn-started', sessionId, turnId, kind, prompt, startedAt: new Date().toISOString(), ...source })
   try {
     return await run()

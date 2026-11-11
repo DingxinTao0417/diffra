@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import { listSessions, remoteSnapshot } from '@diffra/core'
+import { type PromptImage, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { RELAY_HOST, RELAY_PATH } from '@diffra/relay/protocol'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
@@ -28,6 +29,27 @@ const actionResultSchema = z.union([
   z.object({ ok: z.literal(false), error: z.string().max(2000) }),
 ])
 const pendingActions = new Map<string, (result: RemoteActionResult) => void>()
+// 压缩提问图片也交给界面（canvas 能解 WebP，主进程的 nativeImage 不能）；界面一直不回就当压不了
+const COMPRESS_TIMEOUT_MS = 15_000
+const compressResultSchema = z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.base64() }).nullable())
+const pendingCompress = new Map<string, (result: Array<PromptImage | null>) => void>()
+
+function compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>> {
+  const window = BrowserWindow.getAllWindows()[0]
+  if (!window) return Promise.resolve(images.map(() => null))
+  return new Promise((resolve) => {
+    const requestId = randomUUID()
+    const timer = setTimeout(() => {
+      pendingCompress.delete(requestId)
+      resolve(images.map(() => null))
+    }, COMPRESS_TIMEOUT_MS)
+    pendingCompress.set(requestId, (result) => {
+      clearTimeout(timer)
+      resolve(result.length === images.length ? result : images.map(() => null))
+    })
+    window.webContents.send(IPC_CHANNELS.remoteCompress, { requestId, images })
+  })
+}
 
 // 只有一个主窗口（关掉就退出），只交给它一个，免得同一个操作做两遍；还没有窗口（启动中、退出中）就做不了
 function act(action: RemoteAction): Promise<RemoteActionResult> {
@@ -90,6 +112,7 @@ export function registerRemoteIpc(userDataDir: string): void {
     snapshot: async (params) => remoteSnapshot(await coreConnection(), params),
     act,
     answerPermission: settlePermission,
+    compressImages,
   })
   opening.then(
     (service) => onSessionEvent((event) => service.sessionEvent(event)),
@@ -133,6 +156,13 @@ export function registerRemoteIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.remotePermission, async (_event, rawId: unknown, rawRequest: unknown, rawOption: unknown) =>
     (await service()).remoteRespondPermission(parse(deviceId, rawId), parse(z.string().regex(/^[A-Za-z0-9-]{1,64}$/), rawRequest), parse(z.enum(['allow_once', 'reject']), rawOption)),
   )
+  ipcMain.handle(IPC_CHANNELS.remoteCompressRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
+    const requestId = parse(z.string().min(1), rawRequestId)
+    const resolve = pendingCompress.get(requestId)
+    if (!resolve) return
+    pendingCompress.delete(requestId)
+    resolve(parse(compressResultSchema, rawResult))
+  })
   // 本机是被连接端：界面做完远程操作回的结果
   ipcMain.handle(IPC_CHANNELS.remoteActionRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
     const requestId = parse(z.string().min(1), rawRequestId)

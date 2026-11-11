@@ -10,11 +10,13 @@ import { formatTime } from '@/lib/format'
 import type { LiveTask } from '@/state/store'
 import { useAppState } from '@/state/store'
 import { RemoteComposer } from './RemoteComposer'
-import { answerRemotePermission, dropRemoteTask, loadEarlierRemote, markRemoteOffline, type RemotePermission, remoteKey, sendRemote, stopRemote, subscribeRemote, unsubscribeRemote } from './remote-tasks'
+import { answerRemotePermission, dropRemoteTask, loadEarlierRemote, markRemoteOffline, type RemotePermission, remoteKey, retryRemote, sendRemote, stopRemote, subscribeRemote, unsubscribeRemote } from './remote-tasks'
 
 // 远程会话没有本机的检查点、规范包这些，对话里依赖它们的按钮本来也都藏了（只读）
 const REMOTE_INFO: SessionInfo = { bashPath: null, checkpoints: false, rulePacks: [], security: { staticCheck: false, lightScan: false }, checks: null }
 const noop = () => {}
+// 订阅失败后自动重试：隔 2、4、8 秒各一次
+const AUTO_RETRIES = 3
 
 // 对方发来的确认换成本机确认卡片的格式：远程只有「允许一次」「拒绝」
 function permissionEventOf(sessionId: string, permission: RemotePermission): PermissionRequestEvent {
@@ -46,8 +48,18 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
     return () => unsubscribeRemote(deviceId, sessionId)
   }, [deviceId, sessionId, online, generation, key])
   useEffect(() => () => dropRemoteTask(key), [key])
+  // 订阅失败、对方又在线时自动再试几次：网络抖一下、对方刚醒过来都会偶尔失败一次；对方明确拒绝的不试
+  const retries = task?.retries ?? 0
+  const failed = task?.status === 'error' && !task.refused
+  useEffect(() => {
+    if (!failed || !online || retries >= AUTO_RETRIES) return
+    const timer = setTimeout(() => retryRemote(key, true), 2000 * 2 ** retries)
+    return () => clearTimeout(timer)
+  }, [failed, online, retries, key])
 
-  const project = list?.projects.find((item) => item.id === task?.projectId)
+  // 订阅成功之前（或者失败了）先按列表里的信息显示标题和能不能操作
+  const listed = list?.sessions.find((item) => item.sessionId === sessionId)
+  const project = list?.projects.find((item) => item.id === (task?.projectId || listed?.projectId))
   const control = project?.level === 'control'
   const permission = useMemo(() => (task?.permission ? permissionEventOf(sessionId, task.permission) : null), [task?.permission, sessionId])
   const live = useMemo<LiveTask | null>(
@@ -93,7 +105,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
           {project && ` · ${project.name}`}
         </span>
         <span className="min-w-0 truncate font-bold" data-testid="remote-task-title">
-          {task?.title || '…'}
+          {task?.title || listed?.title || '…'}
         </span>
         <span className="flex-1" />
         {task?.running && task.status === 'ready' && (
@@ -110,9 +122,12 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
         </p>
       )}
       {task?.status === 'error' && (
-        <p className="border-b px-4 py-2 text-sm text-destructive" role="alert">
-          {task.error}
-        </p>
+        <div className="flex items-center gap-2 border-b px-4 py-1.5 text-sm" role="alert" data-testid="remote-error">
+          <span className="min-w-0 flex-1 text-destructive">{task.error}</span>
+          <Button variant="outline" size="sm" disabled={!online} onClick={() => retryRemote(key, false)}>
+            重试
+          </Button>
+        </div>
       )}
       {task && task.start > 0 && task.status !== 'error' && (
         <div className="flex justify-center border-b py-1.5">
@@ -124,7 +139,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
       {live && live.turns.length > 0 ? (
         <Conversation task={live} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} readOnly />
       ) : (
-        <p className="flex-1 p-8 text-sm text-muted-foreground">{task?.status === 'loading' || !task ? '读取中…' : '这个任务还没有内容。'}</p>
+        <p className="flex-1 p-8 text-sm text-muted-foreground">{task?.status === 'loading' || !task ? '读取中…' : task.status === 'error' ? '' : '这个任务还没有内容。'}</p>
       )}
       {control && task && (
         <div className="px-8 pb-3.5">

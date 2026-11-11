@@ -1,6 +1,7 @@
 import { deviceIdOf, FRAME } from '@diffra/relay/protocol'
 import { createInvite, decodeInvite, encodeInvite, Handshake, pairingPskOf, rendezvousIdOf } from '@diffra/remote'
 import { eventSchema, type Hello, helloSchema, REMOTE_PROLOGUE } from '@diffra/remote/messages'
+import { logRemote } from '../app-log'
 import { DIRECT, SecureChannel, withKind } from './channel'
 import type { DeviceIdentity } from './identity'
 import type { RelayClient } from './relay-client'
@@ -135,7 +136,7 @@ export class PairingHost {
       guest.channel.send(this.deps.hello())
       this.deps.changed()
     } catch (error) {
-      console.error('[remote] 配对握手失败', error)
+      logRemote('配对握手失败', error)
       this.guests.delete(from)
       invite.failures++
       if (invite.failures >= MAX_FAILURES) this.cancel()

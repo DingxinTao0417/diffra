@@ -359,6 +359,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
+  // 远程会话：对方正在跑的这一轮带的图片跑完才过来；超出额度、对方压不了的只有张数
+  const imageNote = turn.pendingImages ? `（带了 ${turn.pendingImages} 张图片，这一轮跑完后显示）` : turn.omittedImages ? `（${turn.omittedImages} 张图片没有同步过来）` : null
   const monitorOpen = useAppState((state) => state.panel === 'monitor')
   // 这一轮每次改动前后的全文（改动卡片只带变化的那段，按顺序重放还原），算改了哪些文件、净增删多少行
   const edits = useMemo(() => replayEdits(turn.items), [turn.items])
@@ -411,7 +413,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
-            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} omittedImages={turn.omittedImages ?? 0} />
+            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} />
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
           case 'edits':
@@ -563,11 +565,11 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
 }
 
 // goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
-// omittedImages：远程会话里提问带的图片不同步，只知道有几张
-function ItemView({ item, goal, skills, images, omittedImages }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[]; omittedImages: number }) {
+// imageNote：远程会话里还没过来、没同步的图片说明
+function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null }) {
   switch (item.kind) {
     case 'user':
-      if (!goal && skills.length === 0 && images.length === 0 && omittedImages === 0) {
+      if (!goal && skills.length === 0 && images.length === 0 && !imageNote) {
         return (
           <div className="max-w-[80%] self-end rounded-2xl bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
             {item.text}
@@ -583,7 +585,7 @@ function ItemView({ item, goal, skills, images, omittedImages }: { item: Exclude
               ))}
             </div>
           )}
-          {omittedImages > 0 && <span className="text-xs text-muted-foreground">（带了 {omittedImages} 张图片，没有同步）</span>}
+          {imageNote && <span className="text-xs text-muted-foreground">{imageNote}</span>}
           <div className="flex flex-wrap justify-end gap-1.5 text-xs text-muted-foreground empty:hidden" data-testid="message-tags">
             {goal && (
               <span className="flex items-center gap-1 rounded-md border px-1.5 py-0.5">

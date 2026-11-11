@@ -1,5 +1,5 @@
 import type { ArchitectureEvent } from '@diffra/core/architecture'
-import type { SessionNotification } from '@diffra/core/types'
+import type { PromptImage, SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
 import type { RemoteAction, RemoteSyncEvent, RemoteView } from '../shared/remote'
@@ -156,6 +156,8 @@ const api: DiffraApi = {
   respondRemotePermission: (deviceId, requestId, optionId) => ipcRenderer.invoke(IPC_CHANNELS.remotePermission, deviceId, requestId, optionId),
   onRemoteAction: (listener) => subscribe<{ requestId: string; action: RemoteAction }>(IPC_CHANNELS.remoteAction, listener),
   respondRemoteAction: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteActionRespond, requestId, result),
+  onRemoteCompress: (listener) => subscribe<{ requestId: string; images: PromptImage[] }>(IPC_CHANNELS.remoteCompress, listener),
+  respondRemoteCompress: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteCompressRespond, requestId, result),
 }
 
 contextBridge.exposeInMainWorld('diffra', api)

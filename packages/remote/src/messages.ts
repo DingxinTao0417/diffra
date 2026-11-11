@@ -1,4 +1,4 @@
-import { PERMISSION_OPTIONS } from '@diffra/core/types'
+import { PERMISSION_OPTIONS, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { z } from 'zod'
 
 // 设备连接的应用层协议（加密通道里跑的 JSON）。对方发来的一律按这里校验，不合格就断开；
@@ -25,6 +25,9 @@ const remotePermissionOption = z.enum([PERMISSION_OPTIONS.allowOnce, PERMISSION_
 
 // ACP 的会话更新：只认外层
 const sessionUpdate = z.looseObject({ sessionUpdate: z.string().min(1).max(64) })
+// 同步过去的提问图片：被连接端压缩过（长边 1024 的 WebP），一张最多这么多 base64 字。界面拿它拼 data: 地址，类型只认图片
+export const REMOTE_IMAGE_MAX_CHARS = 400_000
+const remoteImage = z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.base64().max(REMOTE_IMAGE_MAX_CHARS) })
 const storedTurn = z.looseObject({
   id: z.string().min(1).max(128),
   kind: z.string().max(32),
@@ -33,6 +36,9 @@ const storedTurn = z.looseObject({
   endedAt: z.string().nullable(),
   stopReason: z.string().nullable(),
   updates: z.array(sessionUpdate),
+  images: z.array(remoteImage).max(6).optional(),
+  // 没同步过去的图片张数（太大、超出这一页的额度、压不了）
+  omittedImages: z.number().int().nonnegative().max(100).optional(),
 })
 const taskState = z.object({
   status: z.enum(['running', 'waiting', 'blocked', 'cancelled', 'completed']),
@@ -125,6 +131,8 @@ export const eventSchema = z.discriminatedUnion('event', [
     startedAt: isoTime,
     from: z.object({ sessionId, title: z.string().max(200) }).optional(),
     remote: z.object({ deviceId, name: z.string().max(60) }).optional(),
+    // 提问带了几张图片：这一轮跑完重新取快照时图片才过来
+    imageCount: z.number().int().min(1).max(6).optional(),
   }),
   // 撤销、重新生成这类改了整段记录的：重新订阅
   z.object({ type: z.literal('event'), event: z.literal('session.reset'), sessionId }),

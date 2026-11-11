@@ -1,10 +1,11 @@
 import { join } from 'node:path'
-import type { RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
+import type { PromptImage, RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { fingerprintOf, InviteError } from '@diffra/remote'
 import type { RemoteResumed, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteDeviceView, RemoteProjectGrant, RemoteRelayStatus, RemoteSyncEvent, RemoteView } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
+import { logRemote } from '../app-log'
 import { DIRECT } from './channel'
 import { GuestSync } from './guest-sync'
 import { HostSync } from './host-sync'
@@ -28,6 +29,8 @@ export interface RemoteServiceOptions {
   act(action: RemoteAction): Promise<RemoteActionResult>
   // 替本机的人回答权限请求；已经有人答过了返回 false
   answerPermission(requestId: string, optionId: string): boolean
+  // 提问图片压缩成发给远程的小图，压不了的是 null
+  compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
 }
 
 // 设备连接的总管：本机身份、中转连接、配对、授权、操作记录。
@@ -63,10 +66,11 @@ export class RemoteService {
       answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
       audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
       forget: (deviceId) => void this.revoke(deviceId, '对方删除了本机，撤销授权'),
+      compressImages: (images) => options.compressImages(images),
     })
     this.guestSync = new GuestSync({
       // 通道表是收到第一个直发帧时才建的，本机先开口时要在这里建；还没连中转就不建（不在这里起连接）
-      open: (deviceId) => (this.identity && this.relay ? this.linksFor(this.identity).open(deviceId) : Promise.resolve(false)),
+      open: (deviceId) => (this.identity && this.relay ? this.linksFor(this.identity).open(deviceId) : Promise.resolve({ ok: false, reason: 'relay' })),
       send: (deviceId, message) => this.links?.send(deviceId, 'guest', message) ?? false,
       publish: (event) => options.publishSync(event),
     })
@@ -131,7 +135,7 @@ export class RemoteService {
       try {
         identity = await loadIdentity(dir)
       } catch (error) {
-        console.error('[remote] 读设备身份失败', error)
+        logRemote('读设备身份失败', error)
         unavailable = `读不出本机的设备身份：${error instanceof Error ? error.message : String(error)}`
       }
     }
@@ -226,7 +230,7 @@ export class RemoteService {
 
   // 对方在线时先请它撤销对本机的授权；不在线就只删本机这边，对方的授权要对方自己撤销
   async removePeer(deviceId: string): Promise<void> {
-    if (this.relay?.isOnline(deviceId)) await this.guestSync.forget(deviceId).catch((error: unknown) => console.error('[remote] 请对方撤销授权失败', error))
+    if (this.relay?.isOnline(deviceId)) await this.guestSync.forget(deviceId).catch((error: unknown) => logRemote('请对方撤销授权失败', error))
     await this.store.update((state) => ({ ...state, peers: state.peers.filter((item) => item.deviceId !== deviceId) }))
     this.links?.close(deviceId, 'guest')
     this.sync()
@@ -259,7 +263,7 @@ export class RemoteService {
       await this.store.update((state) => ({ ...state, peers: [...state.peers.filter((item) => item.deviceId !== device.deviceId), saved] }))
       return { ok: true, device: { deviceId: saved.deviceId, fingerprint: fingerprintOf(Buffer.from(saved.deviceId, 'hex')), name: saved.name, pairedAt: now, online: relay.isOnline(saved.deviceId), lastSeenAt: now } }
     } catch (error) {
-      if (!(error instanceof InviteError)) console.error('[remote] 添加设备失败', error)
+      if (!(error instanceof InviteError)) logRemote('添加设备失败', error)
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     } finally {
       this.adding = null
@@ -336,7 +340,7 @@ export class RemoteService {
       undeliverable: (to) => this.undeliverableListeners.get(to)?.(),
       rendezvous: (id, opened) => {
         if (!opened && id === this.host?.rendezvous) {
-          console.error('[remote] 中转拒绝开会合点')
+          logRemote('中转拒绝开会合点')
           this.host.cancel()
         }
       },
@@ -353,6 +357,7 @@ export class RemoteService {
       identity,
       relay: this.relayFor(identity),
       guestKey: (deviceId) => (this.store.get().allowIncoming ? keyOf(this.store.get().grants, deviceId) : null),
+      refusal: () => (this.store.get().allowIncoming ? 'not-granted' : 'off'),
       hostKey: (deviceId) => keyOf(this.store.get().peers, deviceId),
       opened: (deviceId, role) => {
         if (role === 'host') this.hostSync.opened(deviceId)
@@ -380,7 +385,7 @@ export class RemoteService {
           grants: current.grants.map((item) => (item.deviceId === deviceId ? { ...item, lastSeenAt: now } : item)),
           peers: current.peers.map((item) => (item.deviceId === deviceId ? { ...item, lastSeenAt: now } : item)),
         }))
-        .catch((error: unknown) => console.error('[remote] 记录最后在线时间失败', error))
+        .catch((error: unknown) => logRemote('记录最后在线时间失败', error))
     }
     this.changed()
   }

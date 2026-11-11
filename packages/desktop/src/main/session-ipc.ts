@@ -554,6 +554,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const response = await aroundTurn(sessionId, turnId, options.goal ? 'goal' : 'prompt', text, async () => sendPrompt(await coreConnection(), sessionId, turnId, text, options), {
       ...(options.from ? { from: options.from } : {}),
       ...(options.remote ? { remote: options.remote } : {}),
+      ...(options.images.length > 0 ? { imageCount: options.images.length } : {}),
     })
     return response.stopReason
   })
