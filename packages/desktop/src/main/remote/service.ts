@@ -3,7 +3,7 @@ import type { RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { fingerprintOf, InviteError } from '@diffra/remote'
 import type { RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
-import type { RemoteAddResult, RemoteAuditEntry, RemoteDeviceView, RemoteProjectGrant, RemoteRelayStatus, RemoteSyncEvent, RemoteView } from '../../shared/remote'
+import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteDeviceView, RemoteProjectGrant, RemoteRelayStatus, RemoteSyncEvent, RemoteView } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { DIRECT } from './channel'
 import { GuestSync } from './guest-sync'
@@ -24,6 +24,10 @@ export interface RemoteServiceOptions {
   publishSync(event: RemoteSyncEvent): void
   listSessions(): Promise<StoredSessionSummary[]>
   snapshot(params: { sessionId: string; before?: number; maxTurns: number; maxChars: number }): Promise<RemoteSnapshot>
+  // 授权的设备要做的操作，交给本机界面做
+  act(action: RemoteAction): Promise<RemoteActionResult>
+  // 替本机的人回答权限请求；已经有人答过了返回 false
+  answerPermission(requestId: string, optionId: string): boolean
 }
 
 // 设备连接的总管：本机身份、中转连接、配对、授权、操作记录。
@@ -55,6 +59,9 @@ export class RemoteService {
       drop: (deviceId) => this.links?.close(deviceId, 'host'),
       listSessions: () => options.listSessions(),
       snapshot: (params) => options.snapshot(params),
+      act: (action) => options.act(action),
+      answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
+      audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
     })
     this.guestSync = new GuestSync({
       // 通道表是收到第一个直发帧时才建的，本机先开口时要在这里建；还没连中转就不建（不在这里起连接）
@@ -87,6 +94,27 @@ export class RemoteService {
 
   remoteUnsubscribe(deviceId: string, sessionId: string): Promise<void> {
     return this.guestSync.unsubscribe(deviceId, sessionId)
+  }
+
+  // 连接端：操作对方开放了「可查看和操作」的会话，授权由对方检查
+  remotePrompt(deviceId: string, sessionId: string, text: string): Promise<{ queued: boolean }> {
+    this.requirePeer(deviceId)
+    return this.guestSync.prompt(deviceId, sessionId, text)
+  }
+
+  remoteCreate(deviceId: string, projectId: string, text: string): Promise<{ sessionId: string }> {
+    this.requirePeer(deviceId)
+    return this.guestSync.create(deviceId, projectId, text)
+  }
+
+  remoteCancel(deviceId: string, sessionId: string): Promise<void> {
+    this.requirePeer(deviceId)
+    return this.guestSync.cancel(deviceId, sessionId)
+  }
+
+  remoteRespondPermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void> {
+    this.requirePeer(deviceId)
+    return this.guestSync.respondPermission(deviceId, requestId, optionId)
   }
 
   private requirePeer(deviceId: string): void {

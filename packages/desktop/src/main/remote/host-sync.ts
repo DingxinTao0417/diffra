@@ -1,21 +1,28 @@
 import { createHash } from 'node:crypto'
-import { type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
-import { type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
-import { redactText, redactTurn, redactUpdate } from '@diffra/remote/redact'
-import type { RemoteProjectGrant } from '../../shared/remote'
+import { EXTERNAL_ACCESS_SCOPE, PERMISSION_OPTIONS, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
+import { type RemoteEvent, type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
+import { redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
+import type { RemoteAction, RemoteActionResult, RemoteProjectGrant } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import type { StoredGrant } from './state'
 
 // 被连接端的会话同步（docs/decisions.md「设备连接」）：给授权的设备列会话、发快照分页、推实时更新。
 // 每个请求都按授权重新检查：会话的项目要在这台设备的授权里，归档、无项目、设计任务不给看。发出去的都先脱敏（@diffra/remote/redact）。
 // 订阅时先开始缓存实时更新再取快照，快照回来后只补发序号比它大的（core 的 seq，见 UPDATE_SEQ_META_KEY），不丢不重；
-// 实时更新按 150 毫秒攒一批发，连续的文字片段合成一条：中转限每台设备每秒 50 帧
+// 实时更新按 150 毫秒攒一批发，连续的文字片段合成一条：中转限每台设备每秒 50 帧。
+// 远程操作（发消息、新建、停止、回答权限请求）要项目开放了「可查看和操作」，经本机界面做（deps.act）；
+// 权限请求只发给正看着这个会话、能操作的设备，只能「允许一次」或「拒绝」，项目外的文件访问只在本机确认
 
 const FLUSH_MS = 150
 const BATCH_MAX = 500
 const CHANGED_INTERVAL_MS = 1000
 const PAGE_TURNS = 10
 const PAGE_CHARS = 1_000_000
+// 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个
+const OPS_PER_MINUTE = 30
+const CREATES_PER_MINUTE = 5
+const NOT_FOUND = '没有这个会话，或者读不出来'
+const VIEW_ONLY = '对方只开放了查看，不能操作'
 
 export interface HostSyncDeps {
   // 这台设备现在的授权（总开关关着或不在列表里是 null）
@@ -25,6 +32,11 @@ export interface HostSyncDeps {
   drop(deviceId: string): void
   listSessions(): Promise<StoredSessionSummary[]>
   snapshot(params: { sessionId: string; before?: number; maxTurns: number; maxChars: number }): Promise<RemoteSnapshot>
+  // 远程操作交给本机界面做
+  act(action: RemoteAction): Promise<RemoteActionResult>
+  // 替本机的人回答权限请求；已经有人答过了返回 false
+  answerPermission(requestId: string, optionId: string): boolean
+  audit(deviceId: string, name: string, action: string): void
 }
 
 // 发出去的一页：轮次是脱敏后的 StoredTurn（连接端按 snapshotSchema 校验）
@@ -38,6 +50,15 @@ interface Subscription {
   ready: { cwd: string; epoch: string } | null
   pending: Pending[]
   queue: Array<{ seq: number; update: SessionUpdate }>
+}
+
+type PermissionRequest = Extract<RemoteEvent, { event: 'permission.request' }>
+
+interface PendingPermission {
+  sessionId: string
+  request: PermissionRequest
+  // 发给过哪些设备：只有它们能答，答完了要告诉它们
+  sentTo: Set<string>
 }
 
 interface Device {
@@ -95,8 +116,23 @@ function merged(entries: Array<{ seq: number; update: SessionUpdate }>): Array<{
   return result
 }
 
+// 本机在等确认的权限请求里远程能答的部分；项目外的文件访问、没有远程能选的选项时不发
+function remotePermission(event: Extract<SessionEvent, { type: 'permission' }>): PermissionRequest | null {
+  const rawInput = event.toolCall.rawInput
+  if (typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput && rawInput.scope === EXTERNAL_ACCESS_SCOPE) return null
+  const options = event.options.flatMap((option) =>
+    option.optionId === PERMISSION_OPTIONS.allowOnce || option.optionId === PERMISSION_OPTIONS.reject ? [{ optionId: option.optionId, name: option.name.slice(0, 200) }] : [],
+  )
+  if (options.length === 0) return null
+  const toolCall = redactToolCall({ ...event.toolCall, title: event.toolCall.title?.slice(0, 2000) })
+  return { type: 'event', event: 'permission.request', requestId: event.requestId, sessionId: event.sessionId, toolCall, options }
+}
+
 export class HostSync {
   private readonly devices = new Map<string, Device>()
+  private readonly permissions = new Map<string, PendingPermission>()
+  // 限流按设备记，断线重连不清零
+  private readonly rates = new Map<string, { ops: number[]; creates: number[] }>()
 
   constructor(private readonly deps: HostSyncDeps) {}
 
@@ -145,6 +181,7 @@ export class HostSync {
               }
               subscription.pending = []
               this.scheduleFlush(deviceId)
+              for (const pending of this.permissions.values()) if (pending.sessionId === call.sessionId) this.offerPermission(deviceId, cwd, pending)
             },
           }
         } catch (error) {
@@ -157,9 +194,74 @@ export class HostSync {
       case 'session.unsubscribe':
         this.devices.get(deviceId)?.subscriptions.delete(call.sessionId)
         return { value: {} }
-      default:
-        throw new Error('远程操作还没开放')
+      case 'session.prompt': {
+        const { project, title } = await this.operable(grant, call.sessionId)
+        this.charge(deviceId, false)
+        const result = await this.deps.act({ kind: 'send', sessionId: call.sessionId, text: call.text, skills: call.skills, source: { deviceId, name: grant.name } })
+        if (!result.ok) throw new Error(result.error)
+        this.deps.audit(deviceId, grant.name, `远程发消息：${folderName(project.path)}「${title}」`)
+        return { value: { queued: result.queued } }
+      }
+      case 'session.create': {
+        // 只认项目 id，不接受对方给的路径
+        const project = grant.projects.find((item) => projectIdOf(item.path) === call.projectId)
+        if (!project) throw new Error('没有这个项目')
+        if (project.level !== 'control') throw new Error(VIEW_ONLY)
+        this.charge(deviceId, true)
+        const result = await this.deps.act({ kind: 'create', project: project.path, text: call.text, skills: call.skills, source: { deviceId, name: grant.name } })
+        if (!result.ok) throw new Error(result.error)
+        this.deps.audit(deviceId, grant.name, `远程新建任务：${folderName(project.path)}`)
+        return { value: { sessionId: result.sessionId } }
+      }
+      case 'session.cancel': {
+        const { project, title } = await this.operable(grant, call.sessionId)
+        this.charge(deviceId, false)
+        const result = await this.deps.act({ kind: 'cancel', sessionId: call.sessionId })
+        if (!result.ok) throw new Error(result.error)
+        this.deps.audit(deviceId, grant.name, `远程停止：${folderName(project.path)}「${title}」`)
+        return { value: {} }
+      }
+      case 'permission.respond': {
+        const pending = this.permissions.get(call.requestId)
+        if (!pending?.sentTo.has(deviceId)) throw new Error('这个确认已经处理过了')
+        const { project } = await this.operable(grant, pending.sessionId)
+        // 关掉确认卡片不答也算拒绝，和本机一样
+        const optionId = call.optionId ?? PERMISSION_OPTIONS.reject
+        if (!pending.request.options.some((option) => option.optionId === optionId)) throw new Error('这个确认没有这个选项')
+        this.charge(deviceId, false)
+        if (!this.deps.answerPermission(call.requestId, optionId)) throw new Error('这个确认已经处理过了')
+        this.deps.audit(deviceId, grant.name, `远程${optionId === PERMISSION_OPTIONS.reject ? '拒绝' : '允许一次'}：${folderName(project.path)}「${pending.request.toolCall.title ?? ''}」`)
+        return { value: {} }
+      }
     }
+  }
+
+  // 能操作的会话：看得到（同列表的规则），项目开放了「可查看和操作」。没授权和不存在说法一样
+  private async operable(grant: StoredGrant, sessionId: string): Promise<{ project: RemoteProjectGrant; title: string }> {
+    const session = (await this.deps.listSessions()).find((item) => item.sessionId === sessionId)
+    const project = session ? visible(grant, session) : null
+    if (!session || !project) throw new Error(NOT_FOUND)
+    if (project.level !== 'control') throw new Error(VIEW_ONLY)
+    return { project, title: session.title }
+  }
+
+  private charge(deviceId: string, create: boolean): void {
+    const now = Date.now()
+    const rate = this.rates.get(deviceId) ?? { ops: [], creates: [] }
+    this.rates.set(deviceId, rate)
+    rate.ops = rate.ops.filter((at) => now - at < 60_000)
+    rate.creates = rate.creates.filter((at) => now - at < 60_000)
+    if (rate.ops.length >= OPS_PER_MINUTE || (create && rate.creates.length >= CREATES_PER_MINUTE)) throw new Error('操作太频繁，过一会儿再试')
+    rate.ops.push(now)
+    if (create) rate.creates.push(now)
+  }
+
+  // 正看着这个会话、能操作的设备才发；每台只发一次
+  private offerPermission(deviceId: string, cwd: string, pending: PendingPermission): void {
+    const grant = this.deps.grant(deviceId)
+    if (!grant || projectFor(grant, cwd)?.level !== 'control' || pending.sentTo.has(deviceId)) return
+    pending.sentTo.add(deviceId)
+    this.deps.send(deviceId, pending.request)
   }
 
   private async list(grant: StoredGrant): Promise<SessionList> {
@@ -200,6 +302,23 @@ export class HostSync {
   // 主进程里会话的动静
   sessionEvent(event: SessionEvent): void {
     if (event.type === 'changed') return this.broadcastChanged()
+    if (event.type === 'permission') {
+      const request = remotePermission(event)
+      if (!request) return
+      const pending: PendingPermission = { sessionId: event.sessionId, request, sentTo: new Set() }
+      this.permissions.set(event.requestId, pending)
+      for (const [deviceId, device] of this.devices) {
+        const ready = device.subscriptions.get(event.sessionId)?.ready
+        if (ready) this.offerPermission(deviceId, ready.cwd, pending)
+      }
+      return
+    }
+    if (event.type === 'permission-settled') {
+      const pending = this.permissions.get(event.requestId)
+      this.permissions.delete(event.requestId)
+      for (const deviceId of pending?.sentTo ?? []) this.deps.send(deviceId, { type: 'event', event: 'permission.settled', requestId: event.requestId })
+      return
+    }
     const sessionId = event.type === 'update' ? event.notification.sessionId : event.sessionId
     for (const [deviceId, device] of this.devices) {
       const subscription = device.subscriptions.get(sessionId)
@@ -265,7 +384,17 @@ export class HostSync {
   // 一轮开始：先把攒着的上一轮的更新发掉，顺序不能乱
   private sendTurn(deviceId: string, subscription: Subscription, event: Extract<SessionEvent, { type: 'turn-started' }>): void {
     this.flushSubscription(deviceId, subscription)
-    this.deps.send(deviceId, { type: 'event', event: 'turn.started', sessionId: subscription.sessionId, turnId: event.turnId, kind: event.kind, prompt: redactText(event.prompt), startedAt: event.startedAt })
+    this.deps.send(deviceId, {
+      type: 'event',
+      event: 'turn.started',
+      sessionId: subscription.sessionId,
+      turnId: event.turnId,
+      kind: event.kind,
+      prompt: redactText(event.prompt),
+      startedAt: event.startedAt,
+      ...(event.from ? { from: { sessionId: event.from.sessionId, title: redactText(event.from.title).slice(0, 200) } } : {}),
+      ...(event.remote ? { remote: event.remote } : {}),
+    })
   }
 
   private scheduleFlush(deviceId: string): void {

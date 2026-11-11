@@ -91,7 +91,13 @@ const skillNamesSchema = z.array(z.string().min(1).max(200)).max(20)
 const promptImagesSchema = z
   .array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string().min(1).max(8_000_000).regex(/^[A-Za-z0-9+/]+=*$/) }))
   .max(6)
-const promptOptionsSchema = z.object({ skills: skillNamesSchema, goal: z.boolean(), images: promptImagesSchema, from: z.object({ sessionId: z.string().min(1), title: z.string() }).optional() })
+const promptOptionsSchema = z.object({
+  skills: skillNamesSchema,
+  goal: z.boolean(),
+  images: promptImagesSchema,
+  from: z.object({ sessionId: z.string().min(1), title: z.string() }).optional(),
+  remote: z.object({ deviceId: z.string().regex(/^[0-9a-f]{32}$/), name: z.string().min(1).max(60) }).optional(),
+})
 
 const mcpTargetSchema = z.union([
   z.object({ sessionId: z.string().min(1) }),
@@ -149,6 +155,7 @@ export const coreClientHandlers: CoreClientHandlers = {
       }
       // 没有窗口能回答时直接按取消处理，不让 core 一直等
       if (broadcast(IPC_CHANNELS.sessionPermission, event) === 0) settlePermission(requestId, null)
+      else emitSessionEvent({ type: 'permission', ...event })
     }),
   onBrowserAction: (params) => browserHost.act(params),
   onDevServer: (params) => devServer(params),
@@ -168,11 +175,15 @@ export const coreClientHandlers: CoreClientHandlers = {
     }),
 }
 
-function settlePermission(requestId: string, optionId: string | null): void {
+// 本机界面、远程设备谁先答算谁的；已经答过的返回 false。答完告诉界面收起确认卡片（可能是远程答的）
+export function settlePermission(requestId: string, optionId: string | null): boolean {
   const pending = pendingPermissions.get(requestId)
-  if (!pending) return
+  if (!pending) return false
   pendingPermissions.delete(requestId)
   pending.resolve(optionId)
+  broadcast(IPC_CHANNELS.sessionPermissionSettled, { requestId, sessionId: pending.sessionId })
+  emitSessionEvent({ type: 'permission-settled', requestId, sessionId: pending.sessionId })
+  return true
 }
 
 // 返回架构功能选模型的办法：和优化提示词一样先用「规划」角色，没配用「编码」
@@ -540,7 +551,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
     const options = parse(promptOptionsSchema, rawOptions)
     await designHost.prepare(sessionId)
-    const response = await aroundTurn(sessionId, turnId, options.goal ? 'goal' : 'prompt', text, async () => sendPrompt(await coreConnection(), sessionId, turnId, text, options))
+    const response = await aroundTurn(sessionId, turnId, options.goal ? 'goal' : 'prompt', text, async () => sendPrompt(await coreConnection(), sessionId, turnId, text, options), {
+      ...(options.from ? { from: options.from } : {}),
+      ...(options.remote ? { remote: options.remote } : {}),
+    })
     return response.stopReason
   })
 

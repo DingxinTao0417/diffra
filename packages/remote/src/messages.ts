@@ -14,6 +14,7 @@ const sessionId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
 // 项目在两端之间只用不透明的 id，不发本机路径
 const projectId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 const requestId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
+const deviceId = z.string().regex(/^[0-9a-f]{32}$/)
 const isoTime = z.iso.datetime({ offset: true })
 // 32 字节的 base64 正好 44 个字符、末尾一个 =
 const key32 = z.base64().refine((value) => value.length === 44 && value.endsWith('=') && !value.endsWith('=='), '要 32 字节')
@@ -93,6 +94,9 @@ export const snapshotSchema = z.object({
 })
 
 export const okSchema = z.object({})
+// 远程发消息：对方正在跑时排在这一轮后面
+export const promptResultSchema = z.object({ queued: z.boolean() })
+export const createResultSchema = z.object({ sessionId })
 
 // 被连接端主动推的
 export const eventSchema = z.discriminatedUnion('event', [
@@ -104,8 +108,18 @@ export const eventSchema = z.discriminatedUnion('event', [
     epoch: z.string().max(64),
     updates: z.array(z.object({ seq: z.number().int().positive(), update: sessionUpdate })).min(1).max(500),
   }),
-  // 一轮开始（会话更新里没有这一项，界面是自己建新一轮的）
-  z.object({ type: z.literal('event'), event: z.literal('turn.started'), sessionId, turnId: z.string().min(1).max(128), kind: z.string().max(32), prompt: z.string(), startedAt: isoTime }),
+  // 一轮开始（会话更新里没有这一项，界面是自己建新一轮的）。from、remote：这一轮是别的任务、哪台远程设备发来的
+  z.object({
+    type: z.literal('event'),
+    event: z.literal('turn.started'),
+    sessionId,
+    turnId: z.string().min(1).max(128),
+    kind: z.string().max(32),
+    prompt: z.string(),
+    startedAt: isoTime,
+    from: z.object({ sessionId, title: z.string().max(200) }).optional(),
+    remote: z.object({ deviceId, name: z.string().max(60) }).optional(),
+  }),
   // 撤销、重新生成这类改了整段记录的：重新订阅
   z.object({ type: z.literal('event'), event: z.literal('session.reset'), sessionId }),
   z.object({ type: z.literal('event'), event: z.literal('sessions.changed') }),
@@ -115,6 +129,8 @@ export const eventSchema = z.discriminatedUnion('event', [
     requestId,
     sessionId,
     toolCall: z.looseObject({ toolCallId: z.string().max(128), title: z.string().max(2000).optional() }),
+    // 本机给的选项里远程能选的那几个（允许一次、拒绝），名字照本机的
+    options: z.array(z.object({ optionId: remotePermissionOption, name: z.string().max(200) })).min(1).max(2),
   }),
   z.object({ type: z.literal('event'), event: z.literal('permission.settled'), requestId }),
   // 配对时被连接端的用户点了允许或拒绝

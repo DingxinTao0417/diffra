@@ -1,6 +1,6 @@
 import type { SessionUpdate, StoredTurn } from '@diffra/core/types'
 import { describe, expect, test } from 'vitest'
-import { MAX_TEXT_CHARS, redactText, redactTurn, redactUpdate } from '../src/redact.js'
+import { MAX_TEXT_CHARS, redactText, redactToolCall, redactTurn, redactUpdate } from '../src/redact.js'
 
 // 测试用的假密钥在运行时拼出来，仓库里不出现完整的密钥格式，免得被代码托管平台的密钥扫描拦下
 const fakeKey = (prefix: string, body: string) => `${prefix}${body}`
@@ -73,6 +73,17 @@ describe('文字脱敏', () => {
 })
 
 describe('会话更新和轮次脱敏', () => {
+  test('发给远程的权限请求：标题和参数里的密钥脱敏，原对象不改', () => {
+    const token = fakeKey('ghp_', 'a'.repeat(36))
+    const toolCall = { toolCallId: 't1', title: `执行 git push https://me:${token}@github.com/me/repo`, kind: 'execute', rawInput: { command: `curl -H "Authorization: Bearer ${token}" https://api.example.com` } }
+    const before = JSON.stringify(toolCall)
+    const redacted = redactToolCall(toolCall)
+    expect(JSON.stringify(redacted)).not.toContain(token)
+    expect(redacted.rawInput.command).toBe('curl -H "Authorization: Bearer [已脱敏]" https://api.example.com')
+    expect(redacted.toolCallId).toBe('t1')
+    expect(JSON.stringify(toolCall)).toBe(before)
+  })
+
   test('工具输出里的密钥脱敏、截图换成文字；原对象不改', () => {
     const update = {
       sessionUpdate: 'tool_call_update',

@@ -105,6 +105,8 @@ const recordSchema = z.object({
       // 第 72 步加的，旧记录没有
       restoredAt: z.string().optional(),
       from: z.object({ sessionId: z.string(), title: z.string() }).optional(),
+      // 第 360 步加的，旧记录没有
+      remote: z.object({ deviceId: z.string(), name: z.string() }).optional(),
     }),
   ),
   messages: z.array(z.unknown()),

@@ -138,9 +138,16 @@ export const mcpServerSchema = z.union([
 
 // skills：用户给这一轮选的 Skill 名称；goal：目标模式，自主推进多轮
 export const taskSourceSchema = z.object({ sessionId: z.string().min(1), title: z.string() })
+export const remoteSourceSchema = z.object({ deviceId: z.string().regex(/^[0-9a-f]{32}$/), name: z.string().min(1).max(60) })
 
 export const promptMetaSchema = z.object({
-  diffra: z.object({ turnId: z.string().min(1), skills: z.array(z.string().min(1)).default([]), goal: z.boolean().default(false), from: taskSourceSchema.optional() }),
+  diffra: z.object({
+    turnId: z.string().min(1),
+    skills: z.array(z.string().min(1)).default([]),
+    goal: z.boolean().default(false),
+    from: taskSourceSchema.optional(),
+    remote: remoteSourceSchema.optional(),
+  }),
 })
 
 export const taskActionParamsSchema = z.discriminatedUnion('action', [

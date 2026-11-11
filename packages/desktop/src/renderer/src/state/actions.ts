@@ -1,6 +1,7 @@
-import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
+import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
+import type { RemoteAction, RemoteActionResult } from '../../../shared/remote'
 import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
@@ -188,6 +189,16 @@ export function wireCoreEvents(): () => void {
     }
     updateLive(request.sessionId, (task) => ({ ...task, permission: request }))
   })
+  // 远程设备答了（或者不用答了）：收起这张确认卡片
+  const offPermissionSettled = window.diffra.onPermissionSettled(({ requestId, sessionId }) =>
+    updateLive(sessionId, (task) => (task.permission?.requestId === requestId ? { ...task, permission: null } : task)),
+  )
+  const offRemoteAction = window.diffra.onRemoteAction(({ requestId, action }) => {
+    handleRemoteAction(action)
+      .catch((error: unknown): RemoteActionResult => ({ ok: false, error: errorMessage(error) }))
+      .then((result) => window.diffra.respondRemoteAction(requestId, result))
+      .catch((error: unknown) => console.error('[remote] 回复远程操作失败', error))
+  })
   const offTaskAction = window.diffra.onTaskAction(({ requestId, params }) => {
     handleTaskAction(params)
       .catch((error: unknown): TaskActionResult => ({ ok: false, error: errorMessage(error) }))
@@ -227,6 +238,8 @@ export function wireCoreEvents(): () => void {
   return () => {
     offUpdate()
     offPermission()
+    offPermissionSettled()
+    offRemoteAction()
     offTaskAction()
     offBrowserState()
     offBrowserActivity()
@@ -338,6 +351,23 @@ async function handleTaskAction(params: TaskActionParams): Promise<TaskActionRes
   return { ok: true, ...created, queued: false }
 }
 
+// 设备连接：授权的远程设备要发消息、新建任务、停止（主进程已经查过授权）。和任务互通一样在后台做，不把用户从正在看的页面切走
+async function handleRemoteAction(action: RemoteAction): Promise<RemoteActionResult> {
+  if (action.kind === 'cancel') {
+    // 已经停了（比如刚好跑完）就当停好了
+    if (store.get().live[action.sessionId]?.running) await window.diffra.cancelSession(action.sessionId)
+    return { ok: true, sessionId: action.sessionId, queued: false }
+  }
+  const options = { skills: action.skills, remote: action.source }
+  if (action.kind === 'send') {
+    const sent = await sendInBackground(action.sessionId, action.text, options)
+    if (!sent) return { ok: false, error: '没有这个会话，或者读不出来' }
+    return { ok: true, sessionId: action.sessionId, queued: sent.queued }
+  }
+  const created = await startInBackground(action.project, action.text, { design: false }, options)
+  return { ok: true, sessionId: created.sessionId, queued: false }
+}
+
 // 在后台给任务发一条消息：载入任务、起一轮（正在跑就排队），不把用户从正在看的页面切走。任务不在了返回 null
 export async function sendInBackground(sessionId: string, text: string, options: Partial<MessageOptions> = {}): Promise<{ title: string; queued: boolean } | null> {
   const summary = store.get().tasks.find((task) => task.sessionId === sessionId)
@@ -397,8 +427,9 @@ export async function sendMessage(sessionId: string, text: string, options: Part
       message.goal ? 'goal' : 'prompt',
       skills,
       images,
-      (turnId) => window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images, ...(message.from ? { from: message.from } : {}) }),
+      (turnId) => window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images, ...(message.from ? { from: message.from } : {}), ...(message.remote ? { remote: message.remote } : {}) }),
       message.from,
+      message.remote,
     )
 }
 
@@ -519,9 +550,10 @@ async function runTurnOnCore(
   images: PromptImage[],
   run: (turnId: string) => Promise<StopReason>,
   from?: TaskSource,
+  remote?: RemoteSource,
 ): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from, remote)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏

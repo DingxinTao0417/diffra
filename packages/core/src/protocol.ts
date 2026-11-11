@@ -139,6 +139,11 @@ export interface TaskSource {
   sessionId: string
   title: string
 }
+// 设备连接：这一轮是哪台远程设备发来的（docs/decisions.md「设备连接」）。name 是本机给它记的名称
+export interface RemoteSource {
+  deviceId: string
+  name: string
+}
 export type TaskActionParams =
   | { sessionId: string; action: 'send'; target: string; message: string; from: TaskSource }
   | { sessionId: string; action: 'create'; project: string | null; title: string | null; design: boolean; message: string; from: TaskSource }
@@ -489,6 +494,8 @@ export interface StoredTurn {
   restoredAt?: string
   // 这一轮的提问是另一个任务（智能体用 task_send、task_create）发来的；用户自己发的没有
   from?: TaskSource
+  // 这一轮的提问是配对的远程设备发来的；第 360 步加的，旧记录没有
+  remote?: RemoteSource
 }
 
 // session/load 响应的 _meta.diffra

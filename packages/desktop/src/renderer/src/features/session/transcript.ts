@@ -1,5 +1,5 @@
 import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
-import type { CheckResult, FinishVerification, PromptImage, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
+import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -58,6 +58,8 @@ export interface Turn {
   silence: Record<string, { agent: string | null; since: number }>
   // 另一个任务的智能体发来的消息
   from?: TaskSource
+  // 配对的远程设备发来的消息
+  remote?: RemoteSource
   // 远程会话：提问带的图片没同步，只知道有几张
   omittedImages?: number
 }
@@ -73,9 +75,9 @@ export interface Usage {
   cacheInput: number
 }
 
-export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource): Turn {
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource): Turn {
   return {
-    ...(from ? { from } : {}), id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
+    ...(from ? { from } : {}), ...(remote ? { remote } : {}), id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -98,6 +100,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     restoredAt: turn.restoredAt ? Date.parse(turn.restoredAt) || null : null,
     outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
     ...(turn.from ? { from: turn.from } : {}),
+    ...(turn.remote ? { remote: turn.remote } : {}),
     silence: turn.updates.reduce((silence, update) => {
       const change = modelSilenceOf(update)
       return change ? applySilence(silence, change) : silence

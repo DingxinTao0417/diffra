@@ -5,7 +5,7 @@ import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -216,14 +216,14 @@ export class Session {
     return controller
   }
 
-  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
     }
     this.messageStarts.set(id, this.messages.length)
     this.editedTexts.clear()
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}) })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}), ...(remote ? { remote } : {}) })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次

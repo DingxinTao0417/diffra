@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { DiagramKind } from '@diffra/core/architecture'
-import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
+import type { PermissionMode, PromptImage, RemoteSource, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { RemoteView } from '../../../shared/remote'
 import type { RemoteListState, RemoteTask } from '@/features/devices/remote-tasks'
@@ -35,6 +35,8 @@ export interface MessageOptions {
   images: PromptImage[]
   // 另一个任务的智能体发来的（任务互通）
   from?: TaskSource
+  // 配对的远程设备发来的（设备连接）
+  remote?: RemoteSource
 }
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载

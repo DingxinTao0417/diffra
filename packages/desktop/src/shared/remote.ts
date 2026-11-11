@@ -1,3 +1,4 @@
+import type { RemoteSource } from '@diffra/core/types'
 import type { RemoteEvent } from '@diffra/remote/messages'
 
 // 设备连接（docs/decisions.md「设备连接」）：主进程和界面之间交换的状态。
@@ -56,6 +57,15 @@ export type RemoteAddResult = { ok: true; device: RemoteDeviceView } | { ok: fal
 
 // 被连接端推来的动静（已经校验过），或者和它的会话通道断了（界面等它重新在线后重新订阅）
 export type RemoteSyncEvent = { deviceId: string; event: RemoteEvent } | { deviceId: string; disconnected: true }
+
+// 被连接端：远程设备要做的操作，主进程交给界面去做（和任务互通同一条路：界面发送前自己建新的一轮，主进程直接调 core 的话这一轮会串进上一轮）
+export type RemoteAction =
+  | { kind: 'send'; sessionId: string; text: string; skills: string[]; source: RemoteSource }
+  | { kind: 'create'; project: string; text: string; skills: string[]; source: RemoteSource }
+  | { kind: 'cancel'; sessionId: string }
+
+// queued：对方正在跑，消息排在这一轮后面
+export type RemoteActionResult = { ok: true; sessionId: string; queued: boolean } | { ok: false; error: string }
 
 export interface RemoteAuditEntry {
   at: string

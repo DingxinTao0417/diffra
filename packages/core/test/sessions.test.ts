@@ -180,6 +180,21 @@ describe('会话持久化', () => {
     expect(await loadSession(second, plain.sessionId, project, config(server.baseUrl))).toMatchObject({ design: false, noProject: false })
   })
 
+  test('远程设备发来的一轮记下是哪台设备，重启后加载和远程快照都带回；本机发的没有', async () => {
+    server = await startScriptedServer([{ text: '好的' }, { text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    const remote = { deviceId: 'ab'.repeat(16), name: '同事的电脑' }
+    await sendPrompt(first, sessionId, 'turn-1', '远程发的', { remote })
+    await sendPrompt(first, sessionId, 'turn-2', '本机发的')
+
+    const second = await startCore()
+    const loaded = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns.map((turn) => turn.remote)).toEqual([remote, undefined])
+    const snapshot = await remoteSnapshot(second, { sessionId, maxTurns: 10, maxChars: 1_000_000 })
+    expect(snapshot.turns.map((turn) => turn.remote)).toEqual([remote, undefined])
+  })
+
   test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值，下一轮只提问不被拉回', async () => {
     server = await startScriptedServer([
       { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },

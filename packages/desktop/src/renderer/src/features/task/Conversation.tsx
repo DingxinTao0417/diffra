@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ModelErrorKind, PromptImage, TaskProgressView } from '@diffra/core/types'
+import type { ModelErrorKind, PromptImage, RemoteSource, TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -407,6 +407,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   return (
     <section data-testid="turn" data-turn-id={turn.id} className="group/turn flex flex-col gap-3.5">
       {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
+      {turn.remote && <RemoteSourceTag source={turn.remote} />}
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
@@ -698,6 +699,18 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
       )}
       {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
     </div>
+  )
+}
+
+// 配对的远程设备发来的一轮。连接端看对方的会话时，自己发的那几轮显示「本机发的」
+function RemoteSourceTag({ source }: { source: RemoteSource }) {
+  const self = useAppState((state) => state.remote?.self?.deviceId)
+  const name = source.name.length > 20 ? `${source.name.slice(0, 20)}…` : source.name
+  return (
+    <span className="flex shrink-0 items-center gap-1 self-end rounded-full border px-2 py-0.5 text-xs text-muted-foreground" title={source.name} data-testid="turn-remote-source">
+      <MonitorSmartphone className="size-3" />
+      {source.deviceId === self ? '本机发的' : `来自设备「${name}」`}
+    </span>
   )
 }
 

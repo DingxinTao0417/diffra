@@ -1,19 +1,49 @@
+import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { listSessions, remoteSnapshot } from '@diffra/core'
 import { RELAY_HOST, RELAY_PATH } from '@diffra/relay/protocol'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
+import type { RemoteAction, RemoteActionResult } from '../shared/remote'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { onSessionEvent } from './session-events'
+import { settlePermission } from './session-ipc'
 import { RemoteService } from './remote/service'
 import { deviceNameSchema, projectGrantSchema } from './remote/state'
 
 const deviceId = z.string().regex(/^[0-9a-f]{32}$/)
 const sessionId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
+const promptText = z.string().trim().min(1).max(100_000)
 const projects = z.array(projectGrantSchema).max(200)
 const INVITE_TTL_SECONDS = 600
+// 远程操作在本机界面上做，界面一直不回（比如卡住）时不让对方的请求和这里的记录一直挂着；连接端那边等 30 秒
+const ACTION_TIMEOUT_MS = 30_000
+
+const actionResultSchema = z.union([
+  z.object({ ok: z.literal(true), sessionId: sessionId, queued: z.boolean() }),
+  z.object({ ok: z.literal(false), error: z.string().max(2000) }),
+])
+const pendingActions = new Map<string, (result: RemoteActionResult) => void>()
+
+// 只有一个主窗口（关掉就退出），只交给它一个，免得同一个操作做两遍；还没有窗口（启动中、退出中）就做不了
+function act(action: RemoteAction): Promise<RemoteActionResult> {
+  const window = BrowserWindow.getAllWindows()[0]
+  if (!window) return Promise.resolve({ ok: false, error: '对方的 Diffra 窗口没有打开，操作不了' })
+  return new Promise((resolve) => {
+    const requestId = randomUUID()
+    const timer = setTimeout(() => {
+      pendingActions.delete(requestId)
+      resolve({ ok: false, error: '对方的 Diffra 界面没有回应' })
+    }, ACTION_TIMEOUT_MS)
+    pendingActions.set(requestId, (result) => {
+      clearTimeout(timer)
+      resolve(result)
+    })
+    window.webContents.send(IPC_CHANNELS.remoteAction, { requestId, action })
+  })
+}
 
 // 只在未打包时认环境变量：开发和 e2e 连本机的中转、缩短邀请串有效期（规则同 DIFFRA_UPDATE_URL）
 function relayUrl(): string {
@@ -40,6 +70,8 @@ export function registerRemoteIpc(userDataDir: string): void {
     },
     listSessions: async () => listSessions(await coreConnection()),
     snapshot: async (params) => remoteSnapshot(await coreConnection(), params),
+    act,
+    answerPermission: settlePermission,
   })
   opening.then(
     (service) => onSessionEvent((event) => service.sessionEvent(event)),
@@ -71,4 +103,22 @@ export function registerRemoteIpc(userDataDir: string): void {
     (await service()).remotePage(parse(deviceId, rawId), parse(sessionId, rawSession), parse(z.number().int().nonnegative(), rawBefore)),
   )
   ipcMain.handle(IPC_CHANNELS.remoteUnsubscribe, async (_event, rawId: unknown, rawSession: unknown) => (await service()).remoteUnsubscribe(parse(deviceId, rawId), parse(sessionId, rawSession)))
+  ipcMain.handle(IPC_CHANNELS.remotePrompt, async (_event, rawId: unknown, rawSession: unknown, rawText: unknown) =>
+    (await service()).remotePrompt(parse(deviceId, rawId), parse(sessionId, rawSession), parse(promptText, rawText)),
+  )
+  ipcMain.handle(IPC_CHANNELS.remoteCreate, async (_event, rawId: unknown, rawProject: unknown, rawText: unknown) =>
+    (await service()).remoteCreate(parse(deviceId, rawId), parse(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), rawProject), parse(promptText, rawText)),
+  )
+  ipcMain.handle(IPC_CHANNELS.remoteCancel, async (_event, rawId: unknown, rawSession: unknown) => (await service()).remoteCancel(parse(deviceId, rawId), parse(sessionId, rawSession)))
+  ipcMain.handle(IPC_CHANNELS.remotePermission, async (_event, rawId: unknown, rawRequest: unknown, rawOption: unknown) =>
+    (await service()).remoteRespondPermission(parse(deviceId, rawId), parse(z.string().regex(/^[A-Za-z0-9-]{1,64}$/), rawRequest), parse(z.enum(['allow_once', 'reject']), rawOption)),
+  )
+  // 本机是被连接端：界面做完远程操作回的结果
+  ipcMain.handle(IPC_CHANNELS.remoteActionRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
+    const requestId = parse(z.string().min(1), rawRequestId)
+    const resolve = pendingActions.get(requestId)
+    if (!resolve) return
+    pendingActions.delete(requestId)
+    resolve(parse(actionResultSchema, rawResult))
+  })
 }

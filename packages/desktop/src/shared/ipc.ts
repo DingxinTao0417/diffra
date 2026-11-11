@@ -42,7 +42,7 @@ import type {
 } from './settings'
 import type { FileReference } from './attachments'
 import type { RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
-import type { RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteView } from './remote'
+import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
@@ -163,6 +163,7 @@ export const IPC_CHANNELS = {
   sessionUpdate: 'session:update',
   sessionPermission: 'session:permission',
   sessionPermissionRespond: 'session:permission-respond',
+  sessionPermissionSettled: 'session:permission-settled',
   sessionTaskAction: 'session:task-action',
   sessionTaskActionRespond: 'session:task-action-respond',
   checkpointPreview: 'session:checkpoint-preview',
@@ -186,6 +187,12 @@ export const IPC_CHANNELS = {
   remotePage: 'remote:page',
   remoteUnsubscribe: 'remote:unsubscribe',
   remoteEvent: 'remote:event',
+  remotePrompt: 'remote:prompt',
+  remoteCreate: 'remote:create',
+  remoteCancel: 'remote:cancel',
+  remotePermission: 'remote:permission',
+  remoteAction: 'remote:action',
+  remoteActionRespond: 'remote:action-respond',
 } as const
 
 // 内置浏览器面板在窗口里的位置（CSS 像素，相对窗口内容区）
@@ -513,6 +520,8 @@ export interface DiffraApi {
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void
   respondPermission(requestId: string, optionId: string | null): Promise<void>
+  // 权限请求答完了（可能是远程设备答的）：界面收起这张确认卡片
+  onPermissionSettled(listener: (event: { requestId: string; sessionId: string }) => void): () => void
   onTaskAction(listener: (event: TaskActionEvent) => void): () => void
   respondTaskAction(requestId: string, result: TaskActionResult): Promise<void>
   previewCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
@@ -540,4 +549,12 @@ export interface DiffraApi {
   pageRemoteSession(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage>
   unsubscribeRemoteSession(deviceId: string, sessionId: string): Promise<void>
   onRemoteEvent(listener: (event: RemoteSyncEvent) => void): () => void
+  // 操作对方授权给本机「可查看和操作」的会话：发消息（对方在跑时排队）、在开放的项目里新建任务、停止、回答对方的权限请求
+  promptRemoteSession(deviceId: string, sessionId: string, text: string): Promise<{ queued: boolean }>
+  createRemoteSession(deviceId: string, projectId: string, text: string): Promise<{ sessionId: string }>
+  cancelRemoteSession(deviceId: string, sessionId: string): Promise<void>
+  respondRemotePermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void>
+  // 本机是被连接端：远程设备的操作交给界面做（同任务互通），做完回结果
+  onRemoteAction(listener: (event: { requestId: string; action: RemoteAction }) => void): () => void
+  respondRemoteAction(requestId: string, result: RemoteActionResult): Promise<void>
 }

@@ -43,6 +43,11 @@ export function redactUpdate(update: SessionUpdate): SessionUpdate {
   return walk(update, false) as SessionUpdate
 }
 
+// 发给能操作的设备的权限请求：工具参数里同样可能有密钥
+export function redactToolCall<T extends object>(toolCall: T): T {
+  return walk(toolCall, false) as T
+}
+
 // 提问带的图片不发，记下有几张
 export function redactTurn(turn: StoredTurn): StoredTurn & { omittedImages?: number } {
   const { images, ...rest } = turn

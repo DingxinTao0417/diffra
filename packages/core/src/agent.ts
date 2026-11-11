@@ -27,6 +27,7 @@ import {
   type StoredTurn,
   type TaskActionParams,
   type TaskActionResult,
+  type RemoteSource,
   type TaskSource,
   type TurnKind,
   UPDATE_SEQ_META_KEY,
@@ -306,9 +307,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     images: PromptImage[],
     run: (io: TurnIO) => Promise<acp.StopReason>,
     from?: TaskSource,
+    remote?: RemoteSource,
   ): Promise<acp.StopReason> => {
     const notify = notifier(client, session.id)
-    session.startTurn(turnId, text, kind, skills, images, from)
+    session.startTurn(turnId, text, kind, skills, images, from, remote)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
     try {
@@ -470,9 +472,18 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const goal = meta.success && meta.data.diffra.goal
       const skills = await selectedSkills(session, skillNames)
       const from = meta.success ? meta.data.diffra.from : undefined
-      const stopReason = await runRecordedTurn(session, client, turnId, text, goal ? 'goal' : 'prompt', skillNames, images, (io) =>
-        runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
+      const remote = meta.success ? meta.data.diffra.remote : undefined
+      const stopReason = await runRecordedTurn(
+        session,
+        client,
+        turnId,
+        text,
+        goal ? 'goal' : 'prompt',
+        skillNames,
+        images,
+        (io) => runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
         from,
+        remote,
       )
       return { stopReason }
     })

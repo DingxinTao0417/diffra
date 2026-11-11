@@ -161,7 +161,7 @@ export function applyRemoteEvent(payload: RemoteSyncEvent): void {
       updateTask(remoteKey(deviceId, event.sessionId), (task) =>
         task.status !== 'ready' || task.turns.some((turn) => turn.id === event.turnId)
           ? task
-          : { ...task, running: true, totalTurns: task.totalTurns + 1, turns: [...task.turns, newTurn(event.turnId, event.prompt, event.kind as Turn['kind'])] },
+          : { ...task, running: true, totalTurns: task.totalTurns + 1, turns: [...task.turns, newTurn(event.turnId, event.prompt, event.kind as Turn['kind'], [], [], event.from, event.remote)] },
       )
       return
     case 'session.reset':

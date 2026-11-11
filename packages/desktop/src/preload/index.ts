@@ -2,7 +2,7 @@ import type { ArchitectureEvent } from '@diffra/core/architecture'
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
-import type { RemoteSyncEvent, RemoteView } from '../shared/remote'
+import type { RemoteAction, RemoteSyncEvent, RemoteView } from '../shared/remote'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -128,6 +128,7 @@ const api: DiffraApi = {
   onTaskAction: (listener) => subscribe<TaskActionEvent>(IPC_CHANNELS.sessionTaskAction, listener),
   respondTaskAction: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.sessionTaskActionRespond, requestId, result),
   respondPermission: (requestId, optionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionPermissionRespond, requestId, optionId),
+  onPermissionSettled: (listener) => subscribe<{ requestId: string; sessionId: string }>(IPC_CHANNELS.sessionPermissionSettled, listener),
   previewCheckpoint: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointPreview, sessionId, turnId),
   restoreCheckpoint: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointRestore, sessionId, turnId),
   getRemoteState: () => ipcRenderer.invoke(IPC_CHANNELS.remoteGetState),
@@ -149,6 +150,12 @@ const api: DiffraApi = {
   pageRemoteSession: (deviceId, sessionId, before) => ipcRenderer.invoke(IPC_CHANNELS.remotePage, deviceId, sessionId, before),
   unsubscribeRemoteSession: (deviceId, sessionId) => ipcRenderer.invoke(IPC_CHANNELS.remoteUnsubscribe, deviceId, sessionId),
   onRemoteEvent: (listener) => subscribe<RemoteSyncEvent>(IPC_CHANNELS.remoteEvent, listener),
+  promptRemoteSession: (deviceId, sessionId, text) => ipcRenderer.invoke(IPC_CHANNELS.remotePrompt, deviceId, sessionId, text),
+  createRemoteSession: (deviceId, projectId, text) => ipcRenderer.invoke(IPC_CHANNELS.remoteCreate, deviceId, projectId, text),
+  cancelRemoteSession: (deviceId, sessionId) => ipcRenderer.invoke(IPC_CHANNELS.remoteCancel, deviceId, sessionId),
+  respondRemotePermission: (deviceId, requestId, optionId) => ipcRenderer.invoke(IPC_CHANNELS.remotePermission, deviceId, requestId, optionId),
+  onRemoteAction: (listener) => subscribe<{ requestId: string; action: RemoteAction }>(IPC_CHANNELS.remoteAction, listener),
+  respondRemoteAction: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteActionRespond, requestId, result),
 }
 
 contextBridge.exposeInMainWorld('diffra', api)

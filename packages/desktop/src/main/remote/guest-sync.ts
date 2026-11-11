@@ -1,4 +1,15 @@
-import { eventSchema, type RemoteSnapshotPage, type RequestCall, responseSchema, type SessionList, sessionListSchema, snapshotSchema } from '@diffra/remote/messages'
+import {
+  createResultSchema,
+  eventSchema,
+  okSchema,
+  promptResultSchema,
+  type RemoteSnapshotPage,
+  type RequestCall,
+  responseSchema,
+  type SessionList,
+  sessionListSchema,
+  snapshotSchema,
+} from '@diffra/remote/messages'
 import type { z } from 'zod'
 import type { RemoteSyncEvent } from '../../shared/remote'
 
@@ -35,6 +46,22 @@ export class GuestSync {
 
   page(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
     return this.request(deviceId, { method: 'session.page', sessionId, before }, snapshotSchema)
+  }
+
+  prompt(deviceId: string, sessionId: string, text: string): Promise<{ queued: boolean }> {
+    return this.request(deviceId, { method: 'session.prompt', sessionId, text, skills: [] }, promptResultSchema)
+  }
+
+  create(deviceId: string, projectId: string, text: string): Promise<{ sessionId: string }> {
+    return this.request(deviceId, { method: 'session.create', projectId, text, skills: [] }, createResultSchema)
+  }
+
+  async cancel(deviceId: string, sessionId: string): Promise<void> {
+    await this.request(deviceId, { method: 'session.cancel', sessionId }, okSchema)
+  }
+
+  async respondPermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void> {
+    await this.request(deviceId, { method: 'permission.respond', requestId, optionId }, okSchema)
   }
 
   async unsubscribe(deviceId: string, sessionId: string): Promise<void> {

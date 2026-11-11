@@ -19,6 +19,7 @@ import {
   type DesignActionResult,
   type TaskActionParams,
   type TaskActionResult,
+  type RemoteSource,
   type TaskSource,
   type DevServerParams,
   type DevServerResult,
@@ -118,6 +119,8 @@ export interface PromptOptions {
   images?: PromptImage[]
   // 另一个任务发来的消息（任务互通）
   from?: TaskSource
+  // 配对的远程设备发来的消息（设备连接）
+  remote?: RemoteSource
 }
 
 export function sendPrompt(
@@ -130,7 +133,7 @@ export function sendPrompt(
   return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
     prompt: [{ type: 'text', text }, ...(options.images ?? []).map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.data }))],
-    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false, ...(options.from ? { from: options.from } : {}) } },
+    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false, ...(options.from ? { from: options.from } : {}), ...(options.remote ? { remote: options.remote } : {}) } },
   })
 }
 
