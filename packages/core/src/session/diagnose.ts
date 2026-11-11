@@ -270,8 +270,7 @@ export async function runDiagnose(session: Session, target: { turnId: string; ca
   if (session.running) throw new Error('上一个任务还没结束')
   const stored = session.turns.find((turn) => turn.id === target.turnId)
   if (!stored) throw new Error('找不到要定位的那一轮')
-  const controller = new AbortController()
-  session.activeTurn = controller
+  const controller = session.activateTurn()
   const { signal } = controller
   const model = session.config.model
   try {

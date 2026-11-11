@@ -409,6 +409,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
+      session.turnRequested()
       const meta = promptMetaSchema.safeParse(params._meta)
       const turnId = meta.success ? meta.data.diffra.turnId : randomUUID()
       const text = params.prompt
@@ -437,6 +438,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.compact, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('任务还在进行中，结束后再压缩上下文')
+      session.turnRequested()
       const stopReason = await runRecordedTurn(session, client, params.turnId, MANUAL_COMPACTION_PROMPT, 'compact', [], [], (io) => compactManually(session, io))
       return { stopReason }
     })
@@ -444,6 +446,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.deepScan, deepScanParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
+      session.turnRequested()
       const stopReason = await runRecordedTurn(session, client, params.turnId, DEEP_SCAN_TITLES[params.scope], 'deep-scan', [], [], (io) =>
         runDeepScan(session, { id: params.turnId }, params.scope, io),
       )
@@ -476,6 +479,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.plan, planParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
+      session.turnRequested()
       const skills = await selectedSkills(session, params.skills)
       const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'plan', params.skills, [], (io) =>
         runPlan(session, { id: params.turnId, text: withSkills(params.prompt, skills) }, io),
@@ -485,6 +489,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.diagnose, diagnoseParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
+      session.turnRequested()
       const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'diagnose', [], [], (io) => runDiagnose(session, params.target, io))
       return { stopReason }
     })

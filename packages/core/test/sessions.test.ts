@@ -363,6 +363,21 @@ describe('会话持久化', () => {
     }
   })
 
+  test('发出后立刻停止：这一轮停下、不调模型；空闲时点停止不影响下一轮', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    // 不等请求处理完就停：core 这时还在读 Skill、存盘，这一轮还没开始
+    const turn = sendPrompt(core, sessionId, 'turn-1', '慢慢想')
+    await cancelSession(core, sessionId)
+    expect((await turn).stopReason).toBe('cancelled')
+    expect(server.bodies).toHaveLength(0)
+
+    await cancelSession(core, sessionId)
+    expect((await sendPrompt(core, sessionId, 'turn-2', '你好')).stopReason).toBe('end_turn')
+    expect(server.bodies).toHaveLength(1)
+  })
+
   test('core 返回不合法的任务状态时丢掉，缺检查命令时为 null', async () => {
     const toAgent = new PassThrough()
     const toClient = new PassThrough()

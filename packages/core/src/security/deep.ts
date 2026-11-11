@@ -90,8 +90,7 @@ async function scanBrief(session: Session, scope: DeepScanScope): Promise<string
 // 但审计过程不进编码模型的对话：报告交给用户，用户勾选后再作为新的一轮发给编码模型
 export async function runDeepScan(session: Session, turn: { id: string }, scope: DeepScanScope, io: TurnIO): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
-  const controller = new AbortController()
-  session.activeTurn = controller
+  const controller = session.activateTurn()
   const { signal } = controller
   const reviewer = session.config.reviewModel ?? session.config.model
   const contextWindow = session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW

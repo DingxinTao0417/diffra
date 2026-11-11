@@ -125,6 +125,9 @@ export class Session {
   readonly consumedChecks = new Map<string, UnresolvedCheck>()
   taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
+  // 请求到了、这一轮还没开始（还在读 Skill、存盘）时点的停止：记下来开始时补上，不然这次停止会被吞掉
+  private turnPending = false
+  private stopPending = false
   // 这一轮里每个文件最近一次改完后的全文，压缩改动卡片用（见 edit-diff.ts）；只在内存里，每轮清空
   readonly editedTexts = new Map<string, string>()
   // 正在等模型输出的那一步：智能体（主智能体是 main，子智能体是它的 id）→ 让它重发请求
@@ -195,7 +198,24 @@ export class Session {
   }
 
   cancel(): void {
-    this.activeTurn?.abort()
+    if (this.activeTurn) this.activeTurn.abort()
+    else if (this.turnPending) this.stopPending = true
+  }
+
+  // 每种轮次的请求一到、第一个 await 之前调
+  turnRequested(): void {
+    this.turnPending = true
+    this.stopPending = false
+  }
+
+  // 这一轮开始：登记它的 AbortController；开始前已经点了停止的，一开始就是停止状态
+  activateTurn(): AbortController {
+    const controller = new AbortController()
+    if (this.stopPending) controller.abort()
+    this.turnPending = false
+    this.stopPending = false
+    this.activeTurn = controller
+    return controller
   }
 
   startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource): void {

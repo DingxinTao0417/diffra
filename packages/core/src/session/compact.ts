@@ -164,8 +164,7 @@ export async function compactIfNeeded(
 // 手动压缩不省略/改写原消息：失败和取消都不改变上下文，历史和撤销所需索引保留。
 export async function compactManually(session: Session, io: TurnIO): Promise<StopReason> {
   if (session.running) throw new Error('任务还在进行中，结束后再压缩上下文')
-  const controller = new AbortController()
-  session.activeTurn = controller
+  const controller = session.activateTurn()
   const timeoutSignal = AbortSignal.timeout(MANUAL_COMPACTION_TIMEOUT_MS)
   const signal = AbortSignal.any([controller.signal, timeoutSignal])
   const toolCallId = randomUUID()

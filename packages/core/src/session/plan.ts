@@ -49,8 +49,7 @@ const PLANNING_MODE = [
 // 但探索过程不进编码模型的对话；用户改好计划、点「按计划执行」后，计划作为新的一轮发给编码模型
 export async function runPlan(session: Session, turn: { id: string; text: string }, io: TurnIO): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
-  const controller = new AbortController()
-  session.activeTurn = controller
+  const controller = session.activateTurn()
   const { signal } = controller
   const planner = session.config.planModel ?? session.config.model
   try {

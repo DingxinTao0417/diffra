@@ -172,8 +172,7 @@ export async function runTurn(
   options: TurnOptions = {},
 ): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
-  const controller = new AbortController()
-  session.activeTurn = controller
+  const controller = session.activateTurn()
   const { signal } = controller
   if (session.taskState.status === 'completed') session.taskState = newTaskState()
   session.taskState = { ...session.taskState, status: 'running', reason: null, contractRequired: session.taskState.contractRequired || requiresReleaseContract(turn.text), releaseVersion: session.taskState.releaseVersion ?? turn.text.match(/\bv?(\d+\.\d+\.\d+)\b/)?.[1] ?? null }
