@@ -747,6 +747,29 @@ v2：
 - 服务器：和更新源同一台、共用 30 Mbps，中转全局限 10 Mbps、每台设备 256 KB/s；中转日志单独存 14 天、不记内容。更新包还没签名，攻破服务器的人能推恶意版本绕过端到端加密，所以签名配好前对外只说「服务器不解密」。开这个功能要改隐私政策（现在写的是代码和对话不经过服务器）。
 - 不做：账号、远程更新 Diffra、手机端。v2：局域网和 P2P 直连、离线缓存和暂存消息、远程撤销等破坏性操作、远程发图片、无项目和设计任务、按会话授权、自建中转、长度填充、macOS。
 
+### 中转服务和部署（第 353–355 步）
+
+- 代码在 `packages/relay`：服务器上用 Node 24 直接跑 TS（`node src/main.ts`），不构建，所以 tsconfig 开了 `erasableSyntaxOnly`、导入写 `.ts` 后缀。运行时依赖只有 `ws`（Node 没有内置 WebSocket 服务端；8.22.1，锁文件里原本就有）和 `zod`。协议在 `src/protocol.ts`，客户端（第 356 步）也从这里取。
+- 协议：WebSocket 路径 `/v1`。
+  - 登录：中转先发随机数，设备用 Ed25519 签 `diffra-relay-auth/1`、一个 0 字节、随机数，连同两把公钥发回；设备 ID 是 Ed25519 公钥接 X25519 公钥的 SHA-256 前 16 字节。没有账号。
+  - 白名单整份替换（最多 64 台）；二进制帧是 1 字节种类 + 16 字节对方 ID + 密文（最多 65535 字节），收件方的白名单里有发件方才转。两边互相在白名单里、都在线时才互相告知在线状态。送不到只回「送不到」，不说是不在线还是没授权。
+  - 会合点：开的设备给 ID 和有效期（最长 600 秒），每台设备同时最多 3 个，每个 IP 每小时最多开 20 个，每个会合点最多 3 台设备来、转 32 帧。连接端把被连接端先放进自己的白名单，被连接端就能直接回它。
+  - 探活用应用层的 `ping`/`pong`：Node 自带的 WebSocket 客户端发不了 ping 帧。中转每 25 秒发 ping 帧，上一轮没回 pong 的断开。
+- 上限（`DEFAULT_LIMITS`）：同一 IP 同时 10 条连接，登录的设备 500 台，没登录的连接 200 条，10 秒内要登录；每台设备每秒 50 帧、256 KB（突发 2 MB），所有设备加起来每秒 1.25 MB（10 Mbps，给更新下载留 20 Mbps）；收件方积压超过 4 MB 断开它。超限都是断开、不排队不丢帧：丢一帧加密通道就对不上了，客户端退避重连、重新握手。WebSocket 不开压缩（内容是密文，压了没用，还多一条解压炸弹的路）。
+- 日志：中转进程只记连接、断开（设备 ID 前 8 位和 IP）和错误，不记内容和大小。进程日志和 nginx 的访问、错误日志都在 `/var/log/diffra-relay/`，留 14 天；不放 `/var/log/nginx/`，那里的 `*.log` 按官网的规则留 180 天，同一个文件写两条轮转规则 logrotate 会报重复。
+- 发布：`pnpm --filter @diffra/desktop publish:relay`（`scripts/publish-relay.ts`，`--dry-run` 只在本机打包、试跑、列出步骤，不连服务器）。
+  - 打包源码、`ws` 和 `zod`（都没有自己的依赖，照本机测过的那份原样拷过去，服务器上不再装）、`release.txt`（时间加提交），上传到 `/opt/diffra-relay/releases/<版本>`，`current` 链过去再重启服务。
+  - 上传前在本机解开打好的包、照服务器的方式启动一次，健康检查返回这个版本才往下走；上线后等 `https://relay.diffra.dev/health` 返回新版本，对不上就链回上一个版本再重启。只留最近 3 个版本。
+  - `packages/relay` 有没提交的改动就不发，线上跑的一定对得上一个提交。
+- 首次上线（第 355 步，改服务器，执行前先问用户；改动前把要改的原文件备份到 `/root/backup/`）。配置文件都在 `packages/relay/deploy/`：
+  1. Cloudflare 加 `relay` 的 A 记录指向服务器，仅 DNS，不走代理（WebSocket 直连 nginx）。
+  2. 装 Node 24（NodeSource 的 apt 源），确认 `/usr/bin/node --version` 是 v24。
+  3. 建系统用户 `diffra-relay`（不能登录、没有家目录），建 `/opt/diffra-relay/releases`、`/var/log/diffra-relay`、`/var/www/certbot`。
+  4. `nginx-http.conf` 放进 `/etc/nginx/sites-available/relay.diffra.dev`、链到 `sites-enabled`，`nginx -t` 后重载；`certbot certonly --webroot -w /var/www/certbot -d relay.diffra.dev` 申请证书；再把 `nginx-https.conf` 接到同一个文件后面，`nginx -t` 后重载。
+  5. `logrotate.conf` 放进 `/etc/logrotate.d/diffra-relay`，`logrotate -d` 检查。
+  6. `diffra-relay.service` 放进 `/etc/systemd/system/`，`daemon-reload` 后 `enable`。
+  7. 本机跑 `publish:relay`；验证健康检查、从本机用 wss 登录，更新源的 `latest.yml` 和安装包下载不受影响。
+
 ## 无项目任务
 
 - 普通任务和设计任务都可以不选项目。core 不需要「项目」这个概念，只要求 cwd 是一个存在的目录，所以全在桌面端做：主进程在「默认保存位置」下替任务建一个文件夹，当成普通 cwd 交给 core，会话配置带 `noProject: true`，写进会话记录和索引（见「Agent 核心」）。界面按这个标记认无项目任务，不按「上级目录是不是默认位置」推断，改了默认位置老任务也不会散开。

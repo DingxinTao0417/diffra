@@ -1,0 +1,41 @@
+# 中转服务的 systemd 单元：放到 /etc/systemd/system/diffra-relay.service。
+# 代码在 /opt/diffra-relay/current（发布脚本每次发一个新目录再把 current 链过去），用 node 直接跑 TS，不构建
+[Unit]
+Description=Diffra 设备连接中转服务
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=diffra-relay
+Group=diffra-relay
+WorkingDirectory=/opt/diffra-relay/current
+ExecStart=/usr/bin/node /opt/diffra-relay/current/src/main.ts
+Environment=RELAY_PORT=8787
+Environment=RELAY_TRUST_PROXY=1
+Environment=NODE_ENV=production
+# 只记连接、断开和错误，按行追加；留 14 天（logrotate.conf）
+StandardOutput=append:/var/log/diffra-relay/relay.log
+StandardError=append:/var/log/diffra-relay/relay.log
+Restart=on-failure
+RestartSec=5
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=4096
+# 只听本机端口、不写任何文件：其余权限都收掉。不加 MemoryDenyWriteExecute，V8 的即时编译要用
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
