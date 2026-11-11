@@ -769,6 +769,9 @@ v2：
   5. `logrotate.conf` 放进 `/etc/logrotate.d/diffra-relay`，`logrotate -d` 检查。
   6. `diffra-relay.service` 放进 `/etc/systemd/system/`，`daemon-reload` 后 `enable`。
   7. 本机跑 `publish:relay`；验证健康检查、从本机用 wss 登录，更新源的 `latest.yml` 和安装包下载不受影响。
+- 2026-11-11 已上线：Node 24.22.2（`/opt/node-v24.22.2-linux-x64`，解压时不保留包里的属主 uid 1000），系统用户 `diffra-relay`（uid 997），证书到 2027-02-09；改动前的 `sites-available`、`logrotate.d` 备份在 `/root/backup/relay-20261111-074548/`。上线后两台临时设备经 `wss://relay.diffra.dev/v1` 登录、互通、转发一帧都正常，日志里记的是 nginx 转来的真实 IP。
+  - 新证书一签发，扫描器几秒内就按证书透明度日志找上门（这次 07:52:45 签发、同一秒就有人扫 `/phpinfo.php`、`/backup.sql`）。签证书到接上 HTTPS 配置之间的那一分钟，443 上的请求落到默认站点、记进了官网 180 天的那份日志；那些都是扫描器的请求，不是设备流量。以后再加子域名，拿到证书后马上接上 HTTPS 配置。
+  - 回退：停掉并禁用 `diffra-relay`，删掉 `sites-enabled/relay.diffra.dev` 后重载 nginx；删 `/opt/diffra-relay`、`/opt/node*`、`/usr/local/bin/node` 和用户；`certbot delete --cert-name relay.diffra.dev`。
 
 ## 无项目任务
 
