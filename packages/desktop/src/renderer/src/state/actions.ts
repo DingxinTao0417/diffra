@@ -3,6 +3,7 @@ import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
+import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { errorMessage } from '../lib/errors'
 import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
@@ -216,6 +217,13 @@ export function wireCoreEvents(): () => void {
     if (store.get().live[sessionId]?.running) cancelTask(sessionId)
   })
   const offTasks = syncBridgeTasks()
+  // 设备连接：配对请求要在任何页面都能弹出来，状态放全局
+  window.diffra.getRemoteState().then(
+    (remote) => store.set((current) => ({ ...current, remote })),
+    (error: unknown) => console.error('[remote] 读取设备连接状态失败', error),
+  )
+  const offRemote = window.diffra.onRemoteState((remote) => store.set((current) => ({ ...current, remote })))
+  const offRemoteEvent = window.diffra.onRemoteEvent(applyRemoteEvent)
   return () => {
     offUpdate()
     offPermission()
@@ -226,6 +234,8 @@ export function wireCoreEvents(): () => void {
     offBridge()
     offStopRequest()
     offTasks()
+    offRemote()
+    offRemoteEvent()
   }
 }
 

@@ -287,6 +287,11 @@ export interface UsageCache {
 // diagnose：停下或子智能体失败后的「定位问题」，只读地查原因、给修复提示词，不改文件、不改变任务结论
 export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact' | 'diagnose'
 export const MANUAL_COMPACTION_PROMPT = '/compact'
+// 深度扫描那一轮记下的提问（也是对话里显示的那一行）
+export const DEEP_SCAN_TITLES: Record<'task' | 'project', string> = {
+  task: '深度安全扫描 · 本任务改动',
+  project: '深度安全扫描 · 整个项目',
+}
 
 // Skill 从哪里来：项目的 .diffra/skills、自己的 ~/.diffra/skills、插件，兼容读取的 Claude Code、Codex 的目录，以及随 Diffra 带的
 export type SkillSource = 'project' | 'user' | 'plugin' | 'claude' | 'codex' | 'builtin'

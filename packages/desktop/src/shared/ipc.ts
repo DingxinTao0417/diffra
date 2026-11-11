@@ -41,6 +41,8 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
+import type { RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
+import type { RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
@@ -165,6 +167,25 @@ export const IPC_CHANNELS = {
   sessionTaskActionRespond: 'session:task-action-respond',
   checkpointPreview: 'session:checkpoint-preview',
   checkpointRestore: 'session:checkpoint-restore',
+  remoteGetState: 'remote:get-state',
+  remoteState: 'remote:state',
+  remoteSetAllowIncoming: 'remote:set-allow-incoming',
+  remoteSetName: 'remote:set-name',
+  remoteCreateInvite: 'remote:create-invite',
+  remoteCancelInvite: 'remote:cancel-invite',
+  remoteRespond: 'remote:respond',
+  remoteUpdateGrant: 'remote:update-grant',
+  remoteRevoke: 'remote:revoke',
+  remoteAddDevice: 'remote:add-device',
+  remoteCancelAdd: 'remote:cancel-add',
+  remoteRemovePeer: 'remote:remove-peer',
+  remoteResetIdentity: 'remote:reset-identity',
+  remoteAudit: 'remote:audit',
+  remoteList: 'remote:list',
+  remoteSubscribe: 'remote:subscribe',
+  remotePage: 'remote:page',
+  remoteUnsubscribe: 'remote:unsubscribe',
+  remoteEvent: 'remote:event',
 } as const
 
 // 内置浏览器面板在窗口里的位置（CSS 像素，相对窗口内容区）
@@ -496,4 +517,27 @@ export interface DiffraApi {
   respondTaskAction(requestId: string, result: TaskActionResult): Promise<void>
   previewCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
   restoreCheckpoint(sessionId: string, turnId: string): Promise<CheckpointChange[]>
+  // 设备连接（见 shared/remote.ts）：状态变了主进程推 onRemoteState
+  getRemoteState(): Promise<RemoteView>
+  onRemoteState(listener: (view: RemoteView) => void): () => void
+  setRemoteAllowIncoming(enabled: boolean): Promise<void>
+  setRemoteName(name: string): Promise<void>
+  createRemoteInvite(): Promise<void>
+  cancelRemoteInvite(): Promise<void>
+  // 本机的人对配对请求点了允许或拒绝；允许时带上开放哪些项目
+  respondRemoteRequest(deviceId: string, approved: boolean, projects: RemoteProjectGrant[]): Promise<void>
+  updateRemoteGrant(deviceId: string, projects: RemoteProjectGrant[]): Promise<void>
+  revokeRemoteDevice(deviceId: string): Promise<void>
+  // 粘贴邀请串添加设备：对方点了允许或拒绝、或者出错才返回
+  addRemoteDevice(invite: string, name: string | null): Promise<RemoteAddResult>
+  cancelAddRemoteDevice(): Promise<void>
+  removeRemotePeer(deviceId: string): Promise<void>
+  resetRemoteIdentity(): Promise<void>
+  getRemoteAudit(): Promise<RemoteAuditEntry[]>
+  // 看自己连接的设备授权给本机的会话：列表、订阅（回一页快照，之后经 onRemoteEvent 推实时动静）、往前翻页、退订
+  listRemoteSessions(deviceId: string): Promise<SessionList>
+  subscribeRemoteSession(deviceId: string, sessionId: string): Promise<RemoteSnapshotPage>
+  pageRemoteSession(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage>
+  unsubscribeRemoteSession(deviceId: string, sessionId: string): Promise<void>
+  onRemoteEvent(listener: (event: RemoteSyncEvent) => void): () => void
 }

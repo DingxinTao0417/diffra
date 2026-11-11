@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, test } from 'vitest'
-import { createInvite, decodeInvite, encodeInvite, InviteError, pairingPskOf, rendezvousIdOf } from '../src/invite.js'
+import { createInvite, decodeInvite, encodeInvite, fingerprintOf, InviteError, pairingPskOf, rendezvousIdOf } from '../src/invite.js'
 import { randomBytes, seeded } from './random.js'
 
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -77,6 +77,13 @@ describe('邀请串', () => {
         expect(error).toBeInstanceOf(InviteError)
       }
     }
+  })
+
+  test('指纹短码是设备 ID 前 5 字节，4 个一组', () => {
+    // 00 11 22 33 44 按 5 位切开是 0 0 8 18 4 12 26 4
+    expect(fingerprintOf(fixed.deviceId)).toBe('008J-4CT4')
+    expect(fingerprintOf(Buffer.alloc(16, 0xff))).toBe('ZZZZ-ZZZZ')
+    expect(() => fingerprintOf(new Uint8Array(8))).toThrow('16 字节')
   })
 
   test('每次生成的密钥不同；会合 ID 和预共享密钥由密钥确定推出，彼此不同', () => {

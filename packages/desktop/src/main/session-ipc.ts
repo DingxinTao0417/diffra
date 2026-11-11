@@ -36,7 +36,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { designStyleById, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -57,6 +57,7 @@ import { browserHost } from './browser'
 import { designHost } from './design'
 import { devServer, killTerminalsIn, pathInside, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
+import { aroundTurn, emitSessionEvent } from './session-events'
 import { mcpServersFor } from './mcp-servers'
 import { enabledPlugins } from './plugins-ipc'
 import { SESSION_RULES } from './rule-packs'
@@ -130,6 +131,7 @@ function broadcast(channel: string, payload: unknown): number {
 export const coreClientHandlers: CoreClientHandlers = {
   onSessionUpdate: (notification) => {
     broadcast(IPC_CHANNELS.sessionUpdate, notification)
+    emitSessionEvent({ type: 'update', notification })
   },
   onPermissionRequest: (request) =>
     new Promise((resolve) => {
@@ -370,9 +372,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return { modelLabel: model?.label ?? null }
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionRewind, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
-    rewindSession(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
-  )
+  ipcMain.handle(IPC_CHANNELS.sessionRewind, async (_event, rawSessionId: unknown, rawTurnId: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const result = await rewindSession(await coreConnection(), sessionId, parse(z.string().min(1), rawTurnId))
+    emitSessionEvent({ type: 'reset', sessionId })
+    return result
+  })
 
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
@@ -475,6 +480,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       rawChange,
     )
     await updateSession(await coreConnection(), sessionId, change)
+    emitSessionEvent({ type: 'changed', sessionId })
   })
 
   // 无项目任务的文件夹：空的直接删，否则用户勾了才移到回收站，连同它独占的检查点仓库；别的任务还用着就不动。
@@ -520,7 +526,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const { trashFolder } = parse(z.object({ trashFolder: z.boolean() }), rawOptions ?? { trashFolder: false })
     const running = deleting.get(sessionId)
     if (running) return running
-    const task = removeSession(sessionId, trashFolder).finally(() => deleting.delete(sessionId))
+    const task = removeSession(sessionId, trashFolder).finally(() => {
+      deleting.delete(sessionId)
+      emitSessionEvent({ type: 'changed', sessionId })
+    })
     deleting.set(sessionId, task)
     return task
   })
@@ -529,35 +538,34 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const sessionId = parse(z.string().min(1), rawSessionId)
     const turnId = parse(z.string().min(1), rawTurnId)
     const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
+    const options = parse(promptOptionsSchema, rawOptions)
     await designHost.prepare(sessionId)
-    const response = await sendPrompt(await coreConnection(), sessionId, turnId, text, parse(promptOptionsSchema, rawOptions))
+    const response = await aroundTurn(sessionId, turnId, options.goal ? 'goal' : 'prompt', text, async () => sendPrompt(await coreConnection(), sessionId, turnId, text, options))
     return response.stopReason
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionDeepScan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawScope: unknown) => {
-    const response = await deepScan(
-      await coreConnection(),
-      parse(z.string().min(1), rawSessionId),
-      parse(z.string().min(1), rawTurnId),
-      parse(z.enum(['task', 'project']), rawScope),
-    )
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const scope = parse(z.enum(['task', 'project']), rawScope)
+    const response = await aroundTurn(sessionId, turnId, 'deep-scan', DEEP_SCAN_TITLES[scope], async () => deepScan(await coreConnection(), sessionId, turnId, scope))
     return response.stopReason
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionCompact, async (_event, rawSessionId: unknown, rawTurnId: unknown) => {
-    const response = await compactSession(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId))
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const response = await aroundTurn(sessionId, turnId, 'compact', MANUAL_COMPACTION_PROMPT, async () => compactSession(await coreConnection(), sessionId, turnId))
     return response.stopReason
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPlan, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawSkills: unknown) => {
-    await designHost.prepare(parse(z.string().min(1), rawSessionId))
-    const response = await plan(
-      await coreConnection(),
-      parse(z.string().min(1), rawSessionId),
-      parse(z.string().min(1), rawTurnId),
-      parse(z.string().trim().min(1, '任务内容不能为空'), rawText),
-      parse(skillNamesSchema, rawSkills),
-    )
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const text = parse(z.string().trim().min(1, '任务内容不能为空'), rawText)
+    const skills = parse(skillNamesSchema, rawSkills)
+    await designHost.prepare(sessionId)
+    const response = await aroundTurn(sessionId, turnId, 'plan', text, async () => plan(await coreConnection(), sessionId, turnId, text, skills))
     return response.stopReason
   })
 
@@ -586,13 +594,11 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionDiagnose, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawTarget: unknown) => {
-    const response = await diagnose(
-      await coreConnection(),
-      parse(z.string().min(1), rawSessionId),
-      parse(z.string().min(1), rawTurnId),
-      parse(z.string().trim().min(1), rawText),
-      parse(z.object({ turnId: z.string().min(1), cardId: z.string().min(1).nullable() }), rawTarget),
-    )
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const text = parse(z.string().trim().min(1), rawText)
+    const target = parse(z.object({ turnId: z.string().min(1), cardId: z.string().min(1).nullable() }), rawTarget)
+    const response = await aroundTurn(sessionId, turnId, 'diagnose', text, async () => diagnose(await coreConnection(), sessionId, turnId, text, target))
     return response.stopReason
   })
 
@@ -666,9 +672,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     previewCheckpoint(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
 
-  ipcMain.handle(IPC_CHANNELS.checkpointRestore, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
-    restoreCheckpoint(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
-  )
+  ipcMain.handle(IPC_CHANNELS.checkpointRestore, async (_event, rawSessionId: unknown, rawTurnId: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const changes = await restoreCheckpoint(await coreConnection(), sessionId, parse(z.string().min(1), rawTurnId))
+    emitSessionEvent({ type: 'reset', sessionId })
+    return changes
+  })
 
   return {
     architectureModel: async () => {

@@ -22,6 +22,7 @@ import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
 import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
+import { ReadOnlyContext, useReadOnly } from './read-only'
 import { VisualCard } from './VisualCard'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
@@ -169,9 +170,11 @@ interface ConversationProps {
   onLocate(id: string): void
   onRestore(turnId: string): void
   onRegenerate(turnId: string): void
+  // 远程会话：只看，不提供作用于本机的操作（见 read-only.ts）
+  readOnly?: boolean
 }
 
-export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }: ConversationProps) {
+export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, readOnly = false }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // 用户停在底部时，新内容进来就跟着滚；往上翻了就不打扰
   const stickRef = useRef(true)
@@ -281,6 +284,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
   }
 
   return (
+    <ReadOnlyContext.Provider value={readOnly}>
     <div className="relative min-h-0 flex-1">
       {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
       <div
@@ -308,7 +312,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
               />
             )
           })}
-          <TodoAcceptanceCard task={task} />
+          {!readOnly && <TodoAcceptanceCard task={task} />}
         </div>
       </div>
       {task.turns.length > 1 && <Timeline turns={task.turns} activeTurn={activeTurn ?? task.turns.at(-1)?.id ?? null} onJump={scrollToTurn} />}
@@ -318,6 +322,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate }
         </Button>
       )}
     </div>
+    </ReadOnlyContext.Provider>
   )
 }
 
@@ -382,9 +387,10 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   }, [turn.items])
   const lastFinishId = last ? [...finishFiles.keys()].at(-1) : undefined
   const lastPassedId = last ? turn.items.filter((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0).at(-1)?.id : undefined
-  const canRegenerate = latestWork
+  const readOnly = useReadOnly()
+  const canRegenerate = latestWork && !readOnly
   // 定位轮不改文件、没有检查点
-  const canRestore = task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
+  const canRestore = !readOnly && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
   // 和 FinishCard 显示撤销按钮的条件一致：撤销过但判成没改动的卡照样留着按钮
   const cardRestore = turn.items.some((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0 && (!turn.restoredAt || finishVerdict(item).tone === 'nochange'))
 
@@ -404,7 +410,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
       {blocks.map((block) => {
         switch (block.type) {
           case 'item':
-            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} />
+            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} omittedImages={turn.omittedImages ?? 0} />
           case 'tools':
             return <ToolGroup key={block.id} items={block.items} />
           case 'edits':
@@ -438,7 +444,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
                 item={block.item}
                 steps={agentSteps.get(block.item.id) ?? []}
                 projectPath={task.project}
-                onDiagnose={latestWork && !task.running && block.item.status === 'failed' ? () => void diagnose(task.sessionId, { turnId: turn.id, cardId: block.item.id, agent: block.item.agentCard!.name }) : undefined}
+                onDiagnose={!readOnly && latestWork && !task.running && block.item.status === 'failed' ? () => void diagnose(task.sessionId, { turnId: turn.id, cardId: block.item.id, agent: block.item.agentCard!.name }) : undefined}
               />
             )
           case 'diagnosis':
@@ -450,7 +456,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           case 'visual':
             return <VisualCard key={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!readOnly && !task.running && task.info.checkpoints ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -461,7 +467,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
         </p>
       )}
       {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} />}
-      {!active && <StopSummary turn={turn} task={task} actionable={latestWork && !task.running} />}
+      {!active && <StopSummary turn={turn} task={task} actionable={!readOnly && latestWork && !task.running} />}
       {turn.error && (
         <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive-soft px-3.5 py-3 text-sm" role="alert" data-testid="turn-error">
           <div className="flex items-center gap-2 font-bold text-destructive">
@@ -556,10 +562,11 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
 }
 
 // goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
-function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[] }) {
+// omittedImages：远程会话里提问带的图片不同步，只知道有几张
+function ItemView({ item, goal, skills, images, omittedImages }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[]; omittedImages: number }) {
   switch (item.kind) {
     case 'user':
-      if (!goal && skills.length === 0 && images.length === 0) {
+      if (!goal && skills.length === 0 && images.length === 0 && omittedImages === 0) {
         return (
           <div className="max-w-[80%] self-end rounded-2xl bg-secondary px-3.5 py-2.5 leading-relaxed whitespace-pre-wrap" data-testid="user-message">
             {item.text}
@@ -575,6 +582,7 @@ function ItemView({ item, goal, skills, images }: { item: Exclude<TranscriptItem
               ))}
             </div>
           )}
+          {omittedImages > 0 && <span className="text-xs text-muted-foreground">（带了 {omittedImages} 张图片，没有同步）</span>}
           <div className="flex flex-wrap justify-end gap-1.5 text-xs text-muted-foreground empty:hidden" data-testid="message-tags">
             {goal && (
               <span className="flex items-center gap-1 rounded-md border px-1.5 py-0.5">
@@ -696,6 +704,10 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
 // 指向另一个任务（任务互通）：点一下切过去
 function TaskLink({ source, label, className }: { source: { sessionId: string; title: string }; label: string; className?: string }) {
   const summary = useAppState((state) => state.tasks.find((task) => task.sessionId === source.sessionId))
+  const readOnly = useReadOnly()
+  const text = `${label}「${source.title.length > 20 ? `${source.title.slice(0, 20)}…` : source.title}」`
+  // 远程会话里的任务 id 是对方设备上的，本机打不开
+  if (readOnly) return <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-xs text-muted-foreground', className)}>{text}</span>
   return (
     <button
       type="button"
@@ -710,7 +722,7 @@ function TaskLink({ source, label, className }: { source: { sessionId: string; t
       }}
     >
       <ArrowUpRight className="size-3" />
-      {label}「{source.title.length > 20 ? `${source.title.slice(0, 20)}…` : source.title}」
+      {text}
     </button>
   )
 }
@@ -850,6 +862,7 @@ function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }
   const [key, longest] = Object.entries(turn.silence).sort(([, a], [, b]) => a.since - b.since)[0] ?? []
   const elapsed = useElapsed(longest?.since, longest !== undefined)
   const [retrying, setRetrying] = useState(false)
+  const readOnly = useReadOnly()
   if (!key || !longest || elapsed === null) return null
   const retry = () => {
     setRetrying(true)
@@ -867,9 +880,11 @@ function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }
         <CircleAlert className="mt-0.5 size-4 shrink-0" />
         {longest.agent ? `子智能体「${longest.agent}」的模型` : '模型'}已 {formatDuration(elapsed)}没有输出，可能卡住了
       </p>
-      <Button variant="outline" size="sm" className="h-7" disabled={retrying} onClick={retry}>
-        重试这一步
-      </Button>
+      {!readOnly && (
+        <Button variant="outline" size="sm" className="h-7" disabled={retrying} onClick={retry}>
+          重试这一步
+        </Button>
+      )}
     </div>
   )
 }
@@ -911,6 +926,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
   const diagnosis = item.diagnosis!
   const [prompt, setPrompt] = useState(diagnosis.prompt)
   const { target } = diagnosis
+  const readOnly = useReadOnly()
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="diagnosis">
       <div className="flex items-center gap-2 font-bold">
@@ -957,14 +973,16 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
           )}
         </div>
       )}
-      <QuestionBar questions={diagnosis.questions} text={prompt} onChange={setPrompt} />
+      {!readOnly && <QuestionBar questions={diagnosis.questions} text={prompt} onChange={setPrompt} />}
       <textarea
         aria-label="修复提示词"
+        readOnly={readOnly}
         value={prompt}
         rows={Math.min(12, prompt.split('\n').length + 1)}
         onChange={(event) => setPrompt(event.target.value)}
         className="w-full resize-y rounded-md border bg-background px-3 py-2 leading-relaxed outline-none focus:border-ring/60"
       />
+      {!readOnly && (
       <div className="flex flex-wrap items-center gap-2">
         <Button className="px-3.5" disabled={prompt.trim() === ''} onClick={() => fillComposer(task.sessionId, prompt.trim())}>
           填入输入框
@@ -982,6 +1000,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
           重新定位
         </Button>
       </div>
+      )}
     </div>
   )
 }
@@ -990,6 +1009,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
 function PlanCard({ item, request, task }: { item: ToolItem; request: string; task: TurnTask }) {
   const original = textOf(item)
   const [text, setText] = useState(original)
+  const readOnly = useReadOnly()
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
@@ -999,11 +1019,13 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
       </div>
       <textarea
         aria-label="计划内容"
+        readOnly={readOnly}
         value={text}
         rows={Math.min(24, text.split('\n').length + 1)}
         onChange={(event) => setText(event.target.value)}
         className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-ring/60"
       />
+      {!readOnly && (
       <div className="flex flex-wrap items-center gap-3">
         <Button disabled={task.running || text.trim() === ''} className="px-3.5" onClick={execute}>
           按计划执行
@@ -1015,6 +1037,7 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
         )}
         <span className="text-xs text-muted-foreground">可以先改计划再执行；不满意就在下面接着说。</span>
       </div>
+      )}
     </div>
   )
 }
@@ -1337,6 +1360,7 @@ function parseReport(text: string): { summary: string; findings: ReportFinding[]
 
 function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
   const { summary, findings } = useMemo(() => parseReport(textOf(item)), [item])
+  const readOnly = useReadOnly()
   // 默认勾上高危的
   const [selected, setSelected] = useState<Set<number>>(() => new Set(findings.flatMap((finding, index) => (finding.level === '高危' ? [index] : []))))
   const toggle = (index: number) =>
@@ -1365,7 +1389,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
       {findings.map((finding, index) => (
         <label key={index} className="flex cursor-pointer gap-2.5 rounded-lg border px-3 py-2" data-testid="deep-scan-finding">
-          <Checkbox className="mt-0.5" checked={selected.has(index)} onCheckedChange={() => toggle(index)} />
+          {!readOnly && <Checkbox className="mt-0.5" checked={selected.has(index)} onCheckedChange={() => toggle(index)} />}
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className={cn('rounded px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
@@ -1378,7 +1402,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
           </div>
         </label>
       ))}
-      {findings.length > 0 && (
+      {!readOnly && findings.length > 0 && (
         <Button disabled={selected.size === 0} className="self-start" onClick={fix}>
           {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
         </Button>

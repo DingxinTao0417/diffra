@@ -6,7 +6,8 @@ import { z } from 'zod'
 // 被连接端 = host，连接端 = 看和操作的那一台。版本号写进 Noise 的 prologue，版本不一致握手就失败
 
 export const REMOTE_PROTOCOL = 1
-export const REMOTE_PROLOGUE = Buffer.from(`diffra-remote/${REMOTE_PROTOCOL}`, 'utf8')
+// 界面也引用这个文件（只用类型），不用 Node 的 Buffer
+export const REMOTE_PROLOGUE = new TextEncoder().encode(`diffra-remote/${REMOTE_PROTOCOL}`)
 
 // 会话 id 的格式和会话存储一致（packages/core/src/session/store.ts）
 const sessionId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
@@ -14,7 +15,8 @@ const sessionId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
 const projectId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 const requestId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
 const isoTime = z.iso.datetime({ offset: true })
-const key32 = z.base64().refine((value) => Buffer.from(value, 'base64').length === 32, '要 32 字节')
+// 32 字节的 base64 正好 44 个字符、末尾一个 =
+const key32 = z.base64().refine((value) => value.length === 44 && value.endsWith('=') && !value.endsWith('=='), '要 32 字节')
 const skills = z.array(z.string().min(1).max(100)).max(20)
 const promptText = z.string().trim().min(1).max(100_000)
 // 远程只能「允许一次」或「拒绝」，不给「始终允许」
@@ -94,7 +96,14 @@ export const okSchema = z.object({})
 
 // 被连接端主动推的
 export const eventSchema = z.discriminatedUnion('event', [
-  z.object({ type: z.literal('event'), event: z.literal('session.update'), sessionId, epoch: z.string().max(64), seq: z.number().int().positive(), update: sessionUpdate }),
+  // 实时更新按批发：中转限每台设备每秒 50 帧，流式输出一秒几十个片段，逐条发会超限被断开
+  z.object({
+    type: z.literal('event'),
+    event: z.literal('session.updates'),
+    sessionId,
+    epoch: z.string().max(64),
+    updates: z.array(z.object({ seq: z.number().int().positive(), update: sessionUpdate })).min(1).max(500),
+  }),
   // 一轮开始（会话更新里没有这一项，界面是自己建新一轮的）
   z.object({ type: z.literal('event'), event: z.literal('turn.started'), sessionId, turnId: z.string().min(1).max(128), kind: z.string().max(32), prompt: z.string(), startedAt: isoTime }),
   // 撤销、重新生成这类改了整段记录的：重新订阅

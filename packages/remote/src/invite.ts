@@ -45,6 +45,13 @@ export function decodeInvite(text: string): Invite {
   return { secret: Buffer.from(body.subarray(1, 1 + SECRET_LEN)), deviceId: Buffer.from(body.subarray(1 + SECRET_LEN)) }
 }
 
+// 指纹短码：设备 ID 前 5 字节的 Base32，形如 K7QF-2M9X。配对时两边都显示，可以念给对方核对
+export function fingerprintOf(deviceId: Uint8Array): string {
+  if (deviceId.length !== DEVICE_ID_LEN) throw new InviteError('设备 ID 要 16 字节')
+  const text = base32(deviceId.subarray(0, 5))
+  return `${text.slice(0, 4)}-${text.slice(4)}`
+}
+
 // 拿去服务器登记、牵线用的会合 ID
 export function rendezvousIdOf(secret: Uint8Array): Uint8Array {
   return derive(secret, 'diffra pairing rendezvous', 16)

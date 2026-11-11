@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { fillComposer } from '@/state/actions'
+import { useReadOnly } from './read-only'
 import { showToast, store, useAppState } from '@/state/store'
 
 // 主题令牌：按应用当前的深浅色和配色取值，给模型写的代码用（名字在 show_visual 的说明里）
@@ -61,6 +62,8 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
   const [expanded, setExpanded] = useState(false)
   const [showCode, setShowCode] = useState(false)
   const [link, setLink] = useState<string | null>(null)
+  // 远程会话里不填本机的输入框、不开链接（会话 id 是对方的）；内容本来就换成了占位
+  const readOnly = useReadOnly()
   // 主题、配色变了就重新渲染一次，令牌跟着换
   const appearance = useAppState((state) => state.settings?.appearance)
   const [version, setVersion] = useState(0)
@@ -73,12 +76,13 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
       const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown } | null
       if (data?.type === 'diffra-visual-ready') target.postMessage({ type: 'diffra-visual', html: visualDocument(title, code) }, '*')
       else if (data?.type === 'diffra-visual-height' && typeof data.height === 'number') setHeight(Math.min(Math.max(Math.ceil(data.height), 40), MAX_HEIGHT))
+      else if (readOnly) return
       else if (data?.type === 'diffra-visual-fill' && typeof data.text === 'string' && data.text.trim()) fillComposer(sessionId, data.text.slice(0, MAX_FILL))
       else if (data?.type === 'diffra-visual-link' && typeof data.href === 'string' && /^https?:\/\//i.test(data.href)) setLink(data.href)
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [title, code, sessionId])
+  }, [title, code, sessionId, readOnly])
 
   useEffect(() => {
     if (!expanded) return

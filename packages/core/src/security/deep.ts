@@ -13,10 +13,7 @@ import { SECURITY_CATEGORIES } from './light.js'
 
 export type DeepScanScope = 'task' | 'project'
 
-export const DEEP_SCAN_TITLES: Record<DeepScanScope, string> = {
-  task: '深度安全扫描 · 本任务改动',
-  project: '深度安全扫描 · 整个项目',
-}
+export { DEEP_SCAN_TITLES } from '../protocol.js'
 
 const MAX_STEPS = 40
 const MAX_FINDINGS = 20

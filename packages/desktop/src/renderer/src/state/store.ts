@@ -2,16 +2,20 @@ import { useSyncExternalStore } from 'react'
 import type { DiagramKind } from '@diffra/core/architecture'
 import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
+import type { RemoteView } from '../../../shared/remote'
+import type { RemoteListState, RemoteTask } from '@/features/devices/remote-tasks'
 import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'mcp' | 'plugins' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'mcp' | 'plugins' | 'devices' | 'storage' | 'usage' | 'about'
 
 export type Route =
   | { name: 'home'; project: string | null }
   | { name: 'design'; project: string | null }
   | { name: 'task'; sessionId: string }
+  // 别的设备授权给本机看的会话（设备连接，只读）
+  | { name: 'remote-task'; deviceId: string; sessionId: string }
   | { name: 'todos' }
   // 架构：projectId 为 null 是项目卡片页；diagram 是看哪张架构图，section 是依赖页的哪一块，
   // scope 是依赖图看到哪一层（见 features/architecture/graph.ts），focus 是选中的方块、节点或依赖线
@@ -86,6 +90,11 @@ export interface AppState {
   browsers: Record<string, BrowserState>
   // 连着的 Diffra 浏览器扩展（用户自己的 Chrome、Edge）
   bridge: BridgeStatus
+  // 设备连接：主进程推来的状态；读到之前为 null
+  remote: RemoteView | null
+  // 自己连接的设备授权给本机的会话列表（按设备）、正在看的远程会话（按「设备/会话」）；都只在内存里
+  remoteLists: Record<string, RemoteListState>
+  remoteTasks: Record<string, RemoteTask>
   settings: SettingsView | null
   sidebarOpen: boolean
   // 窄窗口自动收起是布局上的派生结果，不写回 sidebarOpen：宽度回来后侧栏自己出现，用户自己收起的除外。
@@ -122,6 +131,9 @@ const initialState: AppState = {
   live: {},
   browsers: {},
   bridge: { connections: [] },
+  remote: null,
+  remoteLists: {},
+  remoteTasks: {},
   settings: null,
   sidebarOpen: true,
   sidebarNarrow: false,

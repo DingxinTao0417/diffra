@@ -58,6 +58,8 @@ export interface Turn {
   silence: Record<string, { agent: string | null; since: number }>
   // 另一个任务的智能体发来的消息
   from?: TaskSource
+  // 远程会话：提问带的图片没同步，只知道有几张
+  omittedImages?: number
 }
 
 export interface Usage {

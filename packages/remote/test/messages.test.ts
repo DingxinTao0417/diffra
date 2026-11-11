@@ -8,7 +8,7 @@ const turn = { id: 'turn-1', kind: 'prompt', prompt: '你好', startedAt: '2026-
 
 describe('应用层消息', () => {
   test('协议版本写在 prologue 里', () => {
-    expect(REMOTE_PROLOGUE.toString('utf8')).toBe('diffra-remote/1')
+    expect(new TextDecoder().decode(REMOTE_PROLOGUE)).toBe('diffra-remote/1')
   })
 
   test('每种消息的正常样子都能通过', () => {
@@ -26,7 +26,7 @@ describe('应用层消息', () => {
       { type: 'request', id: 10, call: { method: 'permission.respond', requestId: 'r-1', optionId: null } },
       { type: 'response', id: 1, ok: true, value: { anything: true } },
       { type: 'response', id: 2, ok: false, error: '没有授权' },
-      { type: 'event', event: 'session.update', sessionId: SESSION, epoch: 'e1', seq: 13, update: { sessionUpdate: 'tool_call', toolCallId: 't1' } },
+      { type: 'event', event: 'session.updates', sessionId: SESSION, epoch: 'e1', updates: [{ seq: 13, update: { sessionUpdate: 'tool_call', toolCallId: 't1' } }] },
       { type: 'event', event: 'turn.started', sessionId: SESSION, turnId: 'turn-2', kind: 'prompt', prompt: '继续', startedAt: '2026-11-10T08:01:00.000Z' },
       { type: 'event', event: 'session.reset', sessionId: SESSION },
       { type: 'event', event: 'sessions.changed' },
@@ -54,8 +54,9 @@ describe('应用层消息', () => {
       { type: 'request', id: -1, call: { method: 'sessions.list' } },
       { type: 'hello', protocol: 1, appVersion: '0.3.0', name: '台式机', signingKey: Buffer.alloc(16).toString('base64') },
       { type: 'hello', protocol: 1, appVersion: '0.3.0', name: '', signingKey: KEY },
-      { type: 'event', event: 'session.update', sessionId: SESSION, epoch: 'e1', seq: 0, update: { sessionUpdate: 'tool_call' } },
-      { type: 'event', event: 'session.update', sessionId: SESSION, epoch: 'e1', seq: 1, update: { content: 'no kind' } },
+      { type: 'event', event: 'session.updates', sessionId: SESSION, epoch: 'e1', updates: [{ seq: 0, update: { sessionUpdate: 'tool_call' } }] },
+      { type: 'event', event: 'session.updates', sessionId: SESSION, epoch: 'e1', updates: [{ seq: 1, update: { content: 'no kind' } }] },
+      { type: 'event', event: 'session.updates', sessionId: SESSION, epoch: 'e1', updates: [] },
       { type: 'event', event: 'unknown' },
       { type: 'bye' },
     ]

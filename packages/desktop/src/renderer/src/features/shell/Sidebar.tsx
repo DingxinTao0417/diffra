@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
 import type { SessionSearchResult, StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -13,8 +13,9 @@ import { remPx } from '@/lib/shell'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { isDue } from '@/lib/todo-time'
 import { useNow } from '@/lib/use-now'
-import { loadTodos, openArchitecture, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
+import { loadTodos, navigate, openArchitecture, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
+import { type RemoteProjectGroup, useRemoteProjects } from '@/features/devices/remote-projects'
 import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
 import { useSessionSearch } from './session-search'
@@ -90,6 +91,7 @@ export function Sidebar() {
   const expanded = useAppState((state) => state.expandedProjects)
   const workspacePath = useAppState((state) => state.settings?.defaultWorkspace.path)
   const groups = useMemo(() => groupTasks(projects, tasks, live), [projects, tasks, live])
+  const remoteGroups = useRemoteProjects()
   const activeSession = route.name === 'task' ? route.sessionId : null
   const todos = useAppState((state) => state.todos)
   const openTodoCount = useMemo(() => todos?.filter((todo) => !todo.done).length ?? 0, [todos])
@@ -216,6 +218,9 @@ export function Sidebar() {
             </div>
           )
         })}
+        {remoteGroups.map((group) => (
+          <RemoteProject key={group.key} group={group} collapsed={collapsed.has(group.key)} expanded={expanded.has(group.key)} activeSession={route.name === 'remote-task' && route.deviceId === group.deviceId ? route.sessionId : null} />
+        ))}
       </div>
 
       <div className="space-y-0.5 border-t border-sidebar-border px-2 py-2">
@@ -438,6 +443,65 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
           <Ellipsis className="size-3.5" />
         </button>
       </TaskMenu>
+    </div>
+  )
+}
+
+// 别的设备授权给本机看的项目：和本机项目一样排在「项目」下，右边的设备图标标出是远程的；只读，没有新建任务，任务点开是远程任务页
+function RemoteProject({ group, collapsed, expanded, activeSession }: { group: RemoteProjectGroup; collapsed: boolean; expanded: boolean; activeSession: string | null }) {
+  const hasTasks = group.sessions.length > 0
+  const recent = group.sessions.filter((session, index) => index < RECENT_TASK_LIMIT || session.sessionId === activeSession)
+  const hiddenCount = group.sessions.length - recent.length
+  const where = group.online ? `「${group.deviceName}」上的项目，只读` : `「${group.deviceName}」不在线，显示的是之前的内容`
+  return (
+    <div className="space-y-px" data-testid="sidebar-remote-project">
+      <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent">
+        <span className="relative size-4 shrink-0">
+          <Folder className={cn('size-4 transition-opacity', hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')} />
+          {hasTasks && (
+            <ChevronRight
+              className={cn(
+                'absolute inset-0 size-4 text-muted-foreground opacity-0 transition-[opacity,rotate] group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100',
+                !collapsed && 'rotate-90',
+              )}
+            />
+          )}
+        </span>
+        <button type="button" className={rowButtonClass} title={`${group.name}（${where}）`} aria-expanded={hasTasks ? !collapsed : undefined} disabled={!hasTasks} onClick={() => toggleProject('collapsedProjects', group.key)}>
+          <span className="truncate">{group.name}</span>
+        </button>
+        <span
+          role="img"
+          aria-label={where}
+          title={where}
+          className={cn('absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center text-muted-foreground', !group.online && 'opacity-40')}
+          data-testid={group.online ? 'remote-project-online' : 'remote-project-offline'}
+        >
+          <MonitorSmartphone className="size-3.5" />
+        </span>
+      </div>
+      {!collapsed &&
+        (expanded ? group.sessions : recent).map((session) => (
+          <div
+            key={session.sessionId}
+            className={cn('relative flex h-7.5 items-center gap-2 rounded-lg pr-2 pl-8 hover:bg-accent', session.sessionId === activeSession && 'bg-soft text-foreground hover:bg-soft')}
+            data-testid="sidebar-remote-task"
+          >
+            <button type="button" className={rowButtonClass} title={session.title} onClick={() => navigate({ name: 'remote-task', deviceId: group.deviceId, sessionId: session.sessionId })}>
+              <span className="truncate">{session.title || '（没有标题）'}</span>
+            </button>
+            <span className={trailingClass}>{session.running ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label="运行中" /> : formatTime(session.updatedAt)}</span>
+          </div>
+        ))}
+      {!collapsed && hiddenCount > 0 && (
+        <button
+          type="button"
+          className="flex h-7 w-full items-center rounded-lg pr-2 pl-8 text-left text-xs text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          onClick={() => toggleProject('expandedProjects', group.key)}
+        >
+          {expanded ? '收起' : `显示更多（${hiddenCount}）`}
+        </button>
+      )}
     </div>
   )
 }

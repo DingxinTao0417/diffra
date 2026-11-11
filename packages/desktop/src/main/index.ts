@@ -15,6 +15,7 @@ import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
 import { registerTodosIpc } from './todos-ipc'
+import { registerRemoteIpc } from './remote-ipc'
 import { registerArchitectureIpc } from './architecture-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
@@ -118,6 +119,7 @@ app
     registerSettingsIpc(settings, secrets)
     const { architectureModel } = registerSessionIpc(settings, secrets, userDataDir)
     registerTodosIpc(userDataDir)
+    registerRemoteIpc(userDataDir)
     registerArchitectureIpc(architectureModel)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()

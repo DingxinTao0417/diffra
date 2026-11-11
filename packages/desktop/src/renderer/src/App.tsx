@@ -5,6 +5,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ArchitectureView } from '@/features/architecture/ArchitectureView'
 import { HomeView } from '@/features/home/HomeView'
 import { UpdateNoticeDialog } from '@/features/settings/Changelog'
+import { PairRequestDialog } from '@/features/devices/PairRequestDialog'
+import { RemoteTaskView } from '@/features/devices/RemoteTaskView'
 import { SettingsView } from '@/features/settings/SettingsView'
 import { SearchDialog } from '@/features/shell/SearchDialog'
 import { openProjectFolder, Sidebar } from '@/features/shell/Sidebar'
@@ -148,6 +150,7 @@ export function App() {
                 {route.name === 'home' && <HomeView key="home" projectPath={route.project} />}
                 {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
+                {route.name === 'remote-task' && <RemoteTaskView key={`${route.deviceId}/${route.sessionId}`} deviceId={route.deviceId} sessionId={route.sessionId} />}
                 {route.name === 'todos' && <TodosView />}
                 {route.name === 'architecture' && <ArchitectureView route={route} />}
               </main>
@@ -158,6 +161,7 @@ export function App() {
       <SearchDialog />
       <QuickTodo />
       <UpdateNoticeDialog />
+      <PairRequestDialog />
       <Toast />
     </TooltipProvider>
   )

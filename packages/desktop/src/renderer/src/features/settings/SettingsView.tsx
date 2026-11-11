@@ -13,6 +13,7 @@ import {
   ListChecks,
   type LucideIcon,
   Monitor,
+  MonitorSmartphone,
   Moon,
   Palette,
   Plug,
@@ -58,6 +59,7 @@ import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } 
 import { BrowserSection } from './BrowserSection'
 import { ReleaseItems, ReleaseList } from './Changelog'
 import { UsageSection } from './UsageSection'
+import { DevicesSection } from '@/features/devices/DevicesSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatBytes, formatTime } from '@/lib/format'
@@ -85,6 +87,10 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'mcp', label: 'MCP 服务器', icon: Plug, keywords: 'MCP 工具 提示词模板 prompt 外部工具' },
       { id: 'plugins', label: '插件', icon: Puzzle, keywords: '插件 自定义命令 斜杠 Skill MCP 安装 Git' },
     ],
+  },
+  {
+    name: '连接',
+    items: [{ id: 'devices', label: '设备连接', icon: MonitorSmartphone, keywords: '远程 设备 配对 邀请串 互联网 中转 同步 会话 授权 指纹' }],
   },
   {
     name: '数据',
@@ -168,6 +174,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <McpSettings />
     case 'plugins':
       return <PluginSettings />
+    case 'devices':
+      return <DevicesSection />
     case 'storage':
       return <StorageSection />
     case 'usage':
