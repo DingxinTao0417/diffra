@@ -1,7 +1,7 @@
 import { deflateRawSync } from 'node:zlib'
 import { describe, expect, test } from 'vitest'
 import { encodeMessage, FrameError, MAX_INFLATED_BYTES, MAX_MESSAGE_BYTES, MessageAssembler } from '../src/frames.js'
-import { generateKeyPair, Handshake, NOISE_MAX_PAYLOAD } from '../src/noise.js'
+import { generateKeyPair, Handshake, NOISE_MAX_MESSAGE, NOISE_MAX_PAYLOAD } from '../src/noise.js'
 import { randomBytes, seeded } from './random.js'
 
 function receive(chunks: Uint8Array[]): unknown {
@@ -58,6 +58,21 @@ describe('消息分片', () => {
     let result: unknown
     for (const chunk of encodeMessage(value, { compress: true })) result = assembler.push(receiving.decrypt(sending.encrypt(chunk)))
     expect(result).toEqual(value)
+  })
+
+  test('整片加密后比 Noise 上限少 1 字节，留给桌面端加的通道种类：再加上中转帧头（1 字节类型、16 字节 ID）正好是中转的单帧上限', () => {
+    const initiatorKey = generateKeyPair()
+    const responderKey = generateKeyPair()
+    const prologue = Buffer.from('diffra-remote/1')
+    const initiator = new Handshake({ pattern: 'KK', initiator: true, prologue, staticKey: initiatorKey, remoteStatic: responderKey.publicKey })
+    const responder = new Handshake({ pattern: 'KK', initiator: false, prologue, staticKey: responderKey, remoteStatic: initiatorKey.publicKey })
+    responder.readMessage(initiator.writeMessage())
+    initiator.readMessage(responder.writeMessage())
+    const sending = initiator.split()
+    const sizes = encodeMessage({ data: randomBytes(seeded(7), 200_000).toString('base64') }, { compress: true }).map((chunk) => sending.encrypt(chunk).length)
+    expect(sizes.length).toBeGreaterThan(2)
+    expect(sizes[0]).toBe(NOISE_MAX_MESSAGE - 1)
+    for (const size of sizes) expect(1 + 16 + 1 + size).toBeLessThanOrEqual(1 + 16 + 65_535)
   })
 
   test('坏分片直接报错：空片、不认识的标记、同一条消息标记不一致、不是 JSON', () => {

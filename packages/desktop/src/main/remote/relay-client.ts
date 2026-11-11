@@ -1,5 +1,5 @@
 import { sign } from 'node:crypto'
-import { authPayload, CLOSE, encodeFrame, decodeFrame, type FrameKind, RELAY_PROTOCOL, type ServerMessage, serverMessageSchema } from '@diffra/relay/protocol'
+import { authPayload, CLOSE, encodeFrame, decodeFrame, type FrameKind, MAX_FRAME_BYTES, RELAY_PROTOCOL, type ServerMessage, serverMessageSchema } from '@diffra/relay/protocol'
 import type { RemoteRelayStatus } from '../../shared/remote'
 import { logRemote } from '../app-log'
 import type { DeviceIdentity } from './identity'
@@ -62,6 +62,7 @@ export class RelayClient {
   private pingTimer: NodeJS.Timeout | null = null
   private loginTimer: NodeJS.Timeout | null = null
   private lastHeard = 0
+  private readyAt = 0
   private allow: string[] = []
   private readonly rendezvous = new Map<string, number>()
   private readonly online = new Set<string>()
@@ -120,6 +121,11 @@ export class RelayClient {
   send(kind: FrameKind, to: string, payload: Uint8Array): boolean {
     if (!this.ready || !this.socket) return false
     const frame = encodeFrame(kind, Buffer.from(to, 'hex'), payload)
+    // 超过单帧上限的中转会断开整条连接，和所有设备都断了；只让这一帧发不出去
+    if (frame.length > MAX_FRAME_BYTES) {
+      logRemote(`要发的帧 ${frame.length} 字节，超过中转的上限 ${MAX_FRAME_BYTES}，不发`)
+      return false
+    }
     if (this.outboxBytes + frame.length > MAX_QUEUED_BYTES) return false
     this.outbox.push(frame)
     this.outboxBytes += frame.length
@@ -186,6 +192,8 @@ export class RelayClient {
     })
     socket.addEventListener('close', (event) => {
       if (this.socket !== socket) return
+      // 登录过的连接断了才记（连不上时不按退避一遍遍记）：关闭码分得清是网络断了、被限速、帧太大还是被别处顶掉
+      if (this.ready) logRemote(`和中转断开：${event.code}${event.reason ? ` ${event.reason}` : ''}，连了 ${Math.round((Date.now() - this.readyAt) / 1000)} 秒`)
       this.drop()
       if (!this.running) return
       if (event.code === CLOSE.authFailed.code || event.code === CLOSE.version.code) return this.fail(event.reason || '中转服务拒绝了本机')
@@ -218,6 +226,7 @@ export class RelayClient {
       case 'ready':
         if (this.loginTimer) clearTimeout(this.loginTimer)
         this.ready = true
+        this.readyAt = Date.now()
         this.attempts = 0
         this.control({ type: 'allow', peers: this.allow })
         for (const [id, expiresAt] of this.rendezvous) this.sendRendezvous(id, expiresAt)
@@ -252,6 +261,7 @@ export class RelayClient {
 
   private heartbeat(): void {
     if (Date.now() - this.lastHeard > SILENCE_MS) {
+      logRemote(`${SILENCE_MS / 1000} 秒没收到中转的任何消息，断开重连`)
       this.socket?.close()
       return
     }

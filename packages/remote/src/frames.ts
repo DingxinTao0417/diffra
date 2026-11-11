@@ -7,7 +7,9 @@ import { NOISE_MAX_PAYLOAD } from './noise.js'
 
 const FINAL = 0b01
 const DEFLATED = 0b10
-const CHUNK_DATA = NOISE_MAX_PAYLOAD - 1
+// 片头之外再留 1 字节：桌面端在每条加密后的片前面加 1 字节通道种类，中转帧再加 1 字节类型和 16 字节 ID，合起来不能超过中转的单帧上限（1 + 16 + 65535）。
+// 不留时整片的帧多 1 字节，中转直接断开发送方整条连接（第 387 步）
+const CHUNK_DATA = NOISE_MAX_PAYLOAD - 2
 // 一条消息拼起来（压缩的按压缩后算）和解压后最多多大；超过就断开
 export const MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 export const MAX_INFLATED_BYTES = 32 * 1024 * 1024

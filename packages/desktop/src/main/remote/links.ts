@@ -17,8 +17,8 @@ const REFUSALS = { off: 1, 'not-granted': 2 } as const
 // host：对方看本机（本机是被连接端）；guest：本机看对方
 export type LinkRole = 'host' | 'guest'
 export type Refusal = keyof typeof REFUSALS
-// 建通道没成的原因：中转没连上或断了、对方 10 秒没回、握手失败、对方关了「允许连接本机」、对方没授权本机、本机没有对方的公钥
-export type OpenFailure = 'relay' | 'timeout' | 'handshake' | Refusal | 'unknown-peer'
+// 建通道没成的原因：中转没连上或断了、中转送不到对方、对方 10 秒没回、握手失败、对方关了「允许连接本机」、对方没授权本机、本机没有对方的公钥
+export type OpenFailure = 'relay' | 'offline' | 'timeout' | 'handshake' | Refusal | 'unknown-peer'
 export type OpenResult = { ok: true } | { ok: false; reason: OpenFailure }
 
 export interface LinksDeps {
@@ -77,6 +77,11 @@ export class Links {
     if (!this.channels[role].delete(deviceId)) return
     if (role === 'host' && notify) this.deps.relay.send(FRAME.direct, deviceId, withKind(DIRECT.closed, Buffer.alloc(0)))
     this.deps.closed(deviceId, role)
+  }
+
+  // 中转说送不到对方（对方不在中转上，或者对方的白名单里没有本机）：正在建的通道马上失败，不干等
+  undeliverable(deviceId: string): void {
+    this.fail(deviceId, 'offline')
   }
 
   closeAll(): void {

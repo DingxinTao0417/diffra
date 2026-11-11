@@ -337,7 +337,10 @@ export class RemoteService {
         if (payload[0] === DIRECT.pairing) this.directListeners.get(from)?.(body)
         else this.linksFor(identity).receive(from, payload[0]!, body)
       },
-      undeliverable: (to) => this.undeliverableListeners.get(to)?.(),
+      undeliverable: (to) => {
+        this.undeliverableListeners.get(to)?.()
+        this.links?.undeliverable(to)
+      },
       rendezvous: (id, opened) => {
         if (!opened && id === this.host?.rendezvous) {
           logRemote('中转拒绝开会合点')
