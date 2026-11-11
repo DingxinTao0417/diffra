@@ -191,12 +191,18 @@ test('不跟随时下面长出新内容、没有滚动事件，也会出「回�
       await new Promise(requestAnimationFrame)
       scroller.dataset.scrolls = '0'
       scroller.addEventListener('scroll', () => { scroller.dataset.scrolls = String(Number(scroller.dataset.scrolls) + 1) })
+      // 从这里到断言，测试不碰这个窗口；收到真实的滚轮、按键、点击就是外面有人动了它（本机跑 e2e 时窗口开在桌面上，
+      // Windows 默认让滚轮滚动鼠标下面的非活动窗口），把对话滚回底部附近就会按设计恢复跟随，滚动计数不再作数
+      for (const type of ['wheel', 'keydown', 'pointerdown']) {
+        window.addEventListener(type, (event) => { if (event.isTrusted) scroller.dataset.externalInput = type }, { capture: true })
+      }
     })()`)
     const toBottom = window.getByRole('button', { name: '回到底部' })
     await expect(toBottom).toBeHidden()
 
     await waitTaskDone(window)
     await expect(window.getByText('第 80 段说明', { exact: true })).toBeAttached()
+    await expect(conversationScroller(window), '测试窗口收到了外部的滚轮、按键或点击（本机跑 e2e 时有人操作了这个窗口），结果作废，请重跑').not.toHaveAttribute('data-external-input')
     // 新内容长在视口下面，对话没有跟着滚，也没有滚动事件
     await expect(conversationScroller(window)).toHaveAttribute('data-scrolls', '0')
     await expect(toBottom).toBeVisible()
