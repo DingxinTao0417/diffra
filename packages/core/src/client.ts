@@ -31,6 +31,7 @@ import {
   type PromptEnhancement,
   type PromptImage,
   type PermissionMode,
+  type RemoteSnapshot,
   SESSION_EXT_METHODS,
   type SessionConfig,
   type SessionDesign,
@@ -290,6 +291,7 @@ export async function listSessions(connection: acp.ClientConnection, cwd?: strin
       turnCount: meta.turnCount ?? 0,
       design: meta.design === true,
       noProject: meta.noProject === true,
+      running: meta.running === true,
     }
   })
 }
@@ -332,6 +334,14 @@ export function checkpointDiff(connection: acp.ClientConnection, sessionId: stri
     { sessionId, turnId },
     extRequestOptions(),
   )
+}
+
+// 设备连接读一个会话的一页轮次；before 不给是最后一页
+export function remoteSnapshot(
+  connection: acp.ClientConnection,
+  params: { sessionId: string; before?: number; maxTurns?: number; maxChars?: number },
+): Promise<RemoteSnapshot> {
+  return requestOf(connection)<RemoteSnapshot, typeof params>(SESSION_EXT_METHODS.remoteSnapshot, params, extRequestOptions())
 }
 
 export function searchSessions(connection: acp.ClientConnection, query: string): Promise<SessionSearchResult[]> {

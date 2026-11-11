@@ -144,9 +144,7 @@ export class Session {
     this.designStyle = record ? (record.designStyle ?? null) : (options.config.designStyle ?? null)
     this.noProject = record?.noProject ?? options.config.noProject ?? false
     if (record) {
-      this.taskState = record.taskState ?? newTaskState()
-      // 只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值
-      if (this.taskState.status === 'running' && record.turns.at(-1)?.endedAt === null) this.taskState = { ...this.taskState, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
+      this.taskState = restoredTaskState(record)
       this.messages.push(...record.messages)
       this.compaction = record.compaction
       for (const { checkpoint, messageStart, ...turn } of record.turns) {
@@ -385,6 +383,13 @@ export class Session {
     }
     return changes
   }
+}
+
+// 从记录恢复任务状态：只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值
+export function restoredTaskState(record: SessionRecord): TaskState {
+  const state = record.taskState ?? newTaskState()
+  if (state.status === 'running' && record.turns.at(-1)?.endedAt === null) return { ...state, status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' }
+  return state
 }
 
 // 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。

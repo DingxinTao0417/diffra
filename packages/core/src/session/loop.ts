@@ -1491,7 +1491,7 @@ export function errorResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'error-text', value: text } }
 }
 
-export function taskStateView(session: Session): TaskProgressView {
+export function taskStateView(session: Pick<Session, 'taskState'>): TaskProgressView {
   const { status, reason, requirements, needsVerification } = session.taskState
   return { status, reason, requirements: requirements.map(({ id, title, receiptId }) => ({ id, title, receiptId })), needsVerification }
 }

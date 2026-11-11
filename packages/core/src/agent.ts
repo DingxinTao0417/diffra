@@ -19,14 +19,17 @@ import {
   PROMPT_ENHANCE_USAGE_ID,
   PROMPT_IMAGE_TYPES,
   type PromptImage,
+  type RemoteSnapshot,
   SESSION_EXT_METHODS,
   MANUAL_COMPACTION_PROMPT,
   type SessionInfo,
   type StoredSessionMeta,
+  type StoredTurn,
   type TaskActionParams,
   type TaskActionResult,
   type TaskSource,
   type TurnKind,
+  UPDATE_SEQ_META_KEY,
 } from './protocol.js'
 import { countLanguages, listProjectFiles } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
@@ -58,7 +61,7 @@ import type { ArchitectureEvent } from './architecture/model.js'
 import { ArchitectureService } from './architecture/service.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
-import { Session } from './session/session.js'
+import { restoredTaskState, Session } from './session/session.js'
 import { type SessionRecord, SessionStore, toEntry } from './session/store.js'
 import { toUsageRecord, UsageLog } from './usage/log.js'
 import { isTimeZone, UsageAggregator } from './usage/summary.js'
@@ -82,6 +85,14 @@ const sessionUpdateParams = z.object({
   sessionId: z.string().min(1),
   title: z.string().trim().min(1).max(100).optional(),
   archived: z.boolean().optional(),
+})
+
+// 设备连接读一页轮次：before 是这一页取到第几轮之前（不含），不给是取到最后；超过 maxChars 就少取几轮，但至少一轮
+const remoteSnapshotParams = z.object({
+  sessionId: z.string().min(1),
+  before: z.number().int().nonnegative().optional(),
+  maxTurns: z.number().int().min(1).max(50).default(10),
+  maxChars: z.number().int().min(1).default(1_000_000),
 })
 
 const browserSitesParams = z.object({ allow: z.array(z.string().trim().min(1).max(253)).max(500), block: z.array(z.string().trim().min(1).max(253)).max(500) })
@@ -145,6 +156,25 @@ function clientErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function withSeq(update: acp.SessionUpdate, seq: number): acp.SessionUpdate {
+  const diffra = update._meta?.diffra
+  return { ...update, _meta: { ...update._meta, diffra: { ...(typeof diffra === 'object' && diffra !== null ? diffra : {}), [UPDATE_SEQ_META_KEY]: seq } } }
+}
+
+// 从 before 往前取，最多 maxTurns 轮、压缩后最多 maxChars 字；一轮就超过时也给这一轮。
+// 给的是当下的副本：正在跑的那一轮还会往 updates 里加，响应发出去之前加的不能混进这一页
+function snapshotPage(all: StoredTurn[], before: number, maxTurns: number, maxChars: number): { start: number; turns: StoredTurn[] } {
+  const turns: StoredTurn[] = []
+  let chars = 0
+  for (let index = before - 1; index >= 0 && turns.length < maxTurns; index--) {
+    const text = JSON.stringify(compactTurns([all[index]!])[0])
+    if (turns.length > 0 && chars + text.length > maxChars) break
+    chars += text.length
+    turns.unshift(JSON.parse(text) as StoredTurn)
+  }
+  return { start: before - turns.length, turns }
+}
+
 // 用户选的 Skill 按名字取出来；有一个找不到就不开始这一轮，免得悄悄少了说明
 async function selectedSkills(session: SessionType, names: string[]): Promise<Skill[]> {
   if (names.length === 0) return []
@@ -162,6 +192,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const mcpPool = options.mcpPool ?? new McpPool()
   let notifyArchitecture: (event: ArchitectureEvent) => void = () => {}
   const architecture = options.architectureDir ? new ArchitectureService(options.architectureDir, findRipgrep, (event) => notifyArchitecture(event)) : null
+  // 会话更新的序号（见 UPDATE_SEQ_META_KEY）按会话 id 记，重新载入会话（换了 Session 对象）也接着往上数
+  const epoch = randomUUID()
+  const updateSeqs = new Map<string, number>()
+  // 序号在发出的这一刻同步加上：和 recordUpdate 之间没有 await，读快照时轮次和序号对得上
+  const notifier = (client: acp.AgentContext, sessionId: string) => (update: acp.SessionUpdate) => {
+    const seq = (updateSeqs.get(sessionId) ?? 0) + 1
+    updateSeqs.set(sessionId, seq)
+    return client.notify(acp.methods.client.session.update, { sessionId, update: withSeq(update, seq) })
+  }
 
   // 只留还开着的任务用到的 MCP 连接
   const retainMcp = () =>
@@ -268,7 +307,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     run: (io: TurnIO) => Promise<acp.StopReason>,
     from?: TaskSource,
   ): Promise<acp.StopReason> => {
-    const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
+    const notify = notifier(client, session.id)
     session.startTurn(turnId, text, kind, skills, images, from)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
@@ -393,6 +432,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
           turnCount: entry.turnCount,
           design: entry.design,
           noProject: entry.noProject,
+          running: sessions.get(entry.id)?.running ?? false,
         }
         return { sessionId: entry.id, cwd: entry.cwd, title: entry.title, updatedAt: entry.updatedAt, _meta: { diffra: meta } }
       }),
@@ -401,6 +441,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (sessions.get(params.sessionId)?.running) throw new Error('任务还在进行中，先停止再删除')
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
+      updateSeqs.delete(params.sessionId)
       // 等 stdio 服务器退出再返回：Windows 上它们的当前目录就是任务目录，调用方接着要删这个目录
       await retainMcp()
       await requireStore().remove(params.sessionId)
@@ -518,7 +559,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     )
     .onRequest(SESSION_EXT_METHODS.checkpointRestore, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
-      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
+      const notify = notifier(client, session.id)
       const changes = await session.restoreCheckpoint(params.turnId)
       await persist(session, notify)
       await notify(taskStateUpdate(session))
@@ -539,6 +580,37 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       }
       return entry
     })
+    // 不走 openSession：不建系统提示词、不连 MCP、不放进 sessions。不在内存里的读完文件再看一次，
+    // 读的时候被载入、跑起来了就改取内存里的，免得文件里已有的更新又按序号补发一遍
+    .onRequest(SESSION_EXT_METHODS.remoteSnapshot, remoteSnapshotParams, async ({ params }) => {
+      const stored = sessions.has(params.sessionId) ? null : await requireStore().load(params.sessionId)
+      const live = sessions.get(params.sessionId)
+      const seq = updateSeqs.get(params.sessionId) ?? 0
+      const source = live
+        ? { cwd: live.cwd, title: live.title, archived: live.archived, design: live.designTask, noProject: live.noProject, turns: live.turns, taskState: live.taskState, running: live.running }
+        : stored && { cwd: stored.cwd, title: stored.title, archived: stored.archived, design: stored.design ?? false, noProject: stored.noProject ?? false, turns: stored.turns.map(({ checkpoint: _checkpoint, messageStart: _messageStart, ...turn }) => turn), taskState: restoredTaskState(stored), running: false }
+      // 读文件的时候会话被删了
+      if (!source) throw acp.RequestError.resourceNotFound(params.sessionId)
+      const before = Math.min(params.before ?? source.turns.length, source.turns.length)
+      const { start, turns } = snapshotPage(source.turns, before, params.maxTurns, params.maxChars)
+      const snapshot: RemoteSnapshot = {
+        sessionId: params.sessionId,
+        cwd: source.cwd,
+        title: source.title,
+        archived: source.archived,
+        design: source.design,
+        noProject: source.noProject,
+        running: source.running,
+        // 和 session/load 一样：没在跑却是 running，说明还没有确定的任务状态，不带
+        ...(source.running || source.taskState.status !== 'running' ? { taskState: taskStateView(source) } : {}),
+        totalTurns: source.turns.length,
+        start,
+        turns,
+        epoch,
+        seq,
+      }
+      return snapshot
+    })
     .onRequest(SESSION_EXT_METHODS.sessionSearch, z.object({ query: z.string() }), ({ params }) => requireStore().search(params.query))
     .onRequest(SESSION_EXT_METHODS.browserSites, browserSitesParams, ({ params }) => {
       setBrowserSites(params)
@@ -553,7 +625,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     })
     .onRequest(SESSION_EXT_METHODS.sessionRewind, checkpointParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
-      const notify = (update: acp.SessionUpdate) => client.notify(acp.methods.client.session.update, { sessionId: session.id, update })
+      const notify = notifier(client, session.id)
       const result = await session.rewind(params.turnId)
       await persist(session, notify)
       await notify(taskStateUpdate(session))

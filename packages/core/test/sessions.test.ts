@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { createAgent } from '../src/agent.js'
 import { McpPool } from '../src/mcp.js'
 import {
@@ -26,13 +26,14 @@ import {
   mcpStatus,
   plan,
   previewCheckpoint,
+  remoteSnapshot,
   restoreCheckpoint,
   rewindSession,
   searchSessions,
   sendPrompt,
   updateSession,
 } from '../src/client.js'
-import type { ListTarget, SessionConfig } from '../src/protocol.js'
+import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY } from '../src/protocol.js'
 import { SessionStore } from '../src/session/store.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
@@ -846,5 +847,121 @@ describe('图片输入', () => {
 
     const loaded = await loadSession(core, sessionId, project, { ...base, model: { ...base.model, supportsImages: true } })
     expect(loaded.turns[0]).toMatchObject({ prompt: '看看这张图', images: [{ mimeType: 'image/png', data: PIXEL }] })
+  })
+})
+
+describe('设备连接：会话快照和更新序号', () => {
+  // 这个会话收到的更新序号，排好序；SDK 不保证通知按发出的顺序处理
+  const seqsOf = (sessionId: string) =>
+    notifications
+      .flatMap(({ sessionId: id, update }) => (id === sessionId ? [(update._meta?.diffra as Record<string, unknown> | undefined)?.[UPDATE_SEQ_META_KEY]] : []))
+      .toSorted((a, b) => Number(a) - Number(b))
+  const upTo = (count: number) => Array.from({ length: count }, (_, index) => index + 1)
+
+  test('推出的更新按会话从 1 连续编号，存进记录的不带；快照的序号是读的那一刻推到的；重启后读文件、不载入会话', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
+      { text: '第二轮' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '写一个 a.txt')
+    const first = await remoteSnapshot(core, { sessionId })
+    expect(first).toMatchObject({ sessionId, cwd: project, title: '写一个 a.txt', archived: false, design: false, noProject: false, running: false, totalTurns: 1, start: 0 })
+    expect(first.turns.map((turn) => turn.id)).toEqual(['turn-1'])
+    expect(first.seq).toBeGreaterThan(0)
+    await vi.waitFor(() => expect(seqsOf(sessionId)).toEqual(upTo(first.seq)))
+
+    await sendPrompt(core, sessionId, 'turn-2', '再看看')
+    const second = await remoteSnapshot(core, { sessionId })
+    expect(second.epoch).toBe(first.epoch)
+    expect(second.seq).toBeGreaterThan(first.seq)
+    await vi.waitFor(() => expect(seqsOf(sessionId)).toEqual(upTo(second.seq)))
+
+    const saved = await new SessionStore(join(dataDir, 'sessions')).load(sessionId)
+    expect(JSON.stringify(saved.turns)).not.toContain(`"${UPDATE_SEQ_META_KEY}"`)
+
+    const restarted = await startCore()
+    const stored = await remoteSnapshot(restarted, { sessionId })
+    expect(stored).toMatchObject({ seq: 0, running: false, totalTurns: 2, start: 0 })
+    expect(stored.epoch).not.toBe(second.epoch)
+    // 文件里读的和内存里的一样，不带检查点、对话位置这些内部字段
+    expect(stored.taskState).toEqual(second.taskState)
+    expect(stored.turns).toEqual(second.turns)
+    expect(stored.turns[0]).not.toHaveProperty('checkpoint')
+    expect(stored.turns[0]).not.toHaveProperty('messageStart')
+    // 读快照没有载入会话：不载入就发不了
+    await expect(sendPrompt(restarted, sessionId, 'turn-3', '没载入')).rejects.toThrow()
+    expect((await listSessions(restarted))[0]?.running).toBe(false)
+  })
+
+  test('按轮次往前翻页：最多 maxTurns 轮，超过 maxChars 少取但至少一轮，before 超出时按最后一轮算', async () => {
+    server = await startScriptedServer([{ text: '一' }, { text: '二' }, { text: '三' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    for (const id of ['t1', 't2', 't3']) await sendPrompt(core, sessionId, id, `第 ${id} 轮`)
+    const ids = (snapshot: { turns: Array<{ id: string }> }) => snapshot.turns.map((turn) => turn.id)
+
+    const last = await remoteSnapshot(core, { sessionId, maxTurns: 2 })
+    expect(last).toMatchObject({ totalTurns: 3, start: 1 })
+    expect(ids(last)).toEqual(['t2', 't3'])
+    const earlier = await remoteSnapshot(core, { sessionId, before: last.start, maxTurns: 2 })
+    expect(earlier.start).toBe(0)
+    expect(ids(earlier)).toEqual(['t1'])
+    expect(ids(await remoteSnapshot(core, { sessionId, before: 0 }))).toEqual([])
+    const tight = await remoteSnapshot(core, { sessionId, maxChars: 1 })
+    expect(tight.start).toBe(2)
+    expect(ids(tight)).toEqual(['t3'])
+    expect(ids(await remoteSnapshot(core, { sessionId, before: 99 }))).toEqual(['t1', 't2', 't3'])
+  })
+
+  test('跑着的时候读：带运行中和这一轮；列表标出正在跑；停下后不再是运行中', async () => {
+    let received: () => void = () => {}
+    const requested = new Promise<void>((resolve) => (received = resolve))
+    const hanging = createServer((req) => {
+      req.resume()
+      received()
+    })
+    await new Promise<void>((resolve) => hanging.listen(0, '127.0.0.1', resolve))
+    const { port } = hanging.address() as AddressInfo
+    try {
+      const core = await startCore()
+      const { sessionId } = await createSession(core, project, config(`http://127.0.0.1:${port}/v1`))
+      const turn = sendPrompt(core, sessionId, 'turn-1', '你好')
+      await requested
+      const running = await remoteSnapshot(core, { sessionId })
+      expect(running).toMatchObject({ running: true, totalTurns: 1, taskState: { status: 'running' } })
+      expect(running.turns[0]).toMatchObject({ id: 'turn-1', endedAt: null })
+      expect((await listSessions(core))[0]).toMatchObject({ sessionId, running: true })
+
+      await cancelSession(core, sessionId)
+      expect((await turn).stopReason).toBe('cancelled')
+      const stopped = await remoteSnapshot(core, { sessionId })
+      expect(stopped.running).toBe(false)
+      expect(stopped.turns[0]?.stopReason).toBe('cancelled')
+      expect(stopped.seq).toBeGreaterThanOrEqual(running.seq)
+      expect((await listSessions(core))[0]?.running).toBe(false)
+    } finally {
+      hanging.closeAllConnections()
+      await new Promise<void>((resolve) => hanging.close(() => resolve()))
+    }
+  })
+
+  test('文件里读的任务状态和载入时一样：应用退出时停在运行中的是受阻；没有的会话报错', async () => {
+    server = await startScriptedServer([{ text: '好的' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '你好')
+    const file = join(dataDir, 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { taskState: { status: string }; turns: Array<{ endedAt: string | null; stopReason: string | null }> }
+    record.taskState.status = 'running'
+    record.turns[0]!.endedAt = null
+    record.turns[0]!.stopReason = null
+    writeFileSync(file, JSON.stringify(record))
+
+    const restarted = await startCore()
+    expect((await remoteSnapshot(restarted, { sessionId })).taskState).toMatchObject({ status: 'blocked', reason: '应用退出时任务未完成，请继续执行剩余步骤。' })
+    await expect(remoteSnapshot(restarted, { sessionId: 'missing-session' })).rejects.toThrow('没有找到会话记录')
   })
 })

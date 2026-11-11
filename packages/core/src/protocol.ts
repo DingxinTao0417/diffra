@@ -104,6 +104,9 @@ export interface TurnOutcome {
 // 又收到数据、重发了这一步或这一步正常结束时发 null；被停止时不发，记录里留着「停下时模型已经多久没输出」。
 // 子智能体的同一条更新里带 agent（AgentTag），界面按智能体分开记
 export const MODEL_SILENCE_META_KEY = 'modelSilentSince'
+// core 推给客户端的每条 session/update 的 _meta.diffra.seq：按会话递增（从 1 起），只在 core 内存里，存进记录的更新不带。
+// 设备连接拿它和 _diffra/remote/snapshot 的 seq 比，去重、续传
+export const UPDATE_SEQ_META_KEY = 'seq'
 
 // 只有用户能回答的问题：第一个选项是默认答案，它的 text 原样是提示词里的一行；换成别的选项就把那一行换成那个选项的 text
 export interface PromptQuestion {
@@ -172,6 +175,19 @@ export const TERMINAL_READ_PERMISSION_PREFIX = 'terminal-read:'
 export const SCREENSHOT_MIN_WIDTH = 320
 export const SCREENSHOT_MAX_WIDTH = 1920
 export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
+
+// 格式明确的密钥：安全检查按它打回写进代码的密钥，设备连接发出会话前按它脱敏。
+// 不带 g 标志，test 没有状态，可以共用；要全局替换的按 source 另建
+export const SECRET_FORMATS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
+  { name: 'AWS 访问密钥', pattern: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: 'GitHub 令牌', pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/ },
+  { name: 'GitHub 细粒度令牌', pattern: /\bgithub_pat_[A-Za-z0-9_]{60,}\b/ },
+  { name: '模型服务的 API Key', pattern: /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}\b/ },
+  { name: 'Stripe 密钥', pattern: /\b[rs]k_live_[0-9A-Za-z]{24,}\b/ },
+  { name: 'Slack 令牌', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/ },
+  { name: 'Google API Key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { name: '私钥', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/ },
+]
 
 export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
@@ -488,6 +504,27 @@ export interface StoredSessionMeta {
   turnCount: number
   design: boolean
   noProject: boolean
+  // core 里这个会话正在跑一轮
+  running: boolean
+}
+
+// _diffra/remote/snapshot 的结果（设备连接用）：不载入会话、不连 MCP 地读一页轮次。
+// turns 是全部轮次里从 start 开始的一段，改动卡片已压缩（同 session/load）；taskState 的有无和 session/load 一样
+export interface RemoteSnapshot {
+  sessionId: string
+  cwd: string
+  title: string
+  archived: boolean
+  design: boolean
+  noProject: boolean
+  running: boolean
+  taskState?: TaskProgressView
+  totalTurns: number
+  start: number
+  turns: StoredTurn[]
+  // core 这次启动的标识（重启后 seq 从头算）和读这一页那一刻这个会话推到的 seq：之后推的更新不在这一页里，seq 都比它大
+  epoch: string
+  seq: number
 }
 
 // 客户端整理后的会话列表项
@@ -662,6 +699,8 @@ export const SESSION_EXT_METHODS = {
   architectureSaveDiagram: '_diffra/architecture/save-diagram',
   // 读分析结果里的一个代码文件，给界面看 import 所在的行
   architectureSource: '_diffra/architecture/source',
+  // 设备连接：读一个会话的一页轮次，见 RemoteSnapshot
+  remoteSnapshot: '_diffra/remote/snapshot',
 } as const
 
 // core 主动推给客户端的通知
