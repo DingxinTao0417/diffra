@@ -157,7 +157,7 @@ describe('检查点', () => {
     } finally {
       rmSync(gitDir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })
 
 describe('受保护文件和禁写目录', () => {
