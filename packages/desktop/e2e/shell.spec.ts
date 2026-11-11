@@ -24,6 +24,13 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     await expect(window.getByTestId('sidebar-task')).toHaveCount(1)
     await expect(window.getByTestId('sidebar-task')).toContainText('第一个任务')
 
+    // 搜索框在「新任务」上方，两个入口都还在
+    const newTaskButton = window.getByTestId('sidebar').getByRole('button', { name: '新任务', exact: true })
+    const searchInput = window.getByLabel('侧栏搜索', { exact: true })
+    await expect(searchInput).toBeVisible()
+    await expect(newTaskButton).toBeVisible()
+    expect((await searchInput.boundingBox())?.y ?? 0).toBeLessThan((await newTaskButton.boundingBox())?.y ?? 0)
+
     // 项目条目右侧不显示任务数字，加号一直可见；点加号回到这个项目的首页
     const projectRow = window.getByTestId('sidebar-project-row').filter({ hasText: basename(project) })
     const projectAction = projectRow.getByTestId('sidebar-project-action')
