@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { DiagramKind } from '@diffra/core/architecture'
 import type { PermissionMode, PromptImage, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { ModelRef, SettingsView } from '../../../shared/settings'
@@ -12,7 +13,13 @@ export type Route =
   | { name: 'design'; project: string | null }
   | { name: 'task'; sessionId: string }
   | { name: 'todos' }
+  // 架构：projectId 为 null 是项目卡片页；diagram 是看哪张架构图，section 是依赖页的哪一块，
+  // scope 是依赖图看到哪一层（见 features/architecture/graph.ts），focus 是选中的方块、节点或依赖线
+  | { name: 'architecture'; projectId: string | null; tab: ArchitectureTab; diagram: DiagramKind; section: DependencySection; scope: string; focus: string | null }
   | { name: 'settings'; section: SettingsSection }
+
+export type ArchitectureTab = 'overview' | 'diagram' | 'dependencies' | 'flows' | 'hotspots' | 'target'
+export type DependencySection = 'graph' | 'matrix' | 'cycles' | 'externals'
 
 export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | null
 

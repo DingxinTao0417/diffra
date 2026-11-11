@@ -81,7 +81,7 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | null {
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
   if (item.visual) return 'visual'
@@ -95,6 +95,7 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'security'
   if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
+  if (item.title === '架构检查') return 'architecture'
   if (SECURITY_TITLES.has(item.title)) return 'security'
   if (CHECK_PREFIXES.some((prefix) => item.title.startsWith(prefix))) return 'check'
   if (item.content.some((content) => content.type === 'diff')) return 'edit'
@@ -118,7 +119,7 @@ function toBlocks(items: TranscriptItem[]): Block[] {
       else blocks.push({ type: 'edits', id: item.id, items: [item] })
       continue
     }
-    if (type === 'check' || type === 'review' || type === 'security') {
+    if (type === 'check' || type === 'review' || type === 'architecture' || type === 'security') {
       const previous = blocks.at(-1)
       if (previous?.type === 'checks') previous.items.push(item)
       else blocks.push({ type: 'checks', id: item.id, items: [item] })
@@ -1127,7 +1128,8 @@ function CheckGroup({ items }: { items: ToolItem[] }) {
 
 function CheckItem({ item }: { item: ToolItem }) {
   const type = toolBlockType(item)
-  if (type === 'review') return <ReviewBlock item={item} />
+  if (type === 'review') return <ReviewBlock item={item} label="规范审查" />
+  if (type === 'architecture') return <ReviewBlock item={item} label="架构检查" />
   if (type === 'security') return <SecurityBlock item={item} />
   return <CheckRow item={item} />
 }
@@ -1135,6 +1137,7 @@ function CheckItem({ item }: { item: ToolItem }) {
 function checkName(item: ToolItem): string {
   const type = toolBlockType(item)
   if (type === 'review') return '规范审查'
+  if (type === 'architecture') return '架构检查'
   if (type === 'security') return SECURITY_TITLES.get(item.title) ?? item.title
   return item.title.slice(0, item.title.indexOf('：'))
 }
@@ -1173,15 +1176,16 @@ function CheckRow({ item }: { item: ToolItem }) {
 
 const FINDING_PATTERN = /^(\S+) {2}(\S+:\d+) {2}(.+)$/
 
-function ReviewBlock({ item }: { item: ToolItem }) {
+// 规范审查和架构检查：每行一处问题「规则或导入  路径:行号  说明」
+function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
   const text = textOf(item)
-  const common = { 'data-testid': 'tool-call', 'data-kind': 'review', 'data-status': item.status }
+  const common = { 'data-testid': 'tool-call', 'data-kind': toolBlockType(item), 'data-status': item.status }
   if (item.status !== 'completed' && item.status !== 'failed') {
     return (
       <div {...common}>
         <DisclosureRow className="text-muted-foreground">
           <StatusIcon status={item.status} />
-          规范审查中…
+          {label}中…
         </DisclosureRow>
       </div>
     )
@@ -1192,7 +1196,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
       <div {...common}>
         <DisclosureRow className="items-start">
           <CircleAlert className="mt-1 size-3.5 shrink-0 text-warning" />
-          <span className="shrink-0">规范审查没有完成，这次不拦截</span>
+          <span className="shrink-0">{label}没有完成，这次不拦截</span>
           <span className="whitespace-pre-wrap text-muted-foreground">{text.slice(text.indexOf('：') + 1)}</span>
         </DisclosureRow>
       </div>
@@ -1203,7 +1207,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
       <div {...common}>
         <DisclosureRow className="items-start">
           {item.result === 'partial' ? <CircleAlert className="mt-1 size-3.5 shrink-0 text-warning" /> : <StatusIcon status="completed" className="mt-1" />}
-          <span className="shrink-0 text-muted-foreground">规范审查</span>
+          <span className="shrink-0 text-muted-foreground">{label}</span>
           <span className="whitespace-pre-wrap">{text}</span>
         </DisclosureRow>
       </div>
@@ -1216,7 +1220,7 @@ function ReviewBlock({ item }: { item: ToolItem }) {
     <div {...common} className="flex flex-col gap-1.5 rounded-xl border border-destructive/25 bg-destructive-soft px-3 py-2.5 text-sm">
       <div className="flex items-center gap-2 font-bold text-destructive">
         <X className="size-3.5" strokeWidth={2.6} />
-        {count > 0 ? `规范审查 · ${count} 处问题，已打回` : '规范审查'}
+        {count > 0 ? `${label} · ${count} 处问题，已打回` : label}
       </div>
       {lines.map((line, index) => {
         const match = findings[index]

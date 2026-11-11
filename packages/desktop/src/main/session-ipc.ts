@@ -30,6 +30,7 @@ import {
   searchSessions,
   type SessionChecks,
   type SessionConfig,
+  type SessionModel,
   sendPrompt,
   type TaskActionResult,
   updateSession,
@@ -150,6 +151,9 @@ export const coreClientHandlers: CoreClientHandlers = {
   onBrowserAction: (params) => browserHost.act(params),
   onDevServer: (params) => devServer(params),
   onDesignAction: (params) => designHost.act(params),
+  onArchitectureEvent: (event) => {
+    broadcast(IPC_CHANNELS.architectureEvent, event)
+  },
   onTaskAction: (params) =>
     new Promise((resolve) => {
       const requestId = randomUUID()
@@ -169,7 +173,8 @@ function settlePermission(requestId: string, optionId: string | null): void {
   pending.resolve(optionId)
 }
 
-export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): void {
+// 返回架构功能选模型的办法：和优化提示词一样先用「规划」角色，没配用「编码」
+export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): { architectureModel: () => Promise<SessionModel> } {
   const projectState = (path: string): ProjectState => {
     const project = settings.get().projects[path]
     return {
@@ -664,6 +669,14 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.checkpointRestore, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
     restoreCheckpoint(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
+
+  return {
+    architectureModel: async () => {
+      const resolved = (await resolveRole('planner', '规划')) ?? (await resolveRole('coder', '编码'))
+      if (!resolved) throw new ModelConfigError('model-missing', '还没有给「规划」或「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
+      return resolved.model
+    },
+  }
 }
 
 const WORKSPACE_TITLE_CHARS = 20

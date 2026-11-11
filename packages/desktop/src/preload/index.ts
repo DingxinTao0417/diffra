@@ -1,3 +1,4 @@
+import type { ArchitectureEvent } from '@diffra/core/architecture'
 import type { SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
@@ -69,6 +70,24 @@ const api: DiffraApi = {
   saveTodos: (todos) => ipcRenderer.invoke(IPC_CHANNELS.todosSave, todos),
   notifyTodo: (notice) => ipcRenderer.invoke(IPC_CHANNELS.todosNotify, notice),
   onTodoFocus: (listener) => subscribe<string>(IPC_CHANNELS.todosFocus, listener),
+  listArchitectureProjects: () => ipcRenderer.invoke(IPC_CHANNELS.architectureList),
+  addArchitectureProject: (path) => ipcRenderer.invoke(IPC_CHANNELS.architectureAdd, path),
+  pickArchitectureProject: () => ipcRenderer.invoke(IPC_CHANNELS.architecturePick),
+  removeArchitectureProject: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureRemove, projectId),
+  analyzeArchitecture: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureAnalyze, projectId),
+  cancelArchitecture: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureCancel, projectId),
+  runningArchitecture: () => ipcRenderer.invoke(IPC_CHANNELS.architectureRunning),
+  getArchitecture: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureBundle, projectId),
+  isArchitectureStale: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureStale, projectId),
+  interpretArchitecture: (projectId, parts) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpret, projectId, parts),
+  saveArchitectureDiagram: (projectId, diagram) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveDiagram, projectId, diagram),
+  interpretArchitectureModule: (projectId, path) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpretModule, projectId, path),
+  proposeTargetArchitecture: (projectId, principles) => ipcRenderer.invoke(IPC_CHANNELS.architectureProposeTarget, projectId, principles),
+  saveTargetArchitecture: (projectId, target) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveTarget, projectId, target),
+  saveArchitectureLayout: (projectId, layout) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveLayout, projectId, layout),
+  readArchitectureSource: (projectId, path) => ipcRenderer.invoke(IPC_CHANNELS.architectureSource, projectId, path),
+  openArchitectureFile: (projectId, path) => ipcRenderer.invoke(IPC_CHANNELS.architectureOpenFile, projectId, path),
+  onArchitectureEvent: (listener) => subscribe<ArchitectureEvent>(IPC_CHANNELS.architectureEvent, listener),
   compactSession: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCompact, sessionId, turnId),
   listSkills: (target) => ipcRenderer.invoke(IPC_CHANNELS.skillsList, target),
   saveMcpServer: (input) => ipcRenderer.invoke(IPC_CHANNELS.mcpSave, input),

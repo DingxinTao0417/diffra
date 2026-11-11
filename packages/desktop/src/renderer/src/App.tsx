@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect } from 'react'
 import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { ArchitectureView } from '@/features/architecture/ArchitectureView'
 import { HomeView } from '@/features/home/HomeView'
 import { UpdateNoticeDialog } from '@/features/settings/Changelog'
 import { SettingsView } from '@/features/settings/SettingsView'
@@ -148,6 +149,7 @@ export function App() {
                 {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
                 {route.name === 'todos' && <TodosView />}
+                {route.name === 'architecture' && <ArchitectureView route={route} />}
               </main>
             </>
           )}

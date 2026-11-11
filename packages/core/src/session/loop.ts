@@ -61,6 +61,8 @@ import { runShell } from '../tools/command.js'
 import { resolveToolPath } from '../tools/workspace.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 import { staticScan } from '../security/static.js'
+import { type ArchitectureFinding, checkArchitecture } from '../architecture/check.js'
+import type { ArchitectureAnalysis, TargetArchitecture } from '../architecture/model.js'
 import { auditDependencies, dependenciesChanged } from '../security/deps.js'
 import { buildLightScanRequest, parseLightScanOutput } from '../security/light.js'
 import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityFinding } from '../security/types.js'
@@ -1175,8 +1177,12 @@ async function runFinishGate(
     }
     recordCheckPass(checks)
   }
-  // 检查通过（或没配检查）之后再做安全检查和规范审查，免得对跑不通的代码提意见
-  const diff = await turnDiff(session, turnId, io)
+  // 检查通过（或没配检查）之后再做安全检查、规范审查和架构检查，免得对跑不通的代码提意见
+  const architecture = await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
+    console.error('[session] 读取目标架构失败，这一轮不做架构检查', error)
+    return null
+  })
+  const diff = await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
   const security = diff === null ? [] : await runSecurityChecks(session, diff, summary, signal, io)
   if (signal.aborted) return cancelled()
   const blockers = blocking(security)
@@ -1214,6 +1220,24 @@ async function runFinishGate(
       verification: 'failed',
     }
   }
+  const violations = architecture && diff !== null ? await runArchitectureCheck(session, architecture, diff, io) : []
+  if (signal.aborted) return cancelled()
+  if (violations.length > 0) {
+    await showFinish('failed', `架构检查发现 ${violations.length} 处新增的依赖违反目标架构`)
+    const list = violations.map((item) => `- ${item.path}:${item.line} \`${item.specifier}\`: ${item.message}`).join('\n')
+    return {
+      result: errorResult(
+        call,
+        `The imports you added break the project's target architecture (set by the user in Diffra's 架构 page), so the task is not finished:\n${list}\n` +
+          'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it), then call finish again. ' +
+          'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in the finish summary; the user can change the target architecture.',
+      ),
+      passed: false,
+      summary,
+      goalMet,
+      verification: 'failed',
+    }
+  }
   if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
   if (!command) {
     // 界面还没按 verification 画 verify_changes 卡片，文本里照旧说明未经验证
@@ -1239,10 +1263,11 @@ function showFinishCard(io: TurnIO, call: StepToolCall, verification: FinishVeri
 }
 
 // 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
-async function turnDiff(session: Session, turnId: string, io: TurnIO): Promise<string | null> {
+async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: string[] = []): Promise<string | null> {
   const wanted = [
     session.config.security.staticCheck || session.config.security.lightScan ? '安全检查' : null,
     session.config.rules.review && session.rulePacks.length > 0 ? '规范审查' : null,
+    ...extra,
   ].filter((item): item is string => item !== null)
   if (wanted.length === 0) return null
   const commit = session.turnCheckpoints.get(turnId)
@@ -1271,6 +1296,29 @@ async function runSecurityChecks(session: Session, diff: string, summary: string
     findings.push(...(await runLightScan(session, diff, added, summary, signal, io)))
   }
   return findings
+}
+
+// 架构检查：这一轮新增的 import 对照用户定的目标架构。检查本身出错时不拦截，只在卡片上说明
+async function runArchitectureCheck(session: Session, architecture: { analysis: ArchitectureAnalysis; target: TargetArchitecture }, diff: string, io: TurnIO): Promise<ArchitectureFinding[]> {
+  const added = addedLinesOf(diff)
+  if (added.size === 0) return []
+  const toolCallId = `architecture-${randomUUID()}`
+  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '架构检查', kind: 'other', status: 'in_progress' })
+  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
+  try {
+    const findings = await checkArchitecture(session.cwd, architecture.analysis, architecture.target, added)
+    await finishCard(
+      findings.length > 0 ? 'failed' : 'completed',
+      findings.length > 0 ? 'failed' : 'passed',
+      findings.length > 0 ? findings.map((item) => `${item.specifier}  ${item.path}:${item.line}  ${item.message}`).join('\n') : '新增的依赖都符合目标架构',
+    )
+    return findings
+  } catch (error) {
+    console.error('[session] 架构检查失败', error)
+    await finishCard('failed', 'error', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
+    return []
+  }
 }
 
 async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {

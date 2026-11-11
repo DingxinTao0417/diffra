@@ -15,6 +15,7 @@ import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
 import { registerTodosIpc } from './todos-ipc'
+import { registerArchitectureIpc } from './architecture-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { setupUpdater } from './updater'
@@ -115,8 +116,9 @@ app
     await recordVersion(settings).catch((error: unknown) => console.error('[changelog] 记录版本号失败', error))
     const secrets = await SecretStore.open(userDataDir)
     registerSettingsIpc(settings, secrets)
-    registerSessionIpc(settings, secrets, userDataDir)
+    const { architectureModel } = registerSessionIpc(settings, secrets, userDataDir)
     registerTodosIpc(userDataDir)
+    registerArchitectureIpc(architectureModel)
     registerPluginsIpc(settings, userDataDir)
     registerBrowserIpc()
     // 浏览器扩展的宿主登记和管道：失败了只影响用户自己的浏览器，内置浏览器照常

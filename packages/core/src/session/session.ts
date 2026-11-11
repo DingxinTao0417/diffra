@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
+import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
@@ -65,6 +66,8 @@ export interface SessionOptions {
   fallbackModel?: LanguageModel
   // 从存储恢复时传入
   record?: SessionRecord
+  // 架构功能的数据：项目有目标架构时，完成前检查这一轮新增的依赖
+  architecture?: ArchitectureService | null
 }
 
 export class Session {
@@ -89,6 +92,7 @@ export class Session {
   readonly readRoots: string[]
   readonly mcpServers: McpServer[]
   readonly mcpPool: McpPool | null
+  readonly architecture: ArchitectureService | null
   // 最近一轮开始时取到的 MCP 工具
   mcpTools: McpTurnTools | null = null
   // 客户端配置的设计面板工具：设计任务每轮开始前由客户端配置，普通任务是 null
@@ -128,6 +132,7 @@ export class Session {
 
   constructor(options: SessionOptions) {
     const record = options.record
+    this.architecture = options.architecture ?? null
     this.id = record?.id ?? randomUUID()
     this.createdAt = record?.createdAt ?? new Date().toISOString()
     this.title = record?.title ?? ''

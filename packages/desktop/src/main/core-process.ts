@@ -31,6 +31,8 @@ export function startCore(handlers: CoreClientHandlers): Promise<CoreStatus> {
       DIFFRA_SESSIONS_DIR: join(app.getPath('userData'), 'sessions'),
       // 每次模型调用的用量，按月追加
       DIFFRA_USAGE_DIR: join(app.getPath('userData'), 'usage'),
+      // 架构分析的项目列表、分析结果、目标架构
+      DIFFRA_ARCHITECTURE_DIR: join(app.getPath('userData'), 'architecture'),
       ...(rgPath ? { DIFFRA_RG_PATH: rgPath } : {}),
       // 随 Diffra 带的 Skill：打包后在 resources/skills（electron-builder 的 extraResources），开发时是 core 包里的 skills 目录
       DIFFRA_SKILLS_DIR: app.isPackaged ? join(process.resourcesPath, 'skills') : join(app.getAppPath(), '..', 'core', 'skills'),

@@ -151,6 +151,8 @@ export interface PromptEnhancement {
 }
 // 首页（还没有任务）优化提示词的用量记在这个任务 id 下，用量页按它写名字
 export const PROMPT_ENHANCE_USAGE_ID = 'prompt-enhance'
+// 架构分析里的模型解读、目标架构提案：不属于任何任务，用量记在这个 id 下
+export const ARCHITECTURE_USAGE_ID = 'architecture'
 export interface Diagnosis {
   // 定位的是哪一轮、哪个子智能体（agent 是它的名字），「重新定位」照着再来一次
   target: { turnId: string; cardId: string | null; agent: string | null }
@@ -642,6 +644,29 @@ export const SESSION_EXT_METHODS = {
   commandsList: '_diffra/commands/list',
   // 读一个插件文件夹里有什么
   pluginInspect: '_diffra/plugins/inspect',
+  // 架构分析：项目列表、后台分析（进度走 CLIENT_EXT_NOTIFICATIONS.architectureEvent）、读取结果、模型解读、目标架构
+  architectureList: '_diffra/architecture/list',
+  architectureAdd: '_diffra/architecture/add',
+  architectureRemove: '_diffra/architecture/remove',
+  architectureAnalyze: '_diffra/architecture/analyze',
+  architectureCancel: '_diffra/architecture/cancel',
+  architectureRunning: '_diffra/architecture/running',
+  architectureBundle: '_diffra/architecture/bundle',
+  architectureStale: '_diffra/architecture/stale',
+  architectureInterpret: '_diffra/architecture/interpret',
+  architectureInterpretModule: '_diffra/architecture/interpret-module',
+  architectureProposeTarget: '_diffra/architecture/propose-target',
+  architectureSaveTarget: '_diffra/architecture/save-target',
+  architectureSaveLayout: '_diffra/architecture/save-layout',
+  // 保存手改过的架构图
+  architectureSaveDiagram: '_diffra/architecture/save-diagram',
+  // 读分析结果里的一个代码文件，给界面看 import 所在的行
+  architectureSource: '_diffra/architecture/source',
+} as const
+
+// core 主动推给客户端的通知
+export const CLIENT_EXT_NOTIFICATIONS = {
+  architectureEvent: '_diffra/architecture/event',
 } as const
 
 export const PERMISSION_OPTIONS = {

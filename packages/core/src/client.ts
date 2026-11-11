@@ -1,5 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from './architecture/model.js'
 import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
@@ -12,6 +13,7 @@ import {
   type BrowserActionResult,
   type BrowserSites,
   CLIENT_EXT_METHODS,
+  CLIENT_EXT_NOTIFICATIONS,
   type CommandInfo,
   type DesignActionParams,
   type DesignActionResult,
@@ -58,6 +60,8 @@ export interface CoreClientHandlers {
   onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
   // 智能体给别的任务发消息、新建任务；不提供时任务互通的发送和新建会报错
   onTaskAction?(params: TaskActionParams): Promise<TaskActionResult>
+  // 架构分析、解读的进度和结束
+  onArchitectureEvent?(event: ArchitectureEvent): void
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -84,6 +88,9 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onDesignAction) app.onRequest(CLIENT_EXT_METHODS.designAction, designActionParamsSchema, ({ params }) => onDesignAction(params))
     const onTaskAction = handlers.onTaskAction
     if (onTaskAction) app.onRequest(CLIENT_EXT_METHODS.taskAction, taskActionParamsSchema, ({ params }) => onTaskAction(params))
+    const onArchitectureEvent = handlers.onArchitectureEvent
+    // core 自己发的通知，结构由 core 保证
+    if (onArchitectureEvent) app.onNotification(CLIENT_EXT_NOTIFICATIONS.architectureEvent, (raw: unknown) => raw as ArchitectureEvent, ({ params }) => onArchitectureEvent(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout), { maxMessageBytes: ACP_MAX_MESSAGE_BYTES }))
 }
@@ -346,6 +353,80 @@ export function runProjectCheck(connection: acp.ClientConnection, cwd: string, c
     { cwd, command },
     { cancellationSignal: AbortSignal.timeout(CHECK_RUN_TIMEOUT_MS), stopWaitingOnCancel: true },
   )
+}
+
+// ---------- 架构分析 ----------
+
+// 模型解读、提目标架构一次调用最多 180 秒
+const ARCHITECTURE_MODEL_TIMEOUT_MS = 200_000
+
+export function architectureList(connection: acp.ClientConnection): Promise<ArchitectureProjectSummary[]> {
+  return requestOf(connection)<ArchitectureProjectSummary[], Record<string, never>>(SESSION_EXT_METHODS.architectureList, {}, extRequestOptions())
+}
+
+export function architectureAdd(connection: acp.ClientConnection, path: string): Promise<ArchitectureProject> {
+  return requestOf(connection)<ArchitectureProject, { path: string }>(SESSION_EXT_METHODS.architectureAdd, { path }, extRequestOptions())
+}
+
+export async function architectureRemove(connection: acp.ClientConnection, projectId: string): Promise<void> {
+  await requestOf(connection)<object, { projectId: string }>(SESSION_EXT_METHODS.architectureRemove, { projectId }, extRequestOptions())
+}
+
+// 分析在 core 后台跑，这里只等它开始；进度和结果走 onArchitectureEvent
+export async function architectureAnalyze(connection: acp.ClientConnection, projectId: string): Promise<void> {
+  await requestOf(connection)<object, { projectId: string }>(SESSION_EXT_METHODS.architectureAnalyze, { projectId }, extRequestOptions())
+}
+
+export async function architectureCancel(connection: acp.ClientConnection, projectId: string): Promise<void> {
+  await requestOf(connection)<object, { projectId: string }>(SESSION_EXT_METHODS.architectureCancel, { projectId }, extRequestOptions())
+}
+
+export function architectureRunning(connection: acp.ClientConnection): Promise<AnalysisProgress[]> {
+  return requestOf(connection)<AnalysisProgress[], Record<string, never>>(SESSION_EXT_METHODS.architectureRunning, {}, extRequestOptions())
+}
+
+export function architectureBundle(connection: acp.ClientConnection, projectId: string): Promise<ArchitectureBundle> {
+  return requestOf(connection)<ArchitectureBundle, { projectId: string }>(SESSION_EXT_METHODS.architectureBundle, { projectId }, extRequestOptions())
+}
+
+export function architectureStale(connection: acp.ClientConnection, projectId: string): Promise<{ stale: boolean | null }> {
+  return requestOf(connection)<{ stale: boolean | null }, { projectId: string }>(SESSION_EXT_METHODS.architectureStale, { projectId }, extRequestOptions())
+}
+
+export async function architectureInterpret(connection: acp.ClientConnection, projectId: string, model: SessionModel, parts: InterpretPart[]): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; model: SessionModel; parts: InterpretPart[] }>(SESSION_EXT_METHODS.architectureInterpret, { projectId, model, parts }, extRequestOptions())
+}
+
+export async function architectureSaveDiagram(connection: acp.ClientConnection, projectId: string, diagram: BlockDiagram): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; diagram: BlockDiagram }>(SESSION_EXT_METHODS.architectureSaveDiagram, { projectId, diagram }, extRequestOptions())
+}
+
+export function architectureInterpretModule(connection: acp.ClientConnection, projectId: string, path: string, model: SessionModel): Promise<ModuleNote> {
+  return requestOf(connection)<ModuleNote, { projectId: string; path: string; model: SessionModel }>(
+    SESSION_EXT_METHODS.architectureInterpretModule,
+    { projectId, path, model },
+    { cancellationSignal: AbortSignal.timeout(ARCHITECTURE_MODEL_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
+export function architectureProposeTarget(connection: acp.ClientConnection, projectId: string, principles: string, model: SessionModel): Promise<{ target: TargetArchitecture; rationale: string }> {
+  return requestOf(connection)<{ target: TargetArchitecture; rationale: string }, { projectId: string; principles: string; model: SessionModel }>(
+    SESSION_EXT_METHODS.architectureProposeTarget,
+    { projectId, principles, model },
+    { cancellationSignal: AbortSignal.timeout(ARCHITECTURE_MODEL_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
+export async function architectureSaveTarget(connection: acp.ClientConnection, projectId: string, target: TargetArchitecture | null): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; target: TargetArchitecture | null }>(SESSION_EXT_METHODS.architectureSaveTarget, { projectId, target }, extRequestOptions())
+}
+
+export function architectureSource(connection: acp.ClientConnection, projectId: string, path: string): Promise<{ text: string; lines: number }> {
+  return requestOf(connection)<{ text: string; lines: number }, { projectId: string; path: string }>(SESSION_EXT_METHODS.architectureSource, { projectId, path }, extRequestOptions())
+}
+
+export async function architectureSaveLayout(connection: acp.ClientConnection, projectId: string, layout: ArchitectureLayout): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; layout: ArchitectureLayout }>(SESSION_EXT_METHODS.architectureSaveLayout, { projectId, layout }, extRequestOptions())
 }
 
 function readSessionInfo(meta: unknown): SessionInfo {

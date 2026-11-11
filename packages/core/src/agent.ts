@@ -53,6 +53,9 @@ import type { Session as SessionType } from './session/session.js'
 import { loadSkills, type Skill, skillRoots, withSkills } from './skills.js'
 import { CHECK_TIMEOUT_SECONDS, runTurn, taskStateUpdate, taskStateView, type TurnIO } from './session/loop.js'
 import { buildSystemPrompt } from './session/prompt.js'
+import { registerArchitecture } from './architecture/handlers.js'
+import type { ArchitectureEvent } from './architecture/model.js'
+import { ArchitectureService } from './architecture/service.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
 import { Session } from './session/session.js'
@@ -70,6 +73,8 @@ export interface AgentOptions {
   usageDir?: string | null
   // 测试时注入，用完自己关掉；正常运行时 core 退出，stdio 服务器读到输入结束自行退出
   mcpPool?: McpPool
+  // 架构分析的数据目录；不给就不提供架构功能
+  architectureDir?: string | null
 }
 
 const checkpointParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1) })
@@ -155,6 +160,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const store = options.sessionsDir ? new SessionStore(options.sessionsDir) : null
   const usageLog = options.usageDir ? new UsageLog(options.usageDir) : null
   const mcpPool = options.mcpPool ?? new McpPool()
+  let notifyArchitecture: (event: ArchitectureEvent) => void = () => {}
+  const architecture = options.architectureDir ? new ArchitectureService(options.architectureDir, findRipgrep, (event) => notifyArchitecture(event)) : null
 
   // 只留还开着的任务用到的 MCP 连接
   const retainMcp = () =>
@@ -217,6 +224,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
       record,
+      architecture,
     })
     const info: SessionInfo = {
       bashPath: environment.bashPath,
@@ -346,7 +354,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     return stopReason
   }
 
-  return acp
+  const app = acp
     .agent({ name: AGENT_NAME })
     .onRequest(acp.methods.agent.initialize, () => ({
       protocolVersion: acp.PROTOCOL_VERSION,
@@ -574,4 +582,5 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       z.object({ endpoint: endpointSchema, modelId: z.string().min(1) }),
       ({ params }) => testModel(params.endpoint, params.modelId),
     )
+  return architecture ? registerArchitecture(app, architecture, usageLog, (notify) => (notifyArchitecture = notify)) : app
 }

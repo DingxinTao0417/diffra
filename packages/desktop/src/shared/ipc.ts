@@ -43,6 +43,7 @@ import type {
 import type { FileReference } from './attachments'
 import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -104,6 +105,24 @@ export const IPC_CHANNELS = {
   todosSave: 'todos:save',
   todosNotify: 'todos:notify',
   todosFocus: 'todos:focus',
+  architectureList: 'architecture:list',
+  architectureAdd: 'architecture:add',
+  architecturePick: 'architecture:pick',
+  architectureRemove: 'architecture:remove',
+  architectureAnalyze: 'architecture:analyze',
+  architectureCancel: 'architecture:cancel',
+  architectureRunning: 'architecture:running',
+  architectureBundle: 'architecture:bundle',
+  architectureStale: 'architecture:stale',
+  architectureInterpret: 'architecture:interpret',
+  architectureInterpretModule: 'architecture:interpret-module',
+  architectureProposeTarget: 'architecture:propose-target',
+  architectureSaveTarget: 'architecture:save-target',
+  architectureSaveLayout: 'architecture:save-layout',
+  architectureSaveDiagram: 'architecture:save-diagram',
+  architectureSource: 'architecture:source',
+  architectureOpenFile: 'architecture:open-file',
+  architectureEvent: 'architecture:event',
   sessionCompact: 'session:compact',
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
@@ -390,6 +409,28 @@ export interface DiffraApi {
   // 待办到时间的系统通知；点通知把窗口调到前面，onTodoFocus 收到这条待办的 id
   notifyTodo(notice: { todoId: string; title: string; body: string }): Promise<void>
   onTodoFocus(listener: (todoId: string) => void): () => void
+  // 架构：项目列表、后台分析（进度和结束走 onArchitectureEvent）、读结果、模型解读（用「规划」角色，没配用「编码」）、目标架构
+  listArchitectureProjects(): Promise<ArchitectureProjectSummary[]>
+  addArchitectureProject(path: string): Promise<ArchitectureProject>
+  // 弹选文件夹的窗口并加进列表；取消时返回 null
+  pickArchitectureProject(): Promise<ArchitectureProject | null>
+  removeArchitectureProject(projectId: string): Promise<void>
+  analyzeArchitecture(projectId: string): Promise<void>
+  cancelArchitecture(projectId: string): Promise<void>
+  runningArchitecture(): Promise<AnalysisProgress[]>
+  getArchitecture(projectId: string): Promise<ArchitectureBundle>
+  isArchitectureStale(projectId: string): Promise<boolean | null>
+  // parts：要模型做哪几样（系统简介和流程、三张架构图），并行跑
+  interpretArchitecture(projectId: string, parts: InterpretPart[]): Promise<void>
+  saveArchitectureDiagram(projectId: string, diagram: BlockDiagram): Promise<void>
+  interpretArchitectureModule(projectId: string, path: string): Promise<ModuleNote>
+  proposeTargetArchitecture(projectId: string, principles: string): Promise<{ target: TargetArchitecture; rationale: string }>
+  saveTargetArchitecture(projectId: string, target: TargetArchitecture | null): Promise<void>
+  saveArchitectureLayout(projectId: string, layout: ArchitectureLayout): Promise<void>
+  readArchitectureSource(projectId: string, path: string): Promise<{ text: string; lines: number }>
+  // 用系统默认程序打开项目里的一个文件
+  openArchitectureFile(projectId: string, path: string): Promise<void>
+  onArchitectureEvent(listener: (event: ArchitectureEvent) => void): () => void
   // 优化输入框里的提示词：用「规划」角色的模型，没配就用 model（输入框选的），再没有就用「编码」角色
   enhancePrompt(request: { text: string; project: string | null; sessionId: string | null; model?: ModelRef; mentions: string[]; design: boolean }): Promise<PromptEnhancement>
   // 定位问题：停下的那一轮（target.turnId），或其中一个子智能体（target.cardId 是它的卡片）

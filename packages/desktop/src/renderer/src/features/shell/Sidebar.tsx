@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
 import type { SessionSearchResult, StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, PenTool, Plus, Search, Settings } from 'lucide-react'
+import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,7 @@ import { remPx } from '@/lib/shell'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { isDue } from '@/lib/todo-time'
 import { useNow } from '@/lib/use-now'
-import { loadTodos, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
+import { loadTodos, openArchitecture, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
@@ -131,6 +131,10 @@ export function Sidebar() {
         <SidebarButton active={route.name === 'design'} onClick={() => openDesign()}>
           <PenTool className="size-4" />
           设计
+        </SidebarButton>
+        <SidebarButton active={route.name === 'architecture'} onClick={() => openArchitecture()}>
+          <Network className="size-4" />
+          架构
         </SidebarButton>
         <SidebarButton active={route.name === 'todos'} onClick={() => openTodos()}>
           <ListTodo className="size-4" />

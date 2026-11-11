@@ -65,6 +65,20 @@ export async function moveHistory(step: -1 | 1): Promise<void> {
   else navigate(target, false)
 }
 
+// 只改当前这一页的状态（比如架构图里选中的节点），不新增后退记录
+export function replaceRoute(route: Route): void {
+  store.set((state) => ({
+    ...state,
+    route,
+    lastWorkRoute: route.name === 'settings' ? state.lastWorkRoute : route,
+    history: state.history.map((item, index) => (index === state.historyIndex ? route : item)),
+  }))
+}
+
+export function openArchitecture(projectId: string | null = null): void {
+  navigate({ name: 'architecture', projectId, tab: projectId ? 'diagram' : 'overview', diagram: 'application', section: 'graph', scope: 'project', focus: null })
+}
+
 export function openSettings(section: SettingsSection = 'general'): void {
   navigate({ name: 'settings', section })
 }
