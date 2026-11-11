@@ -6,7 +6,9 @@ import { type CoreClientHandlers, connectToCore, handshake } from '@diffra/core'
 import { app } from 'electron'
 import type { CoreStatus } from '../shared/ipc'
 
-const HANDSHAKE_TIMEOUT_MS = 10_000
+// 冷启动到握手完成一般零点几秒，但机器忙的时候（开机时杀毒软件在扫、CI 上）偶尔会卡十几秒。
+// 握手失败后这次运行就用不了 core（直到重启应用），所以宁可多等：设置里这段时间显示「连接中」
+const HANDSHAKE_TIMEOUT_MS = 60_000
 
 type CoreConnection = ReturnType<typeof connectToCore>
 
@@ -45,6 +47,7 @@ export function startCore(handlers: CoreClientHandlers): Promise<CoreStatus> {
   })
 
   const connection = connectToCore(child.stdin, child.stdout, handlers)
+  const started = performance.now()
   const info = handshake(connection, HANDSHAKE_TIMEOUT_MS)
   ready = info.then(() => connection)
   // 握手失败由下面返回的状态记录；调用 coreConnection() 的地方会各自收到这个 reject
@@ -53,7 +56,8 @@ export function startCore(handlers: CoreClientHandlers): Promise<CoreStatus> {
   return info.then(
     (value): CoreStatus => ({ state: 'connected', ...value }),
     (error: unknown): CoreStatus => {
-      console.error('[core] 握手失败', error)
+      // 记下等了多久、子进程还在不在，分得清是 core 卡住了还是退出了
+      console.error(`[core] 握手失败：等了 ${Math.round(performance.now() - started)}ms，子进程${child?.exitCode === null ? '还在' : `已退出 code=${child?.exitCode}`}`, error)
       return { state: 'failed', error: error instanceof Error ? error.message : String(error) }
     },
   )

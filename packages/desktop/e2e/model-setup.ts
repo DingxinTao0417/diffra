@@ -27,9 +27,10 @@ export async function configureCoderModel(
   await dialog.getByRole('button', { name: '下一步', exact: true }).click()
   await expect(dialog.getByRole('listitem').filter({ hasText: '模型能力' })).toHaveAttribute('aria-current', 'step')
   await dialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
+  // 校验要等 core 起来再调一次模型，CI 上 core 冷启动偶尔要十几秒，所以多等一会儿。
   // 关不上时把对话框里的字（比如校验报错）带进报错：CI 不留截图，只看得到这里
   await expect(dialog)
-    .toBeHidden()
+    .toBeHidden({ timeout: 30_000 })
     .catch(async (error: unknown) => {
       const text = await dialog.innerText().catch(() => '（读不到）')
       throw new Error(`添加模型后对话框没关，里面写着：${text.replace(/\s+/g, ' ').slice(0, 500)}`, { cause: error })
