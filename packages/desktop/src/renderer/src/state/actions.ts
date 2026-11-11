@@ -1,4 +1,4 @@
-import { MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult } from '../../../shared/remote'
@@ -437,7 +437,6 @@ export function setPlanMode(sessionId: string, planMode: boolean): void {
   updateLive(sessionId, (task) => ({ ...task, planMode }))
 }
 
-const DEEP_SCAN_TITLES = { task: '深度安全扫描 · 本任务改动', project: '深度安全扫描 · 整个项目' } as const
 
 // 深度安全扫描在界面上也是一轮：和 core 记下的标题一致
 export async function runDeepScan(sessionId: string, scope: 'task' | 'project'): Promise<void> {

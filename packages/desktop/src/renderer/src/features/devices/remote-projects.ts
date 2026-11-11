@@ -9,7 +9,9 @@ export interface RemoteProjectGroup {
   deviceId: string
   deviceName: string
   online: boolean
+  projectId: string
   name: string
+  level: SessionList['projects'][number]['level']
   sessions: SessionList['sessions']
 }
 
@@ -40,7 +42,9 @@ export function useRemoteProjects(): RemoteProjectGroup[] {
             deviceId: peer.deviceId,
             deviceName: peer.name,
             online: peer.online,
+            projectId: project.id,
             name: project.name,
+            level: project.level,
             sessions: list.sessions.filter((session) => session.projectId === project.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
           }))
         })

@@ -124,9 +124,13 @@ export class PairingHost {
         for (const other of [...this.guests.keys()]) if (other !== from) this.guests.delete(other)
         return
       }
-      if (guest.device) return
       const message = guest.channel.receive(payload)
       if (message === undefined) return
+      if (guest.device) {
+        // 连接端放弃了：收起确认弹窗，邀请串已经用过，一起作废，免得本机的人之后点允许留下一条对方没存的授权
+        if (eventSchema.safeParse(message).data?.event === 'pair.cancel') this.cancel()
+        return
+      }
       guest.device = verifyHello(message, guest.handshake.remoteStatic(), from)
       guest.channel.send(this.deps.hello())
       this.deps.changed()
@@ -196,16 +200,18 @@ export async function pairWithInvite(text: string, deps: PairWithInviteDeps): Pr
   })
   deps.listenUndeliverable(rendezvous, () => fail(new Error('邀请串已经失效：过期了、被用过了，或者对方作废了。请对方重新生成一个')))
   let paired = false
+  let channel: SecureChannel | null = null
   try {
     send(FRAME.rendezvous, rendezvous, handshake.writeMessage())
     handshake.readMessage(await next(HANDSHAKE_TIMEOUT_MS, '对方没有回应：邀请串可能已经失效，或者对方的 Diffra 没开、没打开「允许连接本机」'))
     send(FRAME.rendezvous, rendezvous, handshake.writeMessage())
-    const channel = new SecureChannel(handshake.split(), (data) => deps.relay.send(FRAME.rendezvous, rendezvous, data))
-    if (!channel.send(deps.hello())) throw new Error('和中转服务断开了，稍后再试')
+    const opened = new SecureChannel(handshake.split(), (data) => deps.relay.send(FRAME.rendezvous, rendezvous, data))
+    channel = opened
+    if (!opened.send(deps.hello())) throw new Error('和中转服务断开了，稍后再试')
 
     const read = async (timeoutMs: number, timeoutMessage: string): Promise<unknown> => {
       for (;;) {
-        const message = channel.receive(await next(timeoutMs, timeoutMessage))
+        const message = opened.receive(await next(timeoutMs, timeoutMessage))
         if (message !== undefined) return message
       }
     }
@@ -217,6 +223,8 @@ export async function pairWithInvite(text: string, deps: PairWithInviteDeps): Pr
     paired = true
     return device
   } finally {
+    // 握手完了却没配成（取消、等太久、出错）：告诉对方，免得对方之后点允许留下一条本机没存的授权。尽力发，发不出去也不管
+    if (!paired) channel?.send({ type: 'event', event: 'pair.cancel' })
     deps.listen(host, null)
     deps.listenUndeliverable(rendezvous, null)
     if (!paired) deps.allowHost(null)

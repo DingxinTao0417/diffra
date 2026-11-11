@@ -20,6 +20,7 @@ import {
   type DevServerResult,
   EXTERNAL_ACCESS_SCOPE,
   type FinishVerification,
+  LOCAL_ONLY_META,
   MODEL_SILENCE_META_KEY,
   TERMINAL_DEFAULT_LINES,
   TERMINAL_READ_PERMISSION_PREFIX,
@@ -820,6 +821,7 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
           kind: access === 'read' ? 'read' : 'edit',
           status: 'pending',
           rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE },
+          _meta: LOCAL_ONLY_META,
         },
         [
           { optionId: PERMISSION_OPTIONS.allowOnce, name: '仅允许本次操作', kind: 'allow_once' },
@@ -930,8 +932,8 @@ async function runBrowserToolCall(
   const kind = isReadOnlyBrowserAction(action) ? 'read' : action.action === 'navigate' || (action.action === 'tabs' && action.url) ? 'fetch' : 'other'
   await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: browserTitle(action), kind, status: 'in_progress', rawInput: call.input })
   if (!io.browser) return fail('The built-in browser is not available in this client.')
-  const ask = (title: string, permissionKind: 'fetch' | 'execute' | 'read') =>
-    io.requestPermission({ toolCallId: call.toolCallId, title, kind: permissionKind, status: 'pending', rawInput: call.input }, PERMISSION_CHOICES)
+  const ask = (title: string, permissionKind: 'fetch' | 'execute' | 'read', localOnly = false) =>
+    io.requestPermission({ toolCallId: call.toolCallId, title, kind: permissionKind, status: 'pending', rawInput: call.input, ...(localOnly ? { _meta: LOCAL_ONLY_META } : {}) }, PERMISSION_CHOICES)
   const url = action.action === 'navigate' ? action.url : action.action === 'tabs' ? action.url : null
   if (url) {
     const permission = await allowNavigation(session, url, (title) => ask(title, 'fetch'))
@@ -958,7 +960,7 @@ async function runBrowserToolCall(
   }
   if (action.action === 'switch' && action.browser !== 'builtin') {
     const name = action.browser === 'chrome' ? 'Chrome' : 'Edge'
-    const permission = await allowSensitiveBrowserAction(session, 'switch', `让智能体改用你的 ${name}（会用你在那里的登录状态）`, (text) => ask(text, 'execute'))
+    const permission = await allowSensitiveBrowserAction(session, 'switch', `让智能体改用你的 ${name}（会用你在那里的登录状态）`, (text) => ask(text, 'execute', true))
     if (!permission.allowed) return fail(permission.reason)
   }
   try {
@@ -1007,7 +1009,7 @@ async function runDevServerToolCall(
       if (input.action !== 'terminal-read') return fail('Invalid terminal read request.')
       const key = `${TERMINAL_READ_PERMISSION_PREFIX}${input.terminalId}`
       if (!session.alwaysAllowed.has(key)) {
-        const choice = await io.requestPermission({ toolCallId: call.toolCallId, title: `读取终端 ${input.terminalId} 最近 ${input.lines} 行（可能包含敏感信息；仅只读）`, kind: 'read', status: 'pending', rawInput: input }, [
+        const choice = await io.requestPermission({ toolCallId: call.toolCallId, title: `读取终端 ${input.terminalId} 最近 ${input.lines} 行（可能包含敏感信息；仅只读）`, kind: 'read', status: 'pending', rawInput: input, _meta: LOCAL_ONLY_META }, [
           { optionId: PERMISSION_OPTIONS.allowOnce, name: '允许读取一次', kind: 'allow_once' },
           { optionId: PERMISSION_OPTIONS.allowAlways, name: '本会话允许读取此终端', kind: 'allow_always' },
           { optionId: PERMISSION_OPTIONS.reject, name: '拒绝', kind: 'reject_once' },

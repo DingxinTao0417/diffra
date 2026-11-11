@@ -1,5 +1,17 @@
 import { describe, expect, test } from 'vitest'
-import { createResultSchema, eventSchema, helloSchema, promptResultSchema, REMOTE_PROLOGUE, remoteMessageSchema, requestSchema, responseSchema, sessionListSchema, snapshotSchema } from '../src/messages.js'
+import {
+  createResultSchema,
+  eventSchema,
+  helloSchema,
+  promptResultSchema,
+  REMOTE_PROLOGUE,
+  remoteMessageSchema,
+  requestSchema,
+  responseSchema,
+  sessionListSchema,
+  snapshotSchema,
+  subscribeResultSchema,
+} from '../src/messages.js'
 import { seeded } from './random.js'
 
 const KEY = Buffer.alloc(32, 1).toString('base64')
@@ -45,11 +57,15 @@ describe('应用层消息', () => {
       },
       { type: 'event', event: 'permission.settled', requestId: 'r-1' },
       { type: 'event', event: 'pair.result', approved: true },
+      { type: 'event', event: 'pair.cancel' },
+      { type: 'request', id: 11, call: { method: 'device.forget' } },
     ]
     for (const message of valid) expect(remoteMessageSchema.safeParse(message).success, JSON.stringify(message)).toBe(true)
     expect(sessionListSchema.safeParse({ projects: [{ id: 'p_1', name: 'diffra', level: 'control' }], sessions: [{ sessionId: SESSION, projectId: 'p_1', title: '任务', updatedAt: '2026-11-10T08:00:00.000Z', running: false, turnCount: 3 }] }).success).toBe(true)
     expect(snapshotSchema.safeParse({ sessionId: SESSION, projectId: 'p_1', title: '任务', running: true, taskState: { status: 'running', reason: null, requirements: [] }, totalTurns: 1, start: 0, turns: [turn], epoch: 'e1', seq: 5 }).success).toBe(true)
     expect(promptResultSchema.safeParse({ queued: true }).success).toBe(true)
+    expect(subscribeResultSchema.safeParse({ resumed: true, sessionId: SESSION, running: false }).success).toBe(true)
+    expect(subscribeResultSchema.safeParse({ resumed: false, sessionId: SESSION, running: false }).success).toBe(false)
     expect(createResultSchema.safeParse({ sessionId: SESSION }).success).toBe(true)
     expect(createResultSchema.safeParse({ sessionId: '../x' }).success).toBe(false)
   })

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { EXTERNAL_ACCESS_SCOPE, PERMISSION_OPTIONS, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
+import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
 import { type RemoteEvent, type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
 import { redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
 import type { RemoteAction, RemoteActionResult, RemoteProjectGrant } from '../../shared/remote'
@@ -10,17 +10,24 @@ import type { StoredGrant } from './state'
 // 每个请求都按授权重新检查：会话的项目要在这台设备的授权里，归档、无项目、设计任务不给看。发出去的都先脱敏（@diffra/remote/redact）。
 // 订阅时先开始缓存实时更新再取快照，快照回来后只补发序号比它大的（core 的 seq，见 UPDATE_SEQ_META_KEY），不丢不重；
 // 实时更新按 150 毫秒攒一批发，连续的文字片段合成一条：中转限每台设备每秒 50 帧。
+// 断线续传：有人看过的会话记一段最近的动静（脱敏后的），对方重连时带上看到的位置，接得上就只补发缺的，接不上（core 重启过、记录挤掉了、中间撤销过）再给快照。
 // 远程操作（发消息、新建、停止、回答权限请求）要项目开放了「可查看和操作」，经本机界面做（deps.act）；
-// 权限请求只发给正看着这个会话、能操作的设备，只能「允许一次」或「拒绝」，项目外的文件访问只在本机确认
+// 权限请求只发给正看着这个会话、能操作的设备，只能「允许一次」或「拒绝」；跨出项目授权的（core 标了 LOCAL_ONLY_META_KEY）只在本机确认
 
 const FLUSH_MS = 150
 const BATCH_MAX = 500
 const CHANGED_INTERVAL_MS = 1000
 const PAGE_TURNS = 10
 const PAGE_CHARS = 1_000_000
-// 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个
+// 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个；读也限：取快照（订阅、翻页）60 次、列表 180 次（对方一轮跑着时每秒可能来一次）
 const OPS_PER_MINUTE = 30
 const CREATES_PER_MINUTE = 5
+const SNAPSHOTS_PER_MINUTE = 60
+const LISTS_PER_MINUTE = 180
+// 断线续传记的那一段：每个会话最多这么多条、这么多字；没人看满 5 分钟就丢
+const HISTORY_MAX_ENTRIES = 5000
+const HISTORY_MAX_CHARS = 4_000_000
+const HISTORY_IDLE_MS = 5 * 60_000
 const NOT_FOUND = '没有这个会话，或者读不出来'
 const VIEW_ONLY = '对方只开放了查看，不能操作'
 
@@ -37,12 +44,26 @@ export interface HostSyncDeps {
   // 替本机的人回答权限请求；已经有人答过了返回 false
   answerPermission(requestId: string, optionId: string): boolean
   audit(deviceId: string, name: string, action: string): void
+  // 对方删除了本机：撤销它的授权
+  forget(deviceId: string): void
 }
 
 // 发出去的一页：轮次是脱敏后的 StoredTurn（连接端按 snapshotSchema 校验）
 type Page = Omit<RemoteSnapshotPage, 'turns'> & { turns: Array<StoredTurn & { omittedImages?: number }> }
 
-type Pending = { kind: 'update'; seq: number; update: SessionUpdate } | { kind: 'turn'; event: Extract<SessionEvent, { type: 'turn-started' }> }
+type TurnStarted = Extract<SessionEvent, { type: 'turn-started' }>
+// afterSeq：一轮开始时这个会话最后一条更新的序号
+type Pending = { kind: 'update'; seq: number; update: SessionUpdate } | { kind: 'turn'; afterSeq: number; event: TurnStarted }
+
+interface History {
+  epoch: string
+  // 序号大于 floor 的更新、afterSeq 不小于 floor 的一轮开始都在 entries 里
+  floor: number
+  lastSeq: number
+  entries: Array<Pending & { chars: number }>
+  chars: number
+  touchedAt: number
+}
 
 interface Subscription {
   sessionId: string
@@ -116,10 +137,10 @@ function merged(entries: Array<{ seq: number; update: SessionUpdate }>): Array<{
   return result
 }
 
-// 本机在等确认的权限请求里远程能答的部分；项目外的文件访问、没有远程能选的选项时不发
+// 本机在等确认的权限请求里远程能答的部分；core 标了只在本机确认的（项目外的文件、本机终端、别的任务、用户自己的浏览器）、没有远程能选的选项时不发
 function remotePermission(event: Extract<SessionEvent, { type: 'permission' }>): PermissionRequest | null {
-  const rawInput = event.toolCall.rawInput
-  if (typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput && rawInput.scope === EXTERNAL_ACCESS_SCOPE) return null
+  const diffra = event.toolCall._meta?.diffra
+  if (typeof diffra === 'object' && diffra !== null && (diffra as Record<string, unknown>)[LOCAL_ONLY_META_KEY] === true) return null
   const options = event.options.flatMap((option) =>
     option.optionId === PERMISSION_OPTIONS.allowOnce || option.optionId === PERMISSION_OPTIONS.reject ? [{ optionId: option.optionId, name: option.name.slice(0, 200) }] : [],
   )
@@ -132,7 +153,10 @@ export class HostSync {
   private readonly devices = new Map<string, Device>()
   private readonly permissions = new Map<string, PendingPermission>()
   // 限流按设备记，断线重连不清零
-  private readonly rates = new Map<string, { ops: number[]; creates: number[] }>()
+  private readonly rates = new Map<string, Record<'ops' | 'creates' | 'snapshots' | 'lists', number[]>>()
+  private readonly histories = new Map<string, History>()
+  // 每个会话最后一条更新的序号，记一轮开始时用
+  private readonly lastSeqs = new Map<string, number>()
 
   constructor(private readonly deps: HostSyncDeps) {}
 
@@ -160,13 +184,18 @@ export class HostSync {
     if (!grant) throw new Error('本机没有授权这台设备')
     switch (call.method) {
       case 'sessions.list':
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
         return { value: await this.list(grant) }
       case 'session.subscribe': {
         const device = this.device(deviceId)
-        // 先登记、开始攒实时更新，再取快照
+        this.sweepHistories()
+        // 先登记、开始攒实时更新，再续传或取快照
         const subscription: Subscription = { sessionId: call.sessionId, ready: null, pending: [], queue: [] }
         device.subscriptions.set(call.sessionId, subscription)
         try {
+          const resumed = call.resume ? await this.resume(grant, deviceId, subscription, call.resume) : null
+          if (resumed) return resumed
+          this.limit(deviceId, 'snapshots', SNAPSHOTS_PER_MINUTE)
           const { page, cwd, epoch, seq, turnIds } = await this.page(grant, call.sessionId)
           return {
             value: page,
@@ -175,6 +204,7 @@ export class HostSync {
             after: () => {
               if (device.subscriptions.get(call.sessionId) !== subscription) return
               subscription.ready = { cwd, epoch }
+              this.anchorHistory(call.sessionId, epoch, seq, subscription.pending)
               for (const item of subscription.pending) {
                 if (item.kind === 'update' && item.seq > seq) subscription.queue.push({ seq: item.seq, update: item.update })
                 if (item.kind === 'turn' && !turnIds.has(item.event.turnId)) this.sendTurn(deviceId, subscription, item.event)
@@ -190,6 +220,7 @@ export class HostSync {
         }
       }
       case 'session.page':
+        this.limit(deviceId, 'snapshots', SNAPSHOTS_PER_MINUTE)
         return { value: (await this.page(grant, call.sessionId, call.before)).page, compress: true }
       case 'session.unsubscribe':
         this.devices.get(deviceId)?.subscriptions.delete(call.sessionId)
@@ -221,6 +252,9 @@ export class HostSync {
         this.deps.audit(deviceId, grant.name, `远程停止：${folderName(project.path)}「${title}」`)
         return { value: {} }
       }
+      case 'device.forget':
+        // 先回复再撤销：撤销会断开通道
+        return { value: {}, after: () => this.deps.forget(deviceId) }
       case 'permission.respond': {
         const pending = this.permissions.get(call.requestId)
         if (!pending?.sentTo.has(deviceId)) throw new Error('这个确认已经处理过了')
@@ -236,6 +270,77 @@ export class HostSync {
     }
   }
 
+  // 断线续传：对方带上看到的位置（core 的 epoch 和 seq），记的那一段接得上就只补发后面的；接不上返回 null，照常给快照
+  private async resume(grant: StoredGrant, deviceId: string, subscription: Subscription, from: { epoch: string; seq: number }): Promise<{ value: unknown; after: () => void } | null> {
+    const history = this.histories.get(subscription.sessionId)
+    if (!history || history.epoch !== from.epoch || from.seq < history.floor || from.seq > history.lastSeq) return null
+    const session = (await this.deps.listSessions()).find((item) => item.sessionId === subscription.sessionId)
+    const project = session ? visible(grant, session) : null
+    if (!session || !project) throw new Error(NOT_FOUND)
+    history.touchedAt = Date.now()
+    return {
+      value: { resumed: true, sessionId: subscription.sessionId, running: session.running },
+      after: () => {
+        const device = this.devices.get(deviceId)
+        // 等回复发出去的这段时间里记录可能被挤掉，或者中间撤销过（记录被删）：断开让对方重新订阅，这回给快照
+        if (device?.subscriptions.get(subscription.sessionId) !== subscription) return
+        if (this.histories.get(subscription.sessionId) !== history || from.seq < history.floor) return this.deps.drop(deviceId)
+        subscription.ready = { cwd: session.cwd, epoch: history.epoch }
+        // 登记之后来的都已经记进去了，从记录里按顺序补
+        subscription.pending = []
+        let replayed = 0
+        for (const entry of history.entries) {
+          if (entry.kind === 'update' && entry.seq > from.seq) {
+            subscription.queue.push({ seq: entry.seq, update: entry.update })
+            replayed++
+          }
+          if (entry.kind === 'turn' && entry.afterSeq >= from.seq) this.sendTurn(deviceId, subscription, entry.event)
+        }
+        console.info(`[remote] 断线续传：从 ${from.seq} 补发 ${replayed} 条`)
+        this.scheduleFlush(deviceId)
+        for (const pending of this.permissions.values()) if (pending.sessionId === subscription.sessionId) this.offerPermission(deviceId, session.cwd, pending)
+      },
+    }
+  }
+
+  // 快照发出去时开始记这个会话（core 重启过就重来）：快照之后已经攒下的补进去，之后的在 sessionEvent 里记
+  private anchorHistory(sessionId: string, epoch: string, seq: number, pending: Pending[]): void {
+    const existing = this.histories.get(sessionId)
+    if (existing?.epoch === epoch) {
+      existing.touchedAt = Date.now()
+      return
+    }
+    const history: History = { epoch, floor: seq, lastSeq: seq, entries: [], chars: 0, touchedAt: Date.now() }
+    this.histories.set(sessionId, history)
+    for (const item of pending) if (item.kind === 'turn' || item.seq > seq) this.record(history, item)
+  }
+
+  private record(history: History, item: Pending): void {
+    const chars = item.kind === 'update' ? JSON.stringify(item.update).length : 0
+    history.entries.push({ ...item, chars })
+    history.chars += chars
+    if (item.kind === 'update') history.lastSeq = Math.max(history.lastSeq, item.seq)
+    // 挤掉最早的：floor 往后挪，比它还早的位置就续不上了
+    while (history.entries.length > HISTORY_MAX_ENTRIES || history.chars > HISTORY_MAX_CHARS) {
+      const oldest = history.entries.shift()!
+      history.chars -= oldest.chars
+      history.floor = Math.max(history.floor, oldest.kind === 'update' ? oldest.seq : oldest.afterSeq + 1)
+    }
+  }
+
+  private watched(sessionId: string): boolean {
+    for (const device of this.devices.values()) if (device.subscriptions.has(sessionId)) return true
+    return false
+  }
+
+  // 没人看、又闲了 5 分钟的记录丢掉
+  private sweepHistories(): void {
+    const now = Date.now()
+    for (const [sessionId, history] of this.histories) {
+      if (!this.watched(sessionId) && now - history.touchedAt > HISTORY_IDLE_MS) this.histories.delete(sessionId)
+    }
+  }
+
   // 能操作的会话：看得到（同列表的规则），项目开放了「可查看和操作」。没授权和不存在说法一样
   private async operable(grant: StoredGrant, sessionId: string): Promise<{ project: RemoteProjectGrant; title: string }> {
     const session = (await this.deps.listSessions()).find((item) => item.sessionId === sessionId)
@@ -246,20 +351,24 @@ export class HostSync {
   }
 
   private charge(deviceId: string, create: boolean): void {
-    const now = Date.now()
-    const rate = this.rates.get(deviceId) ?? { ops: [], creates: [] }
-    this.rates.set(deviceId, rate)
-    rate.ops = rate.ops.filter((at) => now - at < 60_000)
-    rate.creates = rate.creates.filter((at) => now - at < 60_000)
-    if (rate.ops.length >= OPS_PER_MINUTE || (create && rate.creates.length >= CREATES_PER_MINUTE)) throw new Error('操作太频繁，过一会儿再试')
-    rate.ops.push(now)
-    if (create) rate.creates.push(now)
+    this.limit(deviceId, 'ops', OPS_PER_MINUTE, () => create && this.limit(deviceId, 'creates', CREATES_PER_MINUTE))
   }
 
-  // 正看着这个会话、能操作的设备才发；每台只发一次
+  // 一分钟内的次数到上限就拒绝；then 在记下这一次之前再查别的上限（新建同时算一次操作）
+  private limit(deviceId: string, kind: 'ops' | 'creates' | 'snapshots' | 'lists', max: number, then?: () => void): void {
+    const now = Date.now()
+    const rate = this.rates.get(deviceId) ?? { ops: [], creates: [], snapshots: [], lists: [] }
+    this.rates.set(deviceId, rate)
+    rate[kind] = rate[kind].filter((at) => now - at < 60_000)
+    if (rate[kind].length >= max) throw new Error('操作太频繁，过一会儿再试')
+    then?.()
+    rate[kind].push(now)
+  }
+
+  // 正看着这个会话、能操作的设备才发；它重新订阅时再发一次（连接端关掉任务页、断线时就丢了）
   private offerPermission(deviceId: string, cwd: string, pending: PendingPermission): void {
     const grant = this.deps.grant(deviceId)
-    if (!grant || projectFor(grant, cwd)?.level !== 'control' || pending.sentTo.has(deviceId)) return
+    if (!grant || projectFor(grant, cwd)?.level !== 'control') return
     pending.sentTo.add(deviceId)
     this.deps.send(deviceId, pending.request)
   }
@@ -320,22 +429,37 @@ export class HostSync {
       return
     }
     const sessionId = event.type === 'update' ? event.notification.sessionId : event.sessionId
+    let item: Pending | null = null
+    // 没人看、也不用续传的会话不记也不脱敏
+    const tracked = this.watched(sessionId) || this.histories.has(sessionId)
+    if (!tracked || event.type === 'reset') this.lastSeqs.delete(sessionId)
+    if (event.type === 'update' && tracked) {
+      const seq = seqOf(event.notification.update)
+      if (seq !== Number.MAX_SAFE_INTEGER) this.lastSeqs.set(sessionId, Math.max(this.lastSeqs.get(sessionId) ?? 0, seq))
+      item = { kind: 'update', seq, update: redactUpdate(event.notification.update) }
+    } else if (event.type === 'turn-started') item = { kind: 'turn', afterSeq: this.lastSeqs.get(sessionId) ?? 0, event }
+    const history = this.histories.get(sessionId)
+    if (history && event.type === 'reset') this.histories.delete(sessionId)
+    else if (history && item) {
+      if (this.watched(sessionId)) history.touchedAt = Date.now()
+      if (Date.now() - history.touchedAt > HISTORY_IDLE_MS) this.histories.delete(sessionId)
+      else this.record(history, item)
+    }
     for (const [deviceId, device] of this.devices) {
       const subscription = device.subscriptions.get(sessionId)
       if (!subscription) continue
       switch (event.type) {
         case 'update': {
-          const update = redactUpdate(event.notification.update)
-          const seq = seqOf(event.notification.update)
+          if (item?.kind !== 'update') break
           if (subscription.ready) {
-            subscription.queue.push({ seq, update })
+            subscription.queue.push({ seq: item.seq, update: item.update })
             this.scheduleFlush(deviceId)
-          } else subscription.pending.push({ kind: 'update', seq, update })
+          } else subscription.pending.push(item)
           break
         }
         case 'turn-started':
           if (subscription.ready) this.sendTurn(deviceId, subscription, event)
-          else subscription.pending.push({ kind: 'turn', event })
+          else if (item) subscription.pending.push(item)
           break
         case 'reset':
           device.subscriptions.delete(sessionId)
@@ -346,10 +470,16 @@ export class HostSync {
     if (event.type === 'turn-started') this.broadcastChanged()
   }
 
-  // 授权改了：已经看不到的会话让对方重新订阅（会被拒），列表也让它重新取
+  // 授权改了：已经看不到的会话让对方重新订阅（会被拒），列表也让它重新取；改成只能看的，发出去的确认收回
   grantsChanged(): void {
     for (const [deviceId, device] of this.devices) {
       const grant = this.deps.grant(deviceId)
+      for (const [requestId, pending] of this.permissions) {
+        const cwd = device.subscriptions.get(pending.sessionId)?.ready?.cwd
+        if (!pending.sentTo.has(deviceId) || (grant && cwd !== undefined && projectFor(grant, cwd)?.level === 'control')) continue
+        pending.sentTo.delete(deviceId)
+        this.deps.send(deviceId, { type: 'event', event: 'permission.settled', requestId })
+      }
       for (const [sessionId, subscription] of device.subscriptions) {
         if (grant && subscription.ready && projectFor(grant, subscription.ready.cwd)) continue
         if (!subscription.ready && grant) continue
@@ -382,7 +512,7 @@ export class HostSync {
   }
 
   // 一轮开始：先把攒着的上一轮的更新发掉，顺序不能乱
-  private sendTurn(deviceId: string, subscription: Subscription, event: Extract<SessionEvent, { type: 'turn-started' }>): void {
+  private sendTurn(deviceId: string, subscription: Subscription, event: TurnStarted): void {
     this.flushSubscription(deviceId, subscription)
     this.deps.send(deviceId, {
       type: 'event',

@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
-import type { SessionSearchResult, StoredSessionSummary } from '@diffra/core/types'
+import type { StoredSessionSummary } from '@diffra/core/types'
 import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
@@ -16,9 +16,10 @@ import { useNow } from '@/lib/use-now'
 import { loadTodos, navigate, openArchitecture, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { type RemoteProjectGroup, useRemoteProjects } from '@/features/devices/remote-projects'
+import { RemoteNewTaskDialog } from '@/features/devices/RemoteNewTaskDialog'
 import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
-import { useSessionSearch } from './session-search'
+import { type SearchItem, searchItemKey, useSessionSearch } from './session-search'
 import { TaskMenu } from './TaskMenu'
 
 interface SidebarTask {
@@ -266,11 +267,12 @@ function SidebarSearch() {
   const optionId = (index: number) => `${listId}-option-${index}`
   useEffect(() => setSelected(0), [search.text, search.list.length])
 
-  const pick = (item: SessionSearchResult | undefined) => {
+  const pick = (item: SearchItem | undefined) => {
     if (!item) return
     setOpen(false)
     setQuery('')
-    void openTask(item)
+    if (item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
+    else void openTask(item)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -333,7 +335,7 @@ function SidebarSearch() {
               const snippet = item.snippet !== '' && item.snippet !== item.title ? item.snippet : null
               return (
                 <div
-                  key={item.sessionId}
+                  key={searchItemKey(item)}
                   id={optionId(index)}
                   role="option"
                   tabIndex={-1}
@@ -345,7 +347,7 @@ function SidebarSearch() {
                 >
                   <span className="truncate text-sm">{highlightMatch(item.title, search.highlight)}</span>
                   <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                    <span className="max-w-32 truncate">{search.noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}</span>
+                    <span className="max-w-32 truncate">{item.remote ? `${item.remote.deviceName} · ${item.cwd}` : search.noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}</span>
                     <span className="ml-auto shrink-0 tabular-nums">{formatTime(item.updatedAt)}</span>
                   </span>
                   {snippet && <span className="truncate text-xs text-muted-foreground">{highlightMatch(snippet, search.highlight)}</span>}
@@ -447,15 +449,18 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
   )
 }
 
-// 别的设备授权给本机看的项目：和本机项目一样排在「项目」下，右边的设备图标标出是远程的；只读，没有新建任务，任务点开是远程任务页
+// 别的设备授权给本机的项目：和本机项目一样排在「项目」下，右边的设备图标标出是远程的；开放了「可查看和操作」的有加号，在对方那边新建任务。
+// 任务点开是远程任务页
 function RemoteProject({ group, collapsed, expanded, activeSession }: { group: RemoteProjectGroup; collapsed: boolean; expanded: boolean; activeSession: string | null }) {
+  const [creating, setCreating] = useState(false)
+  const control = group.level === 'control'
   const hasTasks = group.sessions.length > 0
   const recent = group.sessions.filter((session, index) => index < RECENT_TASK_LIMIT || session.sessionId === activeSession)
   const hiddenCount = group.sessions.length - recent.length
-  const where = group.online ? `「${group.deviceName}」上的项目，只读` : `「${group.deviceName}」不在线，显示的是之前的内容`
+  const where = group.online ? `「${group.deviceName}」上的项目，${control ? '可以操作' : '只读'}` : `「${group.deviceName}」不在线，显示的是之前的内容`
   return (
     <div className="space-y-px" data-testid="sidebar-remote-project">
-      <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent">
+      <div className={cn('group/project relative flex h-7.5 items-center gap-2 rounded-lg pl-2 hover:bg-accent', control ? 'pr-13' : 'pr-7')}>
         <span className="relative size-4 shrink-0">
           <Folder className={cn('size-4 transition-opacity', hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0')} />
           {hasTasks && (
@@ -474,12 +479,23 @@ function RemoteProject({ group, collapsed, expanded, activeSession }: { group: R
           role="img"
           aria-label={where}
           title={where}
-          className={cn('absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center text-muted-foreground', !group.online && 'opacity-40')}
+          className={cn('absolute top-1/2 flex size-5 -translate-y-1/2 items-center justify-center text-muted-foreground', control ? 'right-7' : 'right-1', !group.online && 'opacity-40')}
           data-testid={group.online ? 'remote-project-online' : 'remote-project-offline'}
         >
           <MonitorSmartphone className="size-3.5" />
         </span>
+        {control && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" aria-label={`在 ${group.name} 新建远程任务`} className={projectActionClass} disabled={!group.online} onClick={() => setCreating(true)}>
+                <Plus className="size-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>在对方的这个项目新建任务</TooltipContent>
+          </Tooltip>
+        )}
       </div>
+      {creating && <RemoteNewTaskDialog deviceId={group.deviceId} deviceName={group.deviceName} projectId={group.projectId} projectName={group.name} onClose={() => setCreating(false)} />}
       {!collapsed &&
         (expanded ? group.sessions : recent).map((session) => (
           <div

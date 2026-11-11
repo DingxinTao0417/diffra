@@ -720,6 +720,11 @@ export const CLIENT_EXT_NOTIFICATIONS = {
   architectureEvent: '_diffra/architecture/event',
 } as const
 
+// 只能由本机的人确认的权限请求，toolCall._meta.diffra 里带上它（设备连接不转给远程设备）：
+// 跨出项目授权的那几类——项目外的文件、读本机终端、给别的任务发消息或新建任务（可能在没开放的项目里）、改用用户自己的浏览器（用着用户的登录状态）
+export const LOCAL_ONLY_META_KEY = 'localOnly'
+export const LOCAL_ONLY_META = { diffra: { [LOCAL_ONLY_META_KEY]: true } }
+
 export const PERMISSION_OPTIONS = {
   allowOnce: 'allow_once',
   allowAlways: 'allow_always',

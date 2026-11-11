@@ -62,6 +62,8 @@ export const requestCallSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('session.create'), projectId, text: promptText, skills }),
   z.object({ method: z.literal('session.cancel'), sessionId }),
   z.object({ method: z.literal('permission.respond'), requestId, optionId: remotePermissionOption.nullable() }),
+  // 连接端删除了这台设备：请被连接端也撤销对它的授权（只会收紧，照办）
+  z.object({ method: z.literal('device.forget') }),
 ])
 
 export const requestSchema = z.object({ type: z.literal('request'), id: z.number().int().nonnegative(), call: requestCallSchema })
@@ -92,6 +94,10 @@ export const snapshotSchema = z.object({
   epoch: z.string().max(64),
   seq: z.number().int().nonnegative(),
 })
+
+// 带位置订阅、被连接端接得上时回它，之后补发缺的；接不上照常回一页快照
+export const resumedSchema = z.object({ resumed: z.literal(true), sessionId, running: z.boolean() })
+export const subscribeResultSchema = z.union([resumedSchema, snapshotSchema])
 
 export const okSchema = z.object({})
 // 远程发消息：对方正在跑时排在这一轮后面
@@ -135,6 +141,8 @@ export const eventSchema = z.discriminatedUnion('event', [
   z.object({ type: z.literal('event'), event: z.literal('permission.settled'), requestId }),
   // 配对时被连接端的用户点了允许或拒绝
   z.object({ type: z.literal('event'), event: z.literal('pair.result'), approved: z.boolean() }),
+  // 配对时连接端放弃了（取消、等太久）：被连接端收起确认弹窗
+  z.object({ type: z.literal('event'), event: z.literal('pair.cancel') }),
 ])
 
 export const remoteMessageSchema = z.union([helloSchema, requestSchema, responseSchema, eventSchema])
@@ -147,3 +155,4 @@ export type RemoteEvent = z.infer<typeof eventSchema>
 export type RemoteMessage = z.infer<typeof remoteMessageSchema>
 export type SessionList = z.infer<typeof sessionListSchema>
 export type RemoteSnapshotPage = z.infer<typeof snapshotSchema>
+export type RemoteResumed = z.infer<typeof resumedSchema>

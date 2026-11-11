@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { hostname } from 'node:os'
+import { realpathSync } from 'node:fs'
+import { hostname, tmpdir } from 'node:os'
+import { basename, dirname } from 'node:path'
 import { listSessions, remoteSnapshot } from '@diffra/core'
 import { RELAY_HOST, RELAY_PATH } from '@diffra/relay/protocol'
 import { app, BrowserWindow, ipcMain } from 'electron'
@@ -45,14 +47,30 @@ function act(action: RemoteAction): Promise<RemoteActionResult> {
   })
 }
 
-// 只在未打包时认环境变量：开发和 e2e 连本机的中转、缩短邀请串有效期（规则同 DIFFRA_UPDATE_URL）
+// 测试用的环境变量（连本机的中转、缩短邀请串有效期）：未打包时认（规则同 DIFFRA_UPDATE_URL）；
+// 打包版只在 e2e 的临时数据目录（系统临时目录下的 diffra-e2e-*）里认，正式数据目录里设了也不管用
+function testOverridesAllowed(): boolean {
+  if (!app.isPackaged) return true
+  // 按真实路径比：Windows 的临时目录可能是 8.3 短名
+  const real = (path: string) => {
+    const resolved = realpathSync.native(path)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  const dir = app.getPath('userData')
+  try {
+    return real(dirname(dir)) === real(tmpdir()) && basename(dir).startsWith('diffra-e2e-')
+  } catch {
+    return false
+  }
+}
+
 function relayUrl(): string {
-  const override = app.isPackaged ? undefined : process.env.DIFFRA_RELAY_URL
+  const override = testOverridesAllowed() ? process.env.DIFFRA_RELAY_URL : undefined
   return override || `wss://${RELAY_HOST}${RELAY_PATH}`
 }
 
 function inviteTtlMs(): number {
-  const override = app.isPackaged ? NaN : Number(process.env.DIFFRA_INVITE_TTL_SECONDS)
+  const override = testOverridesAllowed() ? Number(process.env.DIFFRA_INVITE_TTL_SECONDS) : NaN
   return (Number.isFinite(override) && override > 0 ? override : INVITE_TTL_SECONDS) * 1000
 }
 
@@ -98,7 +116,9 @@ export function registerRemoteIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.remoteResetIdentity, async () => (await service()).resetIdentity())
   ipcMain.handle(IPC_CHANNELS.remoteAudit, async () => (await service()).recentAudit())
   ipcMain.handle(IPC_CHANNELS.remoteList, async (_event, rawId: unknown) => (await service()).remoteList(parse(deviceId, rawId)))
-  ipcMain.handle(IPC_CHANNELS.remoteSubscribe, async (_event, rawId: unknown, rawSession: unknown) => (await service()).remoteSubscribe(parse(deviceId, rawId), parse(sessionId, rawSession)))
+  ipcMain.handle(IPC_CHANNELS.remoteSubscribe, async (_event, rawId: unknown, rawSession: unknown, rawResume: unknown) =>
+    (await service()).remoteSubscribe(parse(deviceId, rawId), parse(sessionId, rawSession), parse(z.object({ epoch: z.string().max(64), seq: z.number().int().nonnegative() }).optional(), rawResume)),
+  )
   ipcMain.handle(IPC_CHANNELS.remotePage, async (_event, rawId: unknown, rawSession: unknown, rawBefore: unknown) =>
     (await service()).remotePage(parse(deviceId, rawId), parse(sessionId, rawSession), parse(z.number().int().nonnegative(), rawBefore)),
   )

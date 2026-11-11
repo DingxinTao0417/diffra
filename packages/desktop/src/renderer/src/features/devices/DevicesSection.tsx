@@ -107,7 +107,7 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除设备「{removing?.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>本机不再连接它。要再连，得请对方重新生成邀请串。对方那边的授权要对方自己撤销。</AlertDialogDescription>
+            <AlertDialogDescription>本机不再连接它，对方在线时会一起撤销对方给本机的授权（不在线的话要对方自己撤销）。要再连，得请对方重新生成邀请串。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>

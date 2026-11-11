@@ -3,12 +3,14 @@ import {
   eventSchema,
   okSchema,
   promptResultSchema,
+  type RemoteResumed,
   type RemoteSnapshotPage,
   type RequestCall,
   responseSchema,
   type SessionList,
   sessionListSchema,
   snapshotSchema,
+  subscribeResultSchema,
 } from '@diffra/remote/messages'
 import type { z } from 'zod'
 import type { RemoteSyncEvent } from '../../shared/remote'
@@ -40,8 +42,9 @@ export class GuestSync {
     return this.request(deviceId, { method: 'sessions.list' }, sessionListSchema)
   }
 
-  subscribe(deviceId: string, sessionId: string): Promise<RemoteSnapshotPage> {
-    return this.request(deviceId, { method: 'session.subscribe', sessionId }, snapshotSchema)
+  // resume：断线前看到的位置，对方接得上就只补发后面的
+  subscribe(deviceId: string, sessionId: string, resume?: { epoch: string; seq: number }): Promise<RemoteSnapshotPage | RemoteResumed> {
+    return this.request(deviceId, { method: 'session.subscribe', sessionId, ...(resume ? { resume } : {}) }, subscribeResultSchema)
   }
 
   page(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
@@ -62,6 +65,10 @@ export class GuestSync {
 
   async respondPermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void> {
     await this.request(deviceId, { method: 'permission.respond', requestId, optionId }, okSchema)
+  }
+
+  async forget(deviceId: string): Promise<void> {
+    await this.request(deviceId, { method: 'device.forget' }, okSchema)
   }
 
   async unsubscribe(deviceId: string, sessionId: string): Promise<void> {

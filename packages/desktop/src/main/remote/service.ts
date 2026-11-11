@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { fingerprintOf, InviteError } from '@diffra/remote'
-import type { RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
+import type { RemoteResumed, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteDeviceView, RemoteProjectGrant, RemoteRelayStatus, RemoteSyncEvent, RemoteView } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { DIRECT } from './channel'
@@ -62,6 +62,7 @@ export class RemoteService {
       act: (action) => options.act(action),
       answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
       audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
+      forget: (deviceId) => void this.revoke(deviceId, '对方删除了本机，撤销授权'),
     })
     this.guestSync = new GuestSync({
       // 通道表是收到第一个直发帧时才建的，本机先开口时要在这里建；还没连中转就不建（不在这里起连接）
@@ -82,9 +83,9 @@ export class RemoteService {
     return this.guestSync.list(deviceId)
   }
 
-  remoteSubscribe(deviceId: string, sessionId: string): Promise<RemoteSnapshotPage> {
+  remoteSubscribe(deviceId: string, sessionId: string, resume?: { epoch: string; seq: number }): Promise<RemoteSnapshotPage | RemoteResumed> {
     this.requirePeer(deviceId)
-    return this.guestSync.subscribe(deviceId, sessionId)
+    return this.guestSync.subscribe(deviceId, sessionId, resume)
   }
 
   remotePage(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
@@ -213,17 +214,19 @@ export class RemoteService {
   }
 
   // 撤销：从中转白名单里拿掉，对方马上看到本机下线
-  async revoke(deviceId: string): Promise<void> {
+  async revoke(deviceId: string, action = '撤销授权'): Promise<void> {
     const grant = this.store.get().grants.find((item) => item.deviceId === deviceId)
     if (!grant) return
     await this.store.update((state) => ({ ...state, grants: state.grants.filter((item) => item.deviceId !== deviceId) }))
-    await this.audit.append({ deviceId, name: grant.name, action: '撤销授权' })
+    await this.audit.append({ deviceId, name: grant.name, action })
     this.links?.close(deviceId, 'host')
     this.hostSync.grantsChanged()
     this.sync()
   }
 
+  // 对方在线时先请它撤销对本机的授权；不在线就只删本机这边，对方的授权要对方自己撤销
   async removePeer(deviceId: string): Promise<void> {
+    if (this.relay?.isOnline(deviceId)) await this.guestSync.forget(deviceId).catch((error: unknown) => console.error('[remote] 请对方撤销授权失败', error))
     await this.store.update((state) => ({ ...state, peers: state.peers.filter((item) => item.deviceId !== deviceId) }))
     this.links?.close(deviceId, 'guest')
     this.sync()

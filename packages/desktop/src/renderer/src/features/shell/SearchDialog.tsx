@@ -1,13 +1,12 @@
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useState } from 'react'
-import type { SessionSearchResult } from '@diffra/core/types'
 import { Search } from 'lucide-react'
 import { cn } from 'cn'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { folderName, formatTime } from '@/lib/format'
-import { openTask } from '@/state/actions'
+import { navigate, openTask } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
-import { useSessionSearch } from './session-search'
+import { type SearchItem, searchItemKey, useSessionSearch } from './session-search'
 
 export function SearchDialog() {
   const open = useAppState((state) => state.searchOpen)
@@ -35,10 +34,11 @@ function SearchBody({ onClose }: { onClose(): void }) {
   const heading = !text ? '最近的任务' : searching ? '搜索中…' : '搜索结果'
   const emptyText = !text ? '还没有任务' : searching ? '' : search.failed ? '搜索失败，请重试' : '没有找到相关任务'
 
-  const pick = (item: SessionSearchResult | undefined) => {
+  const pick = (item: SearchItem | undefined) => {
     if (!item) return
     onClose()
-    void openTask(item)
+    if (item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
+    else void openTask(item)
   }
 
   const move = (next: number) => {
@@ -90,7 +90,7 @@ function SearchBody({ onClose }: { onClose(): void }) {
             const showSnippet = item.snippet !== '' && item.snippet !== item.title
             return (
               <div
-                key={item.sessionId}
+                key={searchItemKey(item)}
                 id={optionId(index)}
                 role="option"
                 tabIndex={-1}
@@ -104,9 +104,9 @@ function SearchBody({ onClose }: { onClose(): void }) {
                   <span className="min-w-0 flex-1 truncate">{highlightMatch(item.title, showSnippet ? '' : highlight)}</span>
                   <span
                     className={cn('max-w-44 shrink-0 truncate rounded-sm px-1.5 text-xs text-muted-foreground', index === selected ? 'bg-background/60' : 'bg-muted')}
-                    title={noProject.has(item.sessionId) ? item.cwd : undefined}
+                    title={!item.remote && noProject.has(item.sessionId) ? item.cwd : undefined}
                   >
-                    {noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}
+                    {item.remote ? `${item.remote.deviceName} · ${item.cwd}` : noProject.has(item.sessionId) ? '无项目' : folderName(item.cwd)}
                   </span>
                   <span className="min-w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{formatTime(item.updatedAt)}</span>
                 </div>

@@ -41,7 +41,7 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
-import type { RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
+import type { RemoteResumed, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
@@ -545,7 +545,8 @@ export interface DiffraApi {
   getRemoteAudit(): Promise<RemoteAuditEntry[]>
   // 看自己连接的设备授权给本机的会话：列表、订阅（回一页快照，之后经 onRemoteEvent 推实时动静）、往前翻页、退订
   listRemoteSessions(deviceId: string): Promise<SessionList>
-  subscribeRemoteSession(deviceId: string, sessionId: string): Promise<RemoteSnapshotPage>
+  // resume：断线前看到的位置（core 的 epoch 和 seq），对方接得上时回 resumed、之后补发缺的
+  subscribeRemoteSession(deviceId: string, sessionId: string, resume?: { epoch: string; seq: number }): Promise<RemoteSnapshotPage | RemoteResumed>
   pageRemoteSession(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage>
   unsubscribeRemoteSession(deviceId: string, sessionId: string): Promise<void>
   onRemoteEvent(listener: (event: RemoteSyncEvent) => void): () => void

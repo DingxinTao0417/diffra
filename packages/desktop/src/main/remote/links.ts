@@ -49,8 +49,13 @@ export class Links {
     })
   }
 
+  // 发不出去（积压太多、断了）就丢掉这条通道：一条消息可能已经发出去一半，对方拼不回来
   send(deviceId: string, role: LinkRole, message: unknown, options?: { compress?: boolean }): boolean {
-    return this.channels[role].get(deviceId)?.send(message, options) ?? false
+    const channel = this.channels[role].get(deviceId)
+    if (!channel) return false
+    if (channel.send(message, options)) return true
+    this.close(deviceId, role)
+    return false
   }
 
   close(deviceId: string, role: LinkRole): void {

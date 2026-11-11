@@ -1,6 +1,6 @@
 import { tool, type ToolResultPart, type ToolSet } from 'ai'
 import { z } from 'zod'
-import { PERMISSION_OPTIONS, type StoredTurn, type TaskActionParams, type TaskActionResult, type TurnOutcome, TURN_OUTCOME_META_KEY } from '../protocol.js'
+import { LOCAL_ONLY_META, PERMISSION_OPTIONS, type StoredTurn, type TaskActionParams, type TaskActionResult, type TurnOutcome, TURN_OUTCOME_META_KEY } from '../protocol.js'
 import type { SessionIndexEntry } from './store.js'
 import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
@@ -215,7 +215,7 @@ export async function runTaskTool(
     }
     if (session.permissionMode !== 'full') {
       const choice = await io.requestPermission(
-        { toolCallId: call.toolCallId, title: question, kind: 'other', status: 'pending', rawInput: call.input },
+        { toolCallId: call.toolCallId, title: question, kind: 'other', status: 'pending', rawInput: call.input, _meta: LOCAL_ONLY_META },
         [
           { optionId: PERMISSION_OPTIONS.allowOnce, name: '发送', kind: 'allow_once' },
           { optionId: PERMISSION_OPTIONS.reject, name: '不发', kind: 'reject_once' },

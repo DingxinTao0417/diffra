@@ -60,7 +60,7 @@ async function close(devices: Device[]): Promise<void> {
   }
 }
 
-test('设备连接：邀请串配对，被连接端核对指纹、选项目后允许；两边看到对方在线；修改授权、重新配对显示原来的授权、撤销后连接端马上看到离线；中转重启后自动重连；私钥加密存放', async () => {
+test('设备连接：邀请串配对，被连接端核对指纹、选项目后允许；两边看到对方在线；修改授权、重新配对显示原来的授权、撤销后连接端马上看到离线；中转重启后自动重连；私钥加密存放；连接端放弃配对时对方的确认弹窗收起，删除设备时对方一起撤销授权', async () => {
   test.setTimeout(150_000)
   let { relay, port } = await startRelay()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-devices-'))
@@ -133,8 +133,28 @@ test('设备连接：邀请串配对，被连接端核对指纹、选项目后�
     await expect(grants.getByTestId('grant')).toHaveCount(0)
     await expect(peers.getByTestId('device-offline')).toBeVisible()
 
+    // 连接端等对方确认时放弃：被连接端的确认弹窗马上收起，不会留下授权
+    await addDevice(guest.window, await newInvite(host.window))
+    await expect(request).toBeVisible()
+    await guest.window.getByRole('dialog').getByRole('button', { name: '取消' }).click()
+    await expect(request).toHaveCount(0)
+    await expect(host.window.getByTestId('invite-text')).toHaveCount(0)
+    await expect(grants.getByTestId('grant')).toHaveCount(0)
+
+    // 连接端删除设备：对方在线时一起撤销对方给本机的授权
+    await expect(guest.window.getByRole('dialog')).toHaveCount(0)
+    await addDevice(guest.window, await newInvite(host.window))
+    await request.getByRole('button', { name: '允许' }).click()
+    await expect(grants.getByTestId('grant')).toHaveCount(1)
+    await expect(peers.getByTestId('device-online')).toBeVisible()
+    await peers.getByRole('button', { name: '删除' }).click()
+    await guest.window.getByRole('alertdialog').getByRole('button', { name: '删除' }).click()
+    await expect(peers.getByTestId('peer')).toHaveCount(0)
+    await expect(grants.getByTestId('grant')).toHaveCount(0)
+
     await host.window.getByRole('button', { name: '查看' }).click()
     const audit = host.window.getByTestId('audit')
+    await expect(audit).toContainText('对方删除了本机，撤销授权')
     await expect(audit).toContainText('撤销授权')
     await expect(audit).toContainText('修改授权')
     await expect(audit).toContainText('允许配对')
@@ -254,7 +274,7 @@ async function send(window: Page, text: string): Promise<void> {
   await window.keyboard.press('Control+Enter')
 }
 
-test('设备连接：连接端在侧栏看到授权项目里的会话（别的项目看不到、直接要也被拒）；打开后看到脱敏的历史（图片只说带了几张）、实时看到对方正在跑的这一轮；只读；往前翻页；跑到一半中转重启，重连后不丢不重；两边逐轮内容一致；撤销后看到离线', async () => {
+test('设备连接：连接端在侧栏看到授权项目里的会话（别的项目看不到、直接要也被拒），侧栏搜索也能找到；打开后看到脱敏的历史（图片只说带了几张）、实时看到对方正在跑的这一轮；只读；往前翻页；跑到一半中转断开，断线期间的输出重连后续传补发、不丢不重；两边逐轮内容一致；撤销后看到离线', async () => {
   test.setTimeout(240_000)
   let { relay, port } = await startRelay()
   const granted = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-granted-'))
@@ -318,8 +338,14 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     const denied = await guest.window.evaluate(`window.diffra.subscribeRemoteSession(${JSON.stringify(hostId)}, ${JSON.stringify(hiddenSession)}).then(() => 'ok', (error) => String(error))`)
     expect(denied).toContain('没有这个会话')
 
+    // 侧栏搜索也能找到远程会话（按标题），点开是远程任务页
+    await sidebar.getByRole('combobox', { name: '侧栏搜索' }).fill('远程看')
+    const found = sidebar.getByRole('listbox', { name: '侧栏搜索结果' }).getByRole('option')
+    await expect(found).toHaveCount(1)
+    await expect(found).toContainText(`主机 · ${basename(granted)}`)
+    await found.click()
+
     // 打开：最近 10 轮，密钥脱敏，只读
-    await remoteTasks.click()
     const remoteTask = guest.window.getByTestId('remote-task')
     await expect(remoteTask.getByTestId('remote-task-title')).toHaveText('远程看的任务')
     await expect(remoteTask.getByTestId('turn')).toHaveCount(10)
@@ -343,18 +369,20 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     await guest.window.screenshot({ path: 'test-results/devices-remote-task.png' })
 
     // 跑到一半中转重启：重连后重新订阅，回答只出现一次
+    // 跑到一半中转断了，断线期间对方把这一轮跑完：重连后续传补发这段输出（不重新取整页），不丢不重
+    const hostLog: string[] = []
+    host.app.process().stdout?.on('data', (chunk: Buffer) => hostLog.push(String(chunk)))
     await send(host.window, '断线的一轮')
     await expect(remoteTask.getByTestId('turn')).toHaveCount(14)
     await expect(remoteTask).toContainText('断线前先说的话')
     await relay.close()
     await expect(guest.window.getByTestId('remote-offline')).toBeVisible()
-    ;({ relay } = await startRelay(port))
-    // 对方这一轮还没跑完时已经重连、重新订阅上了
-    await expect(guest.window.getByTestId('remote-offline')).toHaveCount(0)
-    await expect(remoteTask.getByTestId('remote-task-running')).toBeVisible()
+    await waitTaskDone(host.window, 30_000)
     await expect(remoteTask).not.toContainText('断线后才回来的回答')
+    ;({ relay } = await startRelay(port))
+    await expect(guest.window.getByTestId('remote-offline')).toHaveCount(0, { timeout: 30_000 })
     await expect(remoteTask).toContainText('断线后才回来的回答', { timeout: 15_000 })
-    await waitTaskDone(host.window)
+    await expect.poll(() => hostLog.join('')).toMatch(/断线续传：从 \d+ 补发 [1-9]\d* 条/)
     await expect(remoteTask.getByTestId('remote-task-running')).toHaveCount(0)
     // 不丢不重：和被连接端自己看到的一样多
     for (const text of ['断线前先说的话', '断线后才回来的回答']) {
@@ -460,14 +488,29 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     expect(await remote('cancelRemoteSession', viewSession)).toContain('对方只开放了查看，不能操作')
     expect(await remote('promptRemoteSession', 'no-such-session', '你好')).toContain('没有这个会话')
 
-    // 两边都打开能操作的那个任务
-    await host.window.getByTestId('sidebar-task').filter({ hasText: '远程操作的任务' }).click()
-    await guest.window.getByTestId('sidebar-remote-task').filter({ hasText: '远程操作的任务' }).click()
+    // 侧栏：开放查看的项目没有加号；打开只能看的任务是「只读」、没有输入框
+    const sidebar = guest.window.getByTestId('sidebar')
+    await expect(sidebar.getByRole('button', { name: `在 ${basename(viewOnly)} 新建远程任务` })).toHaveCount(0)
     const remoteTask = guest.window.getByTestId('remote-task')
+    await sidebar.getByTestId('sidebar-remote-task').filter({ hasText: '只能看的任务' }).click()
+    await expect(remoteTask.getByTestId('remote-task-title')).toHaveText('只能看的任务')
+    await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('只读')
+    await expect(remoteTask.getByTestId('remote-composer')).toHaveCount(0)
+
+    // 两边都打开能操作的那个任务：连接端是「可操作」，有输入框
+    await host.window.getByTestId('sidebar-task').filter({ hasText: '远程操作的任务' }).click()
+    await sidebar.getByTestId('sidebar-remote-task').filter({ hasText: '远程操作的任务' }).click()
+    await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('可操作')
     await expect(remoteTask.getByTestId('turn')).toHaveCount(1)
+    const composer = remoteTask.getByLabel('发给对方的消息')
+    const sendRemote = async (text: string) => {
+      await composer.fill(text)
+      await composer.press('Enter')
+      await expect(composer).toHaveValue('')
+    }
 
     // 远程发消息：被连接端起一轮，标出来自哪台设备；连接端自己发的标「本机发的」；两边内容一样
-    expect(await remote('promptRemoteSession', controlSession, '远程发的第一条')).toBe('ok {"queued":false}')
+    await sendRemote('远程发的第一条')
     await expect(host.window.getByTestId('turn')).toHaveCount(2)
     await waitTaskDone(host.window)
     await expect(host.window.getByTestId('turn').nth(1).getByTestId('turn-remote-source')).toHaveText('来自设备「同事的电脑」')
@@ -475,65 +518,77 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     await expect(remoteTask).toContainText('远程发的回答到了')
     expect(await turnTexts(guest.window, '[data-testid="remote-task"]')).toEqual(await turnTexts(host.window, 'body'))
     await host.window.screenshot({ path: 'test-results/devices-remote-control-host.png' })
-    await guest.window.screenshot({ path: 'test-results/devices-remote-control-guest.png' })
 
-    // 权限请求：连接端只拿到「允许一次」「拒绝」，远程答了本机的确认卡片收起，命令照常跑
-    expect(await remote('promptRemoteSession', controlSession, '跑个命令')).toContain('ok')
+    // 权限请求：连接端只拿到「允许一次」「拒绝」，在连接端点允许后本机的确认卡片收起，命令照常跑
+    const requestIds = async () => [...new Set((await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request').map((event) => event.requestId))]
+    await sendRemote('跑个命令')
     const permission = host.window.getByTestId('permission-card')
     await expect(permission).toContainText('hostname')
-    await expect.poll(async () => (await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request')).toHaveLength(1)
+    const remotePermission = remoteTask.getByTestId('permission-card')
+    await expect(remotePermission).toContainText('hostname')
+    await expect(remotePermission.getByRole('button')).toHaveText(['允许一次', '拒绝'])
     const first = (await permissionEvents(guest.window))[0]!
-    expect(first.toolCall?.title).toContain('hostname')
     expect(first.options?.map((option) => option.optionId)).toEqual(['allow_once', 'reject'])
-    expect(await remote('respondRemotePermission', first.requestId, 'allow_once')).toBe('ok')
+    await guest.window.screenshot({ path: 'test-results/devices-remote-control-guest.png' })
+    await remotePermission.getByRole('button', { name: '允许一次' }).click()
+    await expect(remotePermission).toHaveCount(0)
     await expect(permission).toHaveCount(0)
     await waitTaskDone(host.window)
     await expect(host.window.getByTestId('turn').last()).toContainText('命令跑完了')
     // 同一个确认答第二次：已经处理过了
     expect(await remote('respondRemotePermission', first.requestId, 'reject')).toContain('这个确认已经处理过了')
 
-    // 本机先答：连接端收到「已经答完」，再答被拒
-    expect(await remote('promptRemoteSession', controlSession, '再跑一个')).toContain('ok')
+    // 本机先答：连接端的确认卡片收起，再答被拒
+    await sendRemote('再跑一个')
     await expect(permission).toContainText('hostname')
-    await expect.poll(async () => (await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request')).toHaveLength(2)
-    const second = (await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request')[1]!
+    await expect(remotePermission).toContainText('hostname')
+    await expect.poll(requestIds).toHaveLength(2)
+    const second = (await requestIds())[1]!
     await permission.getByRole('button', { name: '允许一次' }).click()
-    await expect.poll(async () => (await permissionEvents(guest.window)).some((event) => event.event === 'permission.settled' && event.requestId === second.requestId)).toBe(true)
-    expect(await remote('respondRemotePermission', second.requestId, 'allow_once')).toContain('这个确认已经处理过了')
+    await expect(remotePermission).toHaveCount(0)
+    expect(await remote('respondRemotePermission', second, 'allow_once')).toContain('这个确认已经处理过了')
     await waitTaskDone(host.window)
 
     // 项目外的文件访问只在本机确认，连接端收不到
-    expect(await remote('promptRemoteSession', controlSession, '读项目外的文件')).toContain('ok')
+    await sendRemote('读项目外的文件')
     await expect(permission).toContainText('项目外读取')
-    const before = (await permissionEvents(guest.window)).length
     await permission.getByRole('button', { name: '拒绝', exact: true }).click()
     await waitTaskDone(host.window)
-    expect((await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request')).toHaveLength(2)
-    expect((await permissionEvents(guest.window)).length).toBe(before)
+    expect(await requestIds()).toHaveLength(2)
+    await expect(remotePermission).toHaveCount(0)
 
     // 运行中再发：排在这一轮后面，跑完接着跑
-    expect(await remote('promptRemoteSession', controlSession, '慢一点的回答')).toBe('ok {"queued":false}')
+    await sendRemote('慢一点的回答')
     await expect(host.window.getByTestId('turn')).toHaveCount(6)
-    expect(await remote('promptRemoteSession', controlSession, '排队的消息')).toBe('ok {"queued":true}')
+    await expect(remoteTask.getByTestId('remote-task-running')).toBeVisible()
+    await sendRemote('排队的消息')
+    await expect(guest.window.getByText('对方正在跑，这条消息排在这一轮后面')).toBeVisible()
     await expect(host.window.getByTestId('turn')).toHaveCount(7, { timeout: 15_000 })
     await waitTaskDone(host.window)
     await expect(host.window.getByTestId('turn').last()).toContainText('排队的回答')
 
-    // 远程停止：模型正在回这一轮时停
+    // 远程停止：模型正在回这一轮时，在连接端点停止
     const served = model.requests()
-    expect(await remote('promptRemoteSession', controlSession, '停下来')).toContain('ok')
+    await sendRemote('停下来')
     await expect(host.window.getByTestId('turn')).toHaveCount(8)
-    await expect(remoteTask.getByTestId('remote-task-running')).toBeVisible()
     await expect.poll(() => model.requests()).toBe(served + 1)
-    expect(await remote('cancelRemoteSession', controlSession)).toBe('ok')
+    await remoteTask.getByRole('button', { name: '停止' }).click()
     await waitTaskStatus(host.window, 'stopped')
+    await expect(remoteTask.getByTestId('remote-task-running')).toHaveCount(0)
     await expect(host.window.getByTestId('turn').last()).not.toContainText('不该出现的回答')
 
-    // 远程新建：只认项目 id，在被连接端后台建好、跑完，侧栏里有
-    const created = await remote('createRemoteSession', controlProject.id, '远程新建的任务')
-    expect(created).toMatch(/^ok \{"sessionId":"[A-Za-z0-9-]+"\}$/)
+    // 远程新建：侧栏能操作的项目上有加号，在被连接端后台建好、跑完，连接端打开它
+    await sidebar.getByRole('button', { name: `在 ${basename(controlled)} 新建远程任务` }).click()
+    const dialog = guest.window.getByRole('dialog')
+    await dialog.getByLabel('新任务要做什么').fill('远程新建的任务')
+    await dialog.getByRole('button', { name: '新建', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(remoteTask.getByTestId('remote-task-title')).toHaveText('远程新建的任务')
+    await expect(remoteTask).toContainText('新任务的回答')
     await expect(host.window.getByTestId('sidebar-task').filter({ hasText: '远程新建的任务' })).toBeVisible()
     await expect.poll(() => host.window.evaluate<boolean>(`window.diffra.listSessions(null).then((tasks) => tasks.some((task) => task.title === '远程新建的任务' && !task.running && task.turnCount === 1))`)).toBe(true)
+    await sidebar.getByTestId('sidebar-remote-task').filter({ hasText: '远程操作的任务' }).click()
+    await expect(remoteTask.getByTestId('remote-task-title')).toHaveText('远程操作的任务')
 
     // 限流：每分钟最多 30 次操作
     let limited = ''
@@ -555,11 +610,13 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     await host.window.getByTestId('sidebar-task').filter({ hasText: '远程操作的任务' }).click()
     await send(host.window, '最后一个命令')
     await expect(permission).toContainText('hostname')
-    await expect.poll(async () => (await permissionEvents(guest.window)).filter((event) => event.event === 'permission.request')).toHaveLength(3)
+    await expect.poll(requestIds).toHaveLength(3)
+    await expect(remotePermission).toContainText('hostname')
     await host.window.getByTestId('remote-control-banner').getByRole('button', { name: '断开这台设备' }).click()
     await host.window.getByRole('alertdialog').getByRole('button', { name: '断开', exact: true }).click()
     await expect(host.window.getByTestId('remote-control-banner')).toHaveCount(0)
     await expect(guest.window.getByTestId('remote-offline')).toBeVisible()
+    await expect(remotePermission).toHaveCount(0)
     await expect(permission).toContainText('hostname')
     await permission.getByRole('button', { name: '拒绝', exact: true }).click()
     await waitTaskDone(host.window)
