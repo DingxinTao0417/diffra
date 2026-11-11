@@ -33,6 +33,23 @@ export function rejectsToolChoice(error: unknown): boolean {
   return APICallError.isInstance(cause) && cause.statusCode === 400 && /tool_choice/i.test(`${cause.message} ${cause.responseBody ?? ''}`)
 }
 
+// 输出上限超出了模型支持的范围：400（有的服务用 422），报错里提到 max_tokens
+export function rejectsMaxTokens(error: unknown): boolean {
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  return APICallError.isInstance(cause) && (cause.statusCode === 400 || cause.statusCode === 422) && /max_tokens|max_output_tokens/i.test(`${cause.message} ${cause.responseBody ?? ''}`)
+}
+
+// 各家会在报错里写出允许的范围（「Range of max_tokens should be [1, 8192]」「max_tokens: 32000 > 8192」），
+// 取比这次请求小、又不至于小得没法用的最大那个数；找不到返回 undefined
+const MIN_USABLE_MAX_TOKENS = 1024
+export function maxTokensFromError(error: unknown, requested: number): number | undefined {
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  const text = APICallError.isInstance(cause) ? `${cause.message} ${cause.responseBody ?? ''}` : String(cause)
+  const numbers = (text.match(/\d[\d,]*/g) ?? []).map((match) => Number(match.replace(/,/g, '')))
+  const usable = numbers.filter((value) => value >= MIN_USABLE_MAX_TOKENS && value < requested)
+  return usable.length > 0 ? Math.max(...usable) : undefined
+}
+
 export function toModelError(error: unknown, apiKey: string, timeoutMs: number): ModelError {
   const cause = RetryError.isInstance(error) ? error.lastError : error
 

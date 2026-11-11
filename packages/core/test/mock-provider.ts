@@ -84,6 +84,28 @@ export async function startMockProvider(): Promise<MockProvider> {
           return send(200, { data: [{ id: 'claude-mock', display_name: 'Claude Mock' }], has_more: false })
         }
         if (req.method === 'POST' && path === '/anthropic/v1/messages') {
+          const body = JSON.parse(raw) as { model?: string; max_tokens?: number; stream?: boolean }
+          // mock-max-8192：最多输出 8192，超了按百炼的写法报范围；mock-max-vague：超过 4096 就拒，报错里不给数字
+          if (body.model === 'mock-max-8192' && (body.max_tokens ?? 0) > 8192) {
+            return send(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Range of max_tokens should be [1, 8192]' } })
+          }
+          if (body.model === 'mock-max-vague' && (body.max_tokens ?? 0) > 4096) {
+            return send(400, { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens is too large for this model' } })
+          }
+          // 流式请求只回一段文字 OK
+          if (body.stream && !wantsTool) {
+            const events = [
+              { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-mock', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 } } },
+              { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+              { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } },
+              { type: 'content_block_stop', index: 0 },
+              { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+              { type: 'message_stop' },
+            ]
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+            res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
+            return
+          }
           return send(200, {
             id: 'msg_1',
             type: 'message',

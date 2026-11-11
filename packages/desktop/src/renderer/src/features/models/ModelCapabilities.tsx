@@ -102,7 +102,7 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
         </div>}
         <p className="text-xs text-muted-foreground">
           {anthropicProtocol
-            ? '一次回复最多输出多少，含思考。选「自动」时 Claude 用官方上限，其他模型按 32k；服务商报 max_tokens 超出范围时调小。'
+            ? '一次回复最多输出多少，含思考。选「自动」时 Claude 用官方上限，其他模型按 32k，服务商说超出范围时自动调低；自己填的值超出范围会直接报错。'
             : '一次回复最多输出多少，含思考。选「自动」时不指定，用服务商的默认值。'}
         </p>
       </div>

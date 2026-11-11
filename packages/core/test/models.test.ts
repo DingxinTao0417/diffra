@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { connectToCore, handshake, requestListModels, requestTestModel } from '../src/client.js'
-import { generateText, type LanguageModel, type ModelMessage } from 'ai'
+import { APICallError, generateText, type LanguageModel, type ModelMessage, streamText } from 'ai'
+import { maxTokensFromError, rejectsMaxTokens } from '../src/models/errors.js'
 import { createLanguageModel, listModels, testModel } from '../src/models/operations.js'
 import { modelConfigSchema } from '../src/session/config.js'
 import type { ModelEndpoint } from '../src/models/types.js'
@@ -79,6 +80,42 @@ describe('最大输出', () => {
     await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'kimi-for-coding', undefined, 8000))).resolves.toBe(8000)
     await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'kimi-for-coding'), 64)).resolves.toBe(64)
     await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'claude-mock'))).resolves.not.toBe(32_000)
+  })
+
+  test('「自动」的上限被拒时按报错里的范围重发，流式也一样，之后的调用直接用它；报错里没有可用的数字就不指定', async () => {
+    const path = '/anthropic/v1/messages'
+    const sentFor = (modelId: string) =>
+      mock.requests
+        .filter((item) => item.path === path && item.body?.includes(`"model":"${modelId}"`))
+        .map((item) => (JSON.parse(item.body ?? '{}') as { max_tokens?: number }).max_tokens)
+    const limited = createLanguageModel(anthropic(), 'mock-max-8192')
+    await expect(generateText({ model: limited, prompt: 'OK', maxRetries: 0 })).resolves.toMatchObject({ text: 'OK' })
+    await expect(streamText({ model: limited, prompt: 'OK', maxRetries: 0 }).text).resolves.toBe('OK')
+    expect(sentFor('mock-max-8192')).toEqual([32_000, 8192, 8192])
+
+    const fresh = createLanguageModel(anthropic(), 'mock-max-8192')
+    await expect(streamText({ model: fresh, prompt: 'OK', maxRetries: 0 }).text).resolves.toBe('OK')
+    expect(sentFor('mock-max-8192')).toEqual([32_000, 8192, 8192, 32_000, 8192])
+
+    // AI SDK 对不认识的模型默认 4096
+    await expect(generateText({ model: createLanguageModel(anthropic(), 'mock-max-vague'), prompt: 'OK', maxRetries: 0 })).resolves.toMatchObject({ text: 'OK' })
+    expect(sentFor('mock-max-vague')).toEqual([32_000, 4096])
+  })
+
+  test('用户填的上限、调用时指定的上限被拒时照常报错，不自动调低', async () => {
+    await expect(generateText({ model: createLanguageModel(anthropic(), 'mock-max-8192', undefined, 16_000), prompt: 'OK', maxRetries: 0 })).rejects.toThrow('Range of max_tokens')
+    await expect(generateText({ model: createLanguageModel(anthropic(), 'mock-max-8192'), prompt: 'OK', maxOutputTokens: 9000, maxRetries: 0 })).rejects.toThrow('Range of max_tokens')
+  })
+
+  test('从报错里取比请求小、又不小于 1024 的最大数字；只认提到 max_tokens 的 400、422', () => {
+    const error = (message: string, statusCode = 400) => new APICallError({ message, url: 'http://x', requestBodyValues: {}, statusCode, isRetryable: false })
+    expect(maxTokensFromError(error('Range of max_tokens should be [1, 8192]'), 32_000)).toBe(8192)
+    expect(maxTokensFromError(error('max_tokens: 32000 > 16,384, which is the maximum allowed'), 32_000)).toBe(16_384)
+    expect(maxTokensFromError(error('max_tokens must be at least 1'), 32_000)).toBeUndefined()
+    expect(rejectsMaxTokens(error('Range of max_tokens should be [1, 8192]'))).toBe(true)
+    expect(rejectsMaxTokens(error('max_output_tokens is too large', 422))).toBe(true)
+    expect(rejectsMaxTokens(error('Range of max_tokens should be [1, 8192]', 500))).toBe(false)
+    expect(rejectsMaxTokens(error('prompt is too long'))).toBe(false)
   })
 
   test('OpenAI 兼容接口默认不指定，设置了才发；和思考强度可以同时用', async () => {

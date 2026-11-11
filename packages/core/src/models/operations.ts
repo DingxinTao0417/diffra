@@ -2,11 +2,11 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogle } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { defaultSettingsMiddleware, generateText, type LanguageModel, tool, wrapLanguageModel } from 'ai'
+import { defaultSettingsMiddleware, generateText, type LanguageModel, type LanguageModelMiddleware, tool, wrapLanguageModel } from 'ai'
 import type { ReasoningEffort } from '../protocol.js'
 import { z } from 'zod'
 import { CORE_VERSION } from '../version.js'
-import { httpError, toModelError } from './errors.js'
+import { httpError, maxTokensFromError, rejectsMaxTokens, toModelError } from './errors.js'
 import type { ListedModel, ListModelsResult, ModelEndpoint, TestModelResult } from './types.js'
 
 const LIST_TIMEOUT_MS = 15_000
@@ -43,15 +43,46 @@ export function createLanguageModel(
   maxOutputTokens?: number | null,
 ): LanguageModel {
   const model = createBaseLanguageModel(endpoint, modelId)
+  const middleware: LanguageModelMiddleware[] = []
   const settings: Parameters<typeof defaultSettingsMiddleware>[0]['settings'] = {}
-  const outputLimit = maxOutputTokens ?? defaultMaxOutputTokens(endpoint, modelId)
-  if (outputLimit !== null) settings.maxOutputTokens = outputLimit
+  if (maxOutputTokens != null) settings.maxOutputTokens = maxOutputTokens
+  else {
+    const automatic = defaultMaxOutputTokens(endpoint, modelId)
+    if (automatic !== null) middleware.push(automaticOutputLimit(automatic))
+  }
   if (reasoningEffort && reasoningEffort !== 'default' && (endpoint.protocol === 'openai-responses' || endpoint.protocol === 'openai-compatible')) {
     const provider = endpoint.protocol === 'openai-responses' ? 'openai' : 'openai-compatible'
     settings.providerOptions = { [provider]: { reasoningEffort } }
   }
-  if (Object.keys(settings).length === 0) return model
-  return wrapLanguageModel({ model, middleware: defaultSettingsMiddleware({ settings }) })
+  if (Object.keys(settings).length > 0) middleware.push(defaultSettingsMiddleware({ settings }))
+  if (middleware.length === 0) return model
+  return wrapLanguageModel({ model, middleware })
+}
+
+type CallOptions = Parameters<NonNullable<LanguageModelMiddleware['wrapStream']>>[0]['params']
+
+// 「自动」的输出上限被服务拒绝时（有的模型最多只能输出 8K），按报错里写的上限再发；报错里没有可用的数字就不指定，用 AI SDK 的默认值。
+// 发成功的上限记在这个模型实例上（一个会话一个），之后的调用不用先被拒一次。调用方自己指定的上限、用户在设置里填的上限都不改，照常报错
+function automaticOutputLimit(limit: number): LanguageModelMiddleware {
+  let current: number | undefined = limit
+  const send = async <T>(params: CallOptions, call: (params: CallOptions) => PromiseLike<T>): Promise<T> => {
+    if (params.maxOutputTokens !== undefined) return call(params)
+    let attempt = current
+    for (;;) {
+      try {
+        const result = await call({ ...params, maxOutputTokens: attempt })
+        current = attempt
+        return result
+      } catch (error) {
+        if (attempt === undefined || !rejectsMaxTokens(error)) throw error
+        attempt = maxTokensFromError(error, attempt)
+      }
+    }
+  }
+  return {
+    wrapGenerate: ({ params, model }) => send(params, (sent) => model.doGenerate(sent)),
+    wrapStream: ({ params, model }) => send(params, (sent) => model.doStream(sent)),
+  }
 }
 
 function defaultMaxOutputTokens(endpoint: ModelEndpoint, modelId: string): number | null {
