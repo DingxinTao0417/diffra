@@ -763,9 +763,9 @@ v2：
   - `packages/relay` 有没提交的改动就不发，线上跑的一定对得上一个提交。
 - 首次上线（第 355 步，改服务器，执行前先问用户；改动前把要改的原文件备份到 `/root/backup/`）。配置文件都在 `packages/relay/deploy/`：
   1. Cloudflare 加 `relay` 的 A 记录指向服务器，仅 DNS，不走代理（WebSocket 直连 nginx）。
-  2. 装 Node 24（NodeSource 的 apt 源），确认 `/usr/bin/node --version` 是 v24。
-  3. 建系统用户 `diffra-relay`（不能登录、没有家目录），建 `/opt/diffra-relay/releases`、`/var/log/diffra-relay`、`/var/www/certbot`。
-  4. `nginx-http.conf` 放进 `/etc/nginx/sites-available/relay.diffra.dev`、链到 `sites-enabled`，`nginx -t` 后重载；`certbot certonly --webroot -w /var/www/certbot -d relay.diffra.dev` 申请证书；再把 `nginx-https.conf` 接到同一个文件后面，`nginx -t` 后重载。
+  2. 装 Node 24：nodejs.org 的官方二进制包（`linux-x64.tar.xz`），对过 `SHASUMS256.txt` 再解到 `/opt/node-v24.x.y-linux-x64`，`/opt/node` 和 `/usr/local/bin/node` 链过去。不加 NodeSource 的 apt 源：服务器上原本只有 Ubuntu 官方源，不多信任一个第三方；Ubuntu 24.04 自带的 nodejs 是 18，跑不了 TS。升级就是换一个目录再改链接。
+  3. 建系统用户 `diffra-relay`（不能登录、没有家目录），建 `/opt/diffra-relay/releases` 和 `/var/log/diffra-relay`。
+  4. `nginx-http.conf` 放进 `/etc/nginx/sites-available/relay.diffra.dev`、链到 `sites-enabled`，`nginx -t` 后重载；`certbot certonly --nginx -d relay.diffra.dev` 申请证书（和官网、更新源一样用 nginx 插件，续期也是现有的 certbot 定时任务）；再把 `nginx-https.conf` 接到同一个文件后面，`nginx -t` 后重载。服务器没有公网 IPv6，现有站点也只听 IPv4，中转一样。
   5. `logrotate.conf` 放进 `/etc/logrotate.d/diffra-relay`，`logrotate -d` 检查。
   6. `diffra-relay.service` 放进 `/etc/systemd/system/`，`daemon-reload` 后 `enable`。
   7. 本机跑 `publish:relay`；验证健康检查、从本机用 wss 登录，更新源的 `latest.yml` 和安装包下载不受影响。

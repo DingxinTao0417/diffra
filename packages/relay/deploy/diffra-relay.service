@@ -1,5 +1,6 @@
 # 中转服务的 systemd 单元：放到 /etc/systemd/system/diffra-relay.service。
-# 代码在 /opt/diffra-relay/current（发布脚本每次发一个新目录再把 current 链过去），用 node 直接跑 TS，不构建
+# 代码在 /opt/diffra-relay/current（发布脚本每次发一个新目录再把 current 链过去），用 node 直接跑 TS，不构建。
+# Node 是 nodejs.org 的官方二进制包，解在 /opt/node，/usr/local/bin/node 链过去
 [Unit]
 Description=Diffra 设备连接中转服务
 After=network-online.target
@@ -10,7 +11,7 @@ Type=simple
 User=diffra-relay
 Group=diffra-relay
 WorkingDirectory=/opt/diffra-relay/current
-ExecStart=/usr/bin/node /opt/diffra-relay/current/src/main.ts
+ExecStart=/usr/local/bin/node /opt/diffra-relay/current/src/main.ts
 Environment=RELAY_PORT=8787
 Environment=RELAY_TRUST_PROXY=1
 Environment=NODE_ENV=production
