@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { runProcess, truncateLines } from '../process.js'
 import { applyEdit } from './edit-match.js'
 import { isProtectedFile, isUnderReadOnly, PROTECTED_GLOBS } from './protected.js'
+import { similarPaths } from './suggest.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
 import { contentHash, resolveToolPath } from './workspace.js'
 
@@ -27,7 +28,7 @@ export async function readFileTool(
   const target = await resolveToolPath(context, input.path, 'read')
   if (isProtectedFile(target.display)) throw protectedFileError(target.display)
   const info = await stat(target.absolute).catch(() => null)
-  if (!info) throw new ToolError(`File not found: ${target.display}`)
+  if (!info) throw new ToolError(`File not found: ${target.display}.${await didYouMean(context, target.display)}`)
   if (info.isDirectory()) throw new ToolError(`${target.display} is a directory. Use list_files instead.`)
   if (info.size > MAX_READ_BYTES) {
     throw new ToolError(`${target.display} is too large (${info.size} bytes). Use search to find the relevant part.`)
@@ -141,7 +142,9 @@ export async function editFileTool(
     }
   }
 
-  if (existing === null) throw new ToolError(`File not found: ${target.display}. To create it, pass an empty old_string.`)
+  if (existing === null) {
+    throw new ToolError(`File not found: ${target.display}.${await didYouMean(context, target.display)} To create it, pass an empty old_string.`)
+  }
   const known = context.readHashes.get(target.absolute)
   if (known === undefined) throw new ToolError(`Read ${target.display} with read_file before editing it.`)
   if (known !== contentHash(existing)) {
@@ -181,6 +184,11 @@ export async function editFileTool(
     diff: { path: target.absolute, oldText: existing, newText: updated },
     edited: true,
   }
+}
+
+async function didYouMean(context: ToolContext, display: string): Promise<string> {
+  const paths = await similarPaths(context, display)
+  return paths.length > 0 ? ` Did you mean: ${paths.join(', ')}?` : ''
 }
 
 // 返回改动附近的几行，让模型确认改对了，不用再读一遍整个文件

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { connectToCore, handshake, requestListModels, requestTestModel } from '../src/client.js'
-import { generateText } from 'ai'
+import { generateText, type LanguageModel, type ModelMessage } from 'ai'
 import { createLanguageModel, listModels, testModel } from '../src/models/operations.js'
 import { modelConfigSchema } from '../src/session/config.js'
 import type { ModelEndpoint } from '../src/models/types.js'
@@ -37,6 +37,63 @@ describe('思考程度', () => {
     expect(modelConfigSchema.safeParse({ ...model, reasoningEffort: 'invalid' }).success).toBe(false)
     expect(modelConfigSchema.parse({ ...model, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
     expect(modelConfigSchema.safeParse(model).success).toBe(true)
+  })
+})
+
+describe('DeepSeek 的思考内容', () => {
+  // 第一条 assistant 没有思考内容（DeepSeek 返回空思考，或换模型前别的模型写的），第二条有
+  const history: ModelMessage[] = [
+    { role: 'user', content: '第一问' },
+    { role: 'assistant', content: [{ type: 'text', text: '直接回答' }] },
+    { role: 'user', content: '第二问' },
+    { role: 'assistant', content: [{ type: 'reasoning', text: '想了想' }, { type: 'text', text: '回答' }] },
+    { role: 'user', content: '第三问' },
+  ]
+  const sentReasoning = async (modelId: string) => {
+    await generateText({ model: createLanguageModel(openai(), modelId), messages: history, abortSignal: AbortSignal.timeout(5000), maxRetries: 0 })
+    const request = mock.requests.findLast((item) => item.path === '/openai/v1/chat/completions')
+    const body = JSON.parse(request?.body ?? '{}') as { messages: Array<{ role: string; reasoning_content?: string }> }
+    return body.messages.filter((message) => message.role === 'assistant').map((message) => message.reasoning_content)
+  }
+
+  test('deepseek- 开头的模型：每条 assistant 消息都带 reasoning_content，没有的补空串', async () => {
+    await expect(sentReasoning('deepseek-v4-pro')).resolves.toEqual(['', '想了想'])
+  })
+
+  test('其他模型不补', async () => {
+    await expect(sentReasoning('mock-a')).resolves.toEqual([undefined, '想了想'])
+  })
+})
+
+describe('最大输出', () => {
+  const anthropic = (): ModelEndpoint => ({ protocol: 'anthropic-compatible', baseUrl: `${mock.baseUrl}/anthropic/`, apiKey: GOOD_KEY })
+  const sentMaxTokens = async (path: string, model: LanguageModel, maxOutputTokens?: number) => {
+    await generateText({ model, prompt: 'OK', maxOutputTokens, abortSignal: AbortSignal.timeout(5000), maxRetries: 0 })
+    const request = mock.requests.findLast((item) => item.path === path)
+    return (JSON.parse(request?.body ?? '{}') as { max_tokens?: number }).max_tokens
+  }
+
+  test('Anthropic 兼容接口的非 Claude 模型默认 32000；设置了按设置，调用时指定的优先；Claude 模型不受影响', async () => {
+    const path = '/anthropic/v1/messages'
+    await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'kimi-for-coding'))).resolves.toBe(32_000)
+    await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'kimi-for-coding', undefined, 8000))).resolves.toBe(8000)
+    await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'kimi-for-coding'), 64)).resolves.toBe(64)
+    await expect(sentMaxTokens(path, createLanguageModel(anthropic(), 'claude-mock'))).resolves.not.toBe(32_000)
+  })
+
+  test('OpenAI 兼容接口默认不指定，设置了才发；和思考强度可以同时用', async () => {
+    const path = '/openai/v1/chat/completions'
+    await expect(sentMaxTokens(path, createLanguageModel(openai(), 'mock-a'))).resolves.toBeUndefined()
+    await expect(sentMaxTokens(path, createLanguageModel(openai(), 'mock-a', 'high', 16_000))).resolves.toBe(16_000)
+    const body: unknown = JSON.parse(mock.requests.findLast((item) => item.path === path)?.body ?? '{}')
+    expect(body).toHaveProperty('reasoning_effort', 'high')
+  })
+
+  test('会话配置：不填是 null，只接受正整数', () => {
+    const model = { endpoint: openai(), modelId: 'mock-a', contextWindow: null, provider: null }
+    expect(modelConfigSchema.parse(model).maxOutputTokens).toBeNull()
+    expect(modelConfigSchema.parse({ ...model, maxOutputTokens: 8000 }).maxOutputTokens).toBe(8000)
+    expect(modelConfigSchema.safeParse({ ...model, maxOutputTokens: 0 }).success).toBe(false)
   })
 })
 

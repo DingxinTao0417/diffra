@@ -14,6 +14,7 @@ export const MAX_MODEL_DISPLAY_NAME_LENGTH = 100
 export const MAX_MODEL_CONTEXT_WINDOWS = 20
 export const MAX_PROVIDER_MODELS = 20
 export const CONTEXT_WINDOW_OPTIONS = [32_000, 64_000, 128_000, 200_000, 256_000, 1_000_000] as const
+export const MAX_OUTPUT_OPTIONS = [8_000, 16_000, 32_000, 64_000] as const
 
 export interface ModelConfig {
   // 旧配置缺少这些字段时沿用模型 ID、启用状态和单个上下文窗口。
@@ -26,6 +27,8 @@ export interface ModelConfig {
   contextWindow: number | null
   // 能看图：提问可以带图片，浏览器工具可以截图给它看
   images: boolean
+  // 每次调用最多输出多少 token；没有或 null 时按协议的默认值
+  maxOutputTokens?: number | null
 }
 
 // 显式处理空白名称，兼容旧配置；所有展示入口使用同一回退规则。

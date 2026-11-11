@@ -104,7 +104,7 @@ export async function enhancePrompt(request: EnhanceRequest, session: Session | 
     context.push(`This is a design task: the agent draws pages on a canvas${style ? ` in the "${style.name}" style` : ''}.`)
   }
   if (request.mentions.length > 0) context.push(`Attachments (keep these tokens exactly): ${request.mentions.join(' ')}`)
-  const model = createLanguageModel(request.model.endpoint, request.model.modelId, request.model.reasoningEffort)
+  const model = createLanguageModel(request.model.endpoint, request.model.modelId, request.model.reasoningEffort, request.model.maxOutputTokens)
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   // 和其他模型调用一样走流式接口；强制只调 submit_prompt，服务不接受时改用 auto（系统提示词里也要求了调它）
   const ask = async (toolChoice: 'auto' | { type: 'tool'; toolName: 'submit_prompt' }) => {

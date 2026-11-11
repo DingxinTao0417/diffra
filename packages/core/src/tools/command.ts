@@ -1,4 +1,5 @@
 import { runProcess, truncateLines } from '../process.js'
+import { similarCommands } from './suggest.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
 
 const DEFAULT_TIMEOUT_SECONDS = 120
@@ -44,5 +45,16 @@ export async function runCommandTool(
   const permission = await context.requestCommandPermission(input.command)
   if (!permission.allowed) throw new ToolError(permission.reason)
   const result = await runShell(context, input.command, timeout)
-  return { text: result.summary, title: `执行 ${input.command}`, terminalOutput: result.summary, commandSucceeded: result.exitCode === 0 && !result.timedOut && !result.aborted }
+  const hint = result.exitCode === 127 ? await missingCommandHint(context, result.output) : ''
+  return { text: result.summary + hint, title: `执行 ${input.command}`, terminalOutput: result.summary, commandSucceeded: result.exitCode === 0 && !result.timedOut && !result.aborted }
+}
+
+// 退出码 127 是命令不存在：给几个 bash 里能找到、名字接近的命令；都不像就提示去项目里找它平时怎么跑
+async function missingCommandHint(context: ToolContext, output: string): Promise<string> {
+  const name = /([^\s:]+): command not found/.exec(output)?.[1]
+  if (!name || !context.bashPath) return ''
+  const similar = await similarCommands(context, context.bashPath, commandEnv(), name)
+  return similar.length > 0
+    ? `\n\`${name}\` was not found. Similar commands that exist: ${similar.join(', ')}.`
+    : `\n\`${name}\` is not installed or not on PATH in Git Bash. Check how the project runs it (package.json scripts, a Makefile, a virtualenv) instead of guessing.`
 }

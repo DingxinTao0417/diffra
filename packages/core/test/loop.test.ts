@@ -5,6 +5,7 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk'
 import { APICallError, simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { z } from 'zod'
 import { Checkpoints } from '../src/checkpoint.js'
 import { McpPool } from '../src/mcp.js'
 import { findBash, findRipgrep } from '../src/environment.js'
@@ -16,11 +17,13 @@ import { formatPlan, runPlan } from '../src/session/plan.js'
 import { compactManually } from '../src/session/compact.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { IMAGE_CHARS, messagesChars, Session, type SessionOptions } from '../src/session/session.js'
+import { TOOLS } from '../src/session/tools.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
 import { testMcpServer } from './mcp-fixture.js'
 
-// inputTokens 是这次调用报给 Diffra 的输入 token 数，默认 1000
-type Step = ({ toolCalls: Array<{ name: string; input: unknown }> } | { text: string }) & { inputTokens?: number }
+// inputTokens 是这次调用报给 Diffra 的输入 token 数，默认 1000；truncated 时这次回复被输出上限截断；
+// raw 是工具参数的原始文本（比如被截断的半截 JSON），不给就用 input 序列化
+type Step = ({ toolCalls: Array<{ name: string; input: unknown; raw?: string }> } | { text: string }) & { inputTokens?: number; truncated?: boolean }
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
 type StreamPart = StreamResult['stream'] extends ReadableStream<infer Part> ? Part : never
 
@@ -41,7 +44,7 @@ function scriptedModel(steps: Step[]): MockLanguageModelV4 {
                 { type: 'text-start' as const, id: 't' },
                 { type: 'text-delta' as const, id: 't', delta: step.text },
                 { type: 'text-end' as const, id: 't' },
-                { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: undefined }, usage: usageOf(step.inputTokens) },
+                { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('stop' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
               ]
             : [
                 { type: 'stream-start' as const, warnings: [] },
@@ -49,9 +52,9 @@ function scriptedModel(steps: Step[]): MockLanguageModelV4 {
                   type: 'tool-call' as const,
                   toolCallId: `call-${index}-${callIndex}`,
                   toolName: call.name,
-                  input: JSON.stringify(call.input),
+                  input: call.raw ?? JSON.stringify(call.input),
                 })),
-                { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: usageOf(step.inputTokens) },
+                { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('tool-calls' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
               ],
       }),
     })),
@@ -784,7 +787,89 @@ describe('主循环', () => {
   })
 })
 
+describe('输出被截断', () => {
+  const promptOf = (model: MockLanguageModelV4, index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt)
+
+  test('只回了半截文字时提醒接着写，不当成回答结束', async () => {
+    const model = scriptedModel([{ text: '前半段', truncated: true }, { text: '后半段' }])
+    const session = await makeSession(model)
+    await expect(runTurn(session, { id: 't', text: '讲讲' }, recordingIO())).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(promptOf(model, 1)).toContain('cut off by the output token limit')
+  })
+
+  test('工具参数被截断时不执行，参数错误之后说明是被截断了、要拆小', async () => {
+    writeFileSync(join(project, 'a.txt'), 'hello\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: null, raw: '{"path":"a.txt","old_string":"hello","new_string":"hel' }], truncated: true },
+      { text: '好' },
+    ])
+    const session = await makeSession(model)
+    await runTurn(session, { id: 't', text: '改' }, recordingIO())
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(promptOf(model, 1)).toContain('A tool call that was cut off was not executed')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hello\n')
+  })
+
+  test('连续截断超过两次不再提醒，照原来的流程结束', async () => {
+    const model = scriptedModel([{ text: '1', truncated: true }, { text: '2', truncated: true }, { text: '3', truncated: true }, { text: '不会走到这里' }])
+    const session = await makeSession(model)
+    await expect(runTurn(session, { id: 't', text: '讲讲' }, recordingIO())).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(3)
+  })
+
+  test('工具调用完整、只是回复到了上限时照常执行，不加提醒', async () => {
+    writeFileSync(join(project, 'a.txt'), 'hello\n')
+    const model = scriptedModel([{ toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }], truncated: true }, { text: '好' }])
+    const session = await makeSession(model)
+    await runTurn(session, { id: 't', text: '读' }, recordingIO())
+    expect(promptOf(model, 1)).toContain('1\\thello')
+    expect(promptOf(model, 1)).not.toContain('cut off by the output token limit')
+  })
+})
+
+describe('工具参数的字符串写法', () => {
+  const toolResults = (session: Session) =>
+    session.messages.flatMap((message) => (message.role === 'tool' ? message.content.filter((part) => part.type === 'tool-result') : []))
+
+  test('数字和布尔写成字符串时照样接受，含糊的写法仍报参数错误', async () => {
+    writeFileSync(join(project, 'a.txt'), 'one\ntwo\nthree\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt', offset: '2', limit: '1' } }] },
+      { toolCalls: [{ name: 'search', input: { pattern: 'two', literal: 'true' } }] },
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt', limit: 'many' } }] },
+      { text: '好' },
+    ])
+    const session = await makeSession(model)
+    await runTurn(session, { id: 't', text: '读' }, recordingIO())
+    const results = toolResults(session).map((result) => JSON.stringify(result))
+    expect(results[0]).toContain('lines 2-2 of 3')
+    expect(results[1]).toContain(':2:two')
+    expect(results[2]).toMatch(/Invalid/)
+  })
+
+  test('发给模型的参数类型不变，仍是 integer 和 boolean', () => {
+    const schema = z.toJSONSchema(TOOLS.read_file.inputSchema as z.ZodType, { io: 'input' }) as { properties: Record<string, { type?: string }> }
+    expect(schema.properties.offset?.type).toBe('integer')
+    const edit = z.toJSONSchema(TOOLS.edit_file.inputSchema as z.ZodType, { io: 'input' }) as { properties: Record<string, { type?: string }>; required: string[] }
+    expect(edit.properties.replace_all?.type).toBe('boolean')
+    expect(edit.required).not.toContain('replace_all')
+  })
+})
+
 describe('系统提示词', () => {
+  test('写明只做要求的事、失败先找原因、不走破坏性捷径、如实汇报；有 bash 时不让过滤测试输出', async () => {
+    const options = { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }
+    const withBash = await buildSystemPrompt(project, '/usr/bin/bash', options, [])
+    expect(withBash).toContain('Do what was asked and nothing more')
+    expect(withBash).toContain('find the cause before changing approach')
+    expect(withBash).toContain('--no-verify')
+    expect(withBash).toContain('without piping their output through head, tail or grep')
+    expect(withBash).toContain('state it in your reply')
+    expect(withBash).toContain('Report results honestly')
+    expect(await buildSystemPrompt(project, null, options, [])).not.toContain('head, tail or grep')
+  })
+
   test('配了检查命令时告诉模型会自动跑、不用自己跑', async () => {
     const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('automatically runs `pnpm typecheck`')
@@ -1356,6 +1441,25 @@ describe('上下文压缩', () => {
 
     await session.rewind('turn-1')
     expect(session.compaction).toBeNull()
+  })
+
+  test('省略不够时不先省略：写摘要时看到的是工具输出原文，消息里不留占位；摘要要求和续接说明写全', async () => {
+    writeBigFiles(6)
+    const model = scriptedModel([...reads(6, (index) => (index === 5 ? 90_000 : 1000)), { text: '摘要：读了六个文件。' }, { text: '看完了' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '读这些文件' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(8)
+    const summaryPrompt = JSON.stringify(model.doStreamCalls[6]?.prompt)
+    expect(summaryPrompt).toContain('too long for the context window')
+    expect(summaryPrompt).toContain('file 1 line 0')
+    expect(summaryPrompt).not.toContain('Output omitted by Diffra')
+    expect(summaryPrompt).toContain('SKILL.md you read')
+    expect(summaryPrompt).toContain('approaches that failed')
+    expect(JSON.stringify(session.messages)).not.toContain('Output omitted by Diffra')
+    expect(cardText(io)).not.toContain('省略了')
+    expect(JSON.stringify(model.doStreamCalls[7]?.prompt)).toContain('without acknowledging or recapping this summary')
   })
 
   test('写摘要失败时停下并说明', async () => {

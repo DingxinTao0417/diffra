@@ -48,6 +48,7 @@ export const modelConfigSchema = z.object({
   contextWindow: z.number().int().positive().nullable(),
   provider: providerSchema,
   supportsImages: z.boolean().default(false),
+  maxOutputTokens: z.number().int().positive().nullable().default(null),
 })
 
 export const sessionConfigSchema = z.object({

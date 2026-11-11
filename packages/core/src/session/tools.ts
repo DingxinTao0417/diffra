@@ -9,10 +9,16 @@ import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 
 const pathField = z.string().describe('Path relative to the project directory, or an external absolute path (requires user approval)')
 
+// 弱模型常把布尔和数字写成字符串（"true"、"30"）。只认这几种明确的写法，别的照样报参数错误；发给模型的 JSON Schema 仍是 boolean、number
+const looseBoolean = (value: unknown) => (value === 'true' ? true : value === 'false' ? false : value)
+const looseNumber = (value: unknown) => (typeof value === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(value) ? Number(value) : value)
+const booleanField = () => z.preprocess(looseBoolean, z.boolean())
+const positiveIntField = () => z.preprocess(looseNumber, z.number().int().positive())
+
 const readFileInput = z.object({
   path: pathField,
-  offset: z.number().int().positive().optional().describe('1-based line number to start reading from'),
-  limit: z.number().int().positive().optional().describe('Maximum number of lines to return (default 400)'),
+  offset: positiveIntField().optional().describe('1-based line number to start reading from'),
+  limit: positiveIntField().optional().describe('Maximum number of lines to return (default 400)'),
 })
 const listFilesInput = z.object({ path: pathField.optional().describe('Directory to list (default: project root)') })
 const outlineInput = z.object({ path: pathField.optional().describe('File or directory to outline (default: project root)') })
@@ -20,21 +26,21 @@ const searchInput = z.object({
   pattern: z.string().describe('Regular expression to search for (plain text when literal is true)'),
   path: pathField.optional().describe('File or directory to search in (default: project root)'),
   glob: z.string().optional().describe('Only search files matching this glob, e.g. "*.ts"'),
-  literal: z.boolean().optional().describe('Treat pattern as plain text'),
+  literal: booleanField().optional().describe('Treat pattern as plain text'),
 })
 const editFileInput = z.object({
   path: pathField,
   old_string: z.string().describe('Exact text to replace. Empty string creates a new file.'),
   new_string: z.string().describe('Replacement text'),
-  replace_all: z.boolean().optional().describe('Replace every occurrence instead of exactly one'),
+  replace_all: booleanField().optional().describe('Replace every occurrence instead of exactly one'),
 })
 const runCommandInput = z.object({
   command: z.string().describe('Bash command to run in the project directory'),
-  timeout_seconds: z.number().int().positive().optional().describe('Default 120, maximum 600'),
+  timeout_seconds: positiveIntField().optional().describe('Default 120, maximum 600'),
 })
 const finishInput = z.object({
   summary: z.string().describe('Short summary of what you did'),
-  goal_met: z.boolean().optional().describe('Only in goal mode: true when the whole goal and its completion criteria are met and verified'),
+  goal_met: booleanField().optional().describe('Only in goal mode: true when the whole goal and its completion criteria are met and verified'),
 })
 
 export const TOOLS = {

@@ -205,6 +205,8 @@ export interface SessionModel {
   provider: ModelProvider | null
   // 用户在模型设置里打开了「图片」：提问可以带图片
   supportsImages?: boolean
+  // 模型设置里的「最大输出」；null 或没有时按协议的默认值
+  maxOutputTokens?: number | null
 }
 
 // 提问里带的图片，base64

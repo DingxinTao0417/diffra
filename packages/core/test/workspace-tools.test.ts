@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Checkpoints } from '../src/checkpoint.js'
-import { findRipgrep } from '../src/environment.js'
+import { findBash, findRipgrep } from '../src/environment.js'
+import { runCommandTool } from '../src/tools/command.js'
 import { editFileTool, listFilesTool, readFileTool, searchTool } from '../src/tools/files.js'
 import type { ToolContext } from '../src/tools/types.js'
 
@@ -35,6 +36,29 @@ describe('文件工具', () => {
     writeFileSync(join(project, 'a.txt'), 'one\ntwo\nthree\n')
     const result = await readFileTool(context, { path: 'a.txt', offset: 2, limit: 1 })
     expect(result.text).toBe('a.txt (lines 2-2 of 3)\n2\ttwo\n... 1 more lines. Use offset=3 to continue.')
+  })
+
+  test('文件不存在时列出项目里同名、只差扩展名或拼错一两个字母的文件，受保护的不列', async () => {
+    mkdirSync(join(project, 'src', 'utils'), { recursive: true })
+    writeFileSync(join(project, 'src', 'utils', 'format.ts'), 'export {}\n')
+    writeFileSync(join(project, 'src', 'helpers.ts'), 'export {}\n')
+    writeFileSync(join(project, '.env'), 'KEY=1\n')
+    await expect(readFileTool(context, { path: 'src/format.ts' })).rejects.toThrow('File not found: src/format.ts. Did you mean: src/utils/format.ts?')
+    await expect(readFileTool(context, { path: 'src/helper.ts' })).rejects.toThrow('Did you mean: src/helpers.ts?')
+    await expect(editFileTool(context, { path: 'src/utils/format.js', old_string: 'a', new_string: 'b' })).rejects.toThrow(
+      'Did you mean: src/utils/format.ts? To create it, pass an empty old_string.',
+    )
+    await expect(readFileTool(context, { path: 'nothing-like-it.md' })).rejects.toThrow(/^File not found: nothing-like-it\.md\.$/)
+    await expect(readFileTool(context, { path: '.envv' })).rejects.toThrow(/^File not found: \.envv\.$/)
+  })
+
+  test('命令不存在时给出名字接近的命令，都不像就提示去看项目怎么跑', async () => {
+    const shell = { ...context, bashPath: await findBash() }
+    const typo = await runCommandTool(shell, { command: 'grepp --version' })
+    expect(typo.text).toMatch(/Similar commands that exist: .*\bgrep\b/)
+    expect(typo.terminalOutput).not.toContain('Similar commands')
+    const unknown = await runCommandTool(shell, { command: 'zzqx-nothing-like-it' })
+    expect(unknown.text).toContain('is not installed or not on PATH')
   })
 
   test('没读过、读完后被改过的文件都不允许编辑', async () => {

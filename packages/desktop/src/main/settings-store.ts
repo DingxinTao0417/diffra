@@ -44,6 +44,7 @@ export const providerFieldsSchema = z.object({
         contextWindow: z.number().int().positive().nullable(),
         // 图片输入那一步加的，旧设置文件里没有
         images: z.boolean().default(false),
+        maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
         reasoningEfforts: z.array(z.enum(REASONING_EFFORTS)).max(REASONING_EFFORTS.length).optional(),
       }),
     )

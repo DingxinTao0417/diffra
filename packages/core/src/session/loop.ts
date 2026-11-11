@@ -96,6 +96,13 @@ const SAME_CHANGE_HINT =
   'If the remaining errors are in files that belong to the same change, update them together in the next step: edit_file can be called several times in one step.'
 // 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
 const STUCK_REPEATS = 3
+// 回复被输出上限截断：只回了半截文字，或最后一个工具调用的参数被截断没执行，就提醒模型接着做、把改动拆小。
+// 连续截断超过这么多次不再提醒，按原来的流程走
+const MAX_TRUNCATION_RESUMES = 2
+export const TRUNCATION_NOTE =
+  '[Diffra] Your previous response was cut off by the output token limit. Continue from where it stopped, with no apology and no recap. ' +
+  'A tool call that was cut off was not executed: make that change again in smaller pieces (several edit_file calls instead of one large one; ' +
+  'write a large new file in parts). Keep each response shorter.'
 // 深度扫描用：上下文用到这个比例时要求交报告
 export const CONTEXT_STOP_RATIO = 0.8
 export const DEFAULT_CONTEXT_WINDOW = 128_000
@@ -277,6 +284,8 @@ export async function runTurn(
     // 调用签名 → 自上次成功编辑以来出现的次数
     const repeats = new Map<string, number>()
     let warnedStuck = false
+    // 连续被输出上限截断的次数，有一步没截断就清零
+    let truncations = 0
     // 这一轮派出的子智能体和它们的文件认领
     const team = newTeam()
 
@@ -295,7 +304,9 @@ export async function runTurn(
       }
 
       const sentChars = contextChars(session)
-      const { toolCalls, inputTokens, cacheRead, cacheWrite, answered } = await streamStep(session, active, signal, io)
+      const { toolCalls, inputTokens, cacheRead, cacheWrite, answered, truncated } = await streamStep(session, active, signal, io)
+      if (!truncated) truncations = 0
+      const resumeTruncated = truncated && truncations < MAX_TRUNCATION_RESUMES && !signal.aborted
       if (inputTokens > 0) {
         session.lastContext = { inputTokens, chars: sentChars, cacheRead, cacheWrite }
         await io.update({
@@ -307,6 +318,11 @@ export async function runTurn(
       }
 
       if (toolCalls.length === 0) {
+        if (resumeTruncated) {
+          truncations++
+          session.messages.push({ role: 'user', content: TRUNCATION_NOTE })
+          continue
+        }
         // 命令或 MCP 工具改的文件平时到 finish 才比指纹，只回文字时也比一次，改了就和 edit_file 一样拉回来走完成门禁
         // 待验证是带过来的时候 finish 不再比指纹，拉回时靠这次比较说清本轮改没改
         const commandEdits = commandedThisTurn && !signal.aborted && (!editedThisTurn || editsCarried) && (await changesOutsideEdits(session, turnStartFingerprint, true)) === 'edited'
@@ -443,6 +459,11 @@ export async function runTurn(
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
       if (editedThisStep) await publishTaskState(session, io)
       if (screenshots.length > 0) session.messages.push(screenshotMessage(screenshots))
+      // 截断的工具调用参数不完整，AI SDK 已经回了参数错误；再说清是被截断了，免得模型原样重发同样长的调用
+      if (resumeTruncated && toolCalls.some((call) => answered.has(call.toolCallId))) {
+        truncations++
+        session.messages.push({ role: 'user', content: TRUNCATION_NOTE })
+      }
 
       if (signal.aborted) return 'cancelled'
       if (finished && goalMaxRounds === null) {
@@ -659,7 +680,7 @@ export async function streamModelStep(
   signal: AbortSignal,
   io: TurnIO,
   retry?: StepRetry,
-): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[] }> {
+): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[]; truncated: boolean }> {
   let toolChoice = settings.toolChoice
   for (;;) {
     const attempt = new AbortController()
@@ -688,6 +709,7 @@ export async function streamModelStep(
       let inputTokens = 0
       let cacheRead: number | null = null
       let cacheWrite: number | null = null
+      let truncated = false
       try {
         for await (const part of result.fullStream) {
           // 中断后流里还会出一条 abort，那不是模型的输出
@@ -711,6 +733,7 @@ export async function streamModelStep(
               inputTokens = part.usage.inputTokens ?? inputTokens
               cacheRead = part.usage.inputTokenDetails.cacheReadTokens ?? cacheRead
               cacheWrite = part.usage.inputTokenDetails.cacheWriteTokens ?? cacheWrite
+              truncated = part.finishReason === 'length'
               await io.recordUsage({ ...settings.usage, usage: part.usage })
               break
             case 'error':
@@ -733,7 +756,7 @@ export async function streamModelStep(
           message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [],
         ),
       )
-      return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages }
+      return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages, truncated }
     } finally {
       signal.removeEventListener('abort', forward)
       if (retry?.handles.get(retry.key) === handle) retry.handles.delete(retry.key)

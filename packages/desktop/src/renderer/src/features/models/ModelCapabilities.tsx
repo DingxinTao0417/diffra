@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { REASONING_EFFORTS, type Protocol, type ReasoningEffort } from '@diffra/core/types'
-import { MAX_MODEL_ID_LENGTH, MAX_MODEL_DISPLAY_NAME_LENGTH, CONTEXT_WINDOW_OPTIONS, type ModelConfig } from '../../../../shared/settings'
+import { MAX_MODEL_ID_LENGTH, MAX_MODEL_DISPLAY_NAME_LENGTH, CONTEXT_WINDOW_OPTIONS, MAX_OUTPUT_OPTIONS, type ModelConfig } from '../../../../shared/settings'
 import { reasoningEffortsFor } from '../../../../shared/reasoning'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -20,13 +20,22 @@ const CONTEXT_CHOICES = [
   { value: CUSTOM_CONTEXT, label: '自定义' },
 ]
 
+const OUTPUT_CHOICES = [
+  { value: AUTO_CONTEXT, label: '自动' },
+  ...MAX_OUTPUT_OPTIONS.map((size) => ({ value: String(size), label: formatTokens(size) })),
+  { value: CUSTOM_CONTEXT, label: '自定义' },
+]
+
 const isPresetContext = (size: number) => CONTEXT_WINDOW_OPTIONS.some((option) => option === size)
+const isPresetOutput = (size: number) => MAX_OUTPUT_OPTIONS.some((option) => option === size)
+const isPositiveInteger = (value: number | null | undefined) => value === null || value === undefined || (Number.isSafeInteger(value) && value > 0)
 
 export function validateModelCapabilities(models: ModelConfig[]): string | null {
   if (models.length === 0) return '请至少填写一个模型 ID'
   if (models.some((model) => !model.id.trim())) return '模型 ID 不能为空'
   if (new Set(models.map((model) => model.id.trim())).size !== models.length) return '模型 ID 重复'
   if (models.some((model) => model.contextWindow !== null && (!Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0))) return '上下文长度要填正整数（单位：token）'
+  if (models.some((model) => !isPositiveInteger(model.maxOutputTokens))) return '最大输出要填正整数（单位：token）'
   return null
 }
 
@@ -47,6 +56,10 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
   const efforts = reasoningEffortsFor({ protocol }, model).filter((value) => value !== 'default')
   const reasoningEnabled = efforts.length > 0
   const contextChoice = customContext ? CUSTOM_CONTEXT : model.contextWindow === null ? AUTO_CONTEXT : String(model.contextWindow)
+  const maxOutput = model.maxOutputTokens ?? null
+  const [customOutput, setCustomOutput] = useState(() => maxOutput !== null && !isPresetOutput(maxOutput))
+  const outputChoice = customOutput ? CUSTOM_CONTEXT : maxOutput === null ? AUTO_CONTEXT : String(maxOutput)
+  const anthropicProtocol = protocol === 'anthropic' || protocol === 'anthropic-compatible'
   const prefix = `capability-${index}`
   return (
     <div className="space-y-5" data-testid={`capabilities-${index}`}>
@@ -70,6 +83,28 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
           <span className="shrink-0 text-sm text-muted-foreground">tokens</span>
         </div>}
         <p className="text-xs text-muted-foreground">选「自动」时使用应用默认值。</p>
+      </div>
+      <div className="space-y-1.5">
+        <p aria-hidden="true" className="text-sm leading-none">最大输出</p>
+        <Segmented size="sm" label="最大输出" value={outputChoice} options={OUTPUT_CHOICES} onChange={(value) => {
+          setCustomOutput(value === CUSTOM_CONTEXT)
+          if (value === CUSTOM_CONTEXT) return
+          onChange({ ...model, maxOutputTokens: value === AUTO_CONTEXT ? null : Number(value) })
+        }} />
+        {customOutput && <div className="flex items-center gap-2">
+          <Input aria-label="自定义最大输出" type="number" min={1} step={1} placeholder="按服务商文档填写" value={maxOutput ?? ''} onChange={(event) => {
+            if (event.target.value === '') { onChange({ ...model, maxOutputTokens: null }); return }
+            const value = event.target.valueAsNumber
+            if (!Number.isSafeInteger(value)) return
+            onChange({ ...model, maxOutputTokens: value })
+          }} />
+          <span className="shrink-0 text-sm text-muted-foreground">tokens</span>
+        </div>}
+        <p className="text-xs text-muted-foreground">
+          {anthropicProtocol
+            ? '一次回复最多输出多少，含思考。选「自动」时 Claude 用官方上限，其他模型按 32k；服务商报 max_tokens 超出范围时调小。'
+            : '一次回复最多输出多少，含思考。选「自动」时不指定，用服务商的默认值。'}
+        </p>
       </div>
       {/* 勾选框在 form 里会多渲染一个绝对定位的隐藏 input，所在行要 relative，否则内容区滚动时它会撑出弹窗外层的滚动条 */}
       <fieldset className="space-y-3">

@@ -224,6 +224,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         contextWindow: model.contextWindow,
         provider: { id: provider.id, name: provider.name },
         supportsImages: model.images,
+        maxOutputTokens: model.maxOutputTokens ?? null,
         reasoningEffort: ref.reasoningEffort,
       },
     }

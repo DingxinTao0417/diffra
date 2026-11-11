@@ -38,7 +38,7 @@ export interface ModelCallResult<T> {
 
 // 和提示词优化一样：走流式接口，强制只调一个提交工具；服务不接受强制时改用 auto（系统提示词里也要求了调它）
 async function submitOnce<T>(model: SessionModel, system: string, prompt: string, toolName: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<ModelCallResult<T>> {
-  const languageModel = createLanguageModel(model.endpoint, model.modelId, model.reasoningEffort)
+  const languageModel = createLanguageModel(model.endpoint, model.modelId, model.reasoningEffort, model.maxOutputTokens)
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   const ask = async (toolChoice: 'auto' | { type: 'tool'; toolName: string }) => {
     const result = streamText({

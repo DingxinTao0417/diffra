@@ -19,6 +19,7 @@ import {
   type StepToolCall,
   streamModelStep,
   textResult,
+  TRUNCATION_NOTE,
   type TurnIO,
 } from './loop.js'
 import type { Session } from './session.js'
@@ -251,7 +252,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
   for (let step = 0; step < WORKER_MAX_STEPS; step++) {
     // 最后一步或上下文快满时要求直接交结果
     const toolChoice: ToolChoice<ToolSet> = step === WORKER_MAX_STEPS - 1 || nearLimit ? { type: 'tool', toolName: REPORT_TOOL } : 'auto'
-    const { toolCalls, inputTokens, answered, responseMessages } = await streamModelStep(
+    const { toolCalls, inputTokens, answered, responseMessages, truncated } = await streamModelStep(
       { model: active.language, system, messages, tools, toolChoice, usage: { role: 'subagent', provider: active.config.provider, modelId: active.config.modelId } },
       signal,
       wio,
@@ -261,7 +262,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     nearLimit = inputTokens > window * CONTEXT_STOP_RATIO
     if (signal.aborted) return { kind: 'cancelled' }
     if (toolCalls.length === 0) {
-      messages.push({ role: 'user', content: `Keep working with the tools, or call ${REPORT_TOOL} when your part is done.` })
+      messages.push({ role: 'user', content: truncated ? TRUNCATION_NOTE : `Keep working with the tools, or call ${REPORT_TOOL} when your part is done.` })
       continue
     }
     const results: ToolResultPart[] = []
@@ -300,6 +301,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     }
     if (results.length > 0) messages.push({ role: 'tool', content: results })
     if (images.length > 0) messages.push(screenshotMessage(images))
+    if (truncated && toolCalls.some((call) => answered.has(call.toolCallId))) messages.push({ role: 'user', content: TRUNCATION_NOTE })
   }
   return { kind: 'max-steps' }
 }

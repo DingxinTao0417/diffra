@@ -21,11 +21,13 @@ const OMITTED_PREFIX = '[Output omitted by Diffra'
 const SUMMARY_REQUEST = [
   '[Diffra] The conversation is too long for the context window. Write a summary that will replace everything above this message.',
   'Work will continue from your summary alone, so include everything needed to continue:',
-  '- what the user asked for, and every constraint or preference they stated;',
+  "- what the user asked for, and every constraint or preference they stated, in the user's own words where the wording matters;",
   '- decisions made and why;',
   '- files read or changed, and what was changed in each;',
-  '- the current state: what is done, what is in progress, what remains;',
-  '- errors met, and whether they are solved.',
+  '- skills you were following: the path of each SKILL.md you read, so it can be read again;',
+  '- the current state: what is done, what is in progress, what remains, and the next step;',
+  '- verification: which checks and tests were run and what they showed, and which were not run yet;',
+  '- errors met and whether they are solved; approaches that failed and why, so they are not tried again.',
   'Be specific: file paths, function names, commands. Do not call tools. Write in the language the user writes in.',
 ].join('\n')
 
@@ -129,16 +131,20 @@ export async function compactIfNeeded(
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
 
   const charsBefore = contextChars(session)
-  const omitted = omitOldToolOutputs(session)
-  const omittedNote = omitted.count > 0 ? `省略了 ${omitted.count} 个较早的工具输出（约 ${omitted.chars} 字），智能体需要时会重新读取。` : ''
-  const afterOmitting = (estimate * contextChars(session)) / charsBefore
+  // 先算省略能省多少，够了才真的替换；不够就直接写摘要，摘要看到的是原文，前缀也没变、能用上缓存
+  const omission = planOmission(session)
+  const afterOmitting = (estimate * (charsBefore - omission.savedChars)) / charsBefore
+  const omittedNote = omission.count > 0 ? `省略了 ${omission.count} 个较早的工具输出（约 ${omission.chars} 字），智能体需要时会重新读取。` : ''
   if (afterOmitting <= threshold) {
+    applyOmission(session, omission)
     await finishCard('completed', `上下文用到约 ${percent}%。${omittedNote}`)
     return { kind: 'ok' }
   }
 
   const cut = recentStepsStart(session.messages, session.compaction?.upTo ?? 0)
   if (cut === null) {
+    // 没有可省略的范围时 omission 是空的，这里只是一致地处理
+    applyOmission(session, omission)
     await finishCard('completed', `上下文用到约 ${percent}%。${omittedNote}更早的对话已经压缩过，剩下的都是最近几步，没法再压。`)
     return afterOmitting > window * HARD_STOP_RATIO ? { kind: 'too-large' } : { kind: 'ok' }
   }
@@ -147,7 +153,7 @@ export async function compactIfNeeded(
     session.compaction = { upTo: cut, summary: summaryMessage(session, options.requestIndex, cut, summary) }
     // 压缩拖了一会儿才结束，界面上的上下文百分比这时就更新，不用等下一次模型调用
     await emitCompactedUsage(session, io, charsBefore, estimate, cacheUsageOf(session, latestUsage(session)))
-    await finishCard('completed', `上下文用到约 ${percent}%。${omittedNote}较早的对话压缩成了下面的摘要，最近 ${KEEP_RECENT_STEPS} 步保留原文。\n\n${summary}`)
+    await finishCard('completed', `上下文用到约 ${percent}%。较早的对话压缩成了下面的摘要，最近 ${KEEP_RECENT_STEPS} 步保留原文。\n\n${summary}`)
     return { kind: 'ok' }
   } catch (error) {
     if (signal.aborted) {
@@ -220,10 +226,20 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
   }
 }
 
-// 把压缩点之后、最近几步之前的长工具输出换成一句占位；原地修改，界面上的历史存在每轮的更新里，不受影响
-function omitOldToolOutputs(session: Session): { count: number; chars: number } {
+interface Omission {
+  // 消息位置 → 换上的消息
+  replacements: Map<number, ModelMessage>
+  count: number
+  // 被省略的原文字数（显示用）和替换后实际少掉的字数（估算用）
+  chars: number
+  savedChars: number
+}
+
+// 算出压缩点之后、最近几步之前哪些长工具输出可以换成一句占位，不改消息
+function planOmission(session: Session): Omission {
   const start = session.compaction?.upTo ?? 0
   const end = recentStepsStart(session.messages, start) ?? start
+  const replacements = new Map<number, ModelMessage>()
   let count = 0
   let chars = 0
   for (let index = start; index < end; index++) {
@@ -234,7 +250,7 @@ function omitOldToolOutputs(session: Session): { count: number; chars: number } 
       if (images === 0) continue
       count += images
       chars += images * IMAGE_CHARS
-      session.messages[index] = { role: 'user', content: `${OMITTED_PREFIX}: ${images} earlier browser screenshot(s). Take a new screenshot if you need to see the page.]` }
+      replacements.set(index, { role: 'user', content: `${OMITTED_PREFIX}: ${images} earlier browser screenshot(s). Take a new screenshot if you need to see the page.]` })
       continue
     }
     if (message?.role !== 'tool') continue
@@ -249,9 +265,16 @@ function omitOldToolOutputs(session: Session): { count: number; chars: number } 
       const value = `${OMITTED_PREFIX} to save context (${output.value.length} characters). Run the tool again if you need it.]`
       return { ...part, output: { type: output.type, value } } satisfies ToolResultPart
     })
-    session.messages[index] = { ...message, content }
+    if (content.some((part, partIndex) => part !== message.content[partIndex])) replacements.set(index, { ...message, content })
   }
-  return { count, chars }
+  const original = [...replacements.keys()].map((index) => session.messages[index]!)
+  const savedChars = messagesChars(original) - messagesChars([...replacements.values()])
+  return { replacements, count, chars, savedChars }
+}
+
+// 原地替换；界面上的历史存在每轮的更新里，不受影响
+function applyOmission(session: Session, omission: Omission): void {
+  for (const [index, message] of omission.replacements) session.messages[index] = message
 }
 
 // 最近 KEEP_RECENT_STEPS 步从哪里开始：倒数第 N 条模型回复的位置。从模型回复处切开，工具调用和它的结果不会被拆开。
@@ -300,5 +323,7 @@ function summaryMessage(session: Session, requestIndex: number, cut: number, sum
     '[Diffra] Earlier parts of this conversation were compacted to save context. Summary of what happened before:',
     summary,
     ...(requestText ? ['', "The user's request for the task in progress when this summary was written, verbatim:", requestText] : []),
+    '',
+    'Continue from the current state without acknowledging or recapping this summary. Read again the SKILL.md of any skill it says you were following before you rely on it.',
   ].join('\n')
 }

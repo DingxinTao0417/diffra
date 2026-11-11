@@ -52,6 +52,14 @@ export async function buildSystemPrompt(
       ? [`- Never modify anything under these paths, they hold the user's data: ${readOnlyPaths.join(', ')}. Reading them is fine.`]
       : []),
     '- Do not weaken tests to make them pass: no deleting or skipping tests, no catch-all exception handling, no hard-coded expected values, unless the user asks for it.',
+    '- Do what was asked and nothing more: no extra features, refactors, options or abstractions the request does not need, and no handling for cases that cannot happen.',
+    '- When something fails, read the error and find the cause before changing approach. Do not repeat the same attempt unchanged, and do not give up after one failure.',
+    '- Do not take destructive shortcuts past an obstacle (such as --no-verify, git reset --hard, or deleting lock files); find out what the unfamiliar file or state is first.',
+    ...(bashPath
+      ? ['- Run tests and builds without piping their output through head, tail or grep: run_command already shortens long output, and a filter can hide the real error.']
+      : []),
+    '- Older tool outputs may be removed from the conversation to save space. When you learn something you will need later (an error message, a value, a line number), state it in your reply.',
+    '- Report results honestly: say which checks you actually ran and what they showed. If you could not verify something, say so.',
     ...checkLines(checks),
     '- If the user only asked a question and you changed nothing, just answer without calling finish.',
     '- Reply in the same language the user writes in.',

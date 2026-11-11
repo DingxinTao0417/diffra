@@ -31,15 +31,53 @@ function anthropicApiBase(baseUrl: string): string {
   return `${trimSlash(baseUrl)}/v1`
 }
 
-export function createLanguageModel(endpoint: ModelEndpoint, modelId: string, reasoningEffort?: ReasoningEffort): LanguageModel {
+// AI SDK 对 Anthropic 系接口里名字不带 claude- 的模型默认只给 4096 输出 token，一次写个大文件就被截断；
+// 用户没单独设置时按这个值发
+export const ANTHROPIC_COMPATIBLE_MAX_OUTPUT_TOKENS = 32_000
+
+// maxOutputTokens：模型设置里的「最大输出」，null 时按协议的默认值；调用时自己传了的以调用时为准
+export function createLanguageModel(
+  endpoint: ModelEndpoint,
+  modelId: string,
+  reasoningEffort?: ReasoningEffort,
+  maxOutputTokens?: number | null,
+): LanguageModel {
   const model = createBaseLanguageModel(endpoint, modelId)
-  if (!reasoningEffort || reasoningEffort === 'default') return model
-  if (endpoint.protocol !== 'openai-responses' && endpoint.protocol !== 'openai-compatible') return model
-  const provider = endpoint.protocol === 'openai-responses' ? 'openai' : 'openai-compatible'
-  return wrapLanguageModel({
-    model,
-    middleware: defaultSettingsMiddleware({ settings: { providerOptions: { [provider]: { reasoningEffort } } } }),
-  })
+  const settings: Parameters<typeof defaultSettingsMiddleware>[0]['settings'] = {}
+  const outputLimit = maxOutputTokens ?? defaultMaxOutputTokens(endpoint, modelId)
+  if (outputLimit !== null) settings.maxOutputTokens = outputLimit
+  if (reasoningEffort && reasoningEffort !== 'default' && (endpoint.protocol === 'openai-responses' || endpoint.protocol === 'openai-compatible')) {
+    const provider = endpoint.protocol === 'openai-responses' ? 'openai' : 'openai-compatible'
+    settings.providerOptions = { [provider]: { reasoningEffort } }
+  }
+  if (Object.keys(settings).length === 0) return model
+  return wrapLanguageModel({ model, middleware: defaultSettingsMiddleware({ settings }) })
+}
+
+function defaultMaxOutputTokens(endpoint: ModelEndpoint, modelId: string): number | null {
+  const anthropic = endpoint.protocol === 'anthropic' || endpoint.protocol === 'anthropic-compatible'
+  return anthropic && !modelId.includes('claude-') ? ANTHROPIC_COMPATIBLE_MAX_OUTPUT_TOKENS : null
+}
+
+// 端点身份优先：DeepSeek 官方地址，或者别的服务上 deepseek- 开头的模型
+function isDeepSeek(baseUrl: string, modelId: string): boolean {
+  const host = URL.parse(baseUrl)?.hostname.toLowerCase() ?? ''
+  if (host === 'deepseek.com' || host.endsWith('.deepseek.com')) return true
+  const model = modelId.toLowerCase()
+  return model.startsWith('deepseek-') || model.includes('/deepseek-')
+}
+
+// DeepSeek 思考模式带工具时，之后的每次请求里每条 assistant 消息都要带 reasoning_content，缺了回 400。
+// AI SDK 遇到空的思考内容会省掉这个字段，换模型继续时旧消息也没有，这里补成空串；非思考模式下服务会忽略它
+function withReasoningContent(body: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(body.messages)) return body
+  const messages = body.messages.map((message: unknown) =>
+    typeof message === 'object' && message !== null && 'role' in message && message.role === 'assistant' &&
+    !('reasoning_content' in message && typeof message.reasoning_content === 'string')
+      ? { ...message, reasoning_content: '' }
+      : message,
+  )
+  return { ...body, messages }
 }
 
 function createBaseLanguageModel(endpoint: ModelEndpoint, modelId: string) {
@@ -57,7 +95,12 @@ function createBaseLanguageModel(endpoint: ModelEndpoint, modelId: string) {
     case 'openai-responses':
       return createOpenAI({ baseURL: trimSlash(baseUrl), apiKey }).responses(modelId)
     case 'openai-compatible':
-      return createOpenAICompatible({ name: 'openai-compatible', baseURL: trimSlash(baseUrl), apiKey }).chatModel(modelId)
+      return createOpenAICompatible({
+        name: 'openai-compatible',
+        baseURL: trimSlash(baseUrl),
+        apiKey,
+        ...(isDeepSeek(baseUrl, modelId) ? { transformRequestBody: withReasoningContent } : {}),
+      }).chatModel(modelId)
     case 'gemini':
       return createGoogle({ baseURL: trimSlash(baseUrl), apiKey })(modelId)
   }
