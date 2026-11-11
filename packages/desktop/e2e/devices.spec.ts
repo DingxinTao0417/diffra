@@ -16,8 +16,8 @@ interface Device {
   userDataDir: string
 }
 
-async function startRelay(port = 0): Promise<{ relay: Relay; port: number }> {
-  const relay = createRelay({ host: '127.0.0.1', port, trustProxy: false, release: 'e2e', log: () => {} })
+async function startRelay(port = 0, log: (line: string) => void = () => {}): Promise<{ relay: Relay; port: number }> {
+  const relay = createRelay({ host: '127.0.0.1', port, trustProxy: false, release: 'e2e', log })
   return { relay, port: await relay.listen() }
 }
 
@@ -120,9 +120,10 @@ test('设备连接：邀请串配对，被连接端核对指纹、选项目后�
     await expect(guest.window.getByRole('dialog')).toHaveCount(0)
     await expect(peers.getByTestId('peer')).toHaveCount(1)
 
-    // 中转重启：两边自己重连，又看到对方在线
+    // 中转重启：两边自己重连，又看到对方在线；日志里记下断开的关闭码
     await relay.close()
     await expect(peers.getByTestId('device-offline')).toBeVisible()
+    for (const device of [host, guest]) await expect.poll(() => readFileSync(join(device.userDataDir, 'logs', 'remote.log'), 'utf8')).toMatch(/和中转断开：\d+.*，连了 \d+ 秒/)
     ;({ relay } = await startRelay(port))
     await expect(peers.getByTestId('device-online')).toBeVisible({ timeout: 30_000 })
     await expect(grants.getByTestId('device-online')).toBeVisible({ timeout: 30_000 })
@@ -720,5 +721,56 @@ test('设备连接：互相配对时，对方关掉「允许连接本机」、�
     await model.close()
     rmSync(aProject, { recursive: true, force: true })
     rmSync(bProject, { recursive: true, force: true })
+  }
+})
+
+// 6 万个伪随机汉字：压缩后约 110 KB，一条消息要切成一整片加一小片（整片加上直发种类、中转帧头曾经比中转的单帧上限多 1 字节）
+const BIG_REPLY = (() => {
+  let seed = 1
+  const next = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value
+    return (value ^ (value >>> 14)) >>> 0
+  }
+  return Array.from({ length: 60_000 }, () => String.fromCharCode(0x4e00 + (next() % 3000))).join('')
+})()
+
+test('设备连接：会话一页压缩后超过一片（约 64 KB）也能看完整，中转不把被连接端断开；对方不在中转上时建通道马上失败、说清原因，不干等 10 秒', async () => {
+  test.setTimeout(120_000)
+  const relayLog: string[] = []
+  const { relay, port } = await startRelay(0, (line) => relayLog.push(line))
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-big-'))
+  const model = await startScriptedModel([{ text: `长回答开始${BIG_REPLY}长回答结束` }])
+  const host = await launchDevice(port)
+  const guest = await launchDevice(port)
+  try {
+    await configureCoderModel(host.window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(host.app, host.window, project)
+    await startTask(host.window, '要一个很长的回答')
+    await waitTaskDone(host.window)
+    await pair(host, guest, [project])
+
+    await guest.window.getByTestId('sidebar').getByTestId('sidebar-remote-task').click()
+    const remoteTask = guest.window.getByTestId('remote-task')
+    await expect(remoteTask).toContainText('长回答结束', { timeout: 20_000 })
+    const [turn] = await turnTexts(guest.window, '[data-testid="remote-task"]')
+    expect(turn?.messages.at(-1)).toBe(`长回答开始${BIG_REPLY}长回答结束`)
+    expect(relayLog.filter((line) => !line.startsWith('connect '))).toEqual([])
+
+    // 被连接端关掉总开关：中转上它的白名单里没有连接端了，连接端发的握手中转送不到
+    const hostId = await guest.window.evaluate<string>(`window.diffra.getRemoteState().then((state) => state.peers[0].deviceId)`)
+    await openDevices(host.window, '允许连接本机')
+    await host.window.getByRole('switch', { name: '允许连接本机' }).click()
+    await expect.poll(() => guest.window.evaluate<boolean>(`window.diffra.getRemoteState().then((state) => state.peers[0].online)`)).toBe(false)
+    const started = Date.now()
+    expect(await call(guest.window, `window.diffra.listRemoteSessions('${hostId}')`)).toContain('对方现在不在线')
+    expect(Date.now() - started).toBeLessThan(3_000)
+    await expect.poll(() => readFileSync(join(guest.userDataDir, 'logs', 'remote.log'), 'utf8')).toContain('建通道没成：offline')
+  } finally {
+    await close([host, guest])
+    await relay.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
   }
 })
