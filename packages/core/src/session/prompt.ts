@@ -69,7 +69,7 @@ export async function buildSystemPrompt(
     ...(worker
       ? []
       : [
-          '- For work with several distinct steps, show your step list with todo_write and keep it current. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
+          '- When a task spans several modules or the user asked for several things at once, show your step list with todo_write and send its updates together with your next tool call; skip it for ordinary read-change-test work. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
           '- When a question or a change first needs a broad look through code you do not know yet (several modules, many files), hand that exploration to an explore worker with delegate and keep your own context for the work itself. When you already know where to look, read or search directly.',
           ...checkLines(checks),
           '- If the user only asked a question and you changed nothing, just answer without calling finish.',

@@ -57,7 +57,7 @@ import { gitBroughtPaths, projectHead } from './git-moves.js'
 import { runHook } from './hooks.js'
 import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
-import { ASK_USER_TOOL, runAskUser, runTodoWrite, TODO_TOOL } from './interact.js'
+import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { runWaitCommand, WAIT_COMMAND_TOOL } from './wait.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
@@ -198,6 +198,8 @@ export async function runTurn(
   if (session.running) throw new Error('上一个任务还没结束')
   const controller = session.activateTurn()
   const { signal } = controller
+  // 重新生成沿用同一个轮次 id，上一次的清单不能拿来收尾
+  session.stepList = null
   if (session.taskState.status === 'completed') session.taskState = newTaskState()
   session.taskState = { ...session.taskState, status: 'running', reason: null, contractRequired: session.taskState.contractRequired || requiresReleaseContract(turn.text), releaseVersion: session.taskState.releaseVersion ?? turn.text.match(/\bv?(\d+\.\d+\.\d+)\b/)?.[1] ?? null }
   const goalMaxRounds = options.goalMaxRounds ?? null
@@ -459,6 +461,7 @@ export async function runTurn(
           if (gate.passed && !verificationOnly) {
             finished = { summary: gate.summary, goalMet: gate.goalMet }
             turnFinish = mergeFinish(turnFinish, gate.verification)
+            await settleSteps(session, io)
           } else if (!gate.passed && gate.failedCheck) {
             failedFinishCheck = gate.failedCheck
             checkFailures++

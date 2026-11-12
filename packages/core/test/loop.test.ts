@@ -1003,6 +1003,32 @@ describe('步骤清单和中途提问', () => {
     expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
   })
 
+  test('finish 通过时步骤卡收尾：进行中的那步标成做完，没开始的照旧，不另花一次模型调用；上一轮的清单不动', async () => {
+    const list = (...statuses: Array<'pending' | 'in_progress' | 'completed'>) => ({
+      toolCalls: [{ name: 'todo_write', input: { todos: statuses.map((status, index) => ({ content: `第 ${index + 1} 步`, status })) } }],
+    })
+    const model = scriptedModel([list('completed', 'in_progress', 'pending'), { toolCalls: [{ name: 'finish', input: { summary: '做完了' } }] }, list('in_progress'), { text: '先停一下' }, { toolCalls: [{ name: 'finish', input: { summary: '也做完了' } }] }])
+    const session = await makeSession(model)
+    const stepCards = (io: ReturnType<typeof recordingIO>) => io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title === '步骤' ? [update] : []))
+
+    session.startTurn('turn-1', '分三步做')
+    const first = recordingIO()
+    await runTurn(session, { id: 'turn-1', text: '分三步做' }, first)
+    expect(model.doStreamCalls).toHaveLength(2)
+    const settled = stepCards(first).at(-1)
+    expect(settled?.toolCallId).toBe('steps-turn-1')
+    expect(JSON.stringify(settled?.content)).toContain('[x] 第 1 步\\n[x] 第 2 步\\n[ ] 第 3 步')
+
+    // 上一轮停在没调 finish 的清单，这一轮直接 finish：不去动上一轮的卡
+    session.startTurn('turn-2', '列一步就停')
+    await runTurn(session, { id: 'turn-2', text: '列一步就停' }, recordingIO())
+    session.startTurn('turn-3', '收尾')
+    const third = recordingIO()
+    await runTurn(session, { id: 'turn-3', text: '收尾' }, third)
+    expect(turnOutcomes(third)[0]?.stop).toBeNull()
+    expect(stepCards(third)).toEqual([])
+  })
+
   test('ask_user：选项作为确认请求问用户，选了哪个告诉模型，这一轮接着跑；都不选时让它用文字说明后停下', async () => {
     const ask = { toolCalls: [{ name: 'ask_user', input: { question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] } }] }
     const requests: Array<{ title: string; rawInput: unknown; options: string[] }> = []

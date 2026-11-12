@@ -8,7 +8,7 @@ import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -138,6 +138,8 @@ export class Session {
   // 提交前问深度扫描：上次深度扫描跑完时的工作区指纹（代码没再变就不问），和用户选了「这个任务不再问」。只在内存里，重新打开任务后会再问
   deepScannedFingerprint: string | null = null
   deepScanDeclined = false
+  // 这一轮最新的步骤清单（卡片 id 带轮次），finish 通过时用来收尾；只在内存里
+  stepList: { id: string; steps: StepItem[] } | null = null
   // 最近一次因检查卡住停下时还没修好的错误，下一个执行轮开始时交给模型一次；只在内存里，撤销后作废
   unresolvedCheck: UnresolvedCheck | null = null
   // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到

@@ -1,6 +1,6 @@
 import { tool, type ToolResultPart } from 'ai'
 import { z } from 'zod'
-import { ASK_USER_OPTION_PREFIX, ASK_USER_SCOPE, ASK_USER_SKIP, formatSteps, LOCAL_ONLY_META, STEPS_CARD_TITLE } from '../protocol.js'
+import { ASK_USER_OPTION_PREFIX, ASK_USER_SCOPE, ASK_USER_SKIP, formatSteps, LOCAL_ONLY_META, type StepItem, STEPS_CARD_TITLE } from '../protocol.js'
 import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
 import { toolDefinitionChars } from './tools.js'
@@ -27,8 +27,9 @@ const todoInput = z.object({
 export const todoTool = tool({
   description: [
     'Show the user your step list for the current task and keep it up to date. Send the whole list each time.',
-    'Use it for work with three or more distinct steps; skip it for a question or a one-step change.',
-    'Mark a step in_progress when you start it and completed as soon as it is done; keep at most one step in_progress. Add or reword steps when the plan changes.',
+    'Use it only when the task spans several modules or the user asked for several things at once. Do not use it for a question or an ordinary read-change-test task, even though you could split that into steps.',
+    'Send each update in the same response as your next tool call, never on its own. Mark a step in_progress when you start it and completed when it is done; keep at most one step in_progress. Add or reword steps when the plan changes.',
+    'No update is needed just before finish: a successful finish marks the step in progress as completed.',
     'Do not repeat the list in your reply: the user sees it as a card.',
   ].join('\n'),
   inputSchema: todoInput,
@@ -36,21 +37,38 @@ export const todoTool = tool({
 
 const invalid = (issues: z.core.$ZodIssue[]) => `Invalid arguments: ${issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`
 
+const stepsCardId = (session: Session) => `steps-${session.turns.at(-1)?.id ?? session.id}`
+
 // 一轮一张步骤卡：同一轮里每次更新都发同一个 id，界面整张替换，不会越积越多
-export async function runTodoWrite(session: Session, call: StepToolCall, io: TurnIO): Promise<{ result: ToolResultPart; edited: boolean }> {
-  const parsed = todoInput.safeParse(call.input)
-  if (!parsed.success) return { result: errorResult(call, invalid(parsed.error.issues)), edited: false }
-  const steps = parsed.data.todos
+async function showSteps(session: Session, steps: StepItem[], io: TurnIO): Promise<number> {
+  const id = stepsCardId(session)
+  session.stepList = { id, steps }
   const done = steps.filter((step) => step.status === 'completed').length
   await io.update({
     sessionUpdate: 'tool_call',
-    toolCallId: `steps-${session.turns.at(-1)?.id ?? session.id}`,
+    toolCallId: id,
     title: STEPS_CARD_TITLE,
     kind: 'think',
     status: done === steps.length ? 'completed' : 'in_progress',
     content: [{ type: 'content', content: { type: 'text', text: formatSteps(steps) } }],
   })
+  return done
+}
+
+export async function runTodoWrite(session: Session, call: StepToolCall, io: TurnIO): Promise<{ result: ToolResultPart; edited: boolean }> {
+  const parsed = todoInput.safeParse(call.input)
+  if (!parsed.success) return { result: errorResult(call, invalid(parsed.error.issues)), edited: false }
+  const steps = parsed.data.todos
+  const done = await showSteps(session, steps, io)
   return { result: textResult(call, `Step list updated: ${done} of ${steps.length} done. Keep it current as you work.`), edited: false }
+}
+
+// finish 通过时替模型收尾（第 466 步）：进行中的那一步标成做完，没开始的照旧，免得它为了打勾单独再调一次。
+// 只认这一轮的清单
+export async function settleSteps(session: Session, io: TurnIO): Promise<void> {
+  const list = session.stepList
+  if (!list || list.id !== stepsCardId(session) || !list.steps.some((step) => step.status === 'in_progress')) return
+  await showSteps(session, list.steps.map((step) => (step.status === 'in_progress' ? { ...step, status: 'completed' as const } : step)), io)
 }
 
 const askInput = z.object({
