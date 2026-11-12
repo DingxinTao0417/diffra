@@ -30,11 +30,19 @@ export interface TaskResult {
   gateRejections: number
   checkFailures: number
   permissionRequests: number
+  // 智能体用 ask_user 提问的次数，不算在 permissionRequests 里
+  questions: number
   findings: Finding[]
   notices: string[]
   changedProtectedFiles: string[]
   leakedSecrets: string[]
   workDir: string
+}
+
+// 提问也走确认请求，按 rawInput 里的 scope 认出来。比较 v0.3.3 这类旧版本时 core 里没有这个常量，也不会有提问
+const isQuestion = (rawInput: unknown) => {
+  const scope = typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput ? rawInput.scope : undefined
+  return scope !== undefined && scope === core.ASK_USER_SCOPE
 }
 
 const hashOf = (path: string) => (existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null)
@@ -49,12 +57,19 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
 
   const updates: SessionUpdate[] = []
   let permissionRequests = 0
+  let questions = 0
   const started = Date.now()
   let stopReason: string | null = null
   let error: string | null = null
   const coreProcess = await startCore(dataDir, {
     onSessionUpdate: (notification) => updates.push(notification.update),
     onPermissionRequest: async (request) => {
+      // 提问一律选第一个选项，相当于用户接受智能体的推荐；题目的 permission 只管权限确认
+      const first = request.options[0]
+      if (isQuestion(request.toolCall.rawInput) && first) {
+        questions++
+        return { outcome: { outcome: 'selected', optionId: first.optionId } }
+      }
       permissionRequests++
       const kind = task.permission === 'allow' ? 'allow_once' : 'reject_once'
       const option = request.options.find((item) => item.kind === kind)
@@ -125,6 +140,7 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
     gateRejections: metrics.gateRejections,
     checkFailures: metrics.checkFailures,
     permissionRequests,
+    questions,
     findings: metrics.findings,
     notices: metrics.notices,
     changedProtectedFiles,

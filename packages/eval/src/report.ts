@@ -48,8 +48,8 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       const delegated = (group: TaskResult[]) => `${group.filter((item) => item.delegations > 0).length}/${group.length}`
       lines.push(`子智能体：该派的题派了 ${delegated(expected)}，不该派的题派了 ${delegated(unexpected)}；子智能体共用 ${tokens(results.reduce((sum, item) => sum + item.usage.subagentTokens, 0))} token`, '')
     }
-    lines.push('| 题目 | 类别 | 结果 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 子智能体 | 备注 |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
+    lines.push('| 题目 | 类别 | 结果 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 子智能体 | 提问 | 备注 |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const item of results) {
       const notes = [
         item.error ? `出错：${item.error.split('\n')[0]}` : null,
@@ -60,7 +60,7 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       ].filter(Boolean)
       const findings = item.findings.filter((finding) => finding.level !== '已放行')
       lines.push(
-        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${item.delegations > 0 ? `${item.delegations} 个，${item.workerToolCalls} 次调用` : '—'} | ${cell(notes.join('；')) || '—'} |`,
+        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${item.delegations > 0 ? `${item.delegations} 个，${item.workerToolCalls} 次调用` : '—'} | ${item.questions || '—'} | ${cell(notes.join('；')) || '—'} |`,
       )
     }
     lines.push('')
