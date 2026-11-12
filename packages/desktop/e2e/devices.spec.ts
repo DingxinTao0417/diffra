@@ -390,7 +390,20 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     await taskInput(host.window).click()
     await host.window.evaluate(PASTE_BIG_IMAGE)
     await expect(host.window.getByTestId('composer-image')).toHaveCount(1)
+    // 收到「开始了」的那一刻，对方列表里这个会话就算在跑：core 存完盘才算在跑，以前中间这段列表写着没在跑，
+    // 连接端会重新订阅，把没结束的这一轮显示成已停止、也不说带了几张图片
+    await guest.window.evaluate(`(() => {
+      window.runningAtStart = null
+      const off = window.diffra.onRemoteEvent((payload) => {
+        if (payload.event?.event !== 'turn.started') return
+        off()
+        window.diffra.listRemoteSessions(payload.deviceId).then((list) => {
+          window.runningAtStart = list.sessions.find((session) => session.sessionId === payload.event.sessionId)?.running ?? '列表里没有'
+        })
+      })
+    })()`)
     await send(host.window, '实时的一轮')
+    await expect.poll(() => guest.window.evaluate('window.runningAtStart')).toBe(true)
     await expect(remoteTask.getByTestId('task-status')).toHaveAttribute('data-tone', 'running')
     await expect(remoteTask.getByTestId('turn')).toHaveCount(13)
     await expect(remoteTask.getByTestId('turn').last()).toContainText('（带了 1 张图片，这一轮跑完后显示）')

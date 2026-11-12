@@ -192,6 +192,10 @@ export class HostSync {
   private readonly lastActions = new Map<string, number>()
   // 每个会话最后一条更新的序号，记一轮开始时用
   private readonly lastSeqs = new Map<string, number>()
+  // 已经交给 core、还没跑完的一轮（会话 id → 轮次 id，turn-started 到这一轮的 changed）。core 先记下这一轮、存完盘才算在跑，
+  // 这段时间它报的 running 是 false、记录里却已经有这一轮：列表、续传、快照照这里算在跑，
+  // 否则连接端刚收到「开始了」又看到「没在跑」，会重新订阅，把没结束的这一轮显示成已停止
+  private readonly inFlight = new Map<string, string>()
   // 按轮次 id 缓存压过的图片（一轮的图片不会变）
   private readonly imageCache = new Map<string, PromptImage[]>()
   private imageCacheChars = 0
@@ -430,7 +434,7 @@ export class HostSync {
     if (!session || !project) throw new Error(NOT_FOUND)
     history.touchedAt = Date.now()
     return {
-      value: { resumed: true, sessionId: subscription.sessionId, running: session.running },
+      value: { resumed: true, sessionId: subscription.sessionId, running: this.running(session) },
       after: () => {
         const device = this.devices.get(deviceId)
         // 等回复发出去的这段时间里记录可能被挤掉，或者中间撤销过（记录被删）：断开让对方重新订阅，这回给快照
@@ -536,6 +540,10 @@ export class HostSync {
     this.deps.send(deviceId, pending.request)
   }
 
+  private running(session: StoredSessionSummary): boolean {
+    return session.running || this.inFlight.has(session.sessionId)
+  }
+
   private async list(grant: StoredGrant): Promise<SessionList> {
     const sessions = await this.deps.listSessions()
     return {
@@ -544,7 +552,7 @@ export class HostSync {
       sessions: sessions.flatMap((session) => {
         const project = visible(grant, session)
         if (!project) return []
-        return [{ sessionId: session.sessionId, projectId: projectIdOf(project.path), title: hidePaths(redactText(session.title), rootsOf(session.cwd)).slice(0, 200), updatedAt: session.updatedAt, running: session.running, turnCount: session.turnCount }]
+        return [{ sessionId: session.sessionId, projectId: projectIdOf(project.path), title: hidePaths(redactText(session.title), rootsOf(session.cwd)).slice(0, 200), updatedAt: session.updatedAt, running: this.running(session), turnCount: session.turnCount }]
       }),
     }
   }
@@ -565,7 +573,7 @@ export class HostSync {
       sessionId,
       projectId: projectIdOf(project.path),
       title: hidePaths(redactText(snapshot.title), roots).slice(0, 200),
-      running: snapshot.running,
+      running: snapshot.running || this.inFlight.has(sessionId),
       ...(snapshot.taskState ? { taskState: snapshot.taskState } : {}),
       totalTurns: snapshot.totalTurns,
       start: snapshot.start + snapshot.turns.length - prepared.length,
@@ -632,7 +640,11 @@ export class HostSync {
 
   // 主进程里会话的动静
   sessionEvent(event: SessionEvent): void {
-    if (event.type === 'changed') return this.broadcastChanged()
+    if (event.type === 'changed') {
+      if (event.turnId && this.inFlight.get(event.sessionId) === event.turnId) this.inFlight.delete(event.sessionId)
+      return this.broadcastChanged()
+    }
+    if (event.type === 'turn-started') this.inFlight.set(event.sessionId, event.turnId)
     if (event.type === 'permission') {
       const request = remotePermission(event, this.roots(event.sessionId))
       if (!request) return
