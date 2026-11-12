@@ -15,7 +15,7 @@ const searches = (round: string): ScriptStep[] =>
   }))
 
 async function openExecutionSettings(window: Page) {
-  await window.keyboard.press('Control+,')
+  await window.keyboard.press('ControlOrMeta+,')
   await settingsNav(window).getByRole('button', { name: '任务执行' }).click()
 }
 

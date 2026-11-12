@@ -102,8 +102,9 @@ describe('用量汇总', () => {
       ['m2', 1],
       ['m1', 3],
     ])
-    // 路径大小写不同算同一个项目（Windows）
-    expect(summary.projects[0]).toMatchObject({ cwd: 'D:\\work\\app', calls: 3, input: 1200 })
+    // 路径大小写不同：Windows 上算同一个项目；其他系统路径区分大小写，算两个
+    if (process.platform === 'win32') expect(summary.projects[0]).toMatchObject({ cwd: 'D:\\work\\app', calls: 3, input: 1200 })
+    else expect(summary.projects.map((project) => [project.cwd, project.calls])).toEqual(expect.arrayContaining([['D:\\work\\app', 2], ['d:\\WORK\\app', 1]]))
     expect(summary.tasks.map((task) => task.sessionId)).toEqual(['b', 'a', 'c'])
   })
 })

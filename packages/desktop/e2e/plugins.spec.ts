@@ -52,7 +52,7 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '插件', exact: true }).click()
     await answerOpenDialog(app, pluginDir)
     await window.getByRole('button', { name: '从文件夹安装' }).click()
@@ -126,7 +126,7 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     // 停用后，已打开的任务按建任务时开着的插件列，照旧有它的 Skill 和命令；新任务里没有
     const kitSwitch = window.getByRole('switch', { name: '启用 kit' })
     const newTask = window.getByTestId('sidebar').getByRole('button', { name: '新任务' })
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '插件', exact: true }).click()
     await kitSwitch.click()
     await expect(kitSwitch).toHaveAttribute('aria-checked', 'false')
@@ -150,7 +150,7 @@ test('插件：从文件夹和 Git 安装，显示内容；删除 Git 插件连�
     // 停用时建的任务里再启用也不列：core 按建任务时的插件找 Skill，列出来也选不了；新任务才有
     await startTask(window, '再来一个任务')
     await waitTaskDone(window)
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '插件', exact: true }).click()
     await kitSwitch.click()
     await expect(kitSwitch).toHaveAttribute('aria-checked', 'true')

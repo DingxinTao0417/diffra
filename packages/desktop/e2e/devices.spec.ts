@@ -993,6 +993,8 @@ test('设备连接：可操作的远程任务页用本机的输入框——切�
     await guest.window.getByRole('menuitemradio', { name: /自动审批/ }).click()
     await expect(mode).toContainText('自动审批')
     await expect(host.window.getByTestId('permission-mode')).toContainText('自动审批')
+    // 等上一个菜单的关闭动画走完再点，不然这次点击会被当成点在菜单外面（Mac 上容易撞上）
+    await expect(guest.window.getByRole('menu')).toHaveCount(0)
     // 完全访问：只开放了「可查看和操作」，被拒
     await mode.click()
     await guest.window.getByRole('menuitemradio', { name: /完全访问/ }).click()
@@ -1182,10 +1184,10 @@ test('左下角的设备和用量：设备、用量、设置竖着排；设备�
     // 标题栏的提示：收起侧栏、进设置页也在
     const indicator = host.window.getByTestId('remote-control-indicator')
     await expect(indicator).toHaveText('「能操作的电脑」能操作本机')
-    await host.window.keyboard.press('Control+B')
+    await host.window.keyboard.press('ControlOrMeta+B')
     await expect(host.window.getByTestId('sidebar')).toHaveCount(0)
     await expect(indicator).toBeVisible()
-    await host.window.keyboard.press('Control+B')
+    await host.window.keyboard.press('ControlOrMeta+B')
     await host.window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
     await expect(indicator).toBeVisible()
     await host.window.getByRole('button', { name: '返回' }).click()

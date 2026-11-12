@@ -27,7 +27,7 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
     // 目标模式默认 5 轮，改成 3 轮
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '任务执行' }).click()
     const rounds = window.getByRole('radiogroup', { name: '目标模式轮数上限' })
     await expect(rounds.getByRole('radio', { name: '5 轮' })).toHaveAttribute('aria-checked', 'true')

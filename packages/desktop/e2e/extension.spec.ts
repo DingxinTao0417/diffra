@@ -84,8 +84,16 @@ async function mirrorColor(window: Page): Promise<Color | 'none'> {
   return 'none'
 }
 
+// 登记测试用的宿主名。Windows：写注册表里 Chrome、Chromium 的位置（Chrome for Testing 也读那里）。
+// Mac：浏览器读「用户数据目录/NativeMessagingHosts」，清单直接写进这次的临时配置目录，不碰用户真实的 Chrome
+function testHostEnv(profile: string): Record<string, string> {
+  if (process.platform === 'darwin') return { DIFFRA_BROWSER_HOST_TARGETS: 'none', DIFFRA_BROWSER_HOST_DIRS: join(profile, 'NativeMessagingHosts'), DIFFRA_BROWSER_HOST: 'test' }
+  return { DIFFRA_BROWSER_HOST_TARGETS: 'chrome,chromium', DIFFRA_BROWSER_HOST: 'test' }
+}
+
 function removeTestHost(): void {
-  // 测试用的宿主登记指向已经删掉的临时目录，删掉
+  // 测试用的宿主登记指向已经删掉的临时目录，删掉；Mac 上清单在临时配置目录里，跟着删了
+  if (process.platform === 'darwin') return
   for (const root of ['HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts', 'HKCU\\Software\\Chromium\\NativeMessagingHosts']) {
     spawnSync('reg.exe', ['delete', `${root}\\dev.diffra.browser_test`, '/f'], { windowsHide: true })
   }
@@ -115,7 +123,7 @@ test('用户自己的浏览器：设置成 Chrome 后，智能体经扩展在浏
     // 第三轮：慢慢想的时候用户在扩展里点了停止
     { text: '想好了', delayMs: 30_000 },
   ])
-  const app = await launchApp(userDataDir, { DIFFRA_BROWSER_HOST_TARGETS: 'chrome,chromium', DIFFRA_BROWSER_HOST: 'test' })
+  const app = await launchApp(userDataDir, testHostEnv(profile))
   let browser: BrowserContext | null = null
   try {
     const window = await app.firstWindow()
@@ -200,7 +208,7 @@ test('用户自己的浏览器：智能体开的第二个标签页、别的窗�
     { toolCalls: [{ name: 'browser_get_text', input: {} }] },
     { text: '看到你给的页面了' },
   ])
-  const app = await launchApp(userDataDir, { DIFFRA_BROWSER_HOST_TARGETS: 'chrome,chromium', DIFFRA_BROWSER_HOST: 'test' })
+  const app = await launchApp(userDataDir, testHostEnv(profile))
   let browser: BrowserContext | null = null
   try {
     const window = await app.firstWindow()
@@ -263,7 +271,7 @@ test('用户自己的浏览器：默认是内置浏览器时，智能体按指�
     { toolCalls: [{ name: 'browser_tabs', input: { action: 'list' } }] },
     { text: '换回来了' },
   ])
-  const app = await launchApp(userDataDir, { DIFFRA_BROWSER_HOST_TARGETS: 'chrome,chromium', DIFFRA_BROWSER_HOST: 'test' })
+  const app = await launchApp(userDataDir, testHostEnv(profile))
   let browser: BrowserContext | null = null
   try {
     const window = await app.firstWindow()

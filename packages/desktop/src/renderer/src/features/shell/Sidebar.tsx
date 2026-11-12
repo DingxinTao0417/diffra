@@ -22,6 +22,7 @@ import { highlightMatch } from './SearchDialog'
 import { SidebarFooter } from './SidebarFooter'
 import { type SearchItem, searchItemKey, useSessionSearch } from './session-search'
 import { TaskMenu } from './TaskMenu'
+import { IS_MAC, MAC_CHROME_HEIGHT, MAC_SIDEBAR_MIN_PX, shortcutLabel } from '@/lib/platform'
 
 interface SidebarTask {
   sessionId: string
@@ -114,13 +115,16 @@ export function Sidebar() {
         label="拖动调整侧栏宽度"
         className="absolute inset-y-0 -right-1"
         measure={(handle) => {
-          const min = remPx(SIDEBAR_MIN_REM)
+          // Mac 上侧栏顶部要放得下红绿灯和三个按钮
+          const min = IS_MAC ? Math.max(remPx(SIDEBAR_MIN_REM), MAC_SIDEBAR_MIN_PX) : remPx(SIDEBAR_MIN_REM)
           return { size: handle.parentElement!.getBoundingClientRect().width, min, max: Math.max(min, Math.min(remPx(SIDEBAR_MAX_REM), window.innerWidth - remPx(MAIN_MIN_REM))) }
         }}
         onResize={(size) => setLayout({ sidebarWidth: size })}
         onCommit={(size) => void saveLayout({ sidebarWidth: size })}
         onReset={() => void saveLayout({ sidebarWidth: null })}
       />
+      {/* Mac：红绿灯和顶栏按钮浮在这里（TitleBar），留出位置 */}
+      {IS_MAC && <div aria-hidden className="shrink-0" style={{ height: MAC_CHROME_HEIGHT }} />}
       <div className="flex h-10.5 items-center gap-2 px-4 pt-3 pb-2">
         <BrandMark className="size-5.5" />
         <span className="font-semibold">Diffra</span>
@@ -322,7 +326,7 @@ function SidebarSearch() {
           }}
           onKeyDown={onKeyDown}
         />
-        <Kbd>Ctrl+K</Kbd>
+        <Kbd>{shortcutLabel('Ctrl+K')}</Kbd>
       </div>
       {open && (
         <div className="absolute inset-x-0 top-full z-40 mt-1 max-h-96 overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-overlay">

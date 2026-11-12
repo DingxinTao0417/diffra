@@ -49,7 +49,9 @@ const HOVER_SETTLE_MS = 300
 const DRAG_STEPS = 10
 const KEY_REPEAT_GAP_MS = 50
 const WAIT_POLL_MS = 250
-const DIALOG_CLOSE_WAIT_MS = 150
+// 内置浏览器的弹窗由 Electron 自动按取消关掉，关闭事件在 Windows 上 150 毫秒内到，Mac 上更晚；关了就不再等
+const DIALOG_CLOSE_WAIT_MS = 1000
+const DIALOG_CLOSE_POLL_MS = 25
 const CONSOLE_PROBLEMS = new Set(['error', 'warning', 'assert'])
 // 有弹窗时页面的脚本停住，这些操作不碰页面，照常能做
 const DIALOG_SAFE = new Set<BrowserAction['action']>(['dialog', 'console', 'network', 'tabs'])
@@ -435,10 +437,15 @@ export class PageAgent {
   private raceDialog(work: Promise<unknown>): Promise<boolean> {
     if (this.dialog) return Promise.resolve(true)
     return new Promise((resolve, reject) => {
-      // 弹窗可能马上又被自动关掉（内置浏览器），稍等一下再看
+      // 弹窗可能马上又被自动关掉（内置浏览器），等它关掉或等满时间再看；用户的 Chrome 里弹窗一直开着，等满才回
       const onDialog = () => {
         this.dialogListeners.delete(onDialog)
-        setTimeout(() => resolve(true), DIALOG_CLOSE_WAIT_MS)
+        const deadline = Date.now() + DIALOG_CLOSE_WAIT_MS
+        const check = () => {
+          if (!this.dialog || Date.now() >= deadline) resolve(true)
+          else setTimeout(check, DIALOG_CLOSE_POLL_MS)
+        }
+        setTimeout(check, DIALOG_CLOSE_POLL_MS)
       }
       this.dialogListeners.add(onDialog)
       work.then(

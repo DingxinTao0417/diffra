@@ -8,6 +8,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
+    "postinstall": "node scripts/node-pty-permissions.ts",
     "dev": "node scripts/changelog.ts && electron-vite dev",
     "build": "electron-vite build && node scripts/changelog.ts",
     "package": "electron-vite build && node scripts/changelog.ts && electron-builder --config electron-builder.config.ts --win --publish never",

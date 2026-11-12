@@ -57,3 +57,9 @@ export function cards(window: Page, kind: 'tool' | 'edit' | 'check' | 'review' |
 export function settingsNav(window: Page) {
   return window.getByRole('navigation', { name: '设置分区' })
 }
+
+// 底部终端里敲的命令：Windows 是 PowerShell；Mac 是用户的登录 shell（zsh、bash 都认这两条）
+export const TERMINAL_ECHO = process.platform === 'win32' ? "Write-Output ('term' + '-ok-' + (6*7))" : 'echo "term-ok-$((6*7))"'
+export const TERMINAL_PWD = process.platform === 'win32' ? '(Get-Location).Path' : 'pwd'
+// 应用的后退快捷键：Windows 是 Alt+←，Mac 是 ⌘[
+export const BACK_KEY = process.platform === 'darwin' ? 'Meta+BracketLeft' : 'Alt+ArrowLeft'

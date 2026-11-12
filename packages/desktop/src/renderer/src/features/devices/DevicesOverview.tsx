@@ -131,7 +131,8 @@ export function DevicesButton() {
 }
 
 // 标题栏右边：能操作本机的设备在线时一直显示（侧栏收起、在设置页时也看得到），点开是同一个设备面板
-export function RemoteControlIndicator() {
+// compact：Mac 上跟在左上角的按钮后面，只显示图标（文字给读屏，点开看详情）
+export function RemoteControlIndicator({ compact = false }: { compact?: boolean }) {
   const entries = useDeviceEntries()
   const recent = useRecentAction(entries)
   const active = entries.filter(controlling)
@@ -142,15 +143,19 @@ export function RemoteControlIndicator() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className="mr-[6px] flex h-[26px] max-w-72 items-center gap-[6px] rounded-md bg-warning-soft px-[8px] text-[12px] text-warning hover:opacity-90" data-testid="remote-control-indicator">
+        <button
+          type="button"
+          className={cn('flex h-[26px] items-center rounded-md bg-warning-soft text-[12px] text-warning hover:opacity-90', compact ? 'ml-[4px] w-[26px] justify-center' : 'mr-[6px] max-w-72 gap-[6px] px-[8px]')}
+          data-testid="remote-control-indicator"
+        >
           {full ? <ShieldAlert className="size-[14px] shrink-0" /> : <MonitorSmartphone className="size-[14px] shrink-0" />}
-          <span className="truncate">
+          <span className={compact ? 'sr-only' : 'truncate'}>
             {label}
             {terminals > 0 && ` · 开着 ${terminals} 个终端`}
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
+      <PopoverContent align={compact ? 'start' : 'end'} className="w-80 p-0">
         <DevicesPanel entries={entries} recent={recent} />
       </PopoverContent>
     </Popover>

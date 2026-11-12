@@ -11,6 +11,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 }
 
 const api: DiffraApi = {
+  platform: process.platform,
   getCoreStatus: () => ipcRenderer.invoke(IPC_CHANNELS.coreStatus),
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appVersion),
   getUpdateStatus: () => ipcRenderer.invoke(IPC_CHANNELS.updateStatus),
@@ -102,6 +103,8 @@ const api: DiffraApi = {
   setWindowChrome: (chrome) => ipcRenderer.invoke(IPC_CHANNELS.windowChrome, chrome),
   popupMenu: (position) => ipcRenderer.invoke(IPC_CHANNELS.menuPopup, position),
   onMenuCommand: (listener) => subscribe<MenuCommand>(IPC_CHANNELS.menuCommand, listener),
+  isFullScreen: () => ipcRenderer.invoke(IPC_CHANNELS.windowFullScreen),
+  onFullScreenChange: (listener) => subscribe<boolean>(IPC_CHANNELS.windowFullScreen, listener),
   setBrowserBounds: (sessionId, rect) => ipcRenderer.send(IPC_CHANNELS.browserBounds, sessionId, rect),
   browserNavigate: (sessionId, url) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, sessionId, url),
   browserCommand: (sessionId, command) => ipcRenderer.send(IPC_CHANNELS.browserCommand, sessionId, command),

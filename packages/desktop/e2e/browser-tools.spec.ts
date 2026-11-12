@@ -13,6 +13,8 @@ import { lastToolResult, type ScriptMessages, startScriptedModel } from './scrip
 const TOOLS_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>工具测试</title></head><body>
 <canvas id="pad" width="200" height="150" style="position:absolute;left:300px;top:0;background:#eee"></canvas>
 <p id="log"></p>
+<!-- 表单限制在画布（left:300px）左边：Mac 上字体、文件框更宽，不限的话按钮会排到画布下面，点中心点到的是画布 -->
+<div style="max-width:280px">
 <label>水果 <select id="fruit"><option value="a">苹果</option><option value="b">香蕉</option></select></label>
 <label>头像 <input id="file" type="file"></label>
 <button onclick="setTimeout(() => { document.getElementById('status').textContent = '加载完成' }, 800)">稍后加载</button>
@@ -21,6 +23,7 @@ const TOOLS_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>工�
 <p id="answer"></p>
 <button onclick="fetch('/missing')">发请求</button>
 <a href="/popup" target="_blank">新窗口</a>
+</div>
 <div style="height:3000px"></div>
 <script>
 const log = (text) => { document.getElementById('log').textContent += text + ';' }
@@ -60,6 +63,8 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-browser-tools-'))
   writeFileSync(join(project, 'avatar.png'), 'png')
   const site = await startSite()
+  // 截图按屏幕像素出图：Windows 上是 DEVICE_SCALE（CI 里 0.8），Mac 的 Retina 屏是 2 倍，启动后按窗口的 devicePixelRatio 定
+  let shotScale = DEVICE_SCALE
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'browser_navigate', input: { url: `${site.url}/tools` } }] },
     { toolCalls: [{ name: 'browser_click', input: { x: 350, y: 50 } }] },
@@ -90,7 +95,7 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
     { toolCalls: [{ name: 'browser_navigate', input: { url: `${site.url}/tools` } }] },
     { toolCalls: [{ name: 'browser_screenshot', input: {} }] },
     // 截图按窗口缩放比出图：截图里的 (360, 40) × 缩放比 就是网页上的 (360, 40)，也就是画布里的 (60, 40)
-    { toolCalls: [{ name: 'browser_click', input: { x: 360 * DEVICE_SCALE, y: 40 * DEVICE_SCALE } }] },
+    { toolCalls: [{ name: 'browser_click', input: () => ({ x: 360 * shotScale, y: 40 * shotScale }) }] },
     { toolCalls: [{ name: 'browser_evaluate', input: { expression: "document.getElementById('log').textContent" } }] },
     { toolCalls: [{ name: 'browser_screenshot', input: { full_page: true } }] },
     { toolCalls: [{ name: 'browser_click', input: { x: 360, y: 40 } }] },
@@ -99,6 +104,7 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
+    if (process.platform === 'darwin') shotScale = await window.evaluate<number>('devicePixelRatio')
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '把浏览器工具都试一遍')

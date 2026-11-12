@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServer } from '@agentclientprotocol/sdk'
@@ -38,7 +38,9 @@ describe('MCP 连接', () => {
     expect(await pool.callTool(turn.byName.get('mcp__demo__echo')!, { text: 'hi' }, signal)).toEqual({ text: 'echo: hi', isError: false })
     const whoami = await pool.callTool(turn.byName.get('mcp__demo__whoami')!, {}, signal)
     expect(whoami.text).toContain('token=secret-token')
-    expect(whoami.text.toLowerCase()).toContain(`cwd=${project.toLowerCase()}`)
+    // Mac 的临时目录 /var 是 /private/var 的软链接，服务器进程看到的是真实路径
+    const cwd = process.platform === 'darwin' ? realpathSync(project) : project
+    expect(whoami.text.toLowerCase()).toContain(`cwd=${cwd.toLowerCase()}`)
     expect(await pool.callTool(turn.byName.get('mcp__demo__fail')!, {}, signal)).toEqual({ text: 'something broke', isError: true })
     expect(await pool.promptText(project, server, 'review', { file: 'a.ts' })).toBe('Please review a.ts')
   })

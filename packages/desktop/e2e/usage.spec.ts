@@ -36,7 +36,7 @@ test('用量页：每次模型调用都记上，按范围、模型、项目、�
     await startTask(window, '看看 a.txt')
     await waitTaskDone(window)
 
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '用量' }).click()
     const tile = (label: string) => window.getByTestId('usage-tile').filter({ hasText: label })
     const row = (name: string) => window.getByTestId('usage-row').filter({ hasText: name })

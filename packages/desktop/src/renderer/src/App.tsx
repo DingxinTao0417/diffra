@@ -15,6 +15,7 @@ import { TaskView } from '@/features/task/TaskView'
 import { toggleTerminalPanel, wireTerminalEvents } from '@/features/terminal/terminals'
 import { QuickTodo, TodosView } from '@/features/todos/TodosView'
 import { errorMessage } from '@/lib/errors'
+import { IS_MAC } from '@/lib/platform'
 import { INSET_PANEL } from '@/lib/shell'
 import { initialize, moveHistory, openHome, openSettings, openTodos, setSidebarNarrow, toggleSidebar, wireCoreEvents } from '@/state/actions'
 import { startTodoScheduler } from '@/state/todo-scheduler'
@@ -61,6 +62,20 @@ function runCommand(command: MenuCommand): void {
 }
 
 const CTRL_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', '`': 'terminal', j: 'quick-todo' }
+
+// Mac：⌘K、⌘B、⌘,、⌘J；终端开关是 ⌃`；后退前进是 ⌘[、⌘]。Ctrl+K、Ctrl+B 这些在 Mac 的输入框里是移动光标的按键，不拦；
+// ⌥← 在输入框里是按词移动，也不拦。焦点在终端里时同样只保留切换终端
+const MAC_CMD_KEYS: Record<string, MenuCommand> = { k: 'search', b: 'toggle-sidebar', ',': 'settings', j: 'quick-todo', '[': 'back', ']': 'forward' }
+
+function onMacKeyDown(event: KeyboardEvent, inTerminal: boolean): void {
+  if (event.altKey || event.shiftKey) return
+  let command: MenuCommand | undefined
+  if (event.ctrlKey && !event.metaKey && event.key === '`') command = 'terminal'
+  else if (event.metaKey && !event.ctrlKey) command = MAC_CMD_KEYS[event.key.toLowerCase()]
+  if (!command || (inTerminal && command !== 'terminal')) return
+  event.preventDefault()
+  runCommand(command)
+}
 
 function sidebarWidth(): number {
   // 默认的 --sidebar-w 用 rem 写，跟着「文字大小」缩放；拖过之后是像素
@@ -115,6 +130,7 @@ export function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       // 焦点在终端里时 Ctrl+K、Ctrl+B、Alt+← 等是 shell 的按键，只保留切换终端
       const inTerminal = event.target instanceof Element && event.target.closest('.xterm') !== null
+      if (IS_MAC) return onMacKeyDown(event, inTerminal)
       const arrow = event.key === 'ArrowLeft' ? 'back' : event.key === 'ArrowRight' ? 'forward' : null
       if (arrow && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         if (inTerminal) return
@@ -146,7 +162,8 @@ export function App() {
           ) : (
             <>
               {sidebarShown && <Sidebar />}
-              <main ref={route.name === 'home' || route.name === 'design' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0')}>
+              {/* Mac 没有单独的顶栏：侧栏在时内容面板顶到窗口上沿（留 8px）；侧栏收起时顶上留一条放红绿灯和按钮（MAC_CHROME_HEIGHT） */}
+              <main ref={route.name === 'home' || route.name === 'design' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0', IS_MAC && (sidebarShown ? 'mt-2' : 'border-t-0 pt-[40px]'))}>
                 {route.name === 'home' && <HomeView key="home" projectPath={route.project} />}
                 {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}

@@ -17,6 +17,7 @@ import { TodoCalendar } from './TodoCalendar'
 import { TodoInput } from './TodoInput'
 import { TodoRow } from './TodoRow'
 import { TodoSidePanel } from './TodoSidePanel'
+import { shortcutLabel } from '@/lib/platform'
 
 const ALL = '__all__'
 const NO_PROJECT = '__none__'
@@ -83,7 +84,7 @@ export function TodosView() {
             }}
           />
           <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-            任何页面按 <Kbd>Ctrl+J</Kbd> 快速记
+            任何页面按 <Kbd>{shortcutLabel('Ctrl+J')}</Kbd> 快速记
           </span>
         </div>
         <TodoInput autoFocus />

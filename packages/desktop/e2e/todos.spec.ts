@@ -52,7 +52,7 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
 
     // 任何页面 Ctrl+J 快速记
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
-    await window.keyboard.press('Control+j')
+    await window.keyboard.press('ControlOrMeta+j')
     await window.getByLabel('快速记待办').fill('顺手修一下标题栏')
     await window.getByLabel('快速记待办').press('Enter')
     await expect(window.getByTestId('quick-todo')).toHaveCount(0)

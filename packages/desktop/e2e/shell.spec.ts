@@ -50,15 +50,15 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
 
     // Ctrl+K 按对话内容搜
     await taskInput(window).click()
-    await window.keyboard.press('Control+k')
+    await window.keyboard.press('ControlOrMeta+k')
     await window.getByRole('combobox', { name: '搜索任务' }).fill('独角兽')
     await expect(window.getByRole('option').filter({ hasText: '找到了独角兽的答案' })).toHaveCount(1)
     await window.keyboard.press('Escape')
 
     // Ctrl+B 收起和展开侧栏
-    await window.keyboard.press('Control+b')
+    await window.keyboard.press('ControlOrMeta+b')
     await expect(window.getByTestId('sidebar')).toHaveCount(0)
-    await window.keyboard.press('Control+b')
+    await window.keyboard.press('ControlOrMeta+b')
     await expect(window.getByTestId('sidebar')).toBeVisible()
 
     // 重命名
@@ -80,7 +80,7 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     await window.getByRole('menuitem', { name: '归档' }).click()
     await expect(window.getByText('要做什么？')).toBeVisible()
     await expect(window.getByTestId('sidebar-task')).toHaveCount(0)
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '会话与存储' }).click()
     await expect(window.getByTestId('archived-task')).toHaveCount(1)
     await window.getByTestId('archived-task').getByRole('button', { name: '取消归档' }).click()

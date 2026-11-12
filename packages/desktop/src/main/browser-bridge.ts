@@ -1,3 +1,4 @@
+import { existsSync, rmSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { app } from 'electron'
 import { BRIDGE_PROTOCOL, type BridgeCall, type BridgeTask, type DiffraMessage, type ExtensionMessage, type ExternalBrowserKind } from '../shared/browser-bridge'
@@ -81,6 +82,8 @@ export class BridgeServer {
   start(endpoint: BridgeEndpoint): void {
     this.server = createServer((socket) => this.accept(socket, endpoint.token))
     this.server.on('error', (error) => console.error('[browser-bridge] 管道服务出错', error))
+    // Mac 上的 Unix socket 是个文件，上次没正常退出会留下来，占着就监听不了（同一份数据目录只跑一个 Diffra，删掉是安全的）
+    if (process.platform !== 'win32' && existsSync(endpoint.pipe)) rmSync(endpoint.pipe, { force: true })
     this.server.listen(endpoint.pipe)
   }
 

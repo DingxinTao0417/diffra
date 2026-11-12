@@ -67,6 +67,7 @@ import { INSET_PANEL } from '@/lib/shell'
 import { PERMISSION_MODES } from '@/lib/permission-modes'
 import { leaveSettings, openSettings, setArchived } from '@/state/actions'
 import { type AppState, type SettingsSection, showToast, store, useAppState } from '@/state/store'
+import { IS_MAC, MAC_CHROME_HEIGHT, shortcutKeys } from '@/lib/platform'
 
 const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: string; icon: LucideIcon; keywords: string }> }> = [
   {
@@ -113,6 +114,8 @@ export function SettingsView({ section }: { section: SettingsSection }) {
   return (
     <div className="flex min-w-0 flex-1">
       <nav aria-label="设置分区" className="flex w-(--sidebar-w) shrink-0 flex-col gap-1 bg-sidebar px-2 py-3">
+        {/* Mac：红绿灯和顶栏按钮浮在这里（TitleBar），留出位置 */}
+        {IS_MAC && <div aria-hidden className="shrink-0" style={{ height: MAC_CHROME_HEIGHT - 12 }} />}
         <button type="button" className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-accent" onClick={leaveSettings}>
           <ArrowLeft className="size-4" />
           返回
@@ -143,7 +146,7 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           </div>
         ))}
       </nav>
-      <main className={cn('min-w-0 flex-1', INSET_PANEL)}>
+      <main className={cn('min-w-0 flex-1', INSET_PANEL, IS_MAC && 'mt-2')}>
         <div className="h-full overflow-y-auto [scrollbar-gutter:stable]">
           <div className="mx-auto max-w-[760px] px-6 py-10 lg:py-12">
             <SectionBody section={section} />
@@ -211,7 +214,7 @@ function GeneralSection() {
         {SHORTCUTS.map(({ keys, action }) => (
           <div key={action} className="flex h-10 items-center gap-4 px-4 text-base">
             <span className="flex-1">{action}</span>
-            <KbdGroup>{keys.map((key) => <Kbd key={key}>{key}</Kbd>)}</KbdGroup>
+            <KbdGroup>{shortcutKeys(keys).map((key) => <Kbd key={key}>{key}</Kbd>)}</KbdGroup>
           </div>
         ))}
       </SettingsGroup>

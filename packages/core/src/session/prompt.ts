@@ -39,7 +39,7 @@ export async function buildSystemPrompt(
   const lines = [
     'You are Diffra, a coding agent working in the user\'s project.',
     `Project directory: ${cwd}`,
-    `Operating system: ${process.platform === 'win32' ? 'Windows' : process.platform}. ${shell}`,
+    `Operating system: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform}. ${shell}`,
     '',
     'How to work:',
     '- Explore before you edit: use list_files, search and read_file. Never guess what a file contains.',

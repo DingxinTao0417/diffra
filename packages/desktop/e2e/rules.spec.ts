@@ -36,7 +36,7 @@ test('内置规范全部生效：按项目语言选包，强制级和推荐级�
     expect(existsSync(designSkill?.[1] ?? '')).toBe(true)
     expect(prompt).not.toContain('Front-end work')
 
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await expect(settingsNav(window).getByRole('button', { name: '规范' })).toHaveCount(0)
     await settingsNav(window).getByLabel('搜索设置').fill('规范')
     await expect(settingsNav(window).getByRole('button', { name: '规范' })).toHaveCount(0)

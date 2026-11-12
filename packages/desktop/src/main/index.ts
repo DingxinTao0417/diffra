@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, autoUpdater as nativeUpdater, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { browserHost, registerBrowserIpc } from './browser'
@@ -20,7 +20,7 @@ import { registerArchitectureIpc } from './architecture-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { setupUpdater } from './updater'
-import { setupWindowChrome, titleBarOptions, watchAppCommands } from './window-chrome'
+import { setupWindowChrome, titleBarOptions, watchAppCommands, watchFullScreen } from './window-chrome'
 
 // 开发模式和 e2e 不碰正式安装版的数据目录（%APPDATA%\Diffra），必须在 ready 之前设置
 if (!app.isPackaged) {
@@ -30,6 +30,9 @@ if (!app.isPackaged) {
 // 同一份用户数据只跑一个主进程，再次启动时把已有窗口调到前面。
 // 两个实例会同时占着安装目录里的文件，更新时只有点了更新的那个会退出，卸载旧版就会失败
 const isPrimaryInstance = app.requestSingleInstanceLock()
+// Mac 上点红绿灯关窗只是藏起来（任务、终端照常跑），点 Dock 图标再拿出来；⌘Q、菜单退出、更新时才真正退出
+const HIDE_ON_CLOSE = process.platform === 'darwin'
+let quitting = false
 // Windows 的系统通知按 AppUserModelId 认应用，要和安装包的 appId 一致；开发版不设，免得和装好的 Diffra 混在一起
 if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('dev.diffra.desktop')
 if (!isPrimaryInstance) app.quit()
@@ -62,6 +65,18 @@ function createWindow(): void {
     }, 1500),
   )
   watchAppCommands(window)
+  watchFullScreen(window)
+  if (HIDE_ON_CLOSE) {
+    window.on('close', (event) => {
+      if (quitting) return
+      event.preventDefault()
+      // 全屏的窗口直接藏起来会留下一块黑屏，先退出全屏再藏
+      if (window.isFullScreen()) {
+        window.once('leave-full-screen', () => window.hide())
+        window.setFullScreen(false)
+      } else window.hide()
+    })
+  }
   // 设计页叠在窗口上、随窗口销毁：还有没存的改动时先存完再关
   let designFlushed = false
   window.on('close', (event) => {
@@ -137,9 +152,22 @@ app
     app.quit()
   })
 
-app.on('before-quit', () => logEvent('[quit] 开始退出'))
+app.on('before-quit', () => {
+  quitting = true
+  logEvent('[quit] 开始退出')
+})
+// Mac 上装更新时先关窗口、后发 before-quit，关窗前就要放行
+if (HIDE_ON_CLOSE) nativeUpdater.on('before-quit-for-update', () => (quitting = true))
 
 app.on('window-all-closed', () => app.quit())
+
+// Mac 上点 Dock 图标：把藏起来的窗口拿出来
+app.on('activate', () => {
+  const window = BrowserWindow.getAllWindows()[0]
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+})
 
 app.on('will-quit', () => {
   logEvent('[quit] 窗口已全部关闭，结束终端和 core')

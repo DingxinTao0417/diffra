@@ -29,7 +29,7 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
     // 添加服务器：用跑测试的这个 Node 启动，环境变量的值加密保存
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
     await window.getByRole('button', { name: '添加服务器' }).click()
     const dialog = window.getByRole('dialog')
@@ -94,7 +94,7 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     await input.fill('')
 
     // 停用后新任务不带它的工具
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
     await window.getByRole('switch', { name: '启用 demo' }).click()
     await expect(card.getByTestId('mcp-status')).toHaveText('已停用')
@@ -124,7 +124,7 @@ test('MCP 远程 HTTP：请求头的值加密保存；密钥不对时显示原�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
     // 先填错密钥：卡片上说明是 401
-    await window.keyboard.press('Control+,')
+    await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
     await window.getByRole('button', { name: '添加服务器' }).click()
     const dialog = window.getByRole('dialog')

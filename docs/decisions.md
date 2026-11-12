@@ -13,13 +13,13 @@
 ## v1 / v2 范围
 
 v1：
-- 只发 Windows。
+- 先发 Windows。macOS 版 2026-11-11 开始做（原来排在 v2），进度和做法见「macOS」。
 - 模型只通过 API Key 接入：预置各大厂商的 base URL、Coding Plan 模板（智谱、百炼、Kimi），以及自定义协议配置。
 - 不做订阅账号登录（用 OAuth 消耗 Claude / ChatGPT / Gemini 订阅额度）。Anthropic 和 Google 都禁止第三方应用这样用，分发出去后被封号的是用户；OpenAI 的第三方登录计划还没核实到官方原文。
 
 v2：
 - 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。
-- 多候选方案（每个候选一个 git worktree）、Java 适配器、macOS。
+- 多候选方案（每个候选一个 git worktree）、Java 适配器。
 
 ## 技术栈
 
@@ -36,7 +36,7 @@ v2：
 - 其他运行时依赖：
   - core：`@vscode/ripgrep`（搜索）、`shell-quote`（拆分命令做权限分级）、`@modelcontextprotocol/sdk`（MCP 客户端，只用到 client 部分，服务端依赖不进 bundle）。
   - 桌面端：`diff`（渲染 diff）、`react-markdown` + `remark-gfm`（回复按 Markdown 显示，不渲染原始 HTML）、`@xterm/xterm` + `@xterm/addon-fit`（终端界面）、`node-pty`（终端进程）。
-- 运行前提：Windows 上需要 Git for Windows，检查点要用 git，命令执行要用它自带的 bash。
+- 运行前提：Windows 上需要 Git for Windows，检查点要用 git，命令执行要用它自带的 bash。Mac 上用系统的 `/bin/bash` 和 git（Xcode 命令行工具）。
 
 ## 进程结构
 
@@ -130,6 +130,36 @@ v2：
   - 卸载不删 `%APPDATA%\Diffra`（用户数据），也不删 `%LOCALAPPDATA%\diffra-updater`（更新缓存，约 250MB，里面是两份安装包）。
 - 代码签名：用支持云签名的 OV 证书。2024 年起 EV 证书也不再直接跳过 SmartScreen 的信誉积累，多花钱买 EV 意义不大。
   - 现在还没配签名。没有配置发布者名时，electron-updater 不校验更新包的签名。证书到位后，要同时配置签名和发布者名，客户端才会校验更新包。
+
+## macOS
+
+- 原则：Windows 的行为一点不改。主进程按 `process.platform` 分支，界面从 `renderer/src/lib/platform.ts` 的 `IS_MAC` 分（preload 把 `process.platform` 放在 `window.diffra.platform`）。只在 Windows 上有意义的代码保持原样；两边都要的改动先确认 Windows 上结果不变。
+- 现状（2026-11-11）：开发版在 Mac（Apple 芯片）上能跑，core 的单元测试和桌面端 e2e 全部通过。打包、签名公证、自动更新、CI、官网下载还没做（见下面「还没做」）。
+- 窗口：
+  - 去掉系统标题栏（`titleBarStyle: 'hidden'`），红绿灯放在 (14, 12)。
+  - 顶栏不单独占一行（2026-11-11 定的「侧栏通顶」，像访达、备忘录）：红绿灯、侧栏开关、后退前进浮在窗口左上角，落在侧栏顶部留出的 40px 里；内容面板顶到窗口上沿（留 8px）。侧栏收起时内容区顶上留一条 40px 放这几个按钮。全屏时红绿灯藏起来，按钮挪到最左（主进程发 `window:full-screen`）。侧栏最窄 216px，放得下这一组。
+  - 「某台设备能操作本机」的提示在 Mac 上是按钮组后面的琥珀色小图标（文字给读屏），点开看详情；侧栏左下角的设备那行照常变琥珀色。
+  - 拖动窗口：窗口最上面 40px 整条（`mac-drag-strip`，垫在所有内容下面）和任务页的标题行（`app-drag`）能拖，里面的按钮、输入框、分隔条不拖；弹窗、下拉菜单打开时整条先不拖。拖动条不能用 `pointer-events: none`，那样的元素可能不算进拖动区；放在负 z-index 下面，点击照常落在上面的内容上。用 `ELECTRON_DEBUG_DRAGGABLE_REGIONS=1 pnpm dev` 能看到实际的拖动区。
+  - 不放 ≡：菜单在系统菜单栏里。菜单是单独一份（`window-chrome.ts` 的 `macMenuTemplate`）：应用菜单（关于、检查更新、设置、服务、隐藏、退出）、文件、编辑、视图、窗口、帮助。Windows 那份不动。
+  - 点红绿灯关窗只是藏起来，任务和终端照常跑，点 Dock 图标再拿出来；⌘Q、菜单退出时才真正退出。Mac 装更新时先关窗口、后发 `before-quit`，所以 `before-quit-for-update` 时也放行。
+- 快捷键：
+  - ⌘N、⌘O、⌘K、⌘B、⌘,、⌘J；后退前进是 ⌘[、⌘]；终端开关和 VS Code 一样是 ⌃`（⌘` 是系统切换同一应用的窗口）。
+  - Mac 上 Ctrl+K、Ctrl+B、Ctrl+N 在输入框里是移动光标的按键，⌥← 是按词移动，这些都不拦（Windows 上照旧 Ctrl 和 ⌘ 都认、Alt+← 后退）。
+  - 界面上的按键提示代码里按 Windows 写（`Ctrl+K`），经 `shortcutLabel`、`shortcutKeys` 在 Mac 上显示成 ⌘K、⌃`、⌘[。
+  - e2e 按应用快捷键用 Playwright 的 `ControlOrMeta`（Windows 上就是 Ctrl）；后退用 `flows.ts` 的 `BACK_KEY`。
+- 终端：默认 shell 是 `$SHELL -l`（登录 shell，读用户的 zshrc）。node-pty 在 Mac 上靠 `spawn-helper` 拉起 shell，但 npm 包里这个文件没有执行权限，直接用报「posix_spawnp failed」；桌面端的 `postinstall`（`scripts/node-pty-permissions.ts`）在 Mac 上补执行权限，Windows 上什么都不做。打包时 electron-builder 照原样拷贝，所以先装依赖再打包。
+- 用户自己的浏览器（扩展的本机宿主）：
+  - 没有注册表：清单 JSON 直接写进各浏览器的 `~/Library/Application Support/<浏览器>/NativeMessagingHosts/`（Chrome 是 `Google/Chrome`，Edge 是 `Microsoft Edge`，Chromium 是 `Chromium`）。只登记已经装了的浏览器，不替没装的建目录。卸载没有清理（Mac 没有卸载程序），留下的清单指向不存在的脚本，浏览器连不上就算了。
+  - 启动脚本是 `browser-bridge/diffra-browser-host.sh`（755），和 Windows 的 `.cmd` 一样写好管道、令牌文件、Electron 和脚本的路径。
+  - 管道是数据目录里的 Unix socket（`browser-bridge/bridge.sock`），路径超过 100 字节（上限 104）时退到临时目录；上次没正常退出留下的 socket 文件启动时先删掉。
+  - 实测：Mac 上 Chrome 读的是「用户数据目录/NativeMessagingHosts」，用 `--user-data-dir` 启动的浏览器（e2e 的 Chrome for Testing）不读 `Google/Chrome` 下的清单。所以 e2e 在 Mac 上不登记到真实浏览器的目录，用 `DIFFRA_BROWSER_HOST_DIRS` 把清单写进这次的临时配置目录。
+- 内置浏览器的网页弹窗：Electron 自动按取消关掉，关闭事件在 Windows 上 150 毫秒内到，Mac 上更晚。点击、按键后看到弹窗时，等它关掉再回（最多 1 秒），不然工具结果会让模型去处理已经没有的弹窗。
+- 测试里的平台差异：Mac 的临时目录 `/var` 是 `/private/var` 的软链接，子进程看到的是真实路径；路径大小写只在 Windows 上合并；Retina 屏截图是 2 倍像素，按截图坐标点击的用例按窗口的 `devicePixelRatio` 换算；PowerShell 命令换成 sh 的（`flows.ts` 的 `TERMINAL_ECHO`、`TERMINAL_PWD`）。
+- 还没做：
+  - 打包：electron-builder 的 mac 配置（dmg 加 zip，自动更新只认 zip）、架构（arm64 还是 universal）、`.icns` 图标、ripgrep 换成 Mac 的 `rg`。
+  - 签名和公证：要 Apple Developer 账号（每年 99 美元）和 Developer ID 证书。Mac 上没签名的应用自动更新直接失败，没公证的第一次打开会被 Gatekeeper 拦住，这和 Windows 现在不签名不一样，绕不过去。
+  - 更新源单独一个目录（比如 `/mac/`），`publish-release.ts`、官网下载页、nginx、下载统计跟着加；`updater.ts` 判断免安装版靠 `Uninstall Diffra.exe`，Mac 要换判断方法。
+  - CI 加 `macos-latest` 的任务，证书放进 secrets。
 
 ## Agent 核心（v0）
 
@@ -497,7 +527,7 @@ v2：
   - 删除任务时它在浏览器里的标签页交还给用户，不关（可能有用户自己的东西）。
 - 测试：e2e 用 Playwright 的 Chrome for Testing（正式版 Chrome 137 起不让命令行加载扩展）在新的无头模式下加载开发版扩展，Diffra 登记测试用的宿主名，测完删掉登记。Chrome for Testing 读的是 `Software\Google\Chrome` 下的登记，和正式版 Chrome 同一个位置。CI 的 Windows 构建里多一步 `playwright install chromium`。
   - 在 Claude 桌面版（打包应用）的终端里跑测试时，写注册表和 `%LOCALAPPDATA%` 会被重定向到它私有的副本：注册表项用户的 Chrome 看不到，装在那里的 Chrome for Testing 启动报「并行配置不正确」。本机跑扩展的 e2e 时把 `PLAYWRIGHT_BROWSERS_PATH` 指到其他盘上的目录。
-- 不做（以后再说）：Firefox、Safari、Brave、Arc；macOS、Linux；Chrome 远程调试开关（`chrome://inspect`）当备用；自动识别付款、提交这类高风险按钮再确认；录 GIF；在浏览器侧边栏里聊天；在投屏画面上直接点。
+- 不做（以后再说）：Firefox、Safari、Brave、Arc；Linux（macOS 见「macOS」）；Chrome 远程调试开关（`chrome://inspect`）当备用；自动识别付款、提交这类高风险按钮再确认；录 GIF；在浏览器侧边栏里聊天；在投屏画面上直接点。
 
 ## 前端任务
 

@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Locator, type Page, test } from '@playwright/test'
-import { chooseProject, startDesignTask, startTask, taskInput, waitTaskDone } from './flows'
+import { BACK_KEY, chooseProject, startDesignTask, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -52,11 +52,11 @@ test('分栏拖动：侧栏、任务监控、审阅和浏览器共用的宽度�
     await expect.poll(() => width(sidebar)).toBe(sidebarDefault + 80)
     await window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
     await expect.poll(() => width(window.getByRole('navigation', { name: '设置分区' }))).toBe(sidebarDefault + 80)
-    await window.keyboard.press('Alt+ArrowLeft')
+    await window.keyboard.press(BACK_KEY)
     await expect(window.getByTestId('task-title')).toBeVisible()
-    // 往左拖到底停在下限
+    // 往左拖到底停在下限（Mac 上侧栏顶部要放得下红绿灯和顶栏按钮，至少 216px）
     await drag(window, window.getByRole('separator', { name: '拖动调整侧栏宽度' }), -600)
-    await expect.poll(() => width(sidebar)).toBe(Math.round(13 * rem))
+    await expect.poll(() => width(sidebar)).toBe(process.platform === 'darwin' ? Math.max(Math.round(13 * rem), 216) : Math.round(13 * rem))
     await window.getByRole('separator', { name: '拖动调整侧栏宽度' }).dblclick()
     await expect.poll(() => width(sidebar)).toBe(sidebarDefault)
     await drag(window, window.getByRole('separator', { name: '拖动调整侧栏宽度' }), 40)

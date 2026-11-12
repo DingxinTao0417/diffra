@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
+import { chooseProject, startTask, TERMINAL_ECHO, TERMINAL_PWD, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -26,7 +26,7 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     await expect(tabs).toHaveCount(1)
     await expect(tabs).toContainText(basename(project))
     await host.click()
-    await window.keyboard.type("Write-Output ('term' + '-ok-' + (6*7)); (Get-Location).Path")
+    await window.keyboard.type(`${TERMINAL_ECHO}; ${TERMINAL_PWD}`)
     await window.keyboard.press('Enter')
     await expect(host).toContainText('term-ok-42', { timeout: 20_000 })
     await expect(host).toContainText(basename(project))
@@ -41,8 +41,8 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     await taskInput(window).fill('')
     await host.click()
 
-    // 焦点在终端里时 Ctrl+K 留给 shell，不弹搜索
-    await window.keyboard.press('Control+k')
+    // 焦点在终端里时 Ctrl+K（Mac 上 ⌘K）留给 shell，不弹搜索
+    await window.keyboard.press('ControlOrMeta+k')
     await window.waitForTimeout(300)
     await expect(window.getByRole('combobox', { name: '搜索任务' })).toHaveCount(0)
 
@@ -64,9 +64,9 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     await window.keyboard.press('Enter')
     await expect(tabs).toContainText('已退出', { timeout: 15_000 })
 
-    // 焦点不在终端时 Ctrl+K 照常弹搜索
+    // 焦点不在终端时 Ctrl+K（Mac 上 ⌘K）照常弹搜索
     await taskInput(window).click()
-    await window.keyboard.press('Control+k')
+    await window.keyboard.press('ControlOrMeta+k')
     await expect(window.getByRole('combobox', { name: '搜索任务' })).toBeVisible()
   } finally {
     await app.close()

@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
-import { answerOpenDialog, cards, chooseProject, clickMenuItem, startDesignTask, startTask, waitTaskDone } from './flows'
+import { answerOpenDialog, cards, chooseProject, clickMenuItem, startDesignTask, startTask, TERMINAL_ECHO, waitTaskDone } from './flows'
 import { desktopDir, isPackagedRun, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -177,7 +177,7 @@ test('删除无项目任务：终端开在文件夹里也能移到回收站；�
     await expect(window.getByTestId('terminal-tab')).toContainText(basename(inTerminal))
     const host = window.getByTestId('terminal-host')
     await host.click()
-    await window.keyboard.type("Write-Output ('term' + '-ok-' + (6*7))")
+    await window.keyboard.type(TERMINAL_ECHO)
     await window.keyboard.press('Enter')
     await expect(host).toContainText('term-ok-42', { timeout: 20_000 })
     expect(readdirSync(checkpoints)).toHaveLength(1)
@@ -287,8 +287,9 @@ test('删除无项目任务：开着 stdio MCP 服务器（当前目录就是任
     await waitTaskDone(window, 30_000)
     const folder = folderOf(root, '查一下目录')
     expect(model.bodies()[0]).toContain('mcp__demo__whoami')
-    // whoami 回的是服务器进程的当前目录：就是任务文件夹
-    expect(model.bodies()[1]).toContain(`cwd=${JSON.stringify(folder).slice(1, -1)}`)
+    // whoami 回的是服务器进程的当前目录：就是任务文件夹（Mac 的临时目录 /var 是 /private/var 的软链接，进程看到的是真实路径）
+    const cwd = process.platform === 'darwin' ? realpathSync(folder) : folder
+    expect(model.bodies()[1]).toContain(`cwd=${JSON.stringify(cwd).slice(1, -1)}`)
     expect(readdirSync(folder)).toEqual([])
 
     const dialog = await openDeleteDialog(window, '查一下目录')

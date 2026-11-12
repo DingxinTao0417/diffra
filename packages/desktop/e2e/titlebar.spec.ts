@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, type Locator, test } from '@playwright/test'
-import { chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
+import { BACK_KEY, chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
 import { isPackagedRun, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -26,32 +26,45 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     const bar = window.getByTestId('title-bar')
     await expect(bar).toBeVisible()
     expect(await appRegion(bar)).toBe('drag')
-    expect(await appRegion(bar.getByRole('button', { name: '主菜单' }))).toBe('no-drag')
-    // Windows 上右边给系统的窗口按钮留出位置
+    const mac = process.platform === 'darwin'
+    // Windows 上右边给系统的窗口按钮留出位置；Mac 上左边给红绿灯留位置，菜单在系统菜单栏里，没有 ≡
     if (process.platform === 'win32') expect(Number.parseFloat(await computedStyle(bar, 'padding-right'))).toBeGreaterThan(100)
+    if (mac) {
+      expect(Number.parseFloat(await computedStyle(bar, 'padding-left'))).toBeGreaterThanOrEqual(80)
+      await expect(bar.getByRole('button', { name: '主菜单' })).toHaveCount(0)
+      // 顶栏不单独占一行：按钮组浮在侧栏顶上，内容面板顶到窗口上沿（留 8px）；窗口最上面一条能拖动
+      expect((await bar.boundingBox())!.width).toBeLessThan(300)
+      expect((await window.locator('main').first().boundingBox())!.y).toBeLessThanOrEqual(10)
+      expect(await appRegion(window.locator('.mac-drag-strip'))).toBe('drag')
+    } else expect(await appRegion(bar.getByRole('button', { name: '主菜单' }))).toBe('no-drag')
 
     // 中文菜单
     const menu = await app.evaluate(({ Menu }) =>
       Menu.getApplicationMenu()?.items.map((item) => [item.label, item.submenu?.items.filter((sub) => sub.type !== 'separator').map((sub) => sub.label)]),
     )
-    expect(menu).toEqual([
-      ['文件', ['新任务', '打开项目文件夹…', '设置', '退出']],
-      ['编辑', ['撤销', '重做', '剪切', '复制', '粘贴', '全选']],
-      // 正式版不放重新加载
-      ['视图', ['侧栏', '搜索任务', '终端', '记一条待办', '后退', '前进', '全屏', ...(isPackagedRun() ? [] : ['重新加载'])]],
-      ['帮助', ['Diffra 官网', '检查更新', '开发者工具', '关于 Diffra']],
-    ])
-    // ≡ 在按钮下面弹出这个菜单（测试里记下弹出位置，不真的弹）
-    await app.evaluate(({ Menu }) => {
-      const state = globalThis as unknown as { popups: Array<{ x?: number; y?: number }> }
-      state.popups = []
-      const appMenu = Menu.getApplicationMenu()
-      if (appMenu) appMenu.popup = (options) => void state.popups.push({ x: options?.x, y: options?.y })
-    })
-    await bar.getByRole('button', { name: '主菜单' }).click()
-    await expect
-      .poll(() => app.evaluate(() => (globalThis as unknown as { popups: Array<{ x?: number; y?: number }> }).popups))
-      .toEqual([{ x: 8, y: 35 }])
+    // 正式版不放重新加载
+    const reload = isPackagedRun() ? [] : ['重新加载']
+    if (mac) {
+      const appName = await app.evaluate(({ app }) => app.name)
+      expect(menu).toEqual([
+        [appName, ['关于 Diffra', '检查更新…', '设置…', '服务', '隐藏 Diffra', '隐藏其他', '全部显示', '退出 Diffra']],
+        ['文件', ['新任务', '打开项目文件夹…', '关闭窗口']],
+        ['编辑', ['撤销', '重做', '剪切', '复制', '粘贴', '粘贴并匹配样式', '全选']],
+        ['视图', ['侧栏', '搜索任务', '终端', '记一条待办', '后退', '前进', '进入全屏', ...reload]],
+        ['窗口', ['最小化', '缩放', '前置全部窗口']],
+        ['帮助', ['Diffra 官网', '开发者工具']],
+      ])
+    } else {
+      expect(menu).toEqual([
+        ['文件', ['新任务', '打开项目文件夹…', '设置', '退出']],
+        ['编辑', ['撤销', '重做', '剪切', '复制', '粘贴', '全选']],
+        ['视图', ['侧栏', '搜索任务', '终端', '记一条待办', '后退', '前进', '全屏', ...reload]],
+        ['帮助', ['Diffra 官网', '检查更新', '开发者工具', '关于 Diffra']],
+      ])
+    }
+    // ≡ 在按钮下面弹出这个菜单（测试里记下弹出位置，不真的弹）；Mac 没有 ≡
+    if (!mac) await expectMenuPopup(app, bar)
+
 
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
@@ -92,7 +105,7 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     await expect(settingsNav(window)).toBeHidden()
 
     // 弹窗打开时顶栏不拖动，免得盖在上面的弹窗点不到
-    await window.keyboard.press('Control+k')
+    await window.keyboard.press('ControlOrMeta+k')
     await expect(window.getByRole('dialog')).toBeVisible()
     expect(await appRegion(bar)).toBe('no-drag')
     await window.keyboard.press('Escape')
@@ -105,7 +118,7 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     await bar.getByRole('button', { name: '展开侧栏' }).click()
     await expect(window.getByTestId('sidebar')).toBeVisible()
 
-    // 后退、前进：顶栏按钮、Alt+←、菜单都能用；菜单「新任务」回首页
+    // 后退、前进：顶栏按钮、Alt+←（Mac 上 ⌘[）、菜单都能用；菜单「新任务」回首页
     await chooseProject(app, window, project)
     await startTask(window, '打个招呼')
     await waitTaskDone(window)
@@ -116,7 +129,7 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     await expect(window.getByRole('heading', { name: '要做什么？' })).toBeVisible()
     await forward.click()
     await expect(window.getByTestId('task-title')).toHaveText('打个招呼')
-    await window.keyboard.press('Alt+ArrowLeft')
+    await window.keyboard.press(BACK_KEY)
     await expect(window.getByRole('heading', { name: '要做什么？' })).toBeVisible()
     await clickMenuItem(app, 'forward')
     await expect(window.getByTestId('task-title')).toHaveText('打个招呼')
@@ -139,3 +152,16 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+async function expectMenuPopup(app: ElectronApplication, bar: Locator): Promise<void> {
+  await app.evaluate(({ Menu }) => {
+    const state = globalThis as unknown as { popups: Array<{ x?: number; y?: number }> }
+    state.popups = []
+    const appMenu = Menu.getApplicationMenu()
+    if (appMenu) appMenu.popup = (options) => void state.popups.push({ x: options?.x, y: options?.y })
+  })
+  await bar.getByRole('button', { name: '主菜单' }).click()
+  await expect
+    .poll(() => app.evaluate(() => (globalThis as unknown as { popups: Array<{ x?: number; y?: number }> }).popups))
+    .toEqual([{ x: 8, y: 35 }])
+}

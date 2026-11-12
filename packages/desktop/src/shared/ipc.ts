@@ -142,6 +142,7 @@ export const IPC_CHANNELS = {
   windowChrome: 'window:chrome',
   menuPopup: 'menu:popup',
   menuCommand: 'menu:command',
+  windowFullScreen: 'window:full-screen',
   browserBounds: 'browser:bounds',
   browserNavigate: 'browser:navigate',
   browserCommand: 'browser:command',
@@ -363,6 +364,8 @@ export interface TerminalSize {
 }
 
 export interface DiffraApi {
+  // 运行的系统（process.platform）：Mac 上顶栏给红绿灯留位置、快捷键显示成 ⌘
+  platform: string
   getCoreStatus(): Promise<CoreStatus>
   getAppVersion(): Promise<string>
   getUpdateStatus(): Promise<UpdateStatus>
@@ -493,6 +496,9 @@ export interface DiffraApi {
   // 在窗口坐标 (x, y) 弹出主菜单
   popupMenu(position: { x: number; y: number }): Promise<void>
   onMenuCommand(listener: (command: MenuCommand) => void): () => void
+  // 窗口进出全屏（Mac 全屏时没有红绿灯，顶栏不用再留位置）
+  isFullScreen(): Promise<boolean>
+  onFullScreenChange(listener: (fullScreen: boolean) => void): () => void
   // 内置浏览器：面板位置（null 表示不显示）、用户在地址栏打开网页、前进后退刷新、标签页状态
   setBrowserBounds(sessionId: string, rect: BrowserRect | null): void
   browserNavigate(sessionId: string, url: string): Promise<void>

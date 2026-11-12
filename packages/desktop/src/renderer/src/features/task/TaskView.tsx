@@ -32,6 +32,7 @@ import { RemoteTaskContext, type RemoteTaskSource } from './remote-task'
 import { ReviewPanel } from './ReviewPanel'
 import { ToolOutputContext } from './tool-output'
 import { useTaskDiff } from './useTaskDiff'
+import { shortcutLabel } from '@/lib/platform'
 
 // 设计模式下对话列和画布各自至少留的宽度
 const DESIGN_CHAT_MIN_REM = 20
@@ -124,7 +125,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
 
   const page = (
     <div className="flex h-full min-w-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
+      <header className="app-drag flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
         {remote?.badge}
         <span className="min-w-0 truncate" data-testid="task-title">
           {task.title}
@@ -154,7 +155,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                终端 <Kbd>Ctrl+`</Kbd>
+                终端 <Kbd>{shortcutLabel('Ctrl+`')}</Kbd>
               </TooltipContent>
             </Tooltip>
             <span aria-hidden className="h-4 w-px shrink-0 bg-border" />

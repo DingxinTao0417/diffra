@@ -236,6 +236,17 @@ body[data-scroll-locked] .title-bar {
   -webkit-app-region: no-drag;
 }
 
+/* Mac：没有单独的顶栏。窗口最上面一条（mac-drag-strip）和任务页的标题行（app-drag）能拖动窗口；
+ * 拖动区域会盖过下面的任何东西，所以里面能点、能输入的都不拖。弹窗、下拉菜单打开时同样先不拖动 */
+html[data-platform='darwin'] :is(.mac-drag-strip, .app-drag) {
+  -webkit-app-region: drag;
+}
+html[data-platform='darwin']
+  :is(button, a, input, textarea, select, label, [role='button'], [role='tab'], [role='separator'], [role='combobox'], [role='menuitem'], [contenteditable='true']),
+html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-drag) {
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   * {
     @apply border-border;

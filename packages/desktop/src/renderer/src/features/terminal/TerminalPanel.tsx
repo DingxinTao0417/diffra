@@ -12,6 +12,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TERMINAL_ATTACHMENT_MAX_CHARS } from '../../../../shared/terminal-output'
+import { shortcutLabel } from '@/lib/platform'
 
 const MIN_HEIGHT = 120
 const DEFAULT_HEIGHT = 280
@@ -19,7 +20,9 @@ const DEFAULT_HEIGHT = 280
 const SHELL_LABELS: Record<string, string> = { 'powershell.exe': 'PowerShell', 'pwsh.exe': 'PowerShell', 'bash.exe': 'Git Bash', 'cmd.exe': 'cmd' }
 
 function shellLabel(shell: string) {
-  return SHELL_LABELS[shell.toLowerCase()] ?? shell.replace(/\.exe$/i, '')
+  // Mac 上是 /bin/zsh 这样的完整路径，只显示文件名；Windows 的 shell 不以 / 开头，照旧
+  const name = shell.startsWith('/') ? shell.slice(shell.lastIndexOf('/') + 1) : shell
+  return SHELL_LABELS[name.toLowerCase()] ?? name.replace(/\.exe$/i, '')
 }
 
 // 任务页对话列底部的终端面板；cwd 是「新建终端」用的目录（当前任务的项目）
@@ -108,7 +111,7 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            收起终端 <Kbd>Ctrl+`</Kbd>
+            收起终端 <Kbd>{shortcutLabel('Ctrl+`')}</Kbd>
           </TooltipContent>
         </Tooltip>
       </div>
