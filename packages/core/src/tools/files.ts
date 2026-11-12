@@ -58,11 +58,11 @@ export async function readFileTool(
 
 export async function listFilesTool(context: ToolContext, input: { path?: string }): Promise<ToolOutput> {
   const target = await resolveToolPath(context, input.path ?? '.', 'read')
-  const result = await runProcess(
-    context.rgPath,
-    ['--files', '--hidden', '--glob', '!.git', '--path-separator', '/', '--', target.display],
-    { cwd: context.cwd, timeoutMs: RG_TIMEOUT_MS, signal: context.signal },
-  )
+  // 和 search 一样排除受保护文件：列名字也会暴露 .env、id_rsa 在哪
+  const args = ['--files', '--hidden', '--glob', '!.git', '--path-separator', '/']
+  for (const glob of PROTECTED_GLOBS) args.push('--glob', `!${glob}`)
+  args.push('--', target.display)
+  const result = await runProcess(context.rgPath, args, { cwd: context.cwd, timeoutMs: RG_TIMEOUT_MS, signal: context.signal })
   if (result.exitCode !== 0 && result.exitCode !== 1) throw new ToolError(`list_files failed: ${result.output.trim()}`)
   const files = result.output.split(/\r?\n/).filter(Boolean).sort()
   const shown = files.slice(0, MAX_LISTED_FILES)

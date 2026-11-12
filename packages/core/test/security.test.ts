@@ -27,7 +27,7 @@ function write(added: AddedLines, path: string, lines: string[], addedLineNumber
   added.set(path, new Map(numbers.map((line) => [line, lines[line - 1] ?? ''])))
 }
 
-const summary = (findings: Awaited<ReturnType<typeof staticScan>>) => findings.map((item) => `${item.line} ${item.ruleId} ${item.severity}`)
+const summary = (result: Awaited<ReturnType<typeof staticScan>>) => result.findings.map((item) => `${item.line} ${item.ruleId} ${item.severity}`)
 
 describe('静态检查：JS / TS', () => {
   test('该报的都报，安全写法不报', async () => {
@@ -86,7 +86,7 @@ describe('静态检查：JS / TS', () => {
       '// diffra-allow SEC-INJ-1: 规则号不对',
       'exec(`git diff ${ref}`)',
     ])
-    const findings = await staticScan(project, added)
+    const { findings } = await staticScan(project, added)
     expect(findings.map((item) => [item.line, item.suppressed])).toEqual([
       [2, 'branch 来自固定列表'],
       [3, null],
@@ -268,6 +268,16 @@ describe('依赖审计', () => {
     const yarn = await auditDependencies(project, new Map([['package.json', new Map([[3, '    "axios": "1.6.0"']])]]), await findBash(), new AbortController().signal)
     expect(yarn.notes).toContain('yarn 项目暂不支持依赖审计')
     expect(yarn.complete).toBe(false)
+  })
+
+  test('package.json 只加了 scripts 这类非依赖的行：不算新依赖，不说锁文件没变，审计算完整', async () => {
+    fakeTool('npm', { vulnerabilities: {} })
+    writeFileSync(join(project, 'package-lock.json'), '{}\n')
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'app', scripts: { test: 'vitest run' }, dependencies: { axios: '1.7.4' } }, null, 2))
+    const added: AddedLines = new Map([['package.json', new Map([[4, '    "test": "vitest run"']])]])
+    const result = await auditDependencies(project, added, await findBash(), new AbortController().signal)
+    expect(result.notes.join('\n')).not.toContain('锁文件没变')
+    expect(result).toMatchObject({ complete: true, existing: 0, findings: [] })
   })
 
   test('npm 输出 error 对象时（如没有锁文件）记为没跑完，不说没有漏洞', async () => {

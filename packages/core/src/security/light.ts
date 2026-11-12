@@ -34,7 +34,9 @@ export const SECURITY_CATEGORIES: Array<[string, string]> = [
 
 const CATEGORY_IDS = new Set(SECURITY_CATEGORIES.map(([id]) => id))
 
-export async function buildLightScanRequest(cwd: string, diff: AnnotatedDiff, authorSummary: string): Promise<{ system: string; prompt: string }> {
+// sources 是检查命令开跑之前读到的文件内容；检查命令可能改写文件（eslint --fix、prettier --write），
+// 用那时读到的内容才对得上 diff 的行号。不传时自己读
+export async function buildLightScanRequest(cwd: string, diff: AnnotatedDiff, authorSummary: string, sources?: Map<string, string>): Promise<{ system: string; prompt: string }> {
   const system = [
     'You are a security reviewer. Review a code change for exploitable security problems.',
     'Trace whether data from outside the program (HTTP parameters, body, headers and cookies, CLI arguments, environment, files, ' +
@@ -60,8 +62,8 @@ export async function buildLightScanRequest(cwd: string, diff: AnnotatedDiff, au
   const context: string[] = []
   let budget = MAX_CONTEXT_CHARS
   for (const path of diff.addedLines.keys()) {
-    const content = await readFile(join(cwd, path), 'utf8').catch(() => null)
-    if (content === null || content.length > MAX_FILE_CHARS || content.length > budget) continue
+    const content = sources?.get(path) ?? (await readFile(join(cwd, path), 'utf8').catch(() => null))
+    if (content === null || content === undefined || content.length > MAX_FILE_CHARS || content.length > budget) continue
     budget -= content.length
     context.push(`=== ${path} (full file, for context)`, content)
   }

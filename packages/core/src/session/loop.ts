@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { rejectsToolChoice, toModelError } from '../models/errors.js'
@@ -1181,17 +1182,41 @@ async function runFinishGate(
     return null
   })
   const diff = await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
-  const [check, security, findings, violations] = await Promise.all([
+  // 检查命令可能改写文件（eslint --fix、prettier --write、jest -u）。静态扫描和轻量扫描要按 diff 的行号
+  // 看文件内容，必须在命令开跑之前把内容读下来，否则行号对不上、漏报或报错行
+  const sources = diff === null ? new Map<string, string>() : await snapshotSources(session.cwd, addedLinesOf(diff))
+  // 这几项各自都吞掉自己的异常；意外抛出时各算各的：检查命令没跑完不能算通过（不然会把没过的测试记成已验证），
+  // 安全检查、规范审查、架构检查和它们自己出错时一样，提示一下、这一次不拦截
+  const [checkResult, securityResult, reviewResult, architectureResult] = await Promise.allSettled([
     command ? runCheck(session, command, '完成检查', signal, io) : null,
-    diff === null ? [] : runSecurityChecks(session, diff, summary, signal, io),
+    diff === null ? [] : runSecurityChecks(session, diff, summary, signal, io, sources),
     diff === null ? [] : runReview(session, diff, summary, signal, io),
     architecture && diff !== null ? runArchitectureCheck(session, architecture, diff, io) : [],
   ])
+  const failedParts: string[] = []
+  const settled = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+    if (result.status === 'fulfilled') return result.value
+    console.error(`[session] 完成门禁的${label}出错`, result.reason)
+    failedParts.push(label)
+    return fallback
+  }
+  const check = settled(checkResult, '完成检查', null)
+  const security = settled(securityResult, '安全检查', [])
+  const findings = settled(reviewResult, '规范审查', [])
+  const violations = settled(architectureResult, '架构检查', [])
   if (signal.aborted) return cancelled()
+  const skipped = failedParts.filter((label) => label !== '完成检查')
+  if (skipped.length > 0) await notice(io, 'warning', `${skipped.join('、')}出错，这一次跳过`)
   // 每类问题一张卡片上的说明和一段给模型的说明
   const rejected: Array<{ card: string; text: string }> = []
   let failedCheck: string | null = null
-  if (command && check && !check.passed) {
+  if (command && checkResult.status === 'rejected') {
+    const reason = checkResult.reason instanceof Error ? checkResult.reason.message : String(checkResult.reason)
+    rejected.push({
+      card: `完成检查没有跑完：${command}`,
+      text: `The check \`${command}\` did not complete (${reason}), so the task is not finished. Call finish again to rerun it.`,
+    })
+  } else if (command && check && !check.passed) {
     const parsed = parseCheckErrors(check.full, session.cwd)
     const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
     failedCheck = command
@@ -1266,6 +1291,19 @@ function showFinishCard(io: TurnIO, call: StepToolCall, verification: FinishVeri
   })
 }
 
+// 检查命令开跑之前把改动文件的内容读下来，静态扫描和轻量扫描用它，避免命令改文件后行号对不上。
+// 单个文件读不到就跳过，让扫描退回自己读（或按缺失处理），不影响其它文件
+async function snapshotSources(cwd: string, added: AddedLines): Promise<Map<string, string>> {
+  const sources = new Map<string, string>()
+  await Promise.all(
+    [...added.keys()].map(async (path) => {
+      const text = await readFile(join(cwd, path), 'utf8').catch(() => null)
+      if (text !== null) sources.set(path, text)
+    }),
+  )
+  return sources
+}
+
 // 本轮智能体对文件的改动（Git 带进来的不算，见 Session.changeBase），安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
 async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: string[] = []): Promise<string | null> {
   const wanted = [
@@ -1289,15 +1327,16 @@ async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: str
 }
 
 // 完成前的安全检查：静态检查按规则匹配本轮新增的代码；轻量扫描用评审模型审查改动。
-// 检查本身出错时不拦截完成，只在卡片上说明，免得工具出问题时任务永远完不成
-async function runSecurityChecks(session: Session, diff: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
+// 检查本身出错时不拦截完成，只在卡片上说明，免得工具出问题时任务永远完不成。
+// sources 是检查命令开跑前读到的文件内容，静态扫描和轻量扫描都用它，避免命令改文件后行号对不上
+async function runSecurityChecks(session: Session, diff: string, summary: string, signal: AbortSignal, io: TurnIO, sources: Map<string, string>): Promise<SecurityFinding[]> {
   const added = addedLinesOf(diff)
   if (added.size === 0) return []
   const findings: SecurityFinding[] = []
-  if (session.config.security.staticCheck) findings.push(...(await runStaticCheck(session, added, signal, io)))
+  if (session.config.security.staticCheck) findings.push(...(await runStaticCheck(session, added, signal, io, sources)))
   // 静态检查已经要打回时先不花模型调用，改好之后再扫
   if (session.config.security.lightScan && blocking(findings).length === 0 && !signal.aborted) {
-    findings.push(...(await runLightScan(session, diff, added, summary, signal, io)))
+    findings.push(...(await runLightScan(session, diff, added, summary, signal, io, sources)))
   }
   return findings
 }
@@ -1396,16 +1435,18 @@ async function deepScanFirst(session: Session, call: StepToolCall, io: TurnIO): 
   return true
 }
 
-async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {
+async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO, sources: Map<string, string>): Promise<SecurityFinding[]> {
   const toolCallId = `security-static-${randomUUID()}`
   await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '静态检查', kind: 'other', status: 'in_progress' })
   const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
   try {
-    const findings = await staticScan(session.cwd, added)
+    const { findings, notes } = await staticScan(session.cwd, added, sources)
     if (signal.aborted) return []
-    const result: CheckResult = blocking(findings).length > 0 ? 'failed' : findings.length > 0 ? 'warned' : 'passed'
-    await finishCard(result === 'failed' ? 'failed' : 'completed', result, findings.length > 0 ? formatFindings(findings) : '没有发现常见的高危写法')
+    const skipped = notes.skipped.length > 0 ? `\n有 ${notes.skipped.length} 个文件太大没有查：${notes.skipped.slice(0, 5).join('、')}` : ''
+    const dropped = notes.dropped > 0 ? `\n问题太多，还有 ${notes.dropped} 处没有列出` : ''
+    const result: CheckResult = blocking(findings).length > 0 ? 'failed' : notes.skipped.length > 0 ? 'partial' : findings.length > 0 || notes.dropped > 0 ? 'warned' : 'passed'
+    await finishCard(result === 'failed' ? 'failed' : 'completed', result, findings.length > 0 ? `${formatFindings(findings)}${skipped}${dropped}` : `没有发现常见的高危写法${skipped}`)
     return findings
   } catch (error) {
     console.error('[session] 静态安全检查失败', error)
@@ -1423,6 +1464,7 @@ async function runLightScan(
   summary: string,
   signal: AbortSignal,
   io: TurnIO,
+  sources: Map<string, string>,
 ): Promise<SecurityFinding[]> {
   const diff = annotateDiff(rawDiff)
   const depsChanged = dependenciesChanged(added)
@@ -1437,7 +1479,7 @@ async function runLightScan(
   if (diff.addedLines.size > 0) {
     const reviewer = session.config.reviewModel ?? session.config.model
     try {
-      const { text, usage } = await callReviewer(session.reviewModel, await buildLightScanRequest(session.cwd, diff, summary), signal)
+      const { text, usage } = await callReviewer(session.reviewModel, await buildLightScanRequest(session.cwd, diff, summary, sources), signal)
       if (usage) await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
       findings.push(...parseLightScanOutput(text, diff.addedLines))
       if (diff.truncated) {
@@ -1451,12 +1493,21 @@ async function runLightScan(
       notes.push(`模型扫描没有完成，这次不拦截：${toModelError(error, reviewer.endpoint.apiKey, 0).message}`)
     }
   }
+  // 依赖审计要联网查漏洞库，失败或超时只在卡片上说明，不拦截；这里绝不能把异常抛出去，
+  // 否则会掀翻整个完成门禁（Promise.all 无 catch，异常会被记成「模型调用失败」，还会把会话写坏）
   if (depsChanged && !signal.aborted) {
-    const audit = await auditDependencies(session.cwd, added, session.environment.bashPath, signal)
-    findings.push(...audit.findings)
-    notes.push(...audit.notes)
-    if (!audit.complete) partial = true
-    existing = audit.existing
+    try {
+      const audit = await auditDependencies(session.cwd, added, session.environment.bashPath, signal)
+      findings.push(...audit.findings)
+      notes.push(...audit.notes)
+      if (!audit.complete) partial = true
+      existing = audit.existing
+    } catch (error) {
+      if (signal.aborted) return []
+      console.error('[session] 依赖审计出错，这一次跳过', error)
+      partial = true
+      notes.push(`依赖审计没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   if (signal.aborted) return []
   const text = [findings.length > 0 ? formatFindings(findings) : '没有发现安全问题', ...notes].join('\n')

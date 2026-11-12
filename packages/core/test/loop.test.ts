@@ -354,6 +354,30 @@ describe('主循环', () => {
     expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
   })
 
+  test('完成检查意外没跑完（发卡片时出错）：不算通过，打回让它再调一次 finish', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'new.txt', old_string: '', new_string: 'final\n' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '完成' } }] },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'grep -q final new.txt' })
+    const io = recordingIO()
+    const update = io.update
+    let broken = true
+    io.update = async (item: SessionUpdate) => {
+      if (broken && item.sessionUpdate === 'tool_call' && item.title.startsWith('完成检查')) {
+        broken = false
+        throw new Error('界面连接断了')
+      }
+      return update(item)
+    }
+
+    await expect(runTurn(session, { id: 't', text: '写 new.txt' }, io)).resolves.toBe('end_turn')
+    expect(verifications(io)).toEqual(['failed', 'verified'])
+    const finishResults = session.messages.flatMap((message) => (message.role === 'tool' ? message.content : [])).filter((part) => part.type === 'tool-result' && part.toolName === 'finish')
+    expect(JSON.stringify(finishResults[0])).toContain('did not complete (界面连接断了)')
+  })
+
   test('完成条件没满足、证据不合格时打回，各出一张 failed 完成卡', async () => {
     const pending = scriptedModel([
       { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [{ id: 'delivery', title: '执行交付', commandIncludes: 'deliver', outputIncludes: 'ok' }] } }] },

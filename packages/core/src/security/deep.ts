@@ -16,19 +16,29 @@ export type DeepScanScope = 'task' | 'project'
 export { DEEP_SCAN_TITLES } from '../protocol.js'
 
 const MAX_STEPS = 40
-const MAX_FINDINGS = 20
+// 模型可能报出比这更多的确认问题；上限只用来防止报告无限长，不因为多报一条就整份丢掉
+const MAX_FINDINGS = 60
 const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search'])
 const CATEGORY_IDS = new Set(SECURITY_CATEGORIES.map(([id]) => id))
+
+// 报告字段尽量宽松：模型偶尔把 severity 写成 critical、line 写成 0、path 带上项目前缀，
+// 都不该让 40 步的扫描整份作废。真正不合规的（没有 summary）才拒
+const severityField = z
+  .string()
+  .transform((value) => value.trim().toLowerCase())
+  .pipe(z.enum(['high', 'medium', 'low']))
+  .catch('medium')
+const lineField = z.coerce.number().int().catch(1).transform((value) => (value > 0 ? value : 1))
 
 const reportInput = z.object({
   summary: z.string().describe('One or two sentences in Chinese: what you checked and the overall result'),
   findings: z
     .array(
       z.object({
-        severity: z.enum(['high', 'medium', 'low']),
+        severity: severityField,
         ruleId: z.string().describe('Category ID, e.g. SEC-INJ-1'),
         path: z.string().describe('File where the fix belongs, relative to the project root'),
-        line: z.number().int().positive(),
+        line: lineField,
         problem: z.string().describe('What is wrong, in Chinese'),
         flow: z.string().describe('How untrusted data gets there, in Chinese, as "path:line 说明 → path:line 说明"'),
         fix: z.string().describe('How to fix it, in Chinese'),
@@ -108,7 +118,7 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
         usage: { role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId },
         nudge: 'Keep auditing with the tools, or call report when you are done.',
         readOnlyError: 'This audit is read-only. Use read_file, list_files, search or report.',
-        onFinal: (toolCallId, input) => showReport(session, toolCallId, reportInput.parse(input), io),
+        onFinal: (toolCallId, input) => showReport(session, toolCallId, parseReport(input), io),
       },
       signal,
       io,
@@ -135,6 +145,23 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
 }
 
 const LEVELS = { high: '高危', medium: '提醒', low: '提醒' } as const
+
+const findingInput = reportInput.shape.findings.element
+
+// 报告字段大多做了容错，只剩 summary 是必需的；缺了就补一句，不让 40 步的扫描因为一个字段整份作废。
+// 单条问题不合规的（缺 path/problem 之类）单独丢掉，其余照收
+function parseReport(input: unknown): z.infer<typeof reportInput> {
+  const parsed = reportInput.safeParse(input)
+  if (parsed.success) return parsed.data
+  const loose = (input ?? {}) as Record<string, unknown>
+  const raw = Array.isArray(loose.findings) ? loose.findings : []
+  const findings = raw.flatMap((item) => {
+    const one = findingInput.safeParse(item)
+    return one.success ? [one.data] : []
+  })
+  const summary = typeof loose.summary === 'string' && loose.summary.trim() ? loose.summary : '扫描完成（报告缺少总结）'
+  return { summary, findings: findings.slice(0, MAX_FINDINGS) }
+}
 
 // 报告卡片：第一行是总结，然后每个问题一行（和安全检查卡片同样的格式），下面跟链路和修复建议
 async function showReport(session: Session, toolCallId: string, report: z.infer<typeof reportInput>, io: TurnIO): Promise<void> {

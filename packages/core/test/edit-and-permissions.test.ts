@@ -87,6 +87,31 @@ describe('classifyCommand', () => {
     expect(classifyCommand('cat README.md', policy())).toEqual({ level: 'allow' })
   })
 
+  test('通配符和递归搜索也可能读到受保护文件，要问', () => {
+    for (const command of ['cat .e*', 'cat .en?', 'head -c 200 *.pem', 'rg -uuu API_KEY .', 'rg --hidden API_KEY .', 'grep -r password .', 'grep -rn token src']) {
+      expect(classifyCommand(command, policy())).toEqual({ level: 'ask' })
+    }
+    // 普通的通配符和搜索不受影响
+    for (const command of ['cat src/*.ts', 'rg -n foo src', 'grep -n TODO src/a.ts']) {
+      expect(classifyCommand(command, policy())).toEqual({ level: 'allow' })
+    }
+  })
+
+  test('format、shutdown 这类词出现在普通命令里不算危险命令', () => {
+    for (const command of ['pnpm run format', 'npm run format -- --check', 'git log --format=oneline', 'git commit -m "fix shutdown handler"', 'echo x > format']) {
+      expect(classifyCommand(command, policy()).level).not.toBe('deny')
+    }
+    for (const command of ['mkfs.ext4 /dev/sda', 'sudo reboot', 'echo a; shutdown -h now', 'format c:']) {
+      expect(classifyCommand(command, policy()).level).toBe('deny')
+    }
+  })
+
+  test('rm 不记「同类命令始终允许」', () => {
+    expect(commandKeys('rm a.txt')).toEqual([])
+    const allowed = new Set(['node build.js'])
+    expect(classifyCommand('rm -rf src', policy({ alwaysAllowed: allowed }))).toEqual({ level: 'ask' })
+  })
+
   test('涉及禁写目录的非只读命令，即使「同类命令始终允许」也要问', () => {
     const readOnly = policy({ readOnlyPaths: ['data'], alwaysAllowed: new Set(['node scripts/reset.js', 'rm']) })
     expect(classifyCommand('node scripts/reset.js data/db.json', readOnly)).toEqual({ level: 'ask' })

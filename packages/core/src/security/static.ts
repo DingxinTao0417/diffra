@@ -6,10 +6,16 @@ import { JS_RULES, JSX_RULES, PYTHON_RULES, type StaticRule } from './rules.js'
 import { scanSecrets } from './secrets.js'
 import type { AddedLines, SecurityFinding } from './types.js'
 
-const MAX_FILE_BYTES = 1_000_000
+const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_FINDINGS = 40
 // 写在出问题的那一行或上一行：// diffra-allow SEC-INJ-1: 理由
 const ALLOW_COMMENT = /diffra-allow\s+(SEC-[A-Z]+-\d+)\s*[:：]\s*(\S.*?)\s*(?:\*\/|-->)?\s*$/
+
+// 这一轮没查的文件和原因（太大、读不到），卡片上要说出来，不能静默跳过
+export interface StaticScanNotes {
+  skipped: string[]
+  dropped: number
+}
 
 function rulesFor(language: Language): StaticRule[] {
   if (language === 'python') return PYTHON_RULES
@@ -35,23 +41,31 @@ function runRules(root: SgRoot, rules: StaticRule[], path: string, added: Map<nu
   return findings
 }
 
-// 本轮新增的代码按规则匹配常见高危写法，再查硬写的密钥。只在本机运行，不调用模型
-export async function staticScan(cwd: string, added: AddedLines): Promise<SecurityFinding[]> {
+// 本轮新增的代码按规则匹配常见高危写法，再查硬写的密钥。只在本机运行，不调用模型。
+// sources 是检查命令开跑之前读到的文件内容：检查命令可能改了文件（eslint --fix、prettier --write），
+// 用那时的内容才能和 diff 的行号对上；不传时自己读
+export async function staticScan(cwd: string, added: AddedLines, sources?: Map<string, string>): Promise<{ findings: SecurityFinding[]; notes: StaticScanNotes }> {
   const findings: SecurityFinding[] = []
-  const sources = new Map<string, string[]>()
+  const notes: StaticScanNotes = { skipped: [], dropped: 0 }
+  const files = new Map<string, string[]>()
   for (const [path, lines] of added) {
     const language = languageOf(path)
     if (!language) continue
-    let source: string
-    try {
-      source = await readFile(join(cwd, path), 'utf8')
-    } catch (error) {
-      // 本轮新增后又被删掉的文件没什么可查的
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-      throw error
+    let source: string | undefined = sources?.get(path)
+    if (source === undefined) {
+      try {
+        source = await readFile(join(cwd, path), 'utf8')
+      } catch (error) {
+        // 本轮新增后又被删掉的文件没什么可查的
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
     }
-    if (source.length > MAX_FILE_BYTES) continue
-    sources.set(path, source.split(/\r?\n/))
+    if (source.length > MAX_FILE_BYTES) {
+      notes.skipped.push(path)
+      continue
+    }
+    files.set(path, source.split(/\r?\n/))
     if (language === 'vue') {
       for (const block of vueScripts(source)) findings.push(...runRules(parse(block.lang, block.code), rulesFor(block.lang), path, lines, block.lineOffset))
       for (const [line, text] of lines) {
@@ -72,8 +86,20 @@ export async function staticScan(cwd: string, added: AddedLines): Promise<Securi
     seen.add(key)
     return true
   })
-  for (const finding of unique) finding.suppressed = allowedReason(sources.get(finding.path) ?? linesOf(added, finding.path), finding)
-  return unique.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line).slice(0, MAX_FINDINGS)
+  for (const finding of unique) finding.suppressed = allowedReason(files.get(finding.path) ?? linesOf(added, finding.path), finding)
+  // 截断前先按严重程度排：不能把靠后文件里的高危问题丢掉，只留中危。确定保留哪些之后再按路径和行号显示，
+  // 卡片和测试都按原来的顺序看
+  const bySeverity = [...unique].sort(
+    (a, b) => severityRank(b.severity) - severityRank(a.severity) || a.path.localeCompare(b.path) || a.line - b.line,
+  )
+  notes.dropped = Math.max(0, bySeverity.length - MAX_FINDINGS)
+  const kept = new Set(bySeverity.slice(0, MAX_FINDINGS))
+  const displayed = unique.filter((item) => kept.has(item)).sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+  return { findings: displayed, notes }
+}
+
+function severityRank(severity: SecurityFinding['severity']): number {
+  return severity === 'high' ? 2 : severity === 'medium' ? 1 : 0
 }
 
 function linesOf(added: AddedLines, path: string): string[] {

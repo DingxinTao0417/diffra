@@ -9,6 +9,22 @@ const AUDIT_TIMEOUT_SECONDS = 60
 const NODE_MANIFESTS = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml'])
 const PYTHON_MANIFESTS = /^(requirements.*\.txt|pyproject\.toml)$/
 
+// monorepo 的子包清单也要算：审计命令在仓库根跑就覆盖整个工作区，但改动发生在 packages/*/package.json 时
+// 也要能触发审计，并把这些文件里新增的依赖算到这一轮头上。node_modules 里的清单不算
+function manifestAt(path: string, names: Set<string> | RegExp): boolean {
+  if (path.includes('node_modules/')) return false
+  const name = basename(path)
+  return names instanceof RegExp ? names.test(name) : names.has(name)
+}
+
+function isNodeManifest(path: string): boolean {
+  return manifestAt(path, NODE_MANIFESTS)
+}
+
+function isPythonManifest(path: string): boolean {
+  return manifestAt(path, PYTHON_MANIFESTS)
+}
+
 // 审计的 JSON 输出可能很长，不能用 runShell（它会截成首尾各 200 行）
 function runAudit(cwd: string, bashPath: string, command: string, signal: AbortSignal) {
   return runProcess(bashPath, ['-c', command], { cwd, timeoutMs: AUDIT_TIMEOUT_SECONDS * 1000, signal, env: commandEnv() })
@@ -27,7 +43,7 @@ function firstLine(output: string): string {
 }
 
 export function dependenciesChanged(added: AddedLines): boolean {
-  return [...added.keys()].some((path) => !path.includes('/') && (NODE_MANIFESTS.has(path) || PYTHON_MANIFESTS.test(basename(path))))
+  return [...added.keys()].some((path) => isNodeManifest(path) || isPythonManifest(path))
 }
 
 export interface AuditResult {
@@ -50,30 +66,43 @@ export async function auditDependencies(cwd: string, added: AddedLines, bashPath
     return result
   }
   const paths = [...added.keys()]
-  if (paths.some((path) => NODE_MANIFESTS.has(path))) await auditNode(cwd, added, bashPath, signal, result)
-  if (paths.some((path) => !path.includes('/') && PYTHON_MANIFESTS.test(path))) await auditPython(cwd, added, bashPath, signal, result)
+  if (paths.some(isNodeManifest)) await auditNode(cwd, added, bashPath, signal, result)
+  if (paths.some(isPythonManifest)) await auditPython(cwd, added, bashPath, signal, result)
   return result
 }
 
-// package.json 里本轮新增的依赖行：名字 → 行号
-function addedNodeDependencies(pkg: PackageJson, added: AddedLines): Map<string, number> {
-  const names = new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})])
-  const found = new Map<string, number>()
-  for (const [line, text] of added.get('package.json') ?? []) {
-    const match = /^\s*"(@?[^"]+)"\s*:/.exec(text)
-    if (match?.[1] && names.has(match[1])) found.set(match[1], line)
+// package.json 里本轮新增的依赖行：名字 → 行号。子包的 package.json 也看，路径一起带上。
+// 只认这个文件 dependencies、devDependencies 里有的名字：新增的 scripts、name、version 这类行不是依赖
+async function addedNodeDependencies(cwd: string, added: AddedLines): Promise<Map<string, { path: string; line: number }>> {
+  const found = new Map<string, { path: string; line: number }>()
+  for (const [path, lines] of added) {
+    if (!isNodeManifest(path) || basename(path) !== 'package.json') continue
+    let pkg: PackageJson
+    try {
+      pkg = JSON.parse(await readFile(join(cwd, path), 'utf8')) as PackageJson
+    } catch {
+      continue
+    }
+    const names = new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})])
+    for (const [line, text] of lines) {
+      const match = /^\s*"(@?[^"]+)"\s*:/.exec(text)
+      if (match?.[1] && names.has(match[1])) found.set(match[1], { path, line })
+    }
   }
   return found
 }
 
 async function auditNode(cwd: string, added: AddedLines, bashPath: string, signal: AbortSignal, result: AuditResult): Promise<void> {
-  let pkg: PackageJson
+  // 在仓库根跑 audit；根上没有 package.json 时（只改了子包）也按 pnpm/npm 跑，audit 会覆盖整个工作区
+  let pkg: PackageJson = {}
   try {
     pkg = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')) as PackageJson
-  } catch {
-    result.complete = false
-    result.notes.push('读不了 package.json，跳过了依赖审计')
-    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      result.complete = false
+      result.notes.push('读不了 package.json，跳过了依赖审计')
+      return
+    }
   }
   const pm = await packageManagerOf(cwd, pkg)
   if (pm !== 'pnpm' && pm !== 'npm') {
@@ -103,8 +132,9 @@ async function auditNode(cwd: string, added: AddedLines, bashPath: string, signa
     result.notes.push(`依赖审计没有完成，这次不拦截：${firstLine(failure.summary ?? failure.message ?? failure.code ?? '')}`)
     return
   }
-  const fresh = addedNodeDependencies(pkg, added)
-  if (fresh.size > 0 && !added.has('pnpm-lock.yaml') && !added.has('package-lock.json')) {
+  const fresh = await addedNodeDependencies(cwd, added)
+  const lockChanged = [...added.keys()].some((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json)$/.test(path))
+  if (fresh.size > 0 && !lockChanged) {
     result.complete = false
     result.notes.push('package.json 加了依赖但锁文件没变，新依赖可能还没安装，审计里没有它们')
   }
@@ -117,11 +147,12 @@ async function auditNode(cwd: string, added: AddedLines, bashPath: string, signa
       continue
     }
     const serious = item.severity === 'high' || item.severity === 'critical'
+    const where = fresh.get(owner)!
     result.findings.push({
       ruleId: 'DEP-VULN',
       severity: serious ? 'high' : 'medium',
-      path: 'package.json',
-      line: fresh.get(owner) ?? 1,
+      path: where.path,
+      line: where.line,
       message: `本轮加入的依赖 ${owner} 带有已知漏洞（${item.name}，${item.severity}：${item.title}）${item.fix ? `，升级到 ${item.fix}` : '，换一个没有这个漏洞的版本或替代包'}`,
       suppressed: null,
     })
@@ -172,7 +203,7 @@ function npmVulnerabilities(report: unknown): Vulnerability[] {
 function addedPythonDependencies(added: AddedLines): Map<string, { path: string; line: number }> {
   const found = new Map<string, { path: string; line: number }>()
   for (const [path, lines] of added) {
-    if (path.includes('/') || !PYTHON_MANIFESTS.test(path)) continue
+    if (!isPythonManifest(path)) continue
     for (const [line, text] of lines) {
       const match = /^\s*"?([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*(==|>=|<=|~=|!=|>|<|"|,|$)/.exec(text)
       if (match?.[1] && !/^(name|version|description|requires-python|readme|license)$/i.test(match[1])) {

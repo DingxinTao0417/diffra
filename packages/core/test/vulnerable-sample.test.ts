@@ -55,7 +55,7 @@ const APP_PY: Array<Omit<Planted, 'file' | 'line'> | string> = [
 
 let project: string
 let planted: Planted[]
-let findings: Awaited<ReturnType<typeof staticScan>>
+let findings: Awaited<ReturnType<typeof staticScan>>['findings']
 
 beforeAll(async () => {
   project = mkdtempSync(join(tmpdir(), 'diffra-vulnerable-'))
@@ -75,7 +75,7 @@ beforeAll(async () => {
     writeFileSync(join(project, file), text.join('\n'))
     added.set(file, new Map(text.map((code, index) => [index + 1, code])))
   }
-  findings = await staticScan(project, added)
+  findings = (await staticScan(project, added)).findings
 })
 
 afterAll(() => {
