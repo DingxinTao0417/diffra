@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import type { Todo } from '../../../../shared/todos'
+import { type Todo, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { addDays, atTime, dayKey, formatClock, isDue, monthGrid, sameDay, startOfDay } from '@/lib/todo-time'
 import { TodoInput } from './TodoInput'
+import { priorityLabel } from './TodoPriority'
 import { TodoRow } from './TodoRow'
 
 const WEEK_HEADER = ['一', '二', '三', '四', '五', '六', '日']
@@ -104,9 +105,11 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
                           'w-full truncate rounded px-1 py-px text-[11px] leading-4',
                           todo.done ? 'text-muted-foreground line-through' : overdue ? 'bg-warning-soft text-warning' : 'bg-background/80 text-foreground ring-1 ring-border',
                         )}
-                        title={todo.text}
+                        title={todoParts(todo).title}
                       >
-                        <span className="text-muted-foreground tabular-nums">{formatClock(new Date(todo.schedule!.at))}</span> {todo.text}
+                        <span className="text-muted-foreground tabular-nums">{formatClock(new Date(todo.schedule!.at))}</span>{' '}
+                        {todo.priority !== undefined && todo.priority !== null && <span className="font-bold">{priorityLabel(todo.priority)} </span>}
+                        {todoParts(todo).title}
                       </span>
                     )
                   })}

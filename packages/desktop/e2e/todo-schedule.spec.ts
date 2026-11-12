@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, test } from '@playwright/test'
@@ -50,6 +50,8 @@ test('定时待办：到点提醒弹系统通知，到点在后台发给新任�
         { ...base, id: 'bill', text: '交水费', schedule: { at: iso(-7_200_000), action: { kind: 'remind' }, result: null } },
         { ...base, id: 'meet', text: '约牙医', schedule: { at: tomorrow.toISOString(), action: { kind: 'remind' }, result: null } },
         { ...base, id: 'idea', text: '试试新的配色' },
+        // 第 485 步之前记的多行待办：只有 text，没有 body 和优先级
+        { ...base, id: 'old-long', text: '整理周末安排\n先看天气\n再订餐厅' },
       ],
     }),
   )
@@ -67,6 +69,11 @@ test('定时待办：到点提醒弹系统通知，到点在后台发给新任�
     await expect(rows.filter({ hasText: '写周报' }).getByTestId('todo-missed')).toContainText('错过了定时发送')
     await expect(group('tomorrow')).toContainText('约牙医')
     await expect(group('unscheduled')).toContainText('试试新的配色')
+    // 旧的多行待办：第一行当标题、其余当正文显示
+    const oldLong = rows.filter({ hasText: '整理周末安排' })
+    await expect(oldLong.getByTestId('todo-title')).toHaveText('整理周末安排')
+    await expect(oldLong.getByTestId('todo-body')).toHaveText('先看天气\n再订餐厅')
+    await expect(oldLong.getByTestId('todo-priority')).toHaveCount(0)
     await expect(window.getByTestId('sidebar-todo-due')).toBeVisible()
 
     // 到点：提醒弹通知；定时发送在后台建任务发出去，不切走当前页面
@@ -95,6 +102,9 @@ test('定时待办：到点提醒弹系统通知，到点在后台发给新任�
     })
     await expect(window.getByTestId('todos-view')).toBeVisible()
     await expect(rows.filter({ hasText: '喝水' })).toHaveClass(/ring-1/)
+    // 到点的结果写回 todos.json 时，旧待办原样保存，没被改写成拆开的样子
+    const saved = JSON.parse(readFileSync(join(userDataDir, 'todos.json'), 'utf8')) as { todos: Array<Record<string, unknown>> }
+    expect(saved.todos.find((todo) => todo.id === 'old-long')).toEqual({ ...base, id: 'old-long', text: '整理周末安排\n先看天气\n再订餐厅', tags: [] })
   } finally {
     await app.close()
     await model.close()

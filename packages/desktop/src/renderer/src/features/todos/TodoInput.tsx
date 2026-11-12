@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { AlarmClock, Check, ChevronDown, Folder, FolderDot, FolderOpen, X } from 'lucide-react'
+import { AlarmClock, Check, ChevronDown, Folder, FolderDot, FolderOpen, SquarePen, X } from 'lucide-react'
+import { parseTodoPriority } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -10,11 +11,14 @@ import { useNow } from '@/lib/use-now'
 import { addTodo, pickProject } from '@/state/actions'
 import { showToast, useAppState } from '@/state/store'
 import { SchedulePicker } from './SchedulePicker'
+import { TodoEditorDialog, type TodoDraft } from './TodoEditorDialog'
+import { PriorityBadge } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
 
 const PROJECT_MENU = 'flex h-7 max-w-48 items-center gap-1 rounded-md border bg-background px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground'
 
-// 记待办的输入框：回车保存；旁边的闹钟先定个提醒时间（定时发送在记下以后从那一条上设）。defaultAt 是日历里选中的那天
+// 记待办的输入框：回车保存；开头写 p0–p3 加空格设优先级。旁边的闹钟先定个提醒时间（定时发送在记下以后从那一条上设），
+// 再旁边的按钮打开添加对话框（标题、正文、优先级都能填），已经输入的字和选好的项目、标签、时间带过去。defaultAt 是日历里选中的那天
 export function TodoInput({
   autoFocus = false,
   placeholder = '记下一个点子，回车保存',
@@ -33,14 +37,19 @@ export function TodoInput({
   const [at, setAt] = useState<Date | null>(null)
   const [project, setProject] = useState<string | null>(null)
   const [tags, setTags] = useState<string[]>([])
+  const [detail, setDetail] = useState<TodoDraft | null>(null)
   const now = useNow()
   const due = at ?? defaultAt ?? null
-  const submit = () => {
-    if (!draft.trim()) return
-    addTodo(draft, due ?? undefined, { project, tags }).catch(() => showToast('保存待办失败，请重试'))
+  const quick = parseTodoPriority(draft)
+  const reset = () => {
     setDraft('')
     setAt(null)
     setTags([])
+  }
+  const submit = () => {
+    if (!quick.text.trim()) return
+    addTodo(quick.text, due ?? undefined, { project, tags, priority: quick.priority }).catch(() => showToast('保存待办失败，请重试'))
+    reset()
   }
   return (
     <div className="flex w-full flex-col gap-2">
@@ -58,6 +67,7 @@ export function TodoInput({
             submit()
           }}
         />
+        {quick.priority !== null && <PriorityBadge priority={quick.priority} />}
         {at && (
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-soft px-2 py-0.5 text-xs" data-testid="todo-input-due">
             提醒 {formatDue(at.toISOString(), now)}
@@ -71,7 +81,11 @@ export function TodoInput({
             <AlarmClock className="size-4" />
           </Button>
         </SchedulePicker>
+        <Button variant="ghost" size="icon-sm" aria-label="详细添加" title="详细添加：标题、正文、优先级" className="text-muted-foreground" onClick={() => setDetail({ title: draft, project, tags, at: due })}>
+          <SquarePen className="size-4" />
+        </Button>
       </div>
+      {detail && <TodoEditorDialog draft={detail} onClose={(saved) => (setDetail(null), saved && reset())} />}
       {showMeta && (
         <div className="flex flex-wrap items-center gap-2 px-1 text-xs">
           <TodoProjectPicker value={project} onChange={setProject} />
@@ -83,7 +97,7 @@ export function TodoInput({
 }
 
 // 记待办时指定一个已有项目；不要求这个项目已经固定在侧边栏里
-function TodoProjectPicker({ value, onChange }: { value: string | null; onChange(path: string | null): void }) {
+export function TodoProjectPicker({ value, onChange }: { value: string | null; onChange(path: string | null): void }) {
   const projects = useAppState((state) => state.projects)
   const tasks = useAppState((state) => state.tasks)
   const known = useMemo(() => {

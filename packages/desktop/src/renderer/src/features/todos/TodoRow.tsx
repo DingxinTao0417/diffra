@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlarmClock, Bell, CircleCheck, Pencil, Send, Tags, Trash2 } from 'lucide-react'
-import type { Todo, TodoSendTarget } from '../../../../shared/todos'
+import { type Todo, type TodoSendTarget, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -12,9 +12,12 @@ import { showToast, store, useAppState } from '@/state/store'
 import { sendScheduleNow } from '@/state/todo-scheduler'
 import { SchedulePicker } from './SchedulePicker'
 import { taskFinishedForTodo } from './todo-acceptance'
+import { TodoEditorDialog } from './TodoEditorDialog'
+import { PriorityBadge } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
 
-// 一条待办：勾完成、双击改字、定时、派给任务、删除。到期时间、定时发送的结果写在下面一行
+// 一条待办：勾完成、定时、派给任务、删除；双击或点「编辑」打开编辑对话框。
+// 标题一行、正文最多两行，点一下展开看全文。到期时间、定时发送的结果写在下面一行
 export function TodoRow({
   todo,
   now,
@@ -37,8 +40,10 @@ export function TodoRow({
   onSend(): void
   onScheduleSend(at: Date): void
 }) {
-  const [editing, setEditing] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [editingTags, setEditingTags] = useState(false)
+  const { title, body } = todoParts(todo)
   const row = useRef<HTMLLIElement>(null)
   const save = (change: (todos: Todo[]) => Todo[]) => {
     saveTodos(change).catch(() => showToast('保存待办失败，请重试'))
@@ -60,11 +65,6 @@ export function TodoRow({
     return () => clearTimeout(timer)
   }, [focused])
 
-  const saveText = () => {
-    const text = editing?.trim()
-    setEditing(null)
-    if (text && text !== todo.text) save((todos) => todos.map((item) => (item.id === todo.id ? { ...item, text } : item)))
-  }
   const pickTime = (at: Date, kind: 'remind' | 'send') => {
     if (kind === 'send') onScheduleSend(at)
     // 只改时间时保留原来的「到时发给谁」
@@ -86,7 +86,7 @@ export function TodoRow({
       {layout === 'list' && <TimeColumn todo={todo} now={now} overdue={overdue} onPick={schedule ? reschedule : pickTime} />}
       <Checkbox
         className="mt-0.5"
-        aria-label={selecting ? `选中：${todo.text}` : `完成：${todo.text}`}
+        aria-label={selecting ? `选中：${title}` : `完成：${title}`}
         checked={selecting ? selected : todo.done}
         onCheckedChange={() =>
           selecting
@@ -97,28 +97,27 @@ export function TodoRow({
         }
       />
       <div className="min-w-0 flex-1">
-        {editing !== null ? (
-          <textarea
-            autoFocus
-            aria-label="编辑待办"
-            value={editing}
-            rows={Math.min(6, editing.split('\n').length)}
-            className="w-full resize-none rounded-md border bg-background px-2 py-1 text-sm outline-none focus:border-ring/60"
-            onChange={(event) => setEditing(event.target.value)}
-            onBlur={saveText}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setEditing(null)
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                saveText()
-              }
-            }}
-          />
-        ) : (
-          <p className={cn('text-sm break-words whitespace-pre-wrap', todo.done && 'text-muted-foreground line-through')} onDoubleClick={() => setEditing(todo.text)}>
-            {todo.text}
-          </p>
-        )}
+        <button
+          type="button"
+          aria-expanded={expanded}
+          title={expanded ? '收起' : '展开全文，双击编辑'}
+          className="flex w-full min-w-0 cursor-pointer flex-col items-stretch text-left"
+          data-testid="todo-text"
+          onClick={() => setExpanded(!expanded)}
+          onDoubleClick={() => setEditing(true)}
+        >
+          <span className="flex min-w-0 items-start gap-1.5">
+            {todo.priority !== undefined && todo.priority !== null && <PriorityBadge priority={todo.priority} className="mt-0.5" />}
+            <span className={cn('min-w-0 text-sm break-words', expanded ? 'whitespace-pre-wrap' : 'truncate', todo.done && 'text-muted-foreground line-through')} data-testid="todo-title">
+              {title}
+            </span>
+          </span>
+          {body && (
+            <span className={cn('mt-0.5 text-xs break-words whitespace-pre-wrap text-muted-foreground', !expanded && 'line-clamp-2')} data-testid="todo-body">
+              {body}
+            </span>
+          )}
+        </button>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           {todo.tags.map((tag) => (
             <button
@@ -209,9 +208,10 @@ export function TodoRow({
           </div>
         )}
       </div>
-      {!selecting && editing === null && (
+      {editing && <TodoEditorDialog todo={todo} onClose={() => setEditing(false)} />}
+      {!selecting && (
         <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          <RowAction label="编辑" onClick={() => setEditing(todo.text)}>
+          <RowAction label="编辑" onClick={() => setEditing(true)}>
             <Pencil className="size-3.5" />
           </RowAction>
           {layout === 'compact' && !schedule && (

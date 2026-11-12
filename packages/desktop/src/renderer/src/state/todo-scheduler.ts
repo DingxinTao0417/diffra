@@ -1,4 +1,4 @@
-import type { Todo, TodoSchedule } from '../../../shared/todos'
+import { type Todo, todoMessage, todoParts, type TodoSchedule } from '../../../shared/todos'
 import { errorMessage } from '@/lib/errors'
 import { saveTodos, sendInBackground, startInBackground } from './actions'
 import { showToast, store } from './store'
@@ -48,22 +48,22 @@ export function startTodoScheduler(): () => void {
     const at = Date.parse(schedule.at)
     const whileClosed = at < startedAt - STARTUP_GRACE_MS
     if (schedule.action.kind === 'remind') {
-      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '待办到时间了', body: todo.text })
+      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '待办到时间了', body: todoMessage(todo) })
       await record(todo.id, schedule.at, { kind: whileClosed ? 'missed' : 'reminded', at: new Date().toISOString() })
       return
     }
     if (whileClosed || now - at > SEND_LATE_MS) {
-      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '错过了定时发送', body: `${todo.text}\n到待办页选择现在发送或取消。` })
+      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '错过了定时发送', body: `${todoParts(todo).title}\n到待办页选择现在发送或取消。` })
       await record(todo.id, schedule.at, { kind: 'missed', at: new Date().toISOString() })
       return
     }
     try {
       const sentTo = await sendScheduled(schedule.action)
       await record(todo.id, schedule.at, { kind: 'sent', at: new Date().toISOString() }, sentTo)
-      await window.diffra.notifyTodo({ todoId: todo.id, title: `已按时发给任务「${sentTo.title}」`, body: todo.text })
+      await window.diffra.notifyTodo({ todoId: todo.id, title: `已按时发给任务「${sentTo.title}」`, body: todoParts(todo).title })
     } catch (error) {
       await record(todo.id, schedule.at, { kind: 'failed', at: new Date().toISOString(), error: errorMessage(error) })
-      await window.diffra.notifyTodo({ todoId: todo.id, title: '定时发送失败', body: `${todo.text}\n${errorMessage(error)}` })
+      await window.diffra.notifyTodo({ todoId: todo.id, title: '定时发送失败', body: `${todoParts(todo).title}\n${errorMessage(error)}` })
     }
   }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { AlarmClock, ChevronDown, ChevronRight, ListTodo, Send } from 'lucide-react'
-import type { Todo } from '../../../../shared/todos'
+import { parseTodoPriority, type Todo, type TodoPriority, TODO_PRIORITIES } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -15,6 +15,7 @@ import { SchedulePicker } from './SchedulePicker'
 import { SendTodosDialog } from './SendTodosDialog'
 import { TodoCalendar } from './TodoCalendar'
 import { TodoInput } from './TodoInput'
+import { PriorityBadge, priorityLabel, priorityRank } from './TodoPriority'
 import { TodoRow } from './TodoRow'
 import { TodoSidePanel } from './TodoSidePanel'
 import { shortcutLabel } from '@/lib/platform'
@@ -22,6 +23,10 @@ import { shortcutLabel } from '@/lib/platform'
 const ALL = '__all__'
 const NO_PROJECT = '__none__'
 const OPEN_GROUPS: TodoGroup[] = ['overdue', 'today', 'tomorrow', 'week', 'later', 'unscheduled']
+const FILTER_CHIP =
+  'rounded-full border px-2.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:border-foreground/30 aria-pressed:bg-soft aria-pressed:text-foreground'
+// 按优先级筛：某一档，或者没设的
+type PriorityFilter = TodoPriority | 'none'
 
 // 发给任务的弹窗：立即发几条，或者给一条定时发送
 type Sending = { ids: string[]; at?: Date }
@@ -33,6 +38,7 @@ export function TodosView() {
   const now = useNow()
   const [filter, setFilter] = useState(ALL)
   const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [sending, setSending] = useState<Sending | null>(null)
@@ -45,14 +51,20 @@ export function TodosView() {
     () => [...new Set((todos ?? []).flatMap((todo) => todo.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     [todos],
   )
+  // 有待办设了优先级才出这一组筛选；只列出用到的几档
+  const priorities = useMemo(() => {
+    const used = new Set((todos ?? []).map((todo) => todo.priority ?? 'none'))
+    return used.size === 1 && used.has('none') ? [] : [...TODO_PRIORITIES.filter((value) => used.has(value)), ...(used.has('none') ? ['none' as const] : [])]
+  }, [todos])
   const visible = useMemo(
     () =>
       (todos ?? []).filter(
         (todo) =>
           (filter === ALL || (todo.project ?? NO_PROJECT) === filter) &&
-          (tagFilter === null || todo.tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())),
+          (tagFilter === null || todo.tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) &&
+          (priorityFilter === null || (todo.priority ?? 'none') === priorityFilter),
       ),
-    [todos, filter, tagFilter],
+    [todos, filter, tagFilter, priorityFilter],
   )
   const groups = useMemo(() => groupTodos(visible, now), [visible, now])
   const openCount = visible.filter((todo) => !todo.done).length
@@ -114,6 +126,23 @@ export function TodosView() {
                     onClick={() => setTagFilter((current) => (current?.toLowerCase() === tag.toLowerCase() ? null : tag))}
                   >
                     #{tag}
+                  </button>
+                ))}
+              </>
+            )}
+            {priorities.length > 0 && (
+              <>
+                <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+                {priorities.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={priorityFilter === value}
+                    className={FILTER_CHIP}
+                    data-testid="todo-priority-filter"
+                    onClick={() => setPriorityFilter((current) => (current === value ? null : value))}
+                  >
+                    {value === 'none' ? '未设优先级' : priorityLabel(value)}
                   </button>
                 ))}
               </>
@@ -214,19 +243,21 @@ export function TodosView() {
 function groupTodos(todos: Todo[], now: Date): Record<TodoGroup, Todo[]> {
   const groups: Record<TodoGroup, Todo[]> = { overdue: [], today: [], tomorrow: [], week: [], later: [], unscheduled: [], done: [] }
   for (const todo of todos) groups[groupOf(todo, now)].push(todo)
+  // 同一组里 P0 在前、没设的最后；同一优先级里照旧：有时间的按时间，没定时间的按记下的先后（新的在前）。sort 是稳定的
   for (const group of OPEN_GROUPS) {
-    if (group !== 'unscheduled') groups[group].sort((a, b) => a.schedule!.at.localeCompare(b.schedule!.at))
+    groups[group].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || (group === 'unscheduled' ? 0 : a.schedule!.at.localeCompare(b.schedule!.at)))
   }
   return groups
 }
 
-// 快速记：任何页面按 Ctrl+J 弹出，回车记下就关；可以顺手定个提醒时间
+// 快速记：任何页面按 Ctrl+J 弹出，回车记下就关；可以顺手定个提醒时间，开头写 p0–p3 加空格设优先级
 export function QuickTodo() {
   const open = useAppState((state) => state.quickTodoOpen)
   const [text, setText] = useState('')
   const [at, setAt] = useState<Date | null>(null)
   const now = useNow()
   if (!open) return null
+  const quick = parseTodoPriority(text)
   const close = () => {
     setText('')
     setAt(null)
@@ -246,10 +277,11 @@ export function QuickTodo() {
             if (event.key === 'Escape') close()
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
             event.preventDefault()
-            if (text.trim()) void addTodo(text, at ?? undefined)
+            if (quick.text.trim()) void addTodo(quick.text, at ?? undefined, { priority: quick.priority })
             close()
           }}
         />
+        {quick.priority !== null && <PriorityBadge priority={quick.priority} />}
         {at && <span className="shrink-0 rounded-full bg-soft px-2 py-0.5 text-xs">提醒 {formatDue(at.toISOString(), now)}</span>}
         <SchedulePicker value={at} onPick={(picked) => setAt(picked)}>
           <Button variant="ghost" size="icon-sm" aria-label="定个提醒时间" className="text-muted-foreground">

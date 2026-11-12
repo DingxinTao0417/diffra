@@ -9,6 +9,9 @@ import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 const todoSchema = z.object({
   id: z.string().min(1).max(64),
   text: z.string().trim().min(1).max(TODO_MAX_TEXT),
+  // 正文、优先级都是第 485 步加的，旧数据没有；必须是选填，不然旧文件读进来整份作废
+  body: z.string().max(TODO_MAX_TEXT).optional(),
+  priority: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]).nullable().optional(),
   project: z.string().min(1).nullable(),
   // 旧数据没有 tags，读出来补成空数组
   tags: z.array(z.string().trim().min(1).max(TODO_MAX_TAG_LENGTH)).max(TODO_MAX_TAGS).default([]),

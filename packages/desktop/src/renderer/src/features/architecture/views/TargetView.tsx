@@ -301,7 +301,7 @@ function GapActions({ projectPath, prompt, todo }: { projectPath: string; prompt
         disabled={busy}
         onClick={async () => {
           setBusy(true)
-          await todoFromArchitecture(projectPath, `${todo}\n\n${prompt}`).finally(() => setBusy(false))
+          await todoFromArchitecture(projectPath, todo, prompt).finally(() => setBusy(false))
         }}
       >
         {busy ? <LoaderCircle className="size-3 animate-spin" /> : <ClipboardList className="size-3" />}

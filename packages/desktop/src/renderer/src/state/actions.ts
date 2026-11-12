@@ -2,7 +2,7 @@ import { DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type P
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
-import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared/todos'
+import { normalizeTodoTags, type Todo, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
@@ -544,10 +544,13 @@ export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void
 }
 
 // 记一条待办；不传 project 时带上所在页面当前的项目，at 有值时到时提醒
-export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[] } = {}): Promise<void> {
+// body：对话框里写的正文（可以是空字符串，表示按新格式存、不再从标题里拆）；快速记不带
+export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[]; body?: string; priority?: TodoPriority | null } = {}): Promise<void> {
   const todo: Todo = {
     id: crypto.randomUUID(),
     text: text.trim(),
+    ...(options.body === undefined ? {} : { body: options.body.trim() }),
+    ...(options.priority === undefined || options.priority === null ? {} : { priority: options.priority }),
     project: options.project === undefined ? currentProject() : options.project,
     tags: normalizeTodoTags(options.tags ?? []),
     createdAt: new Date().toISOString(),
@@ -556,6 +559,11 @@ export function addTodo(text: string, at?: Date, options: { project?: string | n
     ...(at ? { schedule: { at: at.toISOString(), action: { kind: 'remind' as const }, result: null } } : {}),
   }
   return saveTodos((todos) => [todo, ...todos])
+}
+
+// 对话框里改一条待办：标题、正文、优先级、标签、项目、时间
+export function updateTodo(id: string, change: Pick<Todo, 'text' | 'body' | 'priority' | 'tags' | 'project'> & { schedule: TodoSchedule | null }): Promise<void> {
+  return saveTodos((todos) => todos.map((todo) => (todo.id === id ? { ...todo, ...change, text: change.text.trim(), body: change.body?.trim(), tags: normalizeTodoTags(change.tags) } : todo)))
 }
 
 // 验收派给任务的待办：标记完成并记下验收时间，待办从待验收列表里消失

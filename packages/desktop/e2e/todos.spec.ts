@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -107,6 +107,87 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
   } finally {
     await app.close()
     await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('待办的标题、正文和优先级：详细添加（已有标签点选、选项目）、正文两行收起点开看全文、P0 排前面、按优先级筛、快速记 p1 前缀、双击用对话框编辑、派给任务发标题加正文', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-todo-detail-'))
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await chooseProject(app, window, project)
+    await window.getByTestId('sidebar').getByRole('button', { name: /待办/ }).click()
+    const rows = window.getByTestId('todo-row')
+
+    // 快速记：开头写 p1 加空格就是 P1，标题里不留前缀；顺手加一个标签，后面在对话框里点选
+    const input = window.getByLabel('新待办')
+    await window.getByLabel('添加标签').fill('前端')
+    await window.getByLabel('添加标签').press('Enter')
+    await input.fill('p1 修登录页的跳转')
+    await expect(window.getByTestId('todo-priority')).toHaveText('P1')
+    await input.press('Enter')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first().getByTestId('todo-title')).toHaveText('修登录页的跳转')
+    await expect(rows.first().getByTestId('todo-priority')).toHaveText('P1')
+
+    // 详细添加：标题、多行正文、P0、从已有标签里点选、选项目
+    await window.getByRole('button', { name: '详细添加' }).click()
+    const editor = window.getByTestId('todo-editor')
+    await editor.getByLabel('待办标题').fill('重做待办的添加流程')
+    await editor.getByLabel('待办正文').fill('第一步：加对话框\n第二步：列表显示标题\n第三步：正文省略\n第四步：优先级')
+    await editor.getByRole('radio', { name: 'P0' }).click()
+    await editor.getByLabel('添加标签').click()
+    await editor.getByTestId('todo-tag-suggestions').getByRole('button', { name: '#前端' }).click()
+    await expect(editor.getByTestId('todo-tag')).toContainText('#前端')
+    await editor.getByTestId('todo-project-picker').click()
+    await window.getByRole('menuitem', { name: new RegExp(basename(project)) }).click()
+    await editor.getByRole('button', { name: '保存' }).click()
+    await expect(editor).toHaveCount(0)
+
+    // P0 排在 P1 前面；正文收着最多两行，点一下展开看全文
+    await expect(rows).toHaveCount(2)
+    const detailed = rows.first()
+    await expect(detailed.getByTestId('todo-title')).toHaveText('重做待办的添加流程')
+    await expect(detailed.getByTestId('todo-priority')).toHaveText('P0')
+    await expect(detailed).toContainText(basename(project))
+    await expect(detailed.getByTestId('todo-tag')).toContainText('#前端')
+    const body = detailed.getByTestId('todo-body')
+    await expect(body).toHaveCSS('-webkit-line-clamp', '2')
+    await detailed.getByTestId('todo-text').click()
+    await expect(detailed.getByTestId('todo-text')).toHaveAttribute('aria-expanded', 'true')
+    await expect(body).toHaveCSS('-webkit-line-clamp', 'none')
+
+    // 按优先级筛
+    await window.getByTestId('todo-priority-filter').filter({ hasText: 'P0' }).click()
+    await expect(rows).toHaveCount(1)
+    await window.getByTestId('todo-priority-filter').filter({ hasText: 'P0' }).click()
+    await expect(rows).toHaveCount(2)
+
+    // 双击打开编辑对话框：补正文、改成 P2
+    await rows.filter({ hasText: '修登录页的跳转' }).getByTestId('todo-title').dblclick()
+    await expect(editor.getByLabel('待办标题')).toHaveValue('修登录页的跳转')
+    await editor.getByLabel('待办正文').fill('先看路由守卫')
+    await editor.getByRole('radio', { name: 'P2' }).click()
+    await editor.getByRole('button', { name: '保存' }).click()
+    const edited = rows.filter({ hasText: '修登录页的跳转' })
+    await expect(edited.getByTestId('todo-priority')).toHaveText('P2')
+    await expect(edited.getByTestId('todo-body')).toHaveText('先看路由守卫')
+
+    // 派给任务：发出去的是标题、空一行、正文，不带优先级
+    await detailed.getByRole('button', { name: '发送给任务' }).click()
+    await expect(window.getByTestId('send-todos').getByLabel('要发的内容')).toHaveValue('重做待办的添加流程\n\n第一步：加对话框\n第二步：列表显示标题\n第三步：正文省略\n第四步：优先级')
+    await window.keyboard.press('Escape')
+
+    // 存进 todos.json 的是标题、正文、优先级三个字段
+    const saved = JSON.parse(readFileSync(join(userDataDir, 'todos.json'), 'utf8')) as { todos: Array<{ text: string; body?: string; priority?: number }> }
+    expect(saved.todos.find((todo) => todo.text === '重做待办的添加流程')).toMatchObject({ priority: 0, body: '第一步：加对话框\n第二步：列表显示标题\n第三步：正文省略\n第四步：优先级' })
+    expect(saved.todos.find((todo) => todo.text === '修登录页的跳转')).toMatchObject({ priority: 2, body: '先看路由守卫' })
+  } finally {
+    await app.close()
     rmSync(project, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
   }

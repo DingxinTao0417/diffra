@@ -1,4 +1,4 @@
-import { TODO_MAX_TEXT } from '../../../../shared/todos'
+import { TODO_MAX_TEXT, TODO_MAX_TITLE } from '../../../../shared/todos'
 import { addTodo, openHome } from '@/state/actions'
 import { showToast, store } from '@/state/store'
 
@@ -8,7 +8,9 @@ export function draftTask(projectPath: string, text: string): void {
   store.set((state) => ({ ...state, composerInsert: { target: 'home', text, mode: 'fill' } }))
 }
 
-export async function todoFromArchitecture(projectPath: string, text: string): Promise<void> {
-  await addTodo(text.length > TODO_MAX_TEXT ? `${text.slice(0, TODO_MAX_TEXT - 1)}…` : text, undefined, { project: projectPath, tags: ['架构'] })
+// 架构给的一句话当标题，生成的提示词当正文
+export async function todoFromArchitecture(projectPath: string, title: string, body: string): Promise<void> {
+  const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+  await addTodo(clip(title, TODO_MAX_TITLE), undefined, { project: projectPath, tags: ['架构'], body: clip(body, TODO_MAX_TEXT) })
   showToast('已加到待办')
 }

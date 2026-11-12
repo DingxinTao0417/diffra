@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { PromptQuestion } from '@diffra/core/types'
 import { LoaderCircle, PenTool, Search, WandSparkles } from 'lucide-react'
-import type { Todo } from '../../../../shared/todos'
+import { type Todo, todoMessage, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -16,10 +16,14 @@ import { QuestionBar } from '../task/QuestionBar'
 const NO_PROJECT = '__none__'
 const MAX_LISTED_TASKS = 50
 
-// 几条待办合成一条消息；一条就原样发
+// 几条待办合成一条消息：标题加正文，不带优先级；一条就是标题、空一行、正文，几条时正文缩进在标题下面
 export function todosMessage(todos: Todo[]): string {
-  if (todos.length === 1) return todos[0]!.text
-  return ['请完成下面几件事：', ...todos.map((todo) => `- ${todo.text.replace(/\n+/g, ' ')}`)].join('\n')
+  if (todos.length === 1) return todoMessage(todos[0]!)
+  const item = (todo: Todo) => {
+    const { title, body } = todoParts(todo)
+    return [`- ${title}`, ...(body ? body.split(/\r?\n/).filter((line) => line.trim() !== '').map((line) => `  ${line}`) : [])].join('\n')
+  }
+  return ['请完成下面几件事：', ...todos.map(item)].join('\n')
 }
 
 // 把待办派给任务：新任务（选项目、普通或设计）或已有任务（可搜索）。发之前能改、能优化提示词。

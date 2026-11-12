@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import type { Todo } from '../../../../shared/todos'
+import { type Todo, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { addDays, dayKey, dueParts, isDue, monthGrid, sameDay, startOfDay } from '@/lib/todo-time'
@@ -94,7 +94,7 @@ export function TodoSidePanel({ todos, now, onPickDay }: { todos: Todo[]; now: D
                 <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">
                   {parts.day} {parts.clock}
                 </span>
-                <span className="min-w-0 flex-1 truncate">{todo.text}</span>
+                <span className="min-w-0 flex-1 truncate">{todoParts(todo).title}</span>
               </button>
             )
           })

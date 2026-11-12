@@ -1,4 +1,5 @@
 import { ClipboardCheck } from 'lucide-react'
+import { todoParts } from '../../../../shared/todos'
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/lib/errors'
 import { folderName } from '@/lib/format'
@@ -32,7 +33,7 @@ export function TodoAcceptanceCard({ task }: { task: LiveTask }) {
         {pending.map((todo) => (
           <li key={todo.id} className="flex items-start gap-3 py-2 first:pt-0 last:pb-0" data-testid="todo-acceptance-item">
             <div className="min-w-0 flex-1">
-              <p className="text-sm break-words whitespace-pre-wrap">{todo.text}</p>
+              <TodoText todo={todo} />
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                 <span>{todo.project ? folderName(todo.project) : '无项目'}</span>
                 {todo.tags.map((tag) => (
@@ -54,5 +55,15 @@ export function TodoAcceptanceCard({ task }: { task: LiveTask }) {
         </div>
       )}
     </section>
+  )
+}
+
+function TodoText({ todo }: { todo: Parameters<typeof todoParts>[0] }) {
+  const { title, body } = todoParts(todo)
+  return (
+    <>
+      <p className="text-sm break-words">{title}</p>
+      {body && <p className="mt-0.5 line-clamp-2 text-xs break-words whitespace-pre-wrap text-muted-foreground">{body}</p>}
+    </>
   )
 }
