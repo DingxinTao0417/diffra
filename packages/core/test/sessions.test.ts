@@ -35,7 +35,7 @@ import {
   updateSession,
 } from '../src/client.js'
 import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY } from '../src/protocol.js'
-import { SessionStore } from '../src/session/store.js'
+import { type SessionRecord, SessionStore } from '../src/session/store.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
 
@@ -495,6 +495,64 @@ describe('会话存储', () => {
     const loaded = await new SessionStore(dir).load('s1')
     expect(loaded.noProject).toBe(false)
     expect(loaded.design).toBe(false)
+  })
+
+  test('每轮的更新单独存：保存只重写有变化的轮次和会话头，撤掉的轮次删掉文件；某一轮的文件坏了只丢这一轮', async () => {
+    const dir = join(dataDir, 'sessions')
+    const turn = (id: string, updates: acp.SessionUpdate[]) => ({ id, kind: 'prompt' as const, prompt: id, startedAt: 'x', endedAt: null, stopReason: null, updates, checkpoint: null, messageStart: null, skills: [], images: [] })
+    const t1 = turn('t1', [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '第一轮' } }])
+    const t2 = turn('t2', [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '第二轮' } }])
+    const base = { ...record('s1', 'D:\\a', '一', '2026-01-01T00:00:00Z'), turns: [t1, t2] } as SessionRecord
+    const store = new SessionStore(dir)
+    await store.save(base)
+    const head = JSON.parse(readFileSync(join(dir, 's1.json'), 'utf8')) as { version: number; turns: Array<Record<string, unknown>> }
+    expect(head.version).toBe(2)
+    expect(head.turns.every((item) => !('updates' in item))).toBe(true)
+
+    // 第一轮没变：保存时不重写它的文件（这里手动改过文件，没被覆盖就说明没重写）
+    writeFileSync(join(dir, 's1', 't1.json'), JSON.stringify([{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '没被重写' } }]))
+    t2.updates.push({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '第二轮又说了一句' } })
+    await store.save(base)
+    expect(readFileSync(join(dir, 's1', 't1.json'), 'utf8')).toContain('没被重写')
+    expect(readFileSync(join(dir, 's1', 't2.json'), 'utf8')).toContain('第二轮又说了一句')
+
+    // 撤掉第二轮：文件跟着删
+    await store.save({ ...base, turns: [t1] })
+    expect(existsSync(join(dir, 's1', 't2.json'))).toBe(false)
+
+    // 第一轮的文件坏了：会话照样能打开，这一轮没有更新
+    writeFileSync(join(dir, 's1', 't1.json'), '{broken')
+    const loaded = await new SessionStore(dir).load('s1')
+    expect(loaded.turns.map((item) => [item.id, item.updates.length])).toEqual([['t1', 0]])
+
+    // 删除会话连轮次文件一起删
+    await store.remove('s1')
+    expect(existsSync(join(dir, 's1'))).toBe(false)
+  })
+
+  test('旧格式（所有更新在一个文件里）照样能读；第一次保存转成新格式，原文件留一份备份，读回来和原来一样', async () => {
+    const dir = join(dataDir, 'sessions')
+    mkdirSync(dir, { recursive: true })
+    const old = {
+      ...record('s1', 'D:\\a', '一', '2026-01-01T00:00:00Z'),
+      turns: [{ id: 't1', kind: 'prompt', prompt: '你好', startedAt: 'x', endedAt: 'y', stopReason: 'end_turn', updates: [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '好的' } }], checkpoint: null, messageStart: 0, skills: [], images: [] }],
+      messages: [{ role: 'user', content: '你好' }],
+    }
+    writeFileSync(join(dir, 's1.json'), JSON.stringify(old))
+    const store = new SessionStore(dir)
+    const loaded = await store.load('s1')
+    await store.save(loaded)
+    expect(readFileSync(join(dir, 's1.json.v1-backup'), 'utf8')).toBe(JSON.stringify(old))
+    expect(JSON.parse(readFileSync(join(dir, 's1.json'), 'utf8')).version).toBe(2)
+    const reloaded = await new SessionStore(dir).load('s1')
+    expect(reloaded.turns).toEqual(loaded.turns)
+    expect(reloaded.messages).toEqual(old.messages)
+    // 再存一次不会用新格式的文件覆盖备份
+    await store.save(reloaded)
+    expect(readFileSync(join(dir, 's1.json.v1-backup'), 'utf8')).toBe(JSON.stringify(old))
+    // 备份和轮次文件夹不算会话，重建索引时跳过
+    rmSync(join(dir, 'index.json'))
+    expect((await new SessionStore(dir).list()).map((entry) => entry.id)).toEqual(['s1'])
   })
 
   test('拒绝带路径的会话 id；损坏的会话文件给出说明', async () => {

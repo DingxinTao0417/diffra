@@ -5,6 +5,7 @@ import { type ModelMessage, tool, type ToolChoice, type ToolResultPart, type Too
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { ToolError } from '../tools/types.js'
+import type { AgentType } from '../subagents.js'
 import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, PARENT_TOOL_CALL_META_KEY, type PromptImage } from '../protocol.js'
 import { screenshotMessage } from './browser.js'
 import { designInstructions, designTools } from './design.js'
@@ -19,6 +20,7 @@ import {
   type StepToolCall,
   streamModelStep,
   textResult,
+  INTERRUPTION_NOTE,
   TRUNCATION_NOTE,
   type TurnIO,
 } from './loop.js'
@@ -59,6 +61,7 @@ const delegateInput = z.object({
     .max(50)
     .optional()
     .describe('Design tasks only: IDs of the canvas nodes (frames, sections) this worker owns. It can change them and everything inside them, plus the new nodes it creates.'),
+  agent: z.string().trim().min(1).max(32).optional().describe('Worker type, only when the project defines worker types and one of them fits this part (see the tool description)'),
 })
 
 const reportInput = z.object({
@@ -69,9 +72,13 @@ const reportInput = z.object({
 const claimInput = z.object({ files: z.array(z.string().min(1)).min(1).max(50).describe('Files or directories, relative to the project') })
 
 // 设计任务里工人按画布上的节点分工；普通任务按文件
-export function delegateTool(design = false) {
+// types 是项目里自定义的工人类型（.diffra/agents，见 subagents.ts）：列在工具说明里，主智能体用 agent 参数选
+export function delegateTool(design = false, types: AgentType[] = []) {
   return tool({
     description:
+      (types.length > 0
+        ? `Worker types defined for this project (pass one as agent when it fits; omit agent for a general worker): ${types.map((type) => `${type.name}${type.readOnly ? ' (read-only)' : ''} — ${type.description}`).join('; ')}. `
+        : '') +
       'Hand a self-contained part of the task to a worker agent. Call delegate several times in one step to run up to 4 workers in parallel (at most 8 per turn); the step waits until all of them report back. ' +
       (design
         ? 'In this design task, set up the variables, components and page frames yourself first, then give each worker its own frames or sections in nodes (several workers can work on the same page in different sections). Workers can read the whole document but only change their own nodes and the nodes they create. '
@@ -83,8 +90,8 @@ export function delegateTool(design = false) {
 }
 
 // 上下文明细里 delegate 工具定义占的字数
-export function delegateChars(design: boolean): number {
-  return toolDefinitionChars({ [DELEGATE_TOOL]: delegateTool(design) })
+export function delegateChars(design: boolean, types: AgentType[] = []): number {
+  return toolDefinitionChars({ [DELEGATE_TOOL]: delegateTool(design, types) })
 }
 
 const WORKER_TOOLS: ToolSet = {
@@ -92,6 +99,9 @@ const WORKER_TOOLS: ToolSet = {
   [CLAIM_TOOL]: tool({ description: 'Claim more files or directories before changing them. Files another worker owns are refused.', inputSchema: claimInput }),
   [REPORT_TOOL]: tool({ description: 'Finish your part and report back to the coordinator. Call it exactly once, at the end.', inputSchema: reportInput }),
 }
+
+// 只读类型的工人不给这几个工具
+const READ_ONLY_WORKER_EXCLUDED = new Set<string>(['edit_file', 'run_command', CLAIM_TOOL])
 
 // 一轮里的认领表和工人记录：认领在工人交回结果时释放，同一轮后面派的工人可以接着认领
 export interface Team {
@@ -155,6 +165,8 @@ interface Worker {
   // 命令改到别人认领的文件
   boundary: string[]
   steps: number
+  // 自定义的工人类型；没指定就是通用工人
+  type: AgentType | null
 }
 
 type WorkerOutcome =
@@ -235,7 +247,11 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
       team.edits.push({ agentId: worker.tag.id, path })
     },
   }
-  const system = `${session.systemPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned)}`
+  // 自定义类型的说明接在工人规则后面；只读类型另外写明不能改、不能跑命令，工具也只给读和搜索的
+  const typeNote = worker.type
+    ? `\n\nYou are a "${worker.type.name}" worker.${worker.type.readOnly ? ' You are read-only: you cannot change files or run commands; investigate and report.' : ''}\n${worker.type.instructions}`
+    : ''
+  const system = `${session.systemPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned)}${typeNote}`
   const ownedLine = [
     owned.length > 0 ? `Files you own: ${owned.join(', ')}` : `You do not own any files yet; call ${CLAIM_TOOL} before changing a file.`,
     worker.nodes.length > 0 ? `Nodes you own: ${worker.nodes.join(', ')}` : '',
@@ -245,14 +261,15 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
   // 设计任务的工人还能用设计工具（除了 eval：它能绕过节点锁）
   const designSet = Object.fromEntries(Object.entries(designTools(session)).filter(([name]) => name !== DESIGN_EVAL_TOOL))
   const designNames = new Set(Object.keys(designSet))
-  const tools: ToolSet = { ...WORKER_TOOLS, ...designSet }
+  const baseTools = worker.type?.readOnly ? Object.fromEntries(Object.entries(WORKER_TOOLS).filter(([name]) => !READ_ONLY_WORKER_EXCLUDED.has(name))) : WORKER_TOOLS
+  const tools: ToolSet = { ...baseTools, ...(worker.type?.readOnly ? {} : designSet) }
   const messages: ModelMessage[] = [{ role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
   const window = active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let nearLimit = false
   for (let step = 0; step < WORKER_MAX_STEPS; step++) {
     // 最后一步或上下文快满时要求直接交结果
     const toolChoice: ToolChoice<ToolSet> = step === WORKER_MAX_STEPS - 1 || nearLimit ? { type: 'tool', toolName: REPORT_TOOL } : 'auto'
-    const { toolCalls, inputTokens, answered, responseMessages, truncated } = await streamModelStep(
+    const { toolCalls, inputTokens, answered, responseMessages, truncated, interrupted } = await streamModelStep(
       { model: active.language, system, messages, tools, toolChoice, usage: { role: 'subagent', provider: active.config.provider, modelId: active.config.modelId } },
       signal,
       wio,
@@ -262,7 +279,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     nearLimit = inputTokens > window * CONTEXT_STOP_RATIO
     if (signal.aborted) return { kind: 'cancelled' }
     if (toolCalls.length === 0) {
-      messages.push({ role: 'user', content: truncated ? TRUNCATION_NOTE : `Keep working with the tools, or call ${REPORT_TOOL} when your part is done.` })
+      messages.push({ role: 'user', content: truncated ? (interrupted ? INTERRUPTION_NOTE : TRUNCATION_NOTE) : `Keep working with the tools, or call ${REPORT_TOOL} when your part is done.` })
       continue
     }
     const results: ToolResultPart[] = []
@@ -430,10 +447,15 @@ export async function runDelegates(
       await fail(`At most ${MAX_WORKERS_PER_TURN} workers per turn; do the rest yourself.`)
       continue
     }
+    const type = input.data.agent ? (session.agentTypes.find((item) => item.name === input.data.agent) ?? null) : null
+    if (input.data.agent && !type) {
+      await fail(`Unknown worker type "${input.data.agent}". ${session.agentTypes.length > 0 ? `Available: ${session.agentTypes.map((item) => item.name).join(', ')}.` : 'This project defines no worker types; omit agent.'}`)
+      continue
+    }
     const tag: AgentTag = { id: randomUUID(), name: input.data.name, color: AGENT_COLORS[team.count % AGENT_COLORS.length]! }
     team.count++
     const nodes = session.design ? [...new Set(input.data.nodes ?? [])] : []
-    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, readHashes: new Map(), edited: new Set(), boundary: [], steps: 0 }
+    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, readHashes: new Map(), edited: new Set(), boundary: [], steps: 0, type }
     // 先把要认领的都认领下来；和正在跑的工人冲突就不派这个工人
     const refused: string[] = []
     for (const raw of input.data.files ?? []) {

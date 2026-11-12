@@ -35,6 +35,7 @@ import type {
   McpServerInput,
   ModelRef,
   PluginView,
+  ProjectHooks,
   ProviderInput,
   Role,
   SecuritySettings,
@@ -275,6 +276,9 @@ export interface ProjectState {
   path: string
   checks: SessionChecks
   readOnlyPaths: string[]
+  // 在这个项目里选过「始终允许同类命令」的命令键
+  allowedCommands: string[]
+  hooks: ProjectHooks
 }
 
 export interface SessionHandle {
@@ -390,7 +394,7 @@ export interface DiffraApi {
   detectChecks(path: string): Promise<CheckDetection>
   // 在项目目录试跑一条检查命令
   runCheck(path: string, command: string): Promise<CheckRunResult>
-  saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[] }): Promise<ProjectState>
+  saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[]; allowedCommands?: string[]; hooks?: ProjectHooks }): Promise<ProjectState>
   // projectPath 为 null 时建无项目任务
   createSession(projectPath: string | null, options?: SessionOptions): Promise<SessionHandle>
   // 返回新的模型名（换了模型时）

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ModelErrorKind, PromptImage, RemoteSource, TaskProgressView } from '@diffra/core/types'
+import { type ModelErrorKind, parseSteps, type PromptImage, type RemoteSource, STEPS_CARD_TITLE, type TaskProgressView } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
 import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
@@ -24,6 +24,7 @@ import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
+import { StepMark } from './StepMark'
 import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
 
@@ -32,7 +33,7 @@ type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
   | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps'; item: ToolItem }
 
 // 模型接口出错时怎么说；auth、not-found 要去设置里改，其余可以接着发或者换个模型
 const MODEL_ERROR_TEXT: Record<ModelErrorKind, string> = {
@@ -84,7 +85,7 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps' | null {
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
   if (item.visual) return 'visual'
@@ -95,6 +96,7 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architect
   if (item.title === '完成') return 'finish'
   if (item.title === '验证改动（不结束任务）') return 'verify'
   if (item.title === '计划') return 'plan'
+  if (item.title === STEPS_CARD_TITLE) return 'steps'
   if (item.title === '上下文压缩') return 'compaction'
   if (item.title === '深度扫描报告') return 'deep-scan'
   if (item.title === '规范审查') return 'review'
@@ -499,6 +501,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
             return <DeepScanReport key={block.item.id} item={block.item} task={task} />
           case 'compaction':
             return <CompactionRow key={block.item.id} item={block.item} />
+          case 'steps':
+            return <StepList key={block.item.id} item={block.item} />
           case 'plan':
             return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
           case 'verify':
@@ -1152,6 +1156,34 @@ function CompactionRow({ item }: { item: ToolItem }) {
         {detail && (open ? <ChevronDown className="mt-1 size-3 shrink-0" /> : <ChevronRight className="mt-1 size-3 shrink-0" />)}
       </button>
       {open && detail && <div className="mt-1.5 ml-5.5 max-h-96 overflow-auto rounded-md bg-muted p-2.5 leading-relaxed whitespace-pre-wrap">{detail}</div>}
+    </div>
+  )
+}
+
+// 智能体列的步骤清单：一轮一张，随它的更新整张替换；默认展开，收起时只看做到第几步
+function StepList({ item }: { item: ToolItem }) {
+  const [open, setOpen] = useState(true)
+  const steps = parseSteps(textOf(item))
+  const done = steps.filter((step) => step.status === 'completed').length
+  const current = steps.find((step) => step.status === 'in_progress')
+  return (
+    <div className="flex flex-col gap-1 text-sm" data-testid="tool-call" data-kind="steps" data-status={item.status}>
+      <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground/85">
+        <ListChecks className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 text-muted-foreground">步骤</span>
+        <span className="min-w-0 truncate">
+          {done}/{steps.length}
+          {!open && current ? ` · ${current.content}` : ''}
+        </span>
+      </DisclosureRow>
+      <ul hidden={!open} className="flex flex-col gap-0.5 pl-5">
+        {steps.map((step, index) => (
+          <li key={index} className="flex items-start gap-2 leading-relaxed" data-testid="step" data-status={step.status}>
+            <StepMark status={step.status} />
+            <span className={cn('min-w-0 break-words', step.status === 'completed' && 'text-muted-foreground', step.status === 'in_progress' && 'font-bold')}>{step.content}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

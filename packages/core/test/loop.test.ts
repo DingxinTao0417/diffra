@@ -17,6 +17,7 @@ import { runTurn, streamModelStep, type TurnIO } from '../src/session/loop.js'
 import { formatPlan, runPlan } from '../src/session/plan.js'
 import { compactManually } from '../src/session/compact.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
+import { memoryPrompt, readMemory, rememberTurn } from '../src/session/memory.js'
 import { IMAGE_CHARS, messagesChars, Session, type SessionOptions } from '../src/session/session.js'
 import { TOOLS } from '../src/session/tools.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
@@ -35,31 +36,49 @@ const usageOf = (inputTokens = 1000) => ({
 
 // 按剧本一步一步返回：每次模型调用对应数组里的一项
 function scriptedModel(steps: Step[]): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: steps.map((step, index) => ({
-      stream: simulateReadableStream<StreamPart>({
-        chunks:
-          'text' in step
-            ? [
-                { type: 'stream-start' as const, warnings: [] },
-                { type: 'text-start' as const, id: 't' },
-                { type: 'text-delta' as const, id: 't', delta: step.text },
-                { type: 'text-end' as const, id: 't' },
-                { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('stop' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
-              ]
-            : [
-                { type: 'stream-start' as const, warnings: [] },
-                ...step.toolCalls.map((call, callIndex) => ({
-                  type: 'tool-call' as const,
-                  toolCallId: `call-${index}-${callIndex}`,
-                  toolName: call.name,
-                  input: call.raw ?? JSON.stringify(call.input),
-                })),
-                { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('tool-calls' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
-              ],
-      }),
-    })),
-  })
+  return new MockLanguageModelV4({ doStream: steps.map(stepStream) })
+}
+
+// 先说一段话（可以没有）再出错的回复：连接中途断开、服务出错
+function failingStream(text: string | null, error: Error) {
+  return {
+    stream: simulateReadableStream<StreamPart>({
+      chunks: [
+        { type: 'stream-start' as const, warnings: [] },
+        ...(text === null ? [] : [{ type: 'text-start' as const, id: 't' }, { type: 'text-delta' as const, id: 't', delta: text }]),
+        { type: 'error' as const, error },
+      ],
+    }),
+  }
+}
+
+const serviceError = (statusCode: number) =>
+  new APICallError({ message: `HTTP ${statusCode}`, url: 'http://127.0.0.1:1/chat/completions', requestBodyValues: {}, statusCode, isRetryable: false })
+
+function stepStream(step: Step, index: number): StreamResult {
+  return {
+    stream: simulateReadableStream<StreamPart>({
+      chunks:
+        'text' in step
+          ? [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: 't' },
+              { type: 'text-delta' as const, id: 't', delta: step.text },
+              { type: 'text-end' as const, id: 't' },
+              { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('stop' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
+            ]
+          : [
+              { type: 'stream-start' as const, warnings: [] },
+              ...step.toolCalls.map((call, callIndex) => ({
+                type: 'tool-call' as const,
+                toolCallId: `call-${index}-${callIndex}`,
+                toolName: call.name,
+                input: call.raw ?? JSON.stringify(call.input),
+              })),
+              { type: 'finish' as const, finishReason: { unified: step.truncated ? ('length' as const) : ('tool-calls' as const), raw: undefined }, usage: usageOf(step.inputTokens) },
+            ],
+    }),
+  }
 }
 
 function recordingIO(permissionChoice: string | null = 'allow_once'): TurnIO & {
@@ -714,6 +733,44 @@ describe('主循环', () => {
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('rejected this command')
   })
 
+  test('命令确认多一项「这个项目里始终允许同类命令」，带上要记的命令键；项目里已经允许的不再问；无项目任务和 rm 不给这一项', async () => {
+    const run = (command: string): Step => ({ toolCalls: [{ name: 'run_command', input: { command } }] })
+    const asked: Array<{ options: string[]; meta: unknown }> = []
+    const answering = (pick: string) => {
+      const io = recordingIO()
+      io.requestPermission = async (toolCall: ToolCallUpdate, options: PermissionOption[]) => {
+        asked.push({ options: options.map((option) => option.optionId), meta: toolCall._meta })
+        return pick
+      }
+      return io
+    }
+
+    // 选了项目里始终允许：这个会话里同类命令马上不再问
+    const model = scriptedModel([run('node --version'), run('node -e "1"'), run('rm -f nothing.txt'), { text: '好了' }])
+    await runTurn(await makeSession(model), { id: 't', text: '跑一下' }, answering('allow_project'))
+    expect(asked[0]?.options).toEqual(['allow_once', 'allow_always', 'allow_project', 'reject'])
+    expect(asked[0]?.meta).toEqual({ diffra: { projectCommands: { cwd: project, keys: ['node'] } } })
+    // 第二条 node 命令没再问；rm 照旧问，而且没有「项目里始终允许」
+    expect(asked).toHaveLength(2)
+    expect(asked[1]?.options).toEqual(['allow_once', 'allow_always', 'reject'])
+
+    // 建会话时带进来的命令键：一开始就不问；手填的 rm 不算数，照旧问
+    asked.length = 0
+    const base = await makeSession(scriptedModel([]))
+    const allowed = new Session({
+      cwd: project,
+      config: { ...base.config, allowedCommands: ['node', 'rm'] },
+      environment: base.environment,
+      checkpoints: null,
+      rulePacks: [],
+      systemPrompt: base.systemPrompt,
+      model: scriptedModel([run('node --version'), run('rm -f nothing.txt'), { text: '好了' }]),
+    })
+    await runTurn(allowed, { id: 't', text: '跑一下' }, answering('reject'))
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.options).toEqual(['allow_once', 'allow_always', 'reject'])
+  }, 30_000)
+
   test('危险命令直接拦下，不弹确认', async () => {
     const model = scriptedModel([{ toolCalls: [{ name: 'run_command', input: { command: 'rm -rf /' } }] }, { text: '好' }])
     const io = recordingIO('allow_once')
@@ -849,6 +906,237 @@ describe('输出被截断', () => {
     expect(promptOf(model, 1)).toContain('1\\thello')
     expect(promptOf(model, 1)).not.toContain('cut off by the output token limit')
   })
+})
+
+describe('项目记忆', () => {
+  test('一轮结束后挑出要记的事追加到记忆文件：不重复、不记密钥；写进新会话的系统提示词；没开时不调模型', async () => {
+    const memoryDir = mkdtempSync(join(tmpdir(), 'diffra-loop-memory-'))
+    try {
+      const fakeKey = 'gh' + 'p_' + 'a'.repeat(36)
+      const reviewer = scriptedModel([
+        { text: ['- 这个项目用 pnpm，不用 npm', `- 密钥是 ${fakeKey}`, '随便一句不是条目的话'].join(String.fromCharCode(10)) },
+        { text: ['- 这个项目用 pnpm，不用 npm', '- 提交信息用中文'].join(String.fromCharCode(10)) },
+        { text: 'NONE' },
+      ])
+      const base = await makeSession(scriptedModel([]))
+      const sessionWith = (dir: string | null, reviewModel: MockLanguageModelV4) =>
+        new Session({ cwd: project, config: { ...base.config, memoryDir: dir }, environment: base.environment, checkpoints: null, rulePacks: [], systemPrompt: base.systemPrompt, model: scriptedModel([]), reviewModel })
+      const session = sessionWith(memoryDir, reviewer)
+      session.startTurn('t1', '以后这个项目都用 pnpm')
+      session.recordUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '好的，改用 pnpm 了' } })
+      const turn = session.turns[0]!
+      const usage: ModelCallUsage[] = []
+      const record = async (call: ModelCallUsage) => void usage.push(call)
+
+      expect(await rememberTurn(session, turn, record)).toEqual(['- 这个项目用 pnpm，不用 npm'])
+      expect(await rememberTurn(session, turn, record)).toEqual(['- 提交信息用中文'])
+      expect(await rememberTurn(session, turn, record)).toEqual([])
+      expect(await readMemory(memoryDir)).toEqual(['- 这个项目用 pnpm，不用 npm', '- 提交信息用中文'])
+      expect(readFileSync(join(memoryDir, 'MEMORY.md'), 'utf8')).not.toContain(fakeKey)
+      expect(usage.map((call) => call.role)).toEqual(['reviewer', 'reviewer', 'reviewer'])
+      // 提取时带着已有的记忆和这一轮的问答
+      const second = JSON.stringify(reviewer.doStreamCalls[1]?.prompt)
+      expect(second).toContain('这个项目用 pnpm，不用 npm')
+      expect(second).toContain('以后这个项目都用 pnpm')
+      expect(second).toContain('好的，改用 pnpm 了')
+
+      const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [], { skills: [], frontend: null, memory: memoryPrompt(await readMemory(memoryDir)) })
+      expect(prompt).toContain('Notes remembered from earlier tasks in this project')
+      expect(prompt).toContain('- 提交信息用中文')
+
+      const unused = scriptedModel([{ text: '- 不该被调用' }])
+      expect(await rememberTurn(sessionWith(null, unused), turn, record)).toEqual([])
+      expect(unused.doStreamCalls).toHaveLength(0)
+    } finally {
+      rmSync(memoryDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('项目钩子', () => {
+  test('afterEdit 钩子改了文件时告诉模型重读；beforeCommand 退出码 2 拦下命令，理由带上钩子的输出，别的命令照常', async () => {
+    const base = await makeSession(scriptedModel([]))
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'x\n' } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'echo deploy' } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'echo fine' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '好了' } }] },
+    ])
+    const hooks = { afterEdit: 'echo formatted >> "$DIFFRA_FILE"', beforeCommand: 'case "$DIFFRA_COMMAND" in *deploy*) echo "不许部署"; exit 2;; esac' }
+    const session = new Session({
+      cwd: project,
+      config: { ...base.config, permissionMode: 'full', hooks },
+      environment: base.environment,
+      checkpoints: null,
+      rulePacks: [],
+      systemPrompt: base.systemPrompt,
+      model,
+    })
+    await expect(runTurn(session, { id: 't', text: '做一下' }, recordingIO())).resolves.toBe('end_turn')
+
+    const results = session.messages.flatMap((message) => (message.role === 'tool' ? message.content : [])).map((part) => JSON.stringify(part))
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('x\nformatted\n')
+    expect(results[0]).toContain('after-edit hook changed this file')
+    expect(results[1]).toContain("Blocked by the project's before-command hook: 不许部署")
+    expect(results[2]).toContain('fine')
+    expect(results[2]).not.toContain('Blocked')
+  }, 30_000)
+})
+
+describe('步骤清单和中途提问', () => {
+  test('todo_write：一轮一张步骤卡，每次更新整张替换；全部做完时卡片是完成', async () => {
+    const list = (...statuses: Array<'pending' | 'in_progress' | 'completed'>) => ({
+      toolCalls: [{ name: 'todo_write', input: { todos: statuses.map((status, index) => ({ content: `第 ${index + 1} 步`, status })) } }],
+    })
+    const model = scriptedModel([list('in_progress', 'pending'), list('completed', 'in_progress'), list('completed', 'completed'), { text: '做完了' }])
+    const session = await makeSession(model)
+    session.startTurn('turn-1', '分两步做')
+    const io = recordingIO()
+    await runTurn(session, { id: 'turn-1', text: '分两步做' }, io)
+
+    const cards = io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title === '步骤' ? [update] : []))
+    expect(cards.map((card) => card.toolCallId)).toEqual(['steps-turn-1', 'steps-turn-1', 'steps-turn-1'])
+    expect(cards.map((card) => card.status)).toEqual(['in_progress', 'in_progress', 'completed'])
+    expect(JSON.stringify(cards[1]?.content)).toContain('[x] 第 1 步\\n[>] 第 2 步')
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('Step list updated: 0 of 2 done')
+    // 步骤卡不是改文件，不要求 finish
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+  })
+
+  test('ask_user：选项作为确认请求问用户，选了哪个告诉模型，这一轮接着跑；都不选时让它用文字说明后停下', async () => {
+    const ask = { toolCalls: [{ name: 'ask_user', input: { question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] } }] }
+    const requests: Array<{ title: string; rawInput: unknown; options: string[] }> = []
+    const answering = (pick: string | null) => {
+      const io = recordingIO()
+      io.requestPermission = async (toolCall: ToolCallUpdate, options: PermissionOption[]) => {
+        requests.push({ title: toolCall.title ?? '', rawInput: toolCall.rawInput, options: options.map((option) => `${option.optionId}:${option.name}`) })
+        return pick
+      }
+      return io
+    }
+
+    const model = scriptedModel([ask, { text: '按方案 B 做' }])
+    const io = answering('ask-user-option-1')
+    await expect(runTurn(await makeSession(model), { id: 't', text: '做一下' }, io)).resolves.toBe('end_turn')
+    expect(requests[0]).toMatchObject({ title: '用哪种方案？', rawInput: { scope: 'ask-user', question: '用哪种方案？' } })
+    expect(requests[0]?.options).toEqual(['ask-user-option-0:方案 A', 'ask-user-option-1:方案 B', 'ask-user-skip:都不选，我来说'])
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('The user chose: 方案 B')
+    expect(JSON.stringify(io.updates)).toContain('选了：方案 B')
+
+    const skipped = scriptedModel([ask, { text: '你想要哪种？' }])
+    await runTurn(await makeSession(skipped), { id: 't', text: '做一下' }, answering('ask-user-skip'))
+    expect(JSON.stringify(skipped.doStreamCalls[1]?.prompt)).toContain('The user did not pick any option')
+  })
+})
+
+describe('同一步里的只读调用', () => {
+  const toolEvents = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update' ? [`${update.sessionUpdate === 'tool_call' ? '开始' : '结束'} ${update.toolCallId}`] : []))
+
+  test('连续的读文件、搜索一起开跑，结果按原来的顺序交给模型；项目外的路径照旧一个一个来', async () => {
+    for (const name of ['a', 'b', 'c']) writeFileSync(join(project, `${name}.txt`), `${name}\n`)
+    const read = (path: string) => ({ name: 'read_file', input: { path } })
+    const model = scriptedModel([{ toolCalls: [read('a.txt'), read('b.txt'), { name: 'search', input: { pattern: 'c' } }] }, { text: '看完了' }])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '看看' }, io)
+    // 三个都开始了才有第一个结束
+    expect(toolEvents(io).slice(0, 3)).toEqual(['开始 call-0-0', '开始 call-0-1', '开始 call-0-2'])
+    const results = session.messages.flatMap((message) => (message.role === 'tool' ? message.content : []))
+    expect(results.map((part) => (part.type === 'tool-result' ? part.toolCallId : null))).toEqual(['call-0-0', 'call-0-1', 'call-0-2'])
+
+    const outside = scriptedModel([{ toolCalls: [read('../x.txt'), read('../y.txt')] }, { text: '看完了' }])
+    const outsideIO = recordingIO('reject')
+    await runTurn(await makeSession(outside), { id: 't', text: '看看' }, outsideIO)
+    expect(toolEvents(outsideIO).slice(0, 2)).toEqual(['开始 call-0-0', '结束 call-0-0'])
+  })
+
+  test('排在读前面的编辑先执行完：同一步里先改再读，读到的是改过的内容', async () => {
+    writeFileSync(join(project, 'a.txt'), 'old\n')
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'old', new_string: 'new' } }, { name: 'read_file', input: { path: 'a.txt' } }, { name: 'search', input: { pattern: 'new' } }] },
+      { text: '改好了' },
+    ])
+    const session = await makeSession(model)
+    await runTurn(session, { id: 't', text: '改一下' }, recordingIO())
+    const last = JSON.stringify(session.messages.findLast((message) => message.role === 'tool'))
+    expect(last).toContain('1\\tnew')
+    expect(last).not.toContain('1\\told')
+  })
+})
+
+describe('命令输出太长', () => {
+  test('给模型的输出截短后，完整输出存成文件，模型能用 read_file 读被省略的部分；没截短的不存', async () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), 'diffra-loop-outputs-'))
+    try {
+      const model = scriptedModel([
+        { toolCalls: [{ name: 'run_command', input: { command: 'for i in $(seq 1 1000); do echo "line-$i"; done' } }] },
+        { toolCalls: [{ name: 'run_command', input: { command: 'echo short' } }] },
+        { text: '看完了' },
+      ])
+      const session = await makeSession(model, undefined, [], undefined, undefined, undefined, {}, { outputRoot })
+      session.permissionMode = 'full'
+      await runTurn(session, { id: 't', text: '跑一下' }, recordingIO())
+
+      const [long, short] = session.messages.flatMap((message) => (message.role === 'tool' ? message.content : [])).map((part) => JSON.stringify(part))
+      expect(long).toContain('lines omitted')
+      expect(long).not.toContain('line-500\\n')
+      expect(short).not.toContain('saved at')
+      const path = /saved at (\S+\.txt)/.exec(long ?? '')?.[1]
+      expect(path).toBeDefined()
+      expect(readFileSync(path!, 'utf8')).toContain('line-500\n')
+
+      // 存下来的文件在可读目录里：下一轮模型按提示用 read_file 读中间那段
+      session.model = scriptedModel([{ toolCalls: [{ name: 'read_file', input: { path, offset: 500, limit: 2 } }] }, { text: '读到了' }])
+      await runTurn(session, { id: 't2', text: '看中间' }, recordingIO())
+      expect(JSON.stringify(session.messages.findLast((message) => message.role === 'tool'))).toContain('line-500')
+    } finally {
+      rmSync(outputRoot, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+
+describe('模型服务出错时', () => {
+  const notices = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'notice' ? [update.title] : []))
+
+  test('回复说到一半连接断了：已经说的交回对话，让模型接着说，这一轮不停', async () => {
+    const model = new MockLanguageModelV4({ doStream: [failingStream('前半句，', serviceError(502)), stepStream({ text: '后半句。' }, 1)] })
+    const session = await makeSession(model)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 't', text: '说句话' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(2)
+    const second = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    expect(second).toContain('前半句，')
+    expect(second).toContain('cut off by a network error')
+    expect(notices(io)).toEqual([])
+  })
+
+  test('还没说话就出错：等一会儿整步重发；鉴权错误不重发，直接停下', async () => {
+    const model = new MockLanguageModelV4({ doStream: [failingStream(null, serviceError(503)), stepStream({ text: '好了' }, 1)] })
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '说句话' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+
+    const denied = new MockLanguageModelV4({ doStream: [failingStream(null, serviceError(401)), stepStream({ text: '不会走到这里' }, 1)] })
+    const deniedIO = recordingIO()
+    await runTurn(await makeSession(denied), { id: 't', text: '说句话' }, deniedIO)
+    expect(denied.doStreamCalls).toHaveLength(1)
+    expect(turnOutcomes(deniedIO)).toMatchObject([{ stop: 'model-error', errorKind: 'auth' }])
+  }, 30_000)
+
+  test('一直限流：自动重试用完后换备用模型接着做；没配备用模型就停下', async () => {
+    const limited = () => failingStream(null, serviceError(429))
+    const coder = new MockLanguageModelV4({ doStream: [limited(), limited(), limited(), limited()] })
+    const fallback = scriptedModel([{ text: '备用模型接着说' }])
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(coder, undefined, [], undefined, undefined, undefined, { fallback }), { id: 't', text: '说句话' }, io)).resolves.toBe('end_turn')
+    expect(coder.doStreamCalls).toHaveLength(4)
+    expect(fallback.doStreamCalls).toHaveLength(1)
+    expect(notices(io)).toEqual(['已换用备用模型 兜底供应商 / fallback'])
+  }, 60_000)
 })
 
 describe('工具参数的字符串写法', () => {
@@ -1700,6 +1988,33 @@ describe('上下文压缩', () => {
     expect(session.compaction).toBeNull()
   })
 
+  test('写摘要后把压缩掉的那段里最近读过的文件按现在的内容附上；保留的最近几步里的不重复附，太大的不附', async () => {
+    writeFileSync(join(project, 'small.ts'), 'export const small = 1\n')
+    writeFileSync(join(project, 'kept.ts'), 'export const kept = 1\n')
+    writeFileSync(join(project, 'big.ts'), `${'// 很长的一行注释\n'.repeat(2000)}`)
+    // 只读开头几行：输出很短，省略旧输出省不出地方，才会走到写摘要
+    const read = (path: string, inputTokens = 1000): Step => ({ toolCalls: [{ name: 'read_file', input: { path, limit: 3 } }], inputTokens })
+    const model = scriptedModel([
+      read('small.ts'),
+      read('big.ts'),
+      ...searches(3, () => 1000),
+      // 最近四步之一：保留原文
+      read('kept.ts', 90_000),
+      { text: '摘要：看了几个文件。' },
+      { text: '看完了' },
+    ])
+    const session = await makeSession(model)
+    session.startTurn('turn-1', '看看这几个文件')
+    await expect(runTurn(session, { id: 'turn-1', text: '看看这几个文件' }, recordingIO())).resolves.toBe('end_turn')
+
+    // 读过之后文件又变了：附的是现在磁盘上的内容
+    const summary = session.compaction?.summary ?? ''
+    expect(summary).toContain('Files you read or edited most recently before the summary')
+    expect(summary).toContain('=== small.ts\nexport const small = 1')
+    expect(summary).not.toContain('=== big.ts')
+    expect(summary).not.toContain('=== kept.ts')
+  })
+
   test('省略不够时不先省略：写摘要时看到的是工具输出原文，消息里不留占位；摘要要求和续接说明写全', async () => {
     writeBigFiles(6)
     const model = scriptedModel([...reads(6, (index) => (index === 5 ? 90_000 : 1000)), { text: '摘要：读了六个文件。' }, { text: '看完了' }])
@@ -1791,6 +2106,20 @@ describe('卡死检测和步数上限', () => {
     expect(JSON.stringify(session.messages)).not.toContain('same call 3 times')
     expect(notices(io)).toEqual([])
   })
+
+  test('同一条命令跑了 6 次、每次结果不一样：提醒一次，不停下', async () => {
+    const tick: Step = { toolCalls: [{ name: 'run_command', input: { command: 'date +%s%N' } }] }
+    const model = scriptedModel([tick, tick, tick, tick, tick, tick, { text: '不查了' }])
+    const session = await makeSession(model)
+    session.permissionMode = 'full'
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 'turn-1', text: '看看时间' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(7)
+    expect(JSON.stringify(model.doStreamCalls[5]?.prompt)).not.toContain('same call 6 times')
+    expect(JSON.stringify(model.doStreamCalls[6]?.prompt)).toContain('same call 6 times')
+    expect(notices(io)).toEqual([])
+  }, 30_000)
 
   test('步数上限按设置来，到了就停下并说明怎么继续', async () => {
     for (const name of ['a', 'b', 'c', 'd']) writeFileSync(join(project, `${name}.txt`), `${name}\n`)

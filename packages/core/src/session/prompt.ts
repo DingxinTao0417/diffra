@@ -1,3 +1,4 @@
+import { MEMORY_HEADING } from './memory.js'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { RulePack, SessionChecks, SessionConfig, SkillInfo, SkillSource } from '../protocol.js'
@@ -22,6 +23,8 @@ export interface PromptContext {
   skills: SkillInfo[]
   // 有界面代码的项目才有：browser 是能不能用内置浏览器，screenshots 是模型能不能看截图
   frontend: { browser: boolean; screenshots: boolean } | null
+  // 项目记忆里的条目（见 memory.ts），没开或还没有时不传
+  memory?: string
 }
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
@@ -60,12 +63,14 @@ export async function buildSystemPrompt(
       : []),
     '- Older tool outputs may be removed from the conversation to save space. When you learn something you will need later (an error message, a value, a line number), state it in your reply.',
     '- Report results honestly: say which checks you actually ran and what they showed. If you could not verify something, say so.',
+    '- For work with several distinct steps, show your step list with todo_write and keep it current. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
     ...checkLines(checks),
     '- If the user only asked a question and you changed nothing, just answer without calling finish.',
     '- Reply in the same language the user writes in.',
     ...(context.frontend ? frontendLines(context.frontend, skills.listed.has(DESIGN_SKILL)) : []),
     ...skills.lines,
   ]
+  if (context.memory) lines.push('', MEMORY_HEADING, context.memory)
   const projectRules = await readProjectRules(cwd)
   if (projectRules) lines.push('', PROJECT_RULES_HEADING, projectRules)
   lines.push(...codingRuleLines(rulePacks, rules.review))

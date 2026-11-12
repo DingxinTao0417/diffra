@@ -65,6 +65,9 @@ export const sessionConfigSchema = z.object({
   rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),
   permissionMode: z.enum(['ask', 'auto', 'full']),
   security: securitySchema,
+  allowedCommands: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
+  memoryDir: z.string().min(1).nullable().optional(),
+  hooks: z.object({ afterEdit: checkCommandSchema.optional(), beforeCommand: checkCommandSchema.optional(), turnEnd: checkCommandSchema.optional() }).optional(),
   limits: z.object({
     compactAtPercent: z.number().int().min(50).max(90),
     maxSteps: z.number().int().positive().nullable(),

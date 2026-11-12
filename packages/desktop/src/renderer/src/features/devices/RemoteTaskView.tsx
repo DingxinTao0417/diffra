@@ -3,7 +3,7 @@ import type { PermissionMode, SessionChecks, SessionInfo } from '@diffra/core/ty
 import { Archive, Eye, MousePointerClick, ShieldAlert, WifiOff } from 'lucide-react'
 import type { PermissionRequestEvent, ProjectState } from '../../../../shared/ipc'
 import { REMOTE_API } from '../../../../shared/remote'
-import type { ModelRef } from '../../../../shared/settings'
+import { type ModelRef, NO_HOOKS } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PermissionCard } from '@/features/session/PermissionCard'
@@ -174,7 +174,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
     [task, key, project?.name, title, details, changeVersion],
   )
   const projectState = useMemo<ProjectState | null>(
-    () => (details?.project ? { path: project?.name ?? '', checks: details.project.checks as unknown as SessionChecks, readOnlyPaths: details.project.readOnlyPaths } : null),
+    () => (details?.project ? { path: project?.name ?? '', checks: details.project.checks as unknown as SessionChecks, readOnlyPaths: details.project.readOnlyPaths, allowedCommands: [], hooks: NO_HOOKS } : null),
     [details, project?.name],
   )
 

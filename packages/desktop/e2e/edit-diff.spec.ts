@@ -50,9 +50,10 @@ test('改动卡片只带变化的那段：大文件改两处，行号是文件�
 
     // 记录里：第一次改带整份文件（base），第二次只带变化的那段
     const sessionsDir = join(userDataDir, 'sessions')
-    const file = readdirSync(sessionsDir).find((name) => name !== 'index.json' && name.endsWith('.json'))!
-    const saved = JSON.parse(readFileSync(join(sessionsDir, file), 'utf8')) as { turns: Array<{ updates: Array<{ content?: unknown }> }> }
-    const diffs = saved.turns.flatMap((turn) => turn.updates.flatMap((update) => (Array.isArray(update.content) ? update.content : []))).filter((content) => content.type === 'diff') as Array<{ oldText: string; _meta: { diffra: { edit: { base?: string } } } }>
+    // 每轮的更新单独存在 sessions/<会话 id>/<轮次>.json 里（第 437 步），这个任务只有一轮
+    const sessionDir = join(sessionsDir, readdirSync(sessionsDir, { withFileTypes: true }).find((entry) => entry.isDirectory())!.name)
+    const updates = readdirSync(sessionDir).filter((name) => name.endsWith('.json')).flatMap((name) => JSON.parse(readFileSync(join(sessionDir, name), 'utf8')) as Array<{ content?: unknown }>)
+    const diffs = updates.flatMap((update) => (Array.isArray(update.content) ? update.content : [])).filter((content) => content.type === 'diff') as Array<{ oldText: string; _meta: { diffra: { edit: { base?: string } } } }>
     expect(diffs.map((diff) => diff._meta.diffra.edit.base !== undefined)).toEqual([true, false])
     expect(diffs.map((diff) => diff.oldText.split('\n').length)).toEqual([7, 7])
 

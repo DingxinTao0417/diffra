@@ -50,6 +50,18 @@ export function maxTokensFromError(error: unknown, requested: number): number | 
   return usable.length > 0 ? Math.max(...usable) : undefined
 }
 
+// 服务暂时出错、连不上、连接中途断开：原样再发一次可能就好了（限流、5xx、网络）。鉴权、地址、参数不对重发也没用
+export function retryableModelError(error: unknown): boolean {
+  const kind = toModelError(error, '', 0).kind
+  return kind === 'rate-limit' || kind === 'server' || kind === 'network'
+}
+
+// 限流或服务过载（429、503、529）：自动重试用完了还是这样，配了备用模型就换它接着做
+export function overloadedModelError(error: unknown): boolean {
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  return APICallError.isInstance(cause) && [429, 503, 529].includes(cause.statusCode ?? 0)
+}
+
 export function toModelError(error: unknown, apiKey: string, timeoutMs: number): ModelError {
   const cause = RetryError.isInstance(error) ? error.lastError : error
 

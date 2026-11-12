@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto'
+import type { AgentType } from '../subagents.js'
+import { join } from 'node:path'
 import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import { createLanguageModel } from '../models/operations.js'
+import { canRememberCommand } from '../permissions.js'
 import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
 import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
+import { INTERACT_TOOL_CHARS, INTERACT_TOOLS } from './interact.js'
 import { WAIT_COMMAND_TOOL, WAIT_TOOL_CHARS, waitCommandTool } from './wait.js'
 import { TASK_TOOL_CHARS, TASK_TOOLS } from './tasks.js'
 import { browserTools } from './browser.js'
@@ -66,8 +70,12 @@ export interface SessionOptions {
   fallbackModel?: LanguageModel
   // 从存储恢复时传入
   record?: SessionRecord
+  // 会话存储的目录：命令输出太长时，完整输出存在它下面的 <会话 id>/outputs 里。没有存储时不存
+  outputRoot?: string | null
   // 架构功能的数据：项目有目标架构时，完成前检查这一轮新增的依赖
   architecture?: ArchitectureService | null
+  // 项目里自定义的子智能体类型（.diffra/agents）
+  agentTypes?: AgentType[]
 }
 
 export class Session {
@@ -90,6 +98,9 @@ export class Session {
   readonly checkpoints: Checkpoints | null
   readonly rulePacks: RulePack[]
   readonly readRoots: string[]
+  // 被截短的命令输出的完整版存在这里（见 tools/command.ts），也在 readRoots 里
+  readonly outputDir: string | null
+  readonly agentTypes: AgentType[]
   readonly mcpServers: McpServer[]
   readonly mcpPool: McpPool | null
   readonly architecture: ArchitectureService | null
@@ -108,7 +119,7 @@ export class Session {
   readonly messages: ModelMessage[] = []
   readonly readHashes = new Map<string, string>()
   // 「本会话内允许同类命令」记下的命令键，见 permissions.commandKey
-  readonly alwaysAllowed = new Set<string>()
+  readonly alwaysAllowed: Set<string>
   // turnId → 这一轮开始前的快照
   readonly turnCheckpoints = new Map<string, string>()
   // turnId → 这一轮里 Git 命令挪了 HEAD（拉取、切分支）之后的基线：开始前的快照，Git 带进来的文件换成带进来时的内容。没挪过的轮次没有
@@ -148,6 +159,7 @@ export class Session {
     this.designTask = record?.design ?? options.config.design ?? false
     this.designStyle = record ? (record.designStyle ?? null) : (options.config.designStyle ?? null)
     this.noProject = record?.noProject ?? options.config.noProject ?? false
+    this.alwaysAllowed = new Set((options.config.allowedCommands ?? []).filter(canRememberCommand))
     if (record) {
       this.taskState = restoredTaskState(record)
       this.messages.push(...record.messages)
@@ -165,7 +177,9 @@ export class Session {
     this.environment = options.environment
     this.checkpoints = options.checkpoints
     this.rulePacks = options.rulePacks
-    this.readRoots = options.readRoots ?? []
+    this.outputDir = options.outputRoot ? join(options.outputRoot, this.id, 'outputs') : null
+    this.agentTypes = options.agentTypes ?? []
+    this.readRoots = [...(options.readRoots ?? []), ...(this.outputDir ? [this.outputDir] : [])]
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null
     this.systemPrompt = options.systemPrompt
@@ -287,11 +301,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design)), [SHOW_VISUAL_TOOL]: showVisualTool, [WAIT_COMMAND_TOOL]: waitCommandTool, ...TASK_TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, [WAIT_COMMAND_TOOL]: waitCommandTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + VISUAL_TOOL_CHARS + WAIT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design)) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + VISUAL_TOOL_CHARS + WAIT_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数

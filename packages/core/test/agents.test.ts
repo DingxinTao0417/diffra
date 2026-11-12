@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionUpdate } from '@agentclientprotocol/sdk'
@@ -11,6 +11,7 @@ import { DELEGATE_TOOL, MAX_WORKERS_PER_TURN } from '../src/session/agents.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
+import { type AgentType, loadAgentTypes } from '../src/subagents.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
@@ -107,7 +108,7 @@ afterEach(() => {
   rmSync(checkpointDir, { recursive: true, force: true })
 })
 
-async function makeSession(model: MockLanguageModelV4) {
+async function makeSession(model: MockLanguageModelV4, agentTypes: AgentType[] = []) {
   const bashPath = await findBash()
   const rules = { packs: [], review: false }
   const checks = { afterEdit: null, beforeFinish: null }
@@ -132,6 +133,7 @@ async function makeSession(model: MockLanguageModelV4) {
     rulePacks: [],
     systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths: [], rules }, []),
     model,
+    agentTypes,
   })
 }
 
@@ -322,6 +324,39 @@ describe('子智能体', () => {
     expect(maxPending).toBe(1)
     expect(readFileSync(join(project, 'a2.txt'), 'utf8').trim()).toBe('a')
     expect(readFileSync(join(project, 'b2.txt'), 'utf8').trim()).toBe('b')
+  })
+
+  test('自定义的工人类型：说明接进工人的提示词，只读类型没有改文件和跑命令的工具，主智能体的工具说明里列出类型；不认识的类型不派', async () => {
+    mkdirSync(join(project, '.diffra', 'agents'), { recursive: true })
+    writeFileSync(join(project, '.diffra', 'agents', 'explorer.md'), ['---', 'name: explorer', 'description: 只读地查代码', 'mode: read-only', '---', '只查不改，报告里写清文件和行号。', ''].join('\n'))
+    // 没有说明的不算
+    writeFileSync(join(project, '.diffra', 'agents', 'empty.md'), ['---', 'name: empty', '---', '没写 description', ''].join('\n'))
+    const types = (await loadAgentTypes(project)).filter((type) => type.name === 'explorer' || type.name === 'empty')
+    expect(types).toEqual([{ name: 'explorer', description: '只读地查代码', readOnly: true, instructions: '只查不改，报告里写清文件和行号。' }])
+
+    const { model } = routedModel({ 'WORKER-X': [{ toolCalls: [{ name: 'report', input: { summary: '查完了' } }] }] }, [
+      {
+        toolCalls: [
+          { name: DELEGATE_TOOL, input: { name: '查', task: 'WORKER-X：查一下 a.txt', agent: 'explorer' } },
+          { name: DELEGATE_TOOL, input: { name: '错', task: 'WORKER-Y：不会派出去', agent: 'nope' } },
+        ],
+      },
+      { text: '查完了' },
+    ])
+    const session = await makeSession(model, types)
+    expect(await runTurn(session, { id: 't1', text: '查一下' }, recordingIO())).toBe('end_turn')
+
+    const toolNames = (call: (typeof model.doStreamCalls)[number]) => (call.tools ?? []).map((item) => item.name)
+    const worker = model.doStreamCalls.find((call) => JSON.stringify(call.prompt).includes('WORKER-X'))!
+    expect(JSON.stringify(worker.prompt)).toContain('只查不改，报告里写清文件和行号。')
+    expect(JSON.stringify(worker.prompt)).toContain('You are read-only')
+    expect(toolNames(worker)).toEqual(expect.arrayContaining(['read_file', 'search', 'report']))
+    expect(toolNames(worker)).not.toEqual(expect.arrayContaining(['edit_file']))
+    expect(toolNames(worker)).not.toEqual(expect.arrayContaining(['run_command']))
+    const delegate = (model.doStreamCalls[0]?.tools ?? []).find((item) => item.name === DELEGATE_TOOL)
+    expect(JSON.stringify(delegate)).toContain('explorer (read-only) — 只读地查代码')
+    expect(toolResults(session)).toContain('Unknown worker type')
+    expect(model.doStreamCalls.some((call) => JSON.stringify(call.prompt).includes('WORKER-Y：不会派出去') && !JSON.stringify(call.prompt).includes('WORKER-X'))).toBe(false)
   })
 
   test('停止时工人一起停；每轮最多派 8 个', async () => {

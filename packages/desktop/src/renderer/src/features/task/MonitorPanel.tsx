@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AgentTag } from '@diffra/core/types'
+import { type AgentTag, parseSteps, STEPS_CARD_TITLE } from '@diffra/core/types'
 import { Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
@@ -15,6 +15,7 @@ import { openSettings, runDeepScan } from '@/state/actions'
 import { type LiveTask, store, useAppState } from '@/state/store'
 import { splitTitle } from './Conversation'
 import { SidePanel } from './SidePanel'
+import { StepMark } from './StepMark'
 import type { TaskDiff } from './useTaskDiff'
 
 const COLLAPSED_CHANGED_FILE_LIMIT = 10
@@ -74,6 +75,9 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
       }
     }
   }
+  // 智能体这一轮列的步骤清单（最新的一份）；这一轮没列就不显示
+  const stepsCard = verdictTurn?.items.findLast((item) => item.kind === 'tool' && item.title === STEPS_CARD_TITLE)
+  const steps = stepsCard?.kind === 'tool' ? parseSteps(stepsCard.content.flatMap((content) => (content.type === 'content' && content.content.type === 'text' ? [content.content.text] : [])).join('\n')) : []
   // 有完成条件时下面的完成条件区已经写了这句原因，不重复
   const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
   const checks = task.info.checks ?? project?.checks
@@ -136,6 +140,19 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
               </div>
             )}
             {hiddenFailed > 0 && <p className="text-muted-foreground">还有 {hiddenFailed} 条命令失败</p>}
+          </Section>
+        )}
+
+        {steps.length > 0 && (
+          <Section title={`步骤 · ${steps.filter((step) => step.status === 'completed').length}/${steps.length}`}>
+            <ul className="flex flex-col gap-0.5" data-testid="monitor-steps">
+              {steps.map((step, index) => (
+                <li key={index} className="flex items-start gap-2 leading-relaxed">
+                  <StepMark status={step.status} />
+                  <span className={cn('min-w-0 break-words', step.status === 'completed' ? 'text-muted-foreground' : 'text-foreground/90', step.status === 'in_progress' && 'font-bold')}>{step.content}</span>
+                </li>
+              ))}
+            </ul>
           </Section>
         )}
 

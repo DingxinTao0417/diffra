@@ -36,6 +36,8 @@ import { countLanguages, listProjectFiles } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
 import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
+import { loadAgentTypes } from './subagents.js'
+import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
 import { inspectPlugin, pluginMcpServers, pluginSkillRoots } from './plugins.js'
 import {
   checkSwitchesSchema,
@@ -260,8 +262,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       environment,
       checkpoints,
       rulePacks,
-      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { skills, frontend }),
+      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)) }),
       readRoots: roots.map((root) => root.dir),
+      outputRoot: options.sessionsDir ?? null,
+      agentTypes: await loadAgentTypes(cwd),
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
       record,
@@ -392,6 +396,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     } finally {
       session.endTurn(stopReason)
       await persist(session, notify)
+    }
+    // 自动记忆：一轮正常结束后在后台挑出以后用得上的事记下来，不挡下一轮；出错只记日志
+    const finished = session.turns.at(-1)
+    if (session.config.memoryDir && finished && stopReason === 'end_turn' && (kind === 'prompt' || kind === 'goal')) {
+      void rememberTurn(session, finished, async (call) => {
+        if (usageLog) await usageLog.append(toUsageRecord(call, session, new Date()))
+      }).catch((error: unknown) => console.error(`[memory] 会话 ${session.id} 的自动记忆失败`, error))
     }
     return stopReason
   }

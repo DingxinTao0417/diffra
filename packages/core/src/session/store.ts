@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { access, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
@@ -26,7 +27,10 @@ export interface Compaction {
   summary: string
 }
 
-// 一个会话一个文件，每轮开始和结束时整体重写。不存模型接入点和密钥，加载时用当时的设置
+// 一个会话的完整记录（内存里的样子）。磁盘上拆成两部分（第 437 步）：<id>.json 是会话头，存元数据、对话和每轮的元数据（version 2，
+// 轮次里没有 updates）；每轮的界面更新存在 <id>/<轮次>.json。保存时只重写有变化的轮次（一般只有正在跑的这一轮）和会话头。
+// 以前（version 1）所有更新都在一个文件里，长会话一次保存要序列化几十 MB；第一次保存时转成新格式，原文件留成 <id>.json.v1-backup。
+// 不存模型接入点和密钥，加载时用当时的设置
 export interface SessionRecord {
   taskState?: TaskState
   version: 1
@@ -120,15 +124,43 @@ const recordSchema = z.object({
 
 const sameDir = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
 
+// 写进某一轮文件时的样子：条数和最后一条（对象本身）。界面更新只会追加、合并最后一条或替换用量那条，两样都没变就是没改过
+interface WrittenTurn {
+  length: number
+  last: unknown
+}
+
 export class SessionStore {
   // 写文件和改索引排成一队，避免两次保存交错
   private tail: Promise<unknown> = Promise.resolve()
+  // 会话 id → 轮次 id → 这一轮文件上次写进去的样子。没有记录的会话（这个进程里第一次保存、或从旧格式读出来的）整份写
+  private readonly written = new Map<string, Map<string, WrittenTurn>>()
 
   constructor(private readonly dir: string) {}
 
   save(record: SessionRecord): Promise<void> {
     return this.enqueue(async () => {
-      await this.writeAtomic(this.fileOf(record.id), record)
+      const known = this.written.get(record.id)
+      if (!known) await this.backupV1(record.id)
+      const turns = known ?? new Map<string, WrittenTurn>()
+      const turnDir = this.turnDirOf(record.id)
+      await mkdir(turnDir, { recursive: true })
+      for (const turn of record.turns) {
+        const before = turns.get(turn.id)
+        const last = turn.updates.at(-1)
+        if (before && before.length === turn.updates.length && before.last === last) continue
+        await this.writeAtomic(join(turnDir, turnFileName(turn.id)), turn.updates)
+        turns.set(turn.id, { length: turn.updates.length, last })
+      }
+      // 重新生成撤掉的轮次
+      const live = new Set(record.turns.map((turn) => turn.id))
+      for (const id of [...turns.keys()]) {
+        if (live.has(id)) continue
+        await rm(join(turnDir, turnFileName(id)), { force: true })
+        turns.delete(id)
+      }
+      this.written.set(record.id, turns)
+      await this.writeAtomic(this.fileOf(record.id), { ...record, version: 2, turns: record.turns.map(({ updates: _updates, ...turn }) => turn) })
       const index = await this.readIndex()
       const entry = toEntry(record)
       await this.writeIndex([entry, ...index.filter((item) => item.id !== record.id)])
@@ -140,9 +172,16 @@ export class SessionStore {
       if (isMissing(error)) throw new Error(`没有找到会话记录 ${id}`)
       throw error
     })
-    const parsed = recordSchema.safeParse(JSON.parse(text))
+    const raw = JSON.parse(text) as { version?: unknown; turns?: unknown }
+    const split = raw.version === 2 && Array.isArray(raw.turns)
+    // 新格式：把每轮的更新从轮次文件里读回来，拼成和旧格式一样的完整记录再校验
+    const turns = split ? await Promise.all((raw.turns as Array<Record<string, unknown>>).map(async (turn) => ({ ...turn, updates: await this.readTurn(id, turn.id) }))) : raw.turns
+    const parsed = recordSchema.safeParse(split ? { ...raw, version: 1, turns } : raw)
     if (!parsed.success) throw new Error(`会话记录 ${id} 已损坏，无法打开`)
-    return parsed.data as SessionRecord
+    const record = parsed.data as SessionRecord
+    // 读出来的就是磁盘上的样子；这个进程里已经在写的会话不覆盖，它记的是内存里那份对象
+    if (split && !this.written.has(id)) this.written.set(id, new Map(record.turns.map((turn) => [turn.id, { length: turn.updates.length, last: turn.updates.at(-1) }])))
+    return record
   }
 
   async list(cwd?: string): Promise<SessionIndexEntry[]> {
@@ -166,6 +205,9 @@ export class SessionStore {
   remove(id: string): Promise<void> {
     return this.enqueue(async () => {
       await rm(this.fileOf(id), { force: true })
+      await rm(this.turnDirOf(id), { recursive: true, force: true })
+      await rm(`${this.fileOf(id)}${V1_BACKUP_SUFFIX}`, { force: true })
+      this.written.delete(id)
       const index = await this.readIndex()
       await this.writeIndex(index.filter((entry) => entry.id !== id))
     })
@@ -195,6 +237,32 @@ export class SessionStore {
   private fileOf(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`无效的会话 id：${id}`)
     return join(this.dir, `${id}.json`)
+  }
+
+  private turnDirOf(id: string): string {
+    if (!SESSION_ID.test(id)) throw new Error(`无效的会话 id：${id}`)
+    return join(this.dir, id)
+  }
+
+  // 某一轮的更新；文件没了或坏了只丢这一轮的显示，会话照样能打开
+  private async readTurn(id: string, turnId: unknown): Promise<unknown[]> {
+    if (typeof turnId !== 'string') return []
+    try {
+      const updates: unknown = JSON.parse(await readFile(join(this.turnDirOf(id), turnFileName(turnId)), 'utf8'))
+      if (Array.isArray(updates)) return updates
+      console.error(`[sessions] 会话 ${id} 第 ${turnId} 轮的记录格式不对，这一轮不显示`)
+    } catch (error) {
+      console.error(`[sessions] 会话 ${id} 第 ${turnId} 轮的记录读不了，这一轮不显示`, error)
+    }
+    return []
+  }
+
+  // 旧格式（所有更新在一个文件里）第一次转成新格式前，原文件复制一份留着；已经有备份或不是旧格式就不动
+  private async backupV1(id: string): Promise<void> {
+    const file = this.fileOf(id)
+    const backup = `${file}${V1_BACKUP_SUFFIX}`
+    if (await exists(this.turnDirOf(id)) || !(await exists(file)) || await exists(backup)) return
+    await copyFile(file, backup)
   }
 
   // 索引丢了或坏了就扫一遍会话文件重建，会话文件才是权威数据
@@ -280,4 +348,18 @@ function findSnippet(record: SessionRecord, needle: string): string | null {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+const V1_BACKUP_SUFFIX = '.v1-backup'
+
+// 轮次 id 由客户端给，平常是 UUID；拼文件名前和会话 id 一样只放行安全字符，别的换成哈希
+function turnFileName(turnId: string): string {
+  return `${SESSION_ID.test(turnId) ? turnId : createHash('sha256').update(turnId).digest('hex').slice(0, 32)}.json`
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  )
 }

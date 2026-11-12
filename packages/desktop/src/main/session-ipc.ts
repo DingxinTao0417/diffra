@@ -34,7 +34,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -48,7 +48,7 @@ import {
   type SessionHandle,
   type TaskFolderState,
 } from '../shared/ipc'
-import { modelDisplayName, type ModelRef } from '../shared/settings'
+import { modelDisplayName, type ModelRef, NO_HOOKS } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { currentBranch, listBranches, switchBranch } from './project-branch'
@@ -106,7 +106,16 @@ const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 
 interface PendingPermission {
   sessionId: string
+  // 命令确认带的：选「这个项目里始终允许」时要记进项目设置的命令键
+  projectCommands?: ProjectCommandsMeta
   resolve(optionId: string | null): void
+}
+
+function projectCommandsOf(meta: unknown): ProjectCommandsMeta | undefined {
+  const diffra = typeof meta === 'object' && meta !== null && 'diffra' in meta ? meta.diffra : null
+  const value = typeof diffra === 'object' && diffra !== null ? (diffra as Record<string, unknown>)[PROJECT_COMMANDS_META_KEY] : null
+  const parsed = z.object({ cwd: z.string().min(1), keys: z.array(z.string().min(1).max(200)).min(1).max(20) }).safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 const pendingPermissions = new Map<string, PendingPermission>()
@@ -141,6 +150,7 @@ export const coreClientHandlers: CoreClientHandlers = {
       const requestId = randomUUID()
       pendingPermissions.set(requestId, {
         sessionId: request.sessionId,
+        projectCommands: projectCommandsOf(request.toolCall._meta),
         resolve: (optionId) =>
           resolve({ outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } }),
       })
@@ -191,12 +201,14 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       path,
       checks: project?.checks ?? NO_CHECKS,
       readOnlyPaths: project?.readOnlyPaths ?? [],
+      allowedCommands: project?.allowedCommands ?? [],
+      hooks: project?.hooks ?? NO_HOOKS,
     }
   }
 
   const saveProjectState = async (path: string, change: (current: ProjectState) => ProjectState) => {
-    const { checks, readOnlyPaths } = change(projectState(path))
-    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths } } }))
+    const { checks, readOnlyPaths, allowedCommands, hooks } = change(projectState(path))
+    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths, allowedCommands, hooks } } }))
     return projectState(path)
   }
 
@@ -265,7 +277,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
-    const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }), rawSettings)
+    // 始终允许的命令不传就保持原样（旧界面、脚本只传检查和禁写目录）
+    const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }).extend({ allowedCommands: projectSettingsSchema.shape.allowedCommands.optional(), hooks: projectSettingsSchema.shape.hooks.optional() }), rawSettings)
     return saveProjectState(path, (current) => ({ ...current, ...input }))
   })
 
@@ -290,6 +303,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         fallbackModel: fallback?.model ?? null,
         checks: project.checks,
         readOnlyPaths: project.readOnlyPaths,
+        allowedCommands: project.allowedCommands,
+        hooks: project.hooks,
         rules: { ...SESSION_RULES, review: settings.get().security.review },
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
         security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan, deepScan: settings.get().security.deepScan },
@@ -303,6 +318,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         design: options.design ?? false,
         designStyle: options.design ? (options.designStyle ?? null) : null,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
+        // 自动记忆开着时每个项目一个记忆目录；无项目任务的文件夹不是用户的项目，下面建会话时会去掉
+        memoryDir: settings.get().execution.autoMemory ? join(userDataDir, 'memory', projectKey(path)) : null,
       },
       modelLabel: coder.label,
       planLabel: planner?.label ?? null,
@@ -327,6 +344,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       checks: project.checks,
       readOnlyPaths: project.readOnlyPaths,
       checkpointDir: join(userDataDir, 'checkpoints', projectKey(cwd)),
+      memoryDir: null,
       noProject: true,
     }
     try {
@@ -422,13 +440,18 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return folder.shared ? 'shared' : folderState(folder.cwd)
   })
 
-  // 会话记录占用的磁盘空间
+  // 会话记录占用的磁盘空间：会话头在 sessions 下，每轮的记录在 sessions/<会话 id>/ 里（第 437 步）
   ipcMain.handle(IPC_CHANNELS.sessionsStorage, async () => {
     const dir = join(userDataDir, 'sessions')
-    const names = await readdir(dir).catch(() => [] as string[])
-    let bytes = 0
-    for (const name of names) bytes += (await stat(join(dir, name)).catch(() => null))?.size ?? 0
-    return { bytes, dir }
+    const sizeOf = async (path: string): Promise<number> => {
+      const info = await stat(path).catch(() => null)
+      if (!info) return 0
+      if (!info.isDirectory()) return info.size
+      let total = 0
+      for (const name of await readdir(path).catch(() => [] as string[])) total += await sizeOf(join(path, name))
+      return total
+    }
+    return { bytes: await sizeOf(dir), dir }
   })
 
   // 时间范围和时区由界面给，core 校验
@@ -666,8 +689,18 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     )
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionPermissionRespond, (_event, rawRequestId: unknown, rawOptionId: unknown) => {
-    settlePermission(parse(z.string().min(1), rawRequestId), parse(z.string().min(1).nullable(), rawOptionId))
+  ipcMain.handle(IPC_CHANNELS.sessionPermissionRespond, async (_event, rawRequestId: unknown, rawOptionId: unknown) => {
+    const requestId = parse(z.string().min(1), rawRequestId)
+    const optionId = parse(z.string().min(1).nullable(), rawOptionId)
+    // 「这个项目里始终允许同类命令」（第 445 步）：把这条命令的命令键记进项目设置，以后这个项目的任务不再问。
+    // 只有本机界面能选这一项；存不上只记日志，这一次照样放行
+    const remembered = optionId === PERMISSION_OPTIONS.allowProject ? pendingPermissions.get(requestId)?.projectCommands : undefined
+    if (remembered) {
+      await saveProjectState(remembered.cwd, (current) => ({ ...current, allowedCommands: [...new Set([...current.allowedCommands, ...remembered.keys])] })).catch((error: unknown) =>
+        console.error('[sessions] 保存项目里始终允许的命令失败', error),
+      )
+    }
+    settlePermission(requestId, optionId)
   })
 
   ipcMain.handle(IPC_CHANNELS.checkpointPreview, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>

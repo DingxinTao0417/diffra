@@ -52,6 +52,8 @@ const SYSTEM_DANGEROUS =
 
 // 删文件的命令不记「同类命令始终允许」：批准一次 rm 文件不该等于允许 rm -rf 目录
 const NEVER_REMEMBER = new Set(['rm', 'rmdir'])
+// 项目设置里手填的「始终允许的命令」也过这一道，填了 rm 不生效
+export const canRememberCommand = (key: string): boolean => !NEVER_REMEMBER.has(key.split(' ')[0] ?? '')
 
 // 把命令拆成若干段（&& || ; |），每段都是只读或在白名单里才自动放行
 export function classifyCommand(command: string, policy: CommandPolicy): CommandDecision {
@@ -128,7 +130,7 @@ export function commandKey(argv: string[]): string {
 export function commandKeys(command: string): string[] {
   const segments = splitSegments(command.trim())
   if (segments === null) return []
-  return segments.filter((argv) => !isReadOnly(argv)).map(commandKey).filter((key) => !NEVER_REMEMBER.has(key.split(' ')[0] ?? ''))
+  return segments.filter((argv) => !isReadOnly(argv)).map(commandKey).filter(canRememberCommand)
 }
 
 // 命令里每段 git 的子命令，跳过 -C 路径、-c 键=值和其他全局参数；用来认出提交和推送

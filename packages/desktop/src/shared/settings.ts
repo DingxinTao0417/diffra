@@ -48,10 +48,23 @@ export interface ProviderConfig {
   models: ModelConfig[]
 }
 
+// 项目钩子：在固定时机替用户跑的命令，null 是没配。含义见 core 的 SessionHooks
+export interface ProjectHooks {
+  afterEdit: string | null
+  beforeCommand: string | null
+  turnEnd: string | null
+}
+
+export const NO_HOOKS: ProjectHooks = { afterEdit: null, beforeCommand: null, turnEnd: null }
+
 export interface ProjectSettings {
   checks: SessionChecks
   // 禁写目录，相对项目根目录、/ 分隔
   readOnlyPaths: string[]
+  // 用户在这个项目里选过「始终允许同类命令」的命令键；旧设置没有
+  allowedCommands?: string[]
+  // 项目钩子；旧设置没有
+  hooks?: ProjectHooks
 }
 
 export const THEME_MODES = ['light', 'dark', 'system'] as const
@@ -120,9 +133,11 @@ export interface ExecutionSettings {
   maxSteps: (typeof MAX_STEP_OPTIONS)[number] | null
   // 目标模式最多自动跑几轮；每轮各有一份步数上限
   goalMaxRounds: (typeof GOAL_ROUND_OPTIONS)[number]
+  // 自动记忆：每轮结束后把以后用得上的事记进这个项目的记忆文件，新任务带上。每轮多一次模型调用，默认关
+  autoMemory: boolean
 }
 
-export const DEFAULT_EXECUTION: ExecutionSettings = { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 }
+export const DEFAULT_EXECUTION: ExecutionSettings = { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5, autoMemory: false }
 
 export const MCP_TRANSPORTS = ['stdio', 'http'] as const
 

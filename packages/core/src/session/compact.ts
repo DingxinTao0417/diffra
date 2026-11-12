@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
@@ -6,6 +7,8 @@ import { DEFAULT_CONTEXT_WINDOW, type ActiveModel, type TurnIO } from './loop.js
 import type { StopReason, UsageCache } from '../protocol.js'
 import { SCREENSHOT_MARKER } from './browser.js'
 import { IMAGE_CHARS, messagesChars, type Session } from './session.js'
+import { isProtectedFile } from '../tools/protected.js'
+import { resolveInWorkspace } from '../tools/workspace.js'
 
 // 最近这么多步（模型的回复和它调用工具的结果）原样保留，压缩只动更早的部分
 export const KEEP_RECENT_STEPS = 4
@@ -150,7 +153,7 @@ export async function compactIfNeeded(
   }
   try {
     const summary = await summarize(session, options.model, cut, signal, io)
-    session.compaction = { upTo: cut, summary: summaryMessage(session, options.requestIndex, cut, summary) }
+    session.compaction = { upTo: cut, summary: summaryMessage(session, options.requestIndex, cut, summary, await recentFiles(session, cut, window)) }
     // 压缩拖了一会儿才结束，界面上的上下文百分比这时就更新，不用等下一次模型调用
     await emitCompactedUsage(session, io, charsBefore, estimate, cacheUsageOf(session, latestUsage(session)))
     await finishCard('completed', `上下文用到约 ${percent}%。较早的对话压缩成了下面的摘要，最近 ${KEEP_RECENT_STEPS} 步保留原文。\n\n${summary}`)
@@ -211,7 +214,7 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
       return 'end_turn'
     }
     if (signal.aborted) { await finishCard('failed', '已停止，原上下文保持不变。'); return 'cancelled' }
-    const content = summaryMessage(session, latestRequest, cut, summary)
+    const content = summaryMessage(session, latestRequest, cut, summary, await recentFiles(session, cut, session.config.model.contextWindow ?? DEFAULT_CONTEXT_WINDOW))
     const after = messagesChars([{ role: 'user', content }, ...session.messages.slice(cut)])
     if (after >= before) {
       await finishCard('completed', '摘要未减少上下文长度，已保留原上下文。')
@@ -315,14 +318,58 @@ async function summarize(session: Session, model: ActiveModel, cut: number, sign
   return text.trim()
 }
 
+// 压缩掉的那段对话里最近读过、改过的文件，按现在磁盘上的内容附在摘要后面（第 444 步，参照 qwen-code）：
+// 不然模型接着干活的第一件事往往是把这几个文件再读一遍。只附项目里的、不是受保护的、不太大的文件；
+// 保留下来的最近几步里出现过的不附（原文还在）。总量不超过上下文窗口的一小部分
+const RECENT_FILES = 5
+const RECENT_FILE_MAX_CHARS = 8000
+const RECENT_FILES_WINDOW_SHARE = 0.06
+// 估算用：一个 token 大约 3 个字符
+const CHARS_PER_TOKEN = 3
+
+function touchedPaths(messages: ModelMessage[]): string[] {
+  const paths: string[] = []
+  for (const message of messages) {
+    if (message.role !== 'assistant' || typeof message.content === 'string') continue
+    for (const part of message.content) {
+      if (part.type !== 'tool-call' || (part.toolName !== 'read_file' && part.toolName !== 'edit_file')) continue
+      const path = typeof part.input === 'object' && part.input !== null && 'path' in part.input ? part.input.path : null
+      if (typeof path === 'string') paths.push(path)
+    }
+  }
+  return paths
+}
+
+async function recentFiles(session: Session, cut: number, window: number): Promise<string> {
+  const kept = new Set(touchedPaths(session.messages.slice(cut)))
+  const candidates = [...new Set(touchedPaths(session.messages.slice(session.compaction?.upTo ?? 0, cut)).reverse())].filter((path) => !kept.has(path))
+  let budget = Math.min(RECENT_FILES * RECENT_FILE_MAX_CHARS, window * RECENT_FILES_WINDOW_SHARE * CHARS_PER_TOKEN)
+  const blocks: string[] = []
+  for (const path of candidates) {
+    if (blocks.length >= RECENT_FILES) break
+    try {
+      const target = await resolveInWorkspace(session.cwd, path)
+      if (isProtectedFile(target.absolute)) continue
+      const content = await readFile(target.absolute, 'utf8')
+      if (content.length > RECENT_FILE_MAX_CHARS || content.length > budget) continue
+      budget -= content.length
+      blocks.push(`=== ${target.display}\n${content}`)
+    } catch {
+      // 文件删了、挪了、在项目外：不附，模型需要时自己再读
+    }
+  }
+  return blocks.join('\n\n')
+}
+
 // 摘要消息里原样带上这一轮的提问，不依赖模型把用户的原话转述对
-function summaryMessage(session: Session, requestIndex: number, cut: number, summary: string): string {
+function summaryMessage(session: Session, requestIndex: number, cut: number, summary: string, files = ''): string {
   const request = requestIndex < cut ? session.messages[requestIndex] : undefined
   const requestText = request?.role === 'user' && typeof request.content === 'string' ? request.content : null
   return [
     '[Diffra] Earlier parts of this conversation were compacted to save context. Summary of what happened before:',
     summary,
     ...(requestText ? ['', "The user's request for the task in progress when this summary was written, verbatim:", requestText] : []),
+    ...(files ? ['', 'Files you read or edited most recently before the summary, as they are on disk now (read any other file again before relying on it):', files] : []),
     '',
     'Continue from the current state without acknowledging or recapping this summary. Read again the SKILL.md of any skill it says you were following before you rely on it.',
   ].join('\n')

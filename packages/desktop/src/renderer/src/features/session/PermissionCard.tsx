@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
-import { ShieldAlert } from 'lucide-react'
-import { DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
+import { CircleHelp, ShieldAlert } from 'lucide-react'
+import { ASK_USER_SCOPE, type AskUserInput, DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { agentOfMeta } from './transcript'
@@ -16,6 +16,7 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   const command = commandOf(request.toolCall.rawInput)
   const external = isExternalAccess(request.toolCall.rawInput)
   const deepScanAsk = scopeOf(request.toolCall.rawInput) === DEEP_SCAN_ASK_SCOPE
+  const question = questionOf(request.toolCall.rawInput)
   // 子智能体发起的请求写明是哪一个
   const agent = agentOfMeta(request.toolCall._meta)
   const allowOnce = request.options.find((option) => option.kind === 'allow_once')
@@ -51,8 +52,8 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       onKeyDown={onKeyDown}
     >
       <div className="flex items-center gap-2 font-bold">
-        <ShieldAlert className="size-4 text-warning" />
-        {deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
+        {question ? <CircleHelp className="size-4 text-warning" /> : <ShieldAlert className="size-4 text-warning" />}
+        {question ? '智能体想先问你一下' : deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
         {agent && (
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground" data-testid="permission-agent">
             <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: agent.color }} aria-hidden="true" />
@@ -60,10 +61,27 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
           </span>
         )}
       </div>
-      <pre className="overflow-auto rounded-md border bg-background/60 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-words">
-        {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
-        {command ?? request.toolCall.title}
-      </pre>
+      {question ? (
+        // 智能体中途的提问（ask_user）：问题和每个选项的说明，按钮就是选项
+        <div className="space-y-2" data-testid="ask-user">
+          <p className="break-words whitespace-pre-wrap">{question.question}</p>
+          {question.options.some((option) => option.description) && (
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {question.options.map((option) => (
+                <li key={option.label} className="break-words">
+                  <span className="font-bold text-foreground/90">{option.label}</span>
+                  {option.description ? `：${option.description}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <pre className="overflow-auto rounded-md border bg-background/60 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-words">
+          {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
+          {command ?? request.toolCall.title}
+        </pre>
+      )}
       {external && (
         <p className="truncate text-xs text-muted-foreground" title={EXTERNAL_ACCESS_NOTE}>
           仅限上方路径和这类操作；项目外的修改无法用检查点撤销
@@ -111,6 +129,13 @@ function isEditable(element: Element | null): boolean {
 
 function isExternalAccess(rawInput: unknown): boolean {
   return scopeOf(rawInput) === EXTERNAL_ACCESS_SCOPE
+}
+
+// ask_user 的问题和选项；core 已经按格式校验过，这里只确认是这类请求
+function questionOf(rawInput: unknown): AskUserInput | null {
+  if (scopeOf(rawInput) !== ASK_USER_SCOPE) return null
+  const input = rawInput as Partial<AskUserInput>
+  return typeof input.question === 'string' && Array.isArray(input.options) ? { question: input.question, options: input.options } : null
 }
 
 function scopeOf(rawInput: unknown): unknown {

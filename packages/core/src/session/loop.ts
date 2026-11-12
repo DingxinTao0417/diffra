@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
-import { type LanguageModel, type ModelMessage, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
-import { rejectsToolChoice, toModelError } from '../models/errors.js'
+import { type LanguageModel, type ModelMessage, RetryError, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
+import { overloadedModelError, rejectsToolChoice, retryableModelError, toModelError } from '../models/errors.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
@@ -27,6 +28,8 @@ import {
   TERMINAL_DEFAULT_LINES,
   TERMINAL_READ_PERMISSION_PREFIX,
   PERMISSION_OPTIONS,
+  PROJECT_COMMANDS_META_KEY,
+  type ProjectCommandsMeta,
   type PromptImage,
   type SessionModel,
   type TaskProgressView,
@@ -50,7 +53,10 @@ import { designInstructions, isDesignTool, runDesignToolCall } from './design.js
 import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
 import { gitBroughtPaths, projectHead } from './git-moves.js'
+import { runHook } from './hooks.js'
+import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
+import { ASK_USER_TOOL, runAskUser, runTodoWrite, TODO_TOOL } from './interact.js'
 import { runWaitCommand, WAIT_COMMAND_TOOL } from './wait.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
@@ -102,6 +108,12 @@ const STUCK_REPEATS = 3
 // 回复被输出上限截断：只回了半截文字，或最后一个工具调用的参数被截断没执行，就提醒模型接着做、把改动拆小。
 // 连续截断超过这么多次不再提醒，按原来的流程走
 const MAX_TRUNCATION_RESUMES = 2
+// 流式回复说到一半连接断了（第 438 步）：已经说出的文字交回对话，让模型接着往下说
+export const INTERRUPTION_NOTE =
+  '[Diffra] Your previous response was cut off by a network error before it finished. Continue exactly from where it stopped, with no apology and no recap of what you already wrote.'
+// 服务暂时出错、连接中途断开时，同一步最多自动重发几次，每次多等一会儿
+const MAX_STREAM_RETRIES = 3
+const STREAM_RETRY_DELAY_MS = 2000
 export const TRUNCATION_NOTE =
   '[Diffra] Your previous response was cut off by the output token limit. Continue from where it stopped, with no apology and no recap. ' +
   'A tool call that was cut off was not executed: make that change again in smaller pieces (several edit_file calls instead of one large one; ' +
@@ -284,6 +296,8 @@ export async function runTurn(
     // 调用签名 → 自上次成功编辑以来出现的次数
     const repeats = new Map<string, number>()
     let warnedStuck = false
+    // 补充的打转检测（只提醒，不停下），见 spin.ts
+    const spin = newSpinTracker()
     // 连续被输出上限截断的次数，有一步没截断就清零
     let truncations = 0
     // 这一轮派出的子智能体和它们的文件认领
@@ -304,7 +318,16 @@ export async function runTurn(
       }
 
       const sentChars = contextChars(session)
-      const { toolCalls, inputTokens, cacheRead, cacheWrite, answered, truncated } = await streamStep(session, active, signal, io)
+      let stepResult: Awaited<ReturnType<typeof streamStep>>
+      try {
+        stepResult = await streamStep(session, active, signal, io)
+      } catch (error) {
+        // 限流或服务过载，自动重试用完了还是这样（第 438 步）：配了备用模型就换它接着这一步，没配照旧停下
+        if (!signal.aborted && overloadedModelError(error) && (await escalate('编码模型的服务一直限流或暂时不可用', 'The previous model\'s service kept rejecting requests (rate limit or overload).'))) continue
+        throw error
+      }
+      const { toolCalls, inputTokens, cacheRead, cacheWrite, answered, truncated, interrupted } = stepResult
+      noteText(spin, assistantText(stepResult.responseMessages))
       if (!truncated) truncations = 0
       const resumeTruncated = truncated && truncations < MAX_TRUNCATION_RESUMES && !signal.aborted
       if (inputTokens > 0) {
@@ -320,7 +343,7 @@ export async function runTurn(
       if (toolCalls.length === 0) {
         if (resumeTruncated) {
           truncations++
-          session.messages.push({ role: 'user', content: TRUNCATION_NOTE })
+          session.messages.push({ role: 'user', content: interrupted ? INTERRUPTION_NOTE : TRUNCATION_NOTE })
           continue
         }
         // 命令或 MCP 工具改的文件平时到 finish 才比指纹，只回文字时也比一次，改了就和 edit_file 一样拉回来走完成门禁
@@ -358,6 +381,8 @@ export async function runTurn(
       let failedFinishCheck: string | null = null
       let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
+      // 同一步里连续的只读调用一起开跑，结果照原来的顺序处理（第 443 步）；轮到这一串的第一个时才开跑，排在它前面的编辑、命令已经执行完
+      const prefetched = new Map<string, ReturnType<typeof runToolCall>>()
       for (let index = 0; index < toolCalls.length; index++) {
         const call = toolCalls[index]!
         // 参数不合法的调用，AI SDK 已经在返回消息里补了错误结果；再补一条会让同一调用出现两个结果
@@ -452,7 +477,17 @@ export async function runTurn(
           return 'end_turn'
         }
         const headBefore = call.toolName === 'run_command' && !call.invalid ? await headBeforeGit(session, call) : null
-        const outcome = await runToolCall(session, call, signal, io)
+        if (parallelSafe(call) && !prefetched.has(call.toolCallId)) {
+          for (let next = index; next < toolCalls.length && next < index + MAX_PARALLEL_READS; next++) {
+            const item = toolCalls[next]!
+            if (!parallelSafe(item) || answered.has(item.toolCallId)) break
+            const started = runToolCall(session, item, signal, io)
+            // 中途停止时后面的不会再等它，别留下没人接的拒绝
+            started.catch(() => {})
+            prefetched.set(item.toolCallId, started)
+          }
+        }
+        const outcome = await (prefetched.get(call.toolCallId) ?? runToolCall(session, call, signal, io))
         if (headBefore) turnStartFingerprint = await shiftBaselineAfterGit(session, turn.id, headBefore, turnStartFingerprint)
         results.push(outcome.result)
         screenshots.push(...(outcome.images ?? []))
@@ -462,7 +497,9 @@ export async function runTurn(
           editsCarried = false
           session.taskState.needsVerification = true
           repeats.clear()
+          noteEdit(spin)
         } else {
+          noteCall(spin, call.toolName, call.input)
           const key = callSignature(call, outcome.result)
           const count = (repeats.get(key) ?? 0) + 1
           repeats.set(key, count)
@@ -545,6 +582,8 @@ export async function runTurn(
         })
       }
 
+      for (const reminder of takeSpinReminders(spin)) session.messages.push({ role: 'user', content: reminder })
+
       // 改的过程中不跑任何检查（第 431 步）：检查命令、安全检查、规范审查都在 finish 时一起跑
       const finishExhaustion = failedFinishCheck ? checkExhaustion(finishChecks, checkFailures) : null
       if (failedFinishCheck && finishExhaustion && (await checkStuck(failedFinishCheck, finishChecks, finishExhaustion))) return 'end_turn'
@@ -581,7 +620,22 @@ export async function runTurn(
     // 设计页收起主智能体的光标
     if (session.design) await endDesignAgent(io)
     await publishTaskState(session, io, { finish: turnFinish, stop, ...(errorKind ? { errorKind } : {}) })
+    // 项目的 turnEnd 钩子（比如发个通知）：不等它，失败只记日志
+    if (session.config.hooks?.turnEnd) {
+      void runHook(session, 'turnEnd', { DIFFRA_STOP: stop ?? 'done', DIFFRA_FINISH: turnFinish ?? '' }).then((result) => {
+        if (!result.ok) console.error(`[hooks] turnEnd 钩子失败：${result.output}`)
+      })
+    }
   }
+}
+
+// 项目的 afterEdit 钩子（比如格式化刚改的文件）：告诉模型钩子有没有再改这个文件、有没有失败，接在编辑结果后面
+async function afterEditHook(session: Session, path: string, written: string, signal: AbortSignal): Promise<string> {
+  const hook = await runHook(session, 'afterEdit', { DIFFRA_FILE: path }, signal)
+  if (!hook.ok) return `\n[The project's after-edit hook failed: ${hook.output || 'no output'}]`
+  const now = await readFile(path, 'utf8').catch(() => null)
+  // 钩子改了文件：模型手里的内容过期了，下次编辑前得重读（read-before-edit 的哈希对不上，也会要求它重读）
+  return now !== null && now !== written ? '\n[The project\'s after-edit hook changed this file (for example a formatter). Read it again before editing it further.]' : ''
 }
 
 // 每轮开始时取一次 MCP 工具，这一轮里不变；连不上的服务器提示一下，照常开始
@@ -640,6 +694,23 @@ async function streamStep(session: Session, active: ActiveModel, signal: AbortSi
   return step
 }
 
+// 能和相邻的只读调用同时跑的调用：读文件、列文件、搜索、大纲，而且路径在项目里（相对路径、不带 ..）。
+// 项目外的路径可能要弹确认，一次只能问一个，照旧一个一个来
+const PARALLEL_READ_TOOLS = new Set(['read_file', 'list_files', 'search', 'outline'])
+const MAX_PARALLEL_READS = 8
+function parallelSafe(call: StepToolCall): boolean {
+  if (call.invalid || !PARALLEL_READ_TOOLS.has(call.toolName)) return false
+  const path = typeof call.input === 'object' && call.input !== null && 'path' in call.input ? call.input.path : undefined
+  return path === undefined || (typeof path === 'string' && !/^[\\/]|^[A-Za-z]:|(^|[\\/])\.\.([\\/]|$)/.test(path))
+}
+
+// 模型这一步回复里的文字（不含思考和工具调用）
+function assistantText(messages: ModelMessage[]): string {
+  return messages
+    .flatMap((message) => (message.role !== 'assistant' ? [] : typeof message.content === 'string' ? [message.content] : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))))
+    .join('')
+}
+
 // 同一个工具、同样的参数、同样的结果算同一个调用；结果可能很长，取哈希
 function callSignature(call: StepToolCall, result: ToolResultPart): string {
   return createHash('sha256').update(JSON.stringify([call.toolName, call.input, result.output])).digest('hex')
@@ -674,8 +745,10 @@ export async function streamModelStep(
   signal: AbortSignal,
   io: TurnIO,
   retry?: StepRetry,
-): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[]; truncated: boolean }> {
+): Promise<{ toolCalls: StepToolCall[]; inputTokens: number; cacheRead: number | null; cacheWrite: number | null; answered: Set<string>; responseMessages: ModelMessage[]; truncated: boolean; interrupted?: boolean }> {
   let toolChoice = settings.toolChoice
+  // 这一步因为服务出错、连接中断已经自动重发了几次
+  let streamRetries = 0
   for (;;) {
     const attempt = new AbortController()
     const forward = () => attempt.abort(signal.reason)
@@ -695,7 +768,8 @@ export async function streamModelStep(
         messages: settings.messages,
         tools: settings.tools,
         toolChoice,
-        maxRetries: 2,
+        // 请求还没开始返回时的重试交给 AI SDK：指数退避（2、4、8 秒），会看服务给的 Retry-After
+        maxRetries: 3,
         abortSignal: attempt.signal,
         headers: MODEL_CALL_HEADERS,
       })
@@ -704,12 +778,18 @@ export async function streamModelStep(
       let cacheRead: number | null = null
       let cacheWrite: number | null = null
       let truncated = false
+      // 这次请求已经推给界面的回复文字，连接中途断开时交回对话让模型接着说
+      let emitted = ''
+      // 流里报的错先记下，读完再抛：从 for await 里直接抛出去会取消这个流，AI SDK 内部留下一个没人接的 rejection（原因是 undefined）
+      let failure: { error: unknown } | null = null
       try {
         for await (const part of result.fullStream) {
+          if (failure) continue
           // 中断后流里还会出一条 abort，那不是模型的输出
           if (!attempt.signal.aborted) await silence.heard()
           switch (part.type) {
             case 'text-delta':
+              emitted += part.text
               await io.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: part.text } })
               break
             case 'reasoning-delta':
@@ -731,15 +811,40 @@ export async function streamModelStep(
               await io.recordUsage({ ...settings.usage, usage: part.usage })
               break
             case 'error':
-              throw part.error
+              failure = { error: part.error }
+              // 服务报了错却不关连接时，中断这次请求让流马上结束
+              attempt.abort()
+              break
           }
         }
+        if (failure) throw failure.error
       } catch (error) {
         if (retrying && !signal.aborted) continue
         // 要求直接交结果（指定工具）被服务拒绝时改用 auto 再发一次；系统提示词和工具说明里都写了要交结果
         if (typeof toolChoice === 'object' && rejectsToolChoice(error)) {
           toolChoice = 'auto'
           continue
+        }
+        // 服务暂时出错、连接中途断开（第 438 步）：只说了文字就把这段交回对话，让模型接着说；
+        // 什么都还没说、或已经出了工具调用（还没执行）就整步重发。界面上已经显示的半截文字留着，和「重试这一步」一样
+        // AI SDK 已经重试到头的（RetryError）不再套一层重试，不然一个连不上的服务要等好几分钟才报错
+        if (!signal.aborted && !RetryError.isInstance(error) && retryableModelError(error) && streamRetries < MAX_STREAM_RETRIES) {
+          streamRetries++
+          console.error(`[session] 模型回复中途出错，第 ${streamRetries} 次自动重试`, error)
+          if (emitted && toolCalls.length === 0) {
+            return {
+              toolCalls: [],
+              inputTokens,
+              cacheRead,
+              cacheWrite,
+              answered: new Set(),
+              responseMessages: [{ role: 'assistant', content: [{ type: 'text', text: emitted }] }],
+              truncated: true,
+              interrupted: true,
+            }
+          }
+          await delay(STREAM_RETRY_DELAY_MS * streamRetries, undefined, { signal }).catch(() => {})
+          if (!signal.aborted) continue
         }
         throw error
       }
@@ -826,7 +931,13 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
     trustedCommands: session.trustedCommands,
     readOnlyPaths: session.config.readOnlyPaths,
     readRoots: session.readRoots,
-    requestCommandPermission: (command) => askCommandPermission(session, call.toolCallId, command, io),
+    outputDir: session.outputDir,
+    requestCommandPermission: async (command) => {
+      // 项目的 beforeCommand 钩子先看一眼：退出码 2 就拦下，理由是它的输出；别的结果不影响
+      const hook = await runHook(session, 'beforeCommand', { DIFFRA_COMMAND: command }, signal)
+      if (hook.blocked) return { allowed: false, reason: `Blocked by the project's before-command hook${hook.output ? `: ${hook.output}` : '.'} Do not retry it unchanged.` }
+      return askCommandPermission(session, call.toolCallId, command, io)
+    },
     requestExternalPermission: async (path, access) => {
       const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
       if (signal.aborted) return false
@@ -867,6 +978,9 @@ export async function runToolCall(
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
   if (name === SHOW_VISUAL_TOOL) return runShowVisual(call, io)
+  // 步骤清单和提问只给主智能体：子智能体的进度看它的卡片，它也不能替主智能体去问用户
+  if (name === TODO_TOOL && !scope) return runTodoWrite(session, call, io)
+  if (name === ASK_USER_TOOL && !scope) return runAskUser(call, signal, io)
   if (name === WAIT_COMMAND_TOOL && !scope) return runWaitCommand(session, call, signal, io)
   if (isTaskTool(name) && !scope && !call.invalid) return runTaskTool(session, { ...call, toolName: name }, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
@@ -894,6 +1008,7 @@ export async function runToolCall(
     }
     const output = await executeTool(name, call.input, context)
     if (output.edited && output.diff) scope?.onEdited(output.diff.path)
+    if (output.edited && output.diff && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, output.diff.path, output.diff.newText, signal)
     if (name === 'run_command' && output.commandSucceeded && typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string') {
       session.taskState = recordTaskReceipt(session.taskState, call.toolCallId, call.input.command, output.text)
       output.text += `\nEvidence receipt id: ${call.toolCallId}`
@@ -1125,14 +1240,25 @@ async function askCommandPermission(
   if (decision.level === 'deny') {
     return { allowed: false, reason: `This command is blocked by Diffra (${decision.reason}). Do not retry it.` }
   }
+  // 能记成「同类命令」的才给「这个项目里始终允许」（rm 这类不记，见 permissions.ts）；无项目任务的文件夹不是用户的项目，不给
+  const keys = commandKeys(command)
+  const projectWide = keys.length > 0 && !session.noProject
   const choice = await io.requestPermission(
-    { toolCallId, title: `执行 ${command}`, kind: 'execute', status: 'pending', rawInput: { command } },
-    PERMISSION_CHOICES,
+    {
+      toolCallId,
+      title: `执行 ${command}`,
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { command },
+      ...(projectWide ? { _meta: { diffra: { [PROJECT_COMMANDS_META_KEY]: { cwd: session.cwd, keys } satisfies ProjectCommandsMeta } } } : {}),
+    },
+    projectWide ? [...PERMISSION_CHOICES.slice(0, 2), { optionId: PERMISSION_OPTIONS.allowProject, name: '这个项目里始终允许同类命令', kind: 'allow_always' }, ...PERMISSION_CHOICES.slice(2)] : PERMISSION_CHOICES,
   )
-  if (choice === PERMISSION_OPTIONS.allowAlways) {
-    for (const key of commandKeys(command)) session.alwaysAllowed.add(key)
+  const remembered = choice === PERMISSION_OPTIONS.allowAlways || choice === PERMISSION_OPTIONS.allowProject
+  if (remembered) {
+    for (const key of keys) session.alwaysAllowed.add(key)
   }
-  if (choice === PERMISSION_OPTIONS.allowOnce || choice === PERMISSION_OPTIONS.allowAlways) return { allowed: true }
+  if (choice === PERMISSION_OPTIONS.allowOnce || remembered) return { allowed: true }
   return { allowed: false, reason: 'The user rejected this command. Do not retry it; try another approach or ask the user.' }
 }
 

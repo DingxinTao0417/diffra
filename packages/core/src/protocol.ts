@@ -16,6 +16,14 @@ export type {
   ToolKind,
 } from '@agentclientprotocol/sdk'
 
+// 项目钩子：用户填的命令，在固定的时机跑。afterEdit 是智能体改完一个文件之后（环境变量 DIFFRA_FILE 是那个文件）；
+// beforeCommand 是智能体执行命令之前（DIFFRA_COMMAND 是命令，退出码 2 表示拦下）；turnEnd 是一轮结束时（DIFFRA_STOP 是停下的原因，正常结束是 done）
+export interface SessionHooks {
+  afterEdit?: string | null
+  beforeCommand?: string | null
+  turnEnd?: string | null
+}
+
 export interface SessionChecks {
   // 旧的「快速检查」：第 431 步起不再每步跑，只在 beforeFinish 没填时当完成检查用；界面不再单独编辑它
   afterEdit: string | null
@@ -253,6 +261,12 @@ export interface SessionConfig {
   designStyle?: string | null
   // 无项目任务：cwd 是客户端替任务建的文件夹，不是用户的项目。建会话时定下，存进会话记录
   noProject?: boolean
+  // 用户在这个项目里选过「始终允许」的命令键（见 permissions.commandKey），建会话时就算允许过
+  allowedCommands?: string[]
+  // 项目钩子（见 session/hooks.ts）
+  hooks?: SessionHooks
+  // 项目记忆存放的目录（见 session/memory.ts）；null 或不传是没开自动记忆
+  memoryDir?: string | null
   // 检查点仓库的位置；null 表示不打检查点
   checkpointDir: string | null
 }
@@ -275,6 +289,37 @@ export interface CheckpointChange {
 }
 
 const RESTORE_NOTICE_PATHS = 50
+
+// 智能体自己列的步骤清单（第 441 步，工具 todo_write）：core 发一张标题是它的卡片，每次更新用同一个 id 整张替换，
+// 内容一行一步（formatSteps），界面按行解析（parseSteps）。叫「步骤」不叫「待办」：侧栏的待办是用户自己记的事
+export const STEPS_CARD_TITLE = '步骤'
+export type StepStatus = 'pending' | 'in_progress' | 'completed'
+export interface StepItem {
+  content: string
+  status: StepStatus
+}
+const STEP_MARKS: Record<StepStatus, string> = { pending: '[ ]', in_progress: '[>]', completed: '[x]' }
+
+export function formatSteps(steps: StepItem[]): string {
+  return steps.map((step) => `${STEP_MARKS[step.status]} ${step.content.replace(/\s+/g, ' ').trim()}`).join('\n')
+}
+
+export function parseSteps(text: string): StepItem[] {
+  return text.split('\n').flatMap((line) => {
+    const status = (Object.keys(STEP_MARKS) as StepStatus[]).find((key) => line.startsWith(`${STEP_MARKS[key]} `))
+    return status ? [{ status, content: line.slice(4) }] : []
+  })
+}
+
+// 智能体中途问用户的选择题（第 442 步，工具 ask_user）：走确认请求，rawInput.scope 是它，界面按它画成提问卡。
+// 选项的 optionId 是 ASK_USER_OPTION_PREFIX 加序号；用户不想选时是 ASK_USER_SKIP
+export const ASK_USER_SCOPE = 'ask-user'
+export const ASK_USER_OPTION_PREFIX = 'ask-user-option-'
+export const ASK_USER_SKIP = 'ask-user-skip'
+export interface AskUserInput {
+  question: string
+  options: Array<{ label: string; description?: string }>
+}
 
 // 撤销提示：core 记进被撤销的那一轮，客户端撤销时本地追加同样的一条，重新打开任务时按记录重放
 export function restoreNotice(changes: CheckpointChange[]): { title: string; description: string | null } {
@@ -746,5 +791,13 @@ export const TOOL_PREVIEW_META_KEY = 'diffraRemotePreview'
 export const PERMISSION_OPTIONS = {
   allowOnce: 'allow_once',
   allowAlways: 'allow_always',
+  // 这个项目里始终允许同类命令（第 445 步）：客户端把确认请求 _meta.diffra 里的命令键存进项目设置，以后建会话时传回来
+  allowProject: 'allow_project',
   reject: 'reject',
 } as const
+// 命令确认请求的 _meta.diffra.projectCommands：选「这个项目里始终允许」时要存的命令键（如 pnpm test、git commit）和项目目录
+export const PROJECT_COMMANDS_META_KEY = 'projectCommands'
+export interface ProjectCommandsMeta {
+  cwd: string
+  keys: string[]
+}

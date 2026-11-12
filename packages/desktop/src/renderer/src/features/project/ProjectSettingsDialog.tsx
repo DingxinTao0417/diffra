@@ -2,6 +2,7 @@ import { type FormEvent, useRef, useState } from 'react'
 import type { CheckDetection, CheckRunResult, DetectedCheck } from '@diffra/core/types'
 import { Check, LoaderCircle, Play, ScanSearch, ShieldAlert, X } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
+import type { ProjectHooks } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -38,6 +39,13 @@ export function ProjectSettingsDialog({ project, open, onClose, onSaved }: Proje
 
 const KIND_LABELS: Record<DetectedCheck['kind'], string> = { typecheck: '类型检查', lint: 'Lint', test: '测试' }
 
+// 三个钩子的时机和能用的环境变量（core 的 session/hooks.ts）
+const HOOK_FIELDS: Array<{ key: keyof ProjectHooks; label: string; placeholder: string; hint: string }> = [
+  { key: 'afterEdit', label: '改完文件后', placeholder: '例如 npx prettier --write "$DIFFRA_FILE"', hint: '智能体每改完一个文件跑一次，$DIFFRA_FILE 是那个文件。钩子改了文件（比如格式化）会告诉智能体重读。' },
+  { key: 'beforeCommand', label: '执行命令前', placeholder: '例如 case "$DIFFRA_COMMAND" in *deploy*) echo 不许部署; exit 2;; esac', hint: '智能体每条命令执行前跑一次，$DIFFRA_COMMAND 是那条命令。退出码 2 表示拦下，输出作为理由告诉智能体。' },
+  { key: 'turnEnd', label: '一轮结束时', placeholder: '例如 发通知的命令', hint: '每轮结束跑一次，不等它跑完。$DIFFRA_STOP 是停下的原因，正常结束是 done。' },
+]
+
 type Detection = { state: 'loading' } | { state: 'ready'; result: CheckDetection } | { state: 'error'; message: string }
 
 interface Suggestion {
@@ -58,6 +66,8 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
   const savedFinish = project.checks.beforeFinish ?? project.checks.afterEdit ?? ''
   const [finish, setFinish] = useState(savedFinish)
   const [readOnly, setReadOnly] = useState(project.readOnlyPaths.join(', '))
+  const [allowed, setAllowed] = useState(project.allowedCommands.join(', '))
+  const [hooks, setHooks] = useState<ProjectHooks>(project.hooks)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [detection, setDetection] = useState<Detection | null>(null)
@@ -84,6 +94,9 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
       const updated = await window.diffra.saveProject(project.path, {
         checks: { afterEdit: null, beforeFinish: finish.trim() || null },
         readOnlyPaths: readOnly.split(/[,，\s]+/).filter(Boolean),
+        // 命令键里有空格（pnpm test），只按逗号和换行分
+        allowedCommands: allowed.split(/[,，\n]+/).map((item) => item.replace(/\s+/g, ' ').trim()).filter(Boolean),
+        hooks: { afterEdit: hooks.afterEdit?.trim() || null, beforeCommand: hooks.beforeCommand?.trim() || null, turnEnd: hooks.turnEnd?.trim() || null },
       })
       onSaved(updated)
       onClose()
@@ -155,6 +168,45 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
           <p id="read-only-paths-hint" className="text-xs text-muted-foreground">
             相对项目根目录，多个用逗号或空格分隔。
           </p>
+        </section>
+        <section className="space-y-1.5 border-t pt-5">
+          <h3>
+            <Label htmlFor="allowed-commands" className="font-bold">
+              始终允许的命令
+            </Label>
+          </h3>
+          <Input
+            id="allowed-commands"
+            placeholder="例如 pnpm test, git commit"
+            aria-describedby="allowed-commands-hint"
+            value={allowed}
+            onChange={(event) => setAllowed(event.target.value)}
+          />
+          <p id="allowed-commands-hint" className="text-xs text-muted-foreground">
+            这个项目的任务里，这些同类命令不再逐次确认（程序名加第一个子命令）。在确认框里选「这个项目里始终允许同类命令」会加到这里；删掉就恢复询问。多个用逗号分隔。
+          </p>
+        </section>
+        <section className="space-y-3 border-t pt-5">
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold">钩子</h3>
+            <p className="text-xs text-muted-foreground">在固定的时机替你跑一条命令（在项目目录里，Git Bash，最长 1 分钟），不逐次确认。不填就不跑。</p>
+          </div>
+          {HOOK_FIELDS.map((field) => (
+            <div key={field.key} className="space-y-1.5">
+              <Label htmlFor={`hook-${field.key}`}>{field.label}</Label>
+              <Input
+                id={`hook-${field.key}`}
+                className="font-mono text-xs"
+                placeholder={field.placeholder}
+                aria-describedby={`hook-${field.key}-hint`}
+                value={hooks[field.key] ?? ''}
+                onChange={(event) => setHooks({ ...hooks, [field.key]: event.target.value })}
+              />
+              <p id={`hook-${field.key}-hint`} className="text-xs text-muted-foreground">
+                {field.hint}
+              </p>
+            </div>
+          ))}
         </section>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </DialogBody>

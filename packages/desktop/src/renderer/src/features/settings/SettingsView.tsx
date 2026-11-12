@@ -574,6 +574,17 @@ function ExecutionSection() {
         >
           <Segmented label="目标模式轮数上限" value={String(execution.goalMaxRounds)} options={GOAL_ROUND_SEGMENTS} onChange={changeGoalRounds} />
         </SettingsRow>
+        <SettingsRow
+          label="自动记忆"
+          hint={
+            <>
+              每轮结束后记下以后用得上的事，这个项目的新任务会带上。每轮多一次模型调用。
+              <DetailTip label="自动记忆">记的是你说过的偏好和纠正、不明显的项目约定、要用的命令，不记这一次做了什么，也不记密钥。每个项目最多 60 条，存在应用数据目录的 memory 文件夹里（每个项目一个 MEMORY.md），可以直接改或删。</DetailTip>
+            </>
+          }
+        >
+          <Switch label="自动记忆" checked={execution.autoMemory} onChange={(value) => void change({ autoMemory: value })} />
+        </SettingsRow>
       </SettingsGroup>
     </>
   )

@@ -17,6 +17,8 @@ export interface ToolContext {
   // 项目外可以只读访问的目录（Skill 目录），读文件、列文件、搜索、大纲能用绝对路径访问
   readRoots: string[]
   requestExternalPermission?(path: string, access: 'read' | 'write'): Promise<boolean>
+  // 命令输出太长被截短时，完整输出存到这个目录（在 readRoots 里，模型能用 read_file、search 看被省略的部分）；没有就不存
+  outputDir?: string | null
   // 写文件前的检查（子智能体用：文件归别的智能体时抛 ToolError，没人认领的先认领下来）
   beforeWrite?(target: { absolute: string; display: string }): void
 }

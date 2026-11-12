@@ -65,9 +65,15 @@ export const readOnlyPathSchema = z
     '禁写目录要填相对项目根目录的路径，不能是绝对路径，也不能包含 ..',
   )
 
+const hookCommandSchema = z.string().trim().max(1000).nullable().default(null).transform((value) => value || null)
+
 export const projectSettingsSchema = z.object({
   checks: sessionChecksSchema,
   readOnlyPaths: z.array(readOnlyPathSchema).default([]),
+  // 第 445 步加的：用户在这个项目里选过「始终允许同类命令」的命令键（如 pnpm test、git commit），旧设置没有
+  allowedCommands: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
+  // 第 447 步加的：项目钩子，在固定时机替用户跑的命令；旧设置没有
+  hooks: z.object({ afterEdit: hookCommandSchema, beforeCommand: hookCommandSchema, turnEnd: hookCommandSchema }).default({ afterEdit: null, beforeCommand: null, turnEnd: null }),
   // 以前按项目存的规范设置（rules）不再使用，读的时候丢掉，下次保存就没了
 })
 
@@ -113,6 +119,8 @@ export const executionSchema = z.object({
   compactAtPercent: z.literal(COMPACT_AT_PERCENTS),
   maxSteps: z.literal(MAX_STEP_OPTIONS).nullable(),
   goalMaxRounds: z.literal(GOAL_ROUND_OPTIONS).default(DEFAULT_EXECUTION.goalMaxRounds),
+  // 第 446 步加的，旧设置文件里没有
+  autoMemory: z.boolean().default(false),
 })
 
 export const MCP_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
