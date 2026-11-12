@@ -67,8 +67,8 @@ export interface HostSyncDeps {
   compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
   // 对方删除了本机：撤销它的授权
   forget(deviceId: string): void
-  // 远程终端开了、关了（本机横幅显示开着几个）
-  terminalsChanged(): void
+  // 设备的动静变了：开关终端、开始或不再看某个任务、做了一次操作（本机的设备面板显示）
+  activityChanged(): void
   // 项目的本地分支、切换分支（和本机任务页底栏同一套检查，见 main/project-branch.ts）
   branches(cwd: string): Promise<{ current: string | null; branches: string[] }>
   switchBranch(cwd: string, branch: string): Promise<void>
@@ -96,6 +96,8 @@ interface History {
 
 interface Subscription {
   sessionId: string
+  // 任务标题（本机设备面板显示「正在看…」）
+  title: string
   // 快照回来之前是 null：期间的动静先攒在 pending
   ready: { cwd: string; epoch: string } | null
   pending: Pending[]
@@ -186,6 +188,8 @@ export class HostSync {
   private readonly histories = new Map<string, History>()
   // 会话的项目目录（取快照时记下）：发出去的内容里项目路径换成相对的（hidePaths）
   private readonly cwds = new Map<string, string>()
+  // 每台设备最近一次操作的时刻
+  private readonly lastActions = new Map<string, number>()
   // 每个会话最后一条更新的序号，记一轮开始时用
   private readonly lastSeqs = new Map<string, number>()
   // 按轮次 id 缓存压过的图片（一轮的图片不会变）
@@ -195,7 +199,7 @@ export class HostSync {
   private readonly terminals: HostTerminals
 
   constructor(private readonly deps: HostSyncDeps) {
-    this.terminals = new HostTerminals({ send: (deviceId, message) => deps.send(deviceId, message), changed: () => deps.terminalsChanged() })
+    this.terminals = new HostTerminals({ send: (deviceId, message) => deps.send(deviceId, message), changed: () => deps.activityChanged() })
   }
 
   // 这个会话的项目目录和用户目录（hidePaths 用）；还没取过快照时只换用户目录
@@ -203,9 +207,14 @@ export class HostSync {
     return rootsOf(this.cwds.get(sessionId) ?? null)
   }
 
-  // 这台设备在本机开着几个终端
-  terminalCount(deviceId: string): number {
-    return this.terminals.count(deviceId)
+  // 这台设备在本机开着几个终端、正在看哪些任务、最近一次操作的时刻（本机的设备面板显示）
+  activity(deviceId: string): { terminals: number; watching: string[]; lastActionAt: number | null } {
+    const subscriptions = [...(this.devices.get(deviceId)?.subscriptions.values() ?? [])]
+    return {
+      terminals: this.terminals.count(deviceId),
+      watching: subscriptions.flatMap((subscription) => (subscription.ready ? [subscription.title] : [])),
+      lastActionAt: this.lastActions.get(deviceId) ?? null,
+    }
   }
 
   // 通道上来的请求
@@ -238,13 +247,14 @@ export class HostSync {
         const device = this.device(deviceId)
         this.sweepHistories()
         // 先登记、开始攒实时更新，再续传或取快照
-        const subscription: Subscription = { sessionId: call.sessionId, ready: null, pending: [], queue: [] }
+        const subscription: Subscription = { sessionId: call.sessionId, title: '', ready: null, pending: [], queue: [] }
         device.subscriptions.set(call.sessionId, subscription)
         try {
           const resumed = call.resume ? await this.resume(grant, deviceId, subscription, call.resume) : null
           if (resumed) return resumed
           this.limit(deviceId, 'snapshots', SNAPSHOTS_PER_MINUTE)
           const { page, cwd, epoch, seq, turnIds } = await this.page(grant, call.sessionId)
+          subscription.title = page.title
           return {
             value: page,
             compress: true,
@@ -252,6 +262,7 @@ export class HostSync {
             after: () => {
               if (device.subscriptions.get(call.sessionId) !== subscription) return
               subscription.ready = { cwd, epoch }
+              this.deps.activityChanged()
               this.anchorHistory(call.sessionId, epoch, seq, subscription.pending)
               for (const item of subscription.pending) {
                 if (item.kind === 'update' && item.seq > seq) subscription.queue.push({ seq: item.seq, update: item.update })
@@ -285,7 +296,7 @@ export class HostSync {
         return { value: { diff: redactDiff(typeof diff === 'string' ? diff : '') }, compress: true }
       }
       case 'session.unsubscribe':
-        this.devices.get(deviceId)?.subscriptions.delete(call.sessionId)
+        if (this.devices.get(deviceId)?.subscriptions.delete(call.sessionId)) this.deps.activityChanged()
         return { value: {} }
       case 'session.prompt': {
         const { project, title } = await this.operable(grant, call.sessionId)
@@ -426,6 +437,8 @@ export class HostSync {
         if (device?.subscriptions.get(subscription.sessionId) !== subscription) return
         if (this.histories.get(subscription.sessionId) !== history || from.seq < history.floor) return this.deps.drop(deviceId)
         subscription.ready = { cwd: session.cwd, epoch: history.epoch }
+        subscription.title = session.title
+        this.deps.activityChanged()
         // 登记之后来的都已经记进去了，从记录里按顺序补
         subscription.pending = []
         let replayed = 0
@@ -499,6 +512,8 @@ export class HostSync {
 
   private charge(deviceId: string, create: boolean): void {
     this.limit(deviceId, 'ops', OPS_PER_MINUTE, () => create && this.limit(deviceId, 'creates', CREATES_PER_MINUTE))
+    this.lastActions.set(deviceId, Date.now())
+    this.deps.activityChanged()
   }
 
   // 一分钟内的次数到上限就拒绝；then 在记下这一次之前再查别的上限（新建同时算一次操作）
@@ -710,6 +725,7 @@ export class HostSync {
     this.terminals.closeDevice(deviceId)
     const device = this.devices.get(deviceId)
     if (!device) return
+    if (device.subscriptions.size > 0) this.deps.activityChanged()
     if (device.flushTimer) clearTimeout(device.flushTimer)
     if (device.changedTimer) clearTimeout(device.changedTimer)
     this.devices.delete(deviceId)

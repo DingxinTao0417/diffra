@@ -6,7 +6,6 @@ import { ArchitectureView } from '@/features/architecture/ArchitectureView'
 import { HomeView } from '@/features/home/HomeView'
 import { UpdateNoticeDialog } from '@/features/settings/Changelog'
 import { PairRequestDialog } from '@/features/devices/PairRequestDialog'
-import { RemoteControlBanner } from '@/features/devices/RemoteControlBanner'
 import { RemoteTaskView } from '@/features/devices/RemoteTaskView'
 import { SettingsView } from '@/features/settings/SettingsView'
 import { SearchDialog } from '@/features/shell/SearchDialog'
@@ -141,7 +140,6 @@ export function App() {
     <TooltipProvider delayDuration={400}>
       <div className="flex h-screen flex-col bg-sidebar">
         <TitleBar />
-        <RemoteControlBanner />
         <div className="flex min-h-0 flex-1">
           {route.name === 'settings' ? (
             <SettingsView section={route.section} />

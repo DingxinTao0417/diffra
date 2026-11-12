@@ -71,7 +71,7 @@ export class RemoteService {
       answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
       audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
       forget: (deviceId) => void this.revoke(deviceId, '对方删除了本机，撤销授权'),
-      terminalsChanged: () => this.changed(),
+      activityChanged: () => this.changed(),
       branches: (cwd) => options.branches(cwd),
       switchBranch: (cwd, branch) => options.switchBranch(cwd, branch),
       compressImages: (images) => options.compressImages(images),
@@ -181,7 +181,7 @@ export class RemoteService {
         name: request.name,
         previous: state.grants.find((grant) => grant.deviceId === request.deviceId)?.projects ?? null,
       })),
-      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, terminals: this.hostSync.terminalCount(grant.deviceId) })),
+      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, ...this.hostSync.activity(grant.deviceId) })),
       peers: state.peers.map(device),
     }
   }

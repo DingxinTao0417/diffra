@@ -36,7 +36,9 @@ async function openDevices(window: Page, tab: '连接其他设备' | '允许连�
 
 async function allowIncoming(window: Page): Promise<void> {
   await openDevices(window, '允许连接本机')
-  await window.getByRole('switch', { name: '允许连接本机' }).click()
+  // 同一台被连接端再配一台设备时开关已经开着
+  const toggle = window.getByRole('switch', { name: '允许连接本机' })
+  if (!(await toggle.isChecked())) await toggle.click()
   await expect(window.getByTestId('relay-status')).toHaveAttribute('data-state', 'online')
 }
 
@@ -503,8 +505,8 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     await guest.window.evaluate(`window.diffra.setRemoteName('同事的电脑')`)
     await guest.window.evaluate(RECORD_REMOTE_EVENTS)
     await pair(host, guest, [viewOnly], [controlled])
-    // 本机横幅：能操作本机的设备在线
-    await expect(host.window.getByTestId('remote-control-banner')).toContainText('「同事的电脑」在线，可以在本机的 1 个项目里')
+    // 标题栏的提示：能操作本机的设备在线
+    await expect(host.window.getByTestId('remote-control-indicator')).toHaveText('「同事的电脑」能操作本机')
 
     const hostId = await guest.window.evaluate<string>(`window.diffra.getRemoteState().then((state) => state.peers[0].deviceId)`)
     const list = await guest.window.evaluate<{ projects: Array<{ id: string; name: string; level: string }>; sessions: Array<{ sessionId: string; projectId: string; title: string }> }>(`window.diffra.listRemoteSessions(${JSON.stringify(hostId)})`)
@@ -646,9 +648,11 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     await expect(permission).toContainText('hostname')
     await expect.poll(requestIds).toHaveLength(3)
     await expect(remotePermission).toContainText('hostname')
-    await host.window.getByTestId('remote-control-banner').getByRole('button', { name: '断开这台设备' }).click()
+    // 点标题栏的提示，在设备面板里断开
+    await host.window.getByTestId('remote-control-indicator').click()
+    await host.window.getByTestId('devices-panel').getByTestId('device-entry').filter({ hasText: '同事的电脑' }).getByRole('button', { name: '断开' }).click()
     await host.window.getByRole('alertdialog').getByRole('button', { name: '断开', exact: true }).click()
-    await expect(host.window.getByTestId('remote-control-banner')).toHaveCount(0)
+    await expect(host.window.getByTestId('remote-control-indicator')).toHaveCount(0)
     await expect(guest.window.getByTestId('remote-offline')).toBeVisible()
     await expect(remotePermission).toHaveCount(0)
     await expect(permission).toContainText('hostname')
@@ -865,7 +869,11 @@ test('设备连接：「完全控制」——授权时有醒目的提醒，本�
     await pair(host, guest, [], [], [project])
 
     // 本机：横幅、授权列表
-    await expect(host.window.getByTestId('remote-control-banner')).toContainText('能在本机开终端、执行任意命令（1 个项目完全控制）')
+    await expect(host.window.getByTestId('remote-control-indicator')).toContainText('能操作本机')
+    await host.window.getByTestId('remote-control-indicator').click()
+    await expect(host.window.getByTestId('devices-panel').getByTestId('device-level')).toHaveText('完全控制')
+    await expect(host.window.getByTestId('devices-panel').getByTestId('device-entry')).toContainText('1 个项目')
+    await host.window.keyboard.press('Escape')
     await openDevices(host.window, '允许连接本机')
     await expect(host.window.getByTestId('grants')).toContainText('完全控制')
 
@@ -1019,7 +1027,7 @@ test('设备连接：「完全控制」——连接端开对方电脑上的终�
     await remoteTask.getByRole('button', { name: '终端 Ctrl+`' }).click()
     const terminal = remoteTask.getByTestId('remote-terminal')
     await expect(terminal).not.toContainText('正在打开', { timeout: 15_000 })
-    await expect(host.window.getByTestId('remote-control-banner')).toContainText('开着 1 个终端')
+    await expect(host.window.getByTestId('remote-control-indicator')).toContainText('开着 1 个终端')
     await terminal.locator('.xterm').click()
     await guest.window.keyboard.type('echo remote-terminal-ok')
     await guest.window.keyboard.press('Enter')
@@ -1030,7 +1038,7 @@ test('设备连接：「完全控制」——连接端开对方电脑上的终�
     // 关掉面板：对方的终端结束
     await terminal.getByRole('button', { name: '关闭远程终端' }).click()
     await expect(terminal).toHaveCount(0)
-    await expect(host.window.getByTestId('remote-control-banner')).not.toContainText('开着')
+    await expect(host.window.getByTestId('remote-control-indicator')).not.toContainText('开着')
 
     // 完全访问：开放了「完全控制」才能切
     await remoteTask.getByTestId('permission-mode').click()
@@ -1092,6 +1100,122 @@ test('切换分支：本机任务页底栏能切本地分支，有未提交的�
     await expect(remoteBranch).toContainText('main')
   } finally {
     await close([host, guest])
+    await relay.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('左下角的设备和用量：设备、用量、设置竖着排；设备那行右边是在线台数，有设备能操作本机时变琥珀色；面板里能操作的排最前、标出级别和正在看的任务；标题栏一直提示能操作本机的设备（收起侧栏、在设置页也在）；用量写今天的 token，点开能切今天、近 7 天、本月，看按模型和用得最多的任务', async () => {
+  test.setTimeout(180_000)
+  const { relay, port } = await startRelay()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-footer-'))
+  const model = await startScriptedModel([{ text: '好的' }])
+  const host = await launchDevice(port)
+  const operator = await launchDevice(port)
+  const viewer = await launchDevice(port)
+  try {
+    await configureCoderModel(host.window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(host.app, host.window, project)
+    await startTask(host.window, '大家看的任务')
+    await waitTaskDone(host.window)
+    await operator.window.evaluate(`window.diffra.setRemoteName('能操作的电脑')`)
+    await viewer.window.evaluate(`window.diffra.setRemoteName('只能看的电脑')`)
+    await pair(host, viewer, [project])
+    await pair(host, operator, [], [project])
+
+    // 左下角竖着排三行：设备、用量、设置，一样宽、左边对齐
+    const rows = host.window.getByTestId('sidebar-footer').getByRole('button')
+    await expect(rows).toHaveCount(3)
+    const boxes = await Promise.all([0, 1, 2].map(async (index) => (await rows.nth(index).boundingBox())!))
+    expect(boxes.map((box) => box.x)).toEqual([boxes[0].x, boxes[0].x, boxes[0].x])
+    expect(boxes.map((box) => box.width)).toEqual([boxes[0].width, boxes[0].width, boxes[0].width])
+    expect(boxes[0].y).toBeLessThan(boxes[1].y)
+    expect(boxes[1].y).toBeLessThan(boxes[2].y)
+    await expect(rows.nth(2)).toHaveText('设置')
+
+    // 设备那行：右边是在线台数，有设备能操作本机时是琥珀色
+    const devices = host.window.getByTestId('devices-button')
+    await expect(devices.getByTestId('devices-badge')).toHaveText('2')
+    await expect(devices).toHaveAttribute('data-state-level', 'controlling')
+    await expect(devices).toHaveAccessibleName('设备：2 台在线，1 台能操作本机')
+
+    // 能操作的设备打开任务：面板里写它正在看哪个任务
+    await operator.window.getByTestId('sidebar').getByTestId('sidebar-remote-task').click()
+    await expect(operator.window.getByTestId('remote-task')).toContainText('好的')
+    await devices.click()
+    const panel = host.window.getByTestId('devices-panel')
+    await expect(panel).toContainText('连着本机 · 2')
+    const entries = panel.getByTestId('device-entry')
+    await expect(entries).toHaveCount(2)
+    await expect(entries.first()).toContainText('能操作的电脑')
+    await expect(entries.first().getByTestId('device-level')).toHaveText('可查看和操作')
+    await expect(entries.first().getByTestId('device-watching')).toHaveText('正在看「大家看的任务」')
+    await expect(entries.last()).toContainText('只能看的电脑')
+    await expect(entries.last().getByTestId('device-level')).toHaveText('可查看')
+    await expect(entries.last().getByRole('button', { name: '断开' })).toHaveCount(0)
+    // 等弹出动画结束再截图，浅色、深色各一张
+    await host.window.waitForTimeout(400)
+    await host.window.screenshot({ path: 'test-results/devices-footer-panel.png' })
+    await host.window.emulateMedia({ colorScheme: 'dark' })
+    await host.window.waitForTimeout(200)
+    await host.window.screenshot({ path: 'test-results/devices-footer-panel-dark.png' })
+    await host.window.emulateMedia({ colorScheme: 'light' })
+    // 右上角的「连接设置」跳到设备连接
+    await panel.getByRole('button', { name: '连接设置' }).click()
+    await expect(settingsNav(host.window).getByRole('button', { name: '设备连接' })).toHaveAttribute('aria-current', 'page')
+    await host.window.getByRole('button', { name: '返回' }).click()
+
+    // 标题栏的提示：收起侧栏、进设置页也在
+    const indicator = host.window.getByTestId('remote-control-indicator')
+    await expect(indicator).toHaveText('「能操作的电脑」能操作本机')
+    await host.window.keyboard.press('Control+B')
+    await expect(host.window.getByTestId('sidebar')).toHaveCount(0)
+    await expect(indicator).toBeVisible()
+    await host.window.keyboard.press('Control+B')
+    await host.window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
+    await expect(indicator).toBeVisible()
+    await host.window.getByRole('button', { name: '返回' }).click()
+
+    // 用量那行：右边写今天的 token，和用量统计一致
+    const usageOf = (days: number) =>
+      host.window.evaluate<number>(`(() => {
+        const now = new Date()
+        const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ${days}).toISOString()
+        return window.diffra.usageSummary({ from, to: new Date(now.getTime() + 1000).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }).then((summary) => summary.totals.input + summary.totals.output)
+      })()`)
+    const format = (tokens: number) => (tokens >= 1_000_000 ? `${Number((tokens / 1_000_000).toFixed(1))}m` : tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens))
+    const today = await usageOf(0)
+    expect(today).toBeGreaterThan(0)
+    const usage = host.window.getByTestId('usage-button')
+    await expect(usage).toHaveText(`用量今天 ${format(today)}`)
+    await host.window.screenshot({ path: 'test-results/devices-footer.png' })
+    // 点开：今天的总数、按模型（只有脚本模型，占 100%）、用得最多的任务
+    await usage.click()
+    const usagePanel = host.window.getByTestId('usage-panel')
+    await expect(usagePanel.getByTestId('usage-period')).toHaveAttribute('data-period', 'today')
+    await expect(usagePanel.getByTestId('usage-total')).toHaveText(format(today))
+    await expect(usagePanel.getByTestId('usage-model')).toHaveText(['scripted100%'])
+    await expect(usagePanel.getByTestId('usage-task').first()).toContainText('大家看的任务')
+    await host.window.waitForTimeout(400)
+    await host.window.screenshot({ path: 'test-results/devices-footer-usage.png' })
+    await host.window.emulateMedia({ colorScheme: 'dark' })
+    await host.window.waitForTimeout(200)
+    await host.window.screenshot({ path: 'test-results/devices-footer-usage-dark.png' })
+    await host.window.emulateMedia({ colorScheme: 'light' })
+    // 切到近 7 天：总数换成近 7 天的
+    await usagePanel.getByRole('radio', { name: '近 7 天' }).click()
+    await expect(usagePanel.getByTestId('usage-period')).toHaveAttribute('data-period', 'week')
+    await expect(usagePanel.getByTestId('usage-total')).toHaveText(format(await usageOf(6)))
+    // 点任务打开它；再点开、跳到用量详情
+    await usagePanel.getByTestId('usage-task').first().click()
+    await expect(usagePanel).toHaveCount(0)
+    await expect(host.window.getByTestId('task-title')).toHaveText('大家看的任务')
+    await usage.click()
+    await host.window.getByTestId('usage-panel').getByRole('button', { name: '用量详情' }).click()
+    await expect(settingsNav(host.window).getByRole('button', { name: '用量' })).toHaveAttribute('aria-current', 'page')
+  } finally {
+    await close([host, operator, viewer])
     await relay.close()
     await model.close()
     rmSync(project, { recursive: true, force: true })

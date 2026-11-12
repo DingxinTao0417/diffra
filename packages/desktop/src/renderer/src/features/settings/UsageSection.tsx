@@ -11,7 +11,7 @@ import { openHome, openTask } from '@/state/actions'
 import { useAppState } from '@/state/store'
 import { SettingsGroup, SettingsHeader } from './SettingsLayout'
 
-type Range = 'today' | 'week' | 'month30' | 'thisMonth'
+export type Range = 'today' | 'week' | 'month30' | 'thisMonth'
 
 const RANGES: Array<{ value: Range; label: string }> = [
   { value: 'today', label: '今天' },
@@ -20,8 +20,8 @@ const RANGES: Array<{ value: Range; label: string }> = [
   { value: 'thisMonth', label: '本月' },
 ]
 
-// 按本机时区算起点；终点是现在。core 按同一个时区划分每天
-function rangeOf(range: Range, now: Date): { from: Date; to: Date } {
+// 按本机时区算起点；终点是现在。core 按同一个时区划分每天（侧栏的用量面板也用）
+export function rangeOf(range: Range, now: Date): { from: Date; to: Date } {
   const year = now.getFullYear()
   const month = now.getMonth()
   const day = now.getDate()
@@ -245,8 +245,8 @@ interface CompositionPart {
   color: string
 }
 
-// 输入拆成缓存命中和新增，输出拆成正文和推理；四段加起来正好是总用量
-function compositionOf(totals: UsageTotals): CompositionPart[] {
+// 输入拆成缓存命中和新增，输出拆成正文和推理；四段加起来正好是总用量（侧栏的用量面板也用）
+export function compositionOf(totals: UsageTotals): CompositionPart[] {
   const cacheRead = Math.max(0, Math.min(totals.cacheRead, totals.input))
   const reasoning = Math.max(0, Math.min(totals.reasoning, totals.output))
   return [

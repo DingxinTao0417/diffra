@@ -35,10 +35,12 @@ export interface RemoteDeviceView {
   lastSeenAt: string | null
 }
 
-// 本机授权给它的设备；terminals：它在本机开着几个终端（「完全控制」）
+// 本机授权给它的设备。terminals：它在本机开着几个终端（「完全控制」）；watching：它正在看的任务标题；lastActionAt：最近一次操作的时刻（毫秒）
 export interface RemoteGrantView extends RemoteDeviceView {
   projects: RemoteProjectGrant[]
   terminals: number
+  watching: string[]
+  lastActionAt: number | null
 }
 
 // 有设备凭邀请串连上来、等本机的人点允许或拒绝

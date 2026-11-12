@@ -2,10 +2,11 @@ import { type ReactNode, useRef } from 'react'
 import { ArrowLeft, ArrowRight, Menu, PanelLeft } from 'lucide-react'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { RemoteControlIndicator } from '@/features/devices/DevicesOverview'
 import { moveHistory, toggleSidebar } from '@/state/actions'
 import { isSidebarShown, useAppState } from '@/state/store'
 
-// 顶栏：主菜单、侧栏开关、后退前进，其余地方可以拖动窗口；右边留给系统的窗口按钮。
+// 顶栏：主菜单、侧栏开关、后退前进，其余地方可以拖动窗口；右边留给系统的窗口按钮，按钮左边是「能操作本机的设备在线」的提示。
 // 高度用 px 固定为 40，和主进程给系统按钮设的高度一致，不跟着字号缩放
 export function TitleBar() {
   const settingsOpen = useAppState((state) => state.route.name === 'settings')
@@ -39,6 +40,8 @@ export function TitleBar() {
       <BarButton label="前进" shortcut="Alt+→" disabled={!canGoForward} onClick={() => void moveHistory(1)}>
         <ArrowRight className="size-[16px]" />
       </BarButton>
+      <div className="flex-1" />
+      <RemoteControlIndicator />
     </div>
   )
 }

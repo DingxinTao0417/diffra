@@ -19,6 +19,7 @@ import { type RemoteProjectGroup, useRemoteProjects } from '@/features/devices/r
 import { RemoteNewTaskDialog } from '@/features/devices/RemoteNewTaskDialog'
 import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
+import { SidebarFooter } from './SidebarFooter'
 import { type SearchItem, searchItemKey, useSessionSearch } from './session-search'
 import { TaskMenu } from './TaskMenu'
 
@@ -224,12 +225,10 @@ export function Sidebar() {
         ))}
       </div>
 
+      {/* 左下角：设备、用量、设置（SidebarFooter） */}
       <div className="space-y-0.5 border-t border-sidebar-border px-2 py-2">
         <UpdateNotice />
-        <SidebarButton active={route.name === 'settings'} onClick={() => openSettings()}>
-          <Settings className="size-4" />
-          设置
-        </SidebarButton>
+        <SidebarFooter />
       </div>
     </aside>
   )
