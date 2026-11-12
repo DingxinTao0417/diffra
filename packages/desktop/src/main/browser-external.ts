@@ -253,6 +253,9 @@ export class ExternalBrowser {
       case 'tab-updated': {
         const found = this.find(connection, message.tabId)
         if (!found) return
+        // 这条和调试事件是扩展的两条路，先后不保证：新标签页刚开出来时「还是空白页」的更新可能在网页打开之后才到，
+        // 照着改会把网址改回空白，智能体下一步就说没打开网页。有了网页的标签页真回到空白页时调试事件（Page.frameNavigated）会说，这种整条丢掉
+        if (found.tab.target.hasPage() && (message.url === '' || message.url === 'about:blank')) return
         found.tab.target.url = message.url
         found.tab.target.title = message.title
         found.tab.target.loading = message.loading || found.tab.target.loading
