@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { PermissionOption, SessionUpdate, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { APICallError, simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -1075,6 +1075,23 @@ describe('同一步里的只读调用', () => {
     const outsideIO = recordingIO('reject')
     await runTurn(await makeSession(outside), { id: 't', text: '看看' }, outsideIO)
     expect(toolEvents(outsideIO).slice(0, 2)).toEqual(['开始 call-0-0', '结束 call-0-0'])
+  })
+
+  test('改项目外的文件（授权写的临时脚本）不算本轮改动：不跑完成检查，只回文字也不拉回来要 finish', async () => {
+    const outside = join(project, '..', `diffra-outside-${basename(project)}.py`)
+    const model = scriptedModel([{ toolCalls: [{ name: 'edit_file', input: { path: outside, old_string: '', new_string: 'print(1)\n' } }] }, { text: '统计完了' }])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'false' })
+    const io = recordingIO()
+    try {
+      await runTurn(session, { id: 't', text: '写个脚本统计一下' }, io)
+      expect(readFileSync(outside, 'utf8')).toBe('print(1)\n')
+      expect(model.doStreamCalls).toHaveLength(2)
+      expect(io.updates.some((update) => update.sessionUpdate === 'tool_call' && update.title.startsWith('完成检查'))).toBe(false)
+      expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+      expect(session.taskState.needsVerification).toBe(false)
+    } finally {
+      rmSync(outside, { force: true })
+    }
   })
 
   test('排在读前面的编辑先执行完：同一步里先改再读，读到的是改过的内容', async () => {

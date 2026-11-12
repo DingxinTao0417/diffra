@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, RetryError, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
@@ -151,6 +151,11 @@ export interface StepToolCall {
 }
 
 const EXTERNAL_PERMISSION_KEY_PREFIX = 'external:'
+
+function insideProject(session: Session, path: string): boolean {
+  const rel = relative(session.cwd, path)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
 
 const PERMISSION_CHOICES: PermissionOption[] = [
   { optionId: PERMISSION_OPTIONS.allowOnce, name: '允许一次', kind: 'allow_once' },
@@ -1034,7 +1039,8 @@ export async function runToolCall(
       // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
       ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
     })
-    return { result: textResult(call, output.text), edited: output.edited ?? false }
+    // 项目外的文件（用户授权的临时脚本之类）不算本轮改动：不进完成检查，也不要求 finish
+    return { result: textResult(call, output.text), edited: (output.edited ?? false) && (!output.diff || insideProject(session, output.diff.path)) }
   } catch (error) {
     const message = error instanceof ToolError ? error.message : `Tool failed: ${error instanceof Error ? error.message : String(error)}`
     if (!(error instanceof ToolError)) console.error(`[session] 工具 ${name} 出错`, error)
