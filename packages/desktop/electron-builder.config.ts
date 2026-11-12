@@ -7,6 +7,11 @@ import { type ChangelogRelease, formatNotes } from './src/shared/changelog.ts'
 // 更新地址会写进已安装客户端的 resources/app-update.yml，发布后就不能再改。
 // DIFFRA_UPDATE_URL 只在本地验证更新流程时使用，指向临时更新源；正式构建不要设置它。
 const updateUrl = process.env.DIFFRA_UPDATE_URL || 'https://update.diffra.dev/win/'
+// Mac 版的更新源单独一个目录（latest-mac.yml 和 zip 包），同样发布后不能改。现在 Mac 版还不自动更新（见 updater.ts）
+const macUpdateUrl = process.env.DIFFRA_UPDATE_URL || 'https://update.diffra.dev/mac/'
+// 有 Developer ID 证书时（CSC_LINK 是 CI 里的 p12，CSC_NAME 是钥匙串里的证书名）用证书签名，
+// 没有就临时签名（ad-hoc）：Apple 芯片要求程序至少有签名才能运行；临时签名的包只能自己用，发给别人会被 Gatekeeper 拦
+const macCertificate = Boolean(process.env.CSC_LINK || process.env.CSC_NAME)
 
 // rg 二进制随 core 的依赖 @vscode/ripgrep 按平台下载；打包时拷到 resources，主进程通过 DIFFRA_RG_PATH 告诉 core
 const requireFromCore = createRequire(fileURLToPath(new URL('../core/package.json', import.meta.url)))
@@ -31,15 +36,36 @@ const config: Configuration = {
   files: ['out/**/*'],
   // 唯一的原生依赖 node-pty 自带 N-API 预编译文件，Electron 直接能用；重编要装 VS 编译工具，而且会失败
   npmRebuild: false,
-  // 内置 Skill 要是真实文件：模型按索引里的路径用 read_file 读，主进程通过 DIFFRA_SKILLS_DIR 告诉 core
+  // 内置 Skill 要是真实文件：模型按索引里的路径用 read_file 读，主进程通过 DIFFRA_SKILLS_DIR 告诉 core。
+  // ripgrep 按平台各放一份（win、mac 里的 extraResources，和这里的合在一起）
   extraResources: [
-    { from: rgPath, to: 'rg.exe' },
     { from: '../core/skills', to: 'skills' },
     // 设计模式打进去的第三方组件（OpenPencil 等）的出处和许可
     { from: 'NOTICE.md', to: 'NOTICE.md' },
   ],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
+    extraResources: [{ from: rgPath, to: 'rg.exe' }],
+  },
+  // Mac：dmg 给人下载安装，zip 给自动更新用（electron-updater 在 Mac 上只认 zip）。先只出 Apple 芯片（arm64）：
+  // ripgrep、ast-grep 的原生文件按本机架构装，Intel 版要在 Intel 机器或 CI 上另打
+  mac: {
+    target: [
+      { target: 'dmg', arch: ['arm64'] },
+      { target: 'zip', arch: ['arm64'] },
+    ],
+    artifactName: 'Diffra-${version}-${arch}.${ext}',
+    icon: 'build/icon.icns',
+    category: 'public.app-category.developer-tools',
+    extraResources: [{ from: rgPath, to: 'rg' }],
+    // 公证要求开启 hardened runtime；Electron 要 JIT，原生模块（node-pty、ast-grep）的签名和主程序不是同一个团队时要关掉库校验
+    hardenedRuntime: true,
+    entitlements: 'build/entitlements.mac.plist',
+    entitlementsInherit: 'build/entitlements.mac.plist',
+    identity: macCertificate ? undefined : '-',
+    // 公证要 Apple 账号的凭据（APPLE_API_KEY 等），没有证书时也没法公证
+    notarize: macCertificate,
+    publish: [{ provider: 'generic', url: macUpdateUrl }],
   },
   nsis: {
     artifactName: 'Diffra-Setup-${version}.${ext}',

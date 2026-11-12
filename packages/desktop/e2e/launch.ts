@@ -37,8 +37,11 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
   const executable = packagedExecutable()
   // CI 的 Windows 机器屏幕只有 1024×768，1200 宽的窗口被压到屏幕宽，开着任务监控时对话列不够宽，侧栏会自动收起，
   // 用例按侧栏一直在写的；缩到 0.8 倍后 1200×820 的窗口占 960×656 像素，布局和本机一致
-  const scale = DEVICE_SCALE === 1 ? [] : [`--force-device-scale-factor=${DEVICE_SCALE}`]
+  const extraArgs = DEVICE_SCALE === 1 ? [] : [`--force-device-scale-factor=${DEVICE_SCALE}`]
+  // Mac：密钥加密用钥匙串里的「Diffra Safe Storage」。测试不碰用户真实的钥匙串，用 Chromium 的模拟钥匙串；
+  // 不然打包版（签名和开发版不同）一存密钥就弹系统授权框，测试卡在那里
+  if (process.platform === 'darwin') extraArgs.push('--use-mock-keychain')
   // 打包版只认正式数据目录（不看 DIFFRA_USER_DATA_DIR），用 Chromium 的 --user-data-dir 换成临时目录
-  if (executable) return electron.launch({ executablePath: executable, args: [`--user-data-dir=${userDataDir}`, ...scale], env })
-  return electron.launch({ args: ['.', ...scale], cwd: desktopDir, env: { ...env, DIFFRA_USER_DATA_DIR: userDataDir } })
+  if (executable) return electron.launch({ executablePath: executable, args: [`--user-data-dir=${userDataDir}`, ...extraArgs], env })
+  return electron.launch({ args: ['.', ...extraArgs], cwd: desktopDir, env: { ...env, DIFFRA_USER_DATA_DIR: userDataDir } })
 }

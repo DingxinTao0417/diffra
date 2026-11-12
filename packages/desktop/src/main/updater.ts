@@ -12,8 +12,11 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // 更新包只会装到已安装的那份，免安装版下载、安装了也换不掉自己，重开还是旧版，还会一直提示有新版本
 const UNINSTALLER = 'Uninstall Diffra.exe'
 
-function disabledReason(): 'development' | 'portable' | null {
+function disabledReason(): 'development' | 'portable' | 'mac-preview' | null {
   if (!app.isPackaged) return 'development'
+  // Mac 上的自动更新要求新旧版本用同一个 Developer ID 签名；现在的包只有临时签名（ad-hoc），更新必然失败。
+  // 有了证书、正式发 Mac 版时去掉这一行（见 docs/decisions.md「macOS」）
+  if (process.platform === 'darwin') return 'mac-preview'
   return existsSync(join(dirname(app.getPath('exe')), UNINSTALLER)) ? null : 'portable'
 }
 

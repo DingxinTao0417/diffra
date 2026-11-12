@@ -134,7 +134,7 @@ v2：
 ## macOS
 
 - 原则：Windows 的行为一点不改。主进程按 `process.platform` 分支，界面从 `renderer/src/lib/platform.ts` 的 `IS_MAC` 分（preload 把 `process.platform` 放在 `window.diffra.platform`）。只在 Windows 上有意义的代码保持原样；两边都要的改动先确认 Windows 上结果不变。
-- 现状（2026-11-11）：开发版在 Mac（Apple 芯片）上能跑，core 的单元测试和桌面端 e2e 全部通过。打包、签名公证、自动更新、CI、官网下载还没做（见下面「还没做」）。
+- 现状（2026-11-11）：开发版和临时签名的打包版在 Mac（Apple 芯片）上能跑，core 的单元测试、桌面端 e2e（开发版和打包版各 98 个）全部通过。签名公证、自动更新、发布、CI 还没做（见下面「还没做」）。
 - 窗口：
   - 去掉系统标题栏（`titleBarStyle: 'hidden'`），红绿灯放在 (14, 12)。
   - 顶栏不单独占一行（2026-11-11 定的「侧栏通顶」，像访达、备忘录）：红绿灯、侧栏开关、后退前进浮在窗口左上角，落在侧栏顶部留出的 40px 里；内容面板顶到窗口上沿（留 8px）。侧栏收起时内容区顶上留一条 40px 放这几个按钮。全屏时红绿灯藏起来，按钮挪到最左（主进程发 `window:full-screen`）。侧栏最窄 216px，放得下这一组。
@@ -155,11 +155,21 @@ v2：
   - 实测：Mac 上 Chrome 读的是「用户数据目录/NativeMessagingHosts」，用 `--user-data-dir` 启动的浏览器（e2e 的 Chrome for Testing）不读 `Google/Chrome` 下的清单。所以 e2e 在 Mac 上不登记到真实浏览器的目录，用 `DIFFRA_BROWSER_HOST_DIRS` 把清单写进这次的临时配置目录。
 - 内置浏览器的网页弹窗：Electron 自动按取消关掉，关闭事件在 Windows 上 150 毫秒内到，Mac 上更晚。点击、按键后看到弹窗时，等它关掉再回（最多 1 秒），不然工具结果会让模型去处理已经没有的弹窗。
 - 测试里的平台差异：Mac 的临时目录 `/var` 是 `/private/var` 的软链接，子进程看到的是真实路径；路径大小写只在 Windows 上合并；Retina 屏截图是 2 倍像素，按截图坐标点击的用例按窗口的 `devicePixelRatio` 换算；PowerShell 命令换成 sh 的（`flows.ts` 的 `TERMINAL_ECHO`、`TERMINAL_PWD`）。
+- 打包（`pnpm --filter @diffra/desktop package:mac`，配置在 `electron-builder.config.ts` 的 `mac`）：
+  - 出 `release/Diffra-<版本>-arm64.dmg`（给人下载安装）、同名 `.zip`（自动更新只认 zip）和 `latest-mac.yml`；应用在 `release/mac-arm64/Diffra.app`（约 340MB，dmg 约 135MB）。
+  - 先只出 Apple 芯片（arm64）：ripgrep、ast-grep 的原生文件按本机架构装，Intel 版要在 Intel 机器或 CI 上另打，universal 包要两套原生文件，以后再说。
+  - ripgrep 按平台放进 `extraResources`（Windows 还是 `rg.exe`，Mac 是 `rg`），Windows 打出来的东西不变。
+  - 图标 `build/icon.icns`：Windows 的 `icon.ico` 是透明底的标志，Mac 程序坞里习惯带底板，所以按 Apple 模板单独做（1024 画布、824 的白色圆角方块、中间放 `build/brand/icon.svg`）。`pnpm --filter @diffra/desktop icon:mac`（`scripts/mac-icon.ts`）生成，只能在 Mac 上跑；品牌图形改了就重跑。
+  - 签名：开 hardened runtime（公证要求），权限在 `build/entitlements.mac.plist`（JIT，和关掉库校验让 node-pty、ast-grep 这些原生模块能加载）。有 Developer ID 证书时（`CSC_LINK` 或 `CSC_NAME`）用证书签名并公证，没有就临时签名（ad-hoc）。临时签名的包只能自己用：发给别人会被 Gatekeeper 拦。
+  - 更新源 `https://update.diffra.dev/mac/`（`mac.publish`，写进包里，发布后不能改）。
+- 自动更新：Mac 的自动更新要求新旧版本用同一个 Developer ID 签名，临时签名的包一更新就失败，所以现在 Mac 打包版不检查更新，「更新与关于」显示「Mac 预览版暂不自动更新，新版本请到官网下载」（`updater.ts` 的 `mac-preview`）。正式发 Mac 版时去掉。
+- 钥匙串：Mac 上 safeStorage 用钥匙串里的「Diffra Safe Storage」加密 API Key，开发版和打包版共用这个名字。签名不同的程序第一次读它会弹系统授权框；临时签名每次打包都不一样，所以每装一个新包都会问一次，有了 Developer ID 就不会。e2e 在 Mac 上加 `--use-mock-keychain`，不碰用户真实的钥匙串。
+- 打包版验收：`pnpm --filter @diffra/desktop test:packaged:mac` 先打包，再把全部 e2e 跑在 `release/mac-arm64/Diffra.app` 上（Playwright 的 `packaged` 项目按系统选程序路径）。
 - 还没做：
-  - 打包：electron-builder 的 mac 配置（dmg 加 zip，自动更新只认 zip）、架构（arm64 还是 universal）、`.icns` 图标、ripgrep 换成 Mac 的 `rg`。
-  - 签名和公证：要 Apple Developer 账号（每年 99 美元）和 Developer ID 证书。Mac 上没签名的应用自动更新直接失败，没公证的第一次打开会被 Gatekeeper 拦住，这和 Windows 现在不签名不一样，绕不过去。
-  - 更新源单独一个目录（比如 `/mac/`），`publish-release.ts`、官网下载页、nginx、下载统计跟着加；`updater.ts` 判断免安装版靠 `Uninstall Diffra.exe`，Mac 要换判断方法。
-  - CI 加 `macos-latest` 的任务，证书放进 secrets。
+  - 签名和公证：要 Apple Developer 账号（每年 99 美元，国内 688 元）和 Developer ID Application 证书；公证要 App Store Connect 的 API 密钥或 App 专用密码。个人账号的话，系统弹窗里显示的开发者是本人姓名。
+  - 发布：`publish-release.ts` 加 Mac 的文件（dmg、zip、`.blockmap`、`latest-mac.yml`），服务器建 `/var/www/diffra-update/mac/`，nginx、官网下载页（按系统给链接）、下载统计跟着加。
+  - CI 加 `macos-latest` 的任务（打包、跑打包版 e2e、传草稿 Release），证书和公证凭据放进 secrets。
+  - Intel 版或 universal 包。
 
 ## Agent 核心（v0）
 

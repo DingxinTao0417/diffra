@@ -18,8 +18,9 @@ test('设置里显示 core 的 ACP 握手结果、版本号和更新状态', asy
     await settingsNav(window).getByRole('button', { name: '更新与关于' }).click()
     await expect(window.getByTestId('app-version')).toHaveText(version)
     if (isPackagedRun()) {
-      // 打包版测的是 release/win-unpacked，没经过安装（目录里没有卸载程序），是免安装版，不检查更新
-      await expect(window.getByTestId('update-status')).toHaveText('免安装版不检查更新，请用安装版')
+      // 打包版测的是 release/win-unpacked，没经过安装（目录里没有卸载程序），是免安装版，不检查更新；
+      // Mac 的打包版还没有正式签名，不自动更新
+      await expect(window.getByTestId('update-status')).toHaveText(process.platform === 'darwin' ? 'Mac 预览版暂不自动更新，新版本请到官网下载' : '免安装版不检查更新，请用安装版')
     } else {
       // 未打包的应用里 electron-updater 不工作
       await expect(window.getByTestId('update-status')).toHaveText('开发模式不检查更新')
