@@ -173,7 +173,9 @@ export class ExternalBrowser {
 
   private async openTab(sessionId: string, task: ExternalTask, url: string): Promise<ExternalTab> {
     if (task.tabs.length >= MAX_TABS) throw new Error(`一个任务最多开 ${MAX_TABS} 个标签页，先用 browser_tabs 关掉一些`)
-    const { tabId } = await task.connection.call<{ tabId: number }>({ method: 'tabs.create', params: { sessionId, title: task.title, url: 'about:blank', active: task.tabs.length === 0 } })
+    // 新开的都放前台（第 475 步）：以前只有第一个在前台，后面的在后台开。CI 的慢机器上 Chrome 对后台标签页的调试命令会 30 秒不回应，
+    // 智能体接着就在这个标签页上读、点，一卡就是半分钟；同一次运行里前台的那个一切正常
+    const { tabId } = await task.connection.call<{ tabId: number }>({ method: 'tabs.create', params: { sessionId, title: task.title, url: 'about:blank', active: true } })
     const tab = await this.attach(task, tabId)
     task.active = task.tabs.length - 1
     if (url) await tab.agent.load(url)
