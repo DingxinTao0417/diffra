@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { CheckpointChange } from './protocol.js'
@@ -109,6 +110,39 @@ export class Checkpoints {
     })
   }
 
+  // base 里 paths 这些文件换成 source 里的内容（source 里没有的就删掉），其余照旧，存成一个快照提交。
+  // 用来把 Git 带进来的文件（拉取、切分支这类挪了 HEAD 的命令）从「智能体改了什么」的基线里扣掉。用临时索引，不碰快照用的那个
+  overlay(base: string, source: string, paths: string[]): Promise<{ commit: string; tree: string }> {
+    return exclusive(this.gitDir, async () => {
+      const env = { GIT_INDEX_FILE: join(this.gitDir, `overlay-${randomUUID()}.index`) }
+      try {
+        await this.git(['read-tree', base], undefined, env)
+        const wanted = new Set(paths)
+        const parts = (await this.git(['diff-tree', '-r', '-z', '--no-renames', base, source])).split('\0')
+        const entries: string[] = []
+        // -z 的输出一条两段：「:旧模式 新模式 旧对象 新对象 状态」和路径
+        for (let i = 0; i + 1 < parts.length; i += 2) {
+          const [, mode, , object, status] = (parts[i] ?? '').split(' ')
+          const path = parts[i + 1] ?? ''
+          if (!wanted.has(path)) continue
+          entries.push(status === 'D' ? `0 ${'0'.repeat(40)}\t${path}` : `${mode} ${object}\t${path}`)
+        }
+        if (entries.length > 0) await this.git(['update-index', '-z', '--index-info'], `${entries.join('\0')}\0`, env)
+        const tree = (await this.git(['write-tree'], undefined, env)).trim()
+        const commit = (await this.git(['commit-tree', tree, '-m', 'diffra git baseline'])).trim()
+        await this.git(['update-ref', `refs/diffra/${commit}`, commit])
+        return { commit, tree }
+      } finally {
+        await rm(env.GIT_INDEX_FILE, { force: true })
+      }
+    })
+  }
+
+  // 两个快照之间变了的文件
+  changedPaths(from: string, to: string): Promise<string[]> {
+    return exclusive(this.gitDir, async () => (await this.git(['diff-tree', '-r', '-z', '--no-renames', '--name-only', from, to])).split('\0').filter(Boolean))
+  }
+
   // 只动 changesSince 列出的文件：改过和删掉的恢复成快照里的内容，快照之后新建的删掉
   restore(commit: string, changes: CheckpointChange[]): Promise<void> {
     return exclusive(this.gitDir, async () => {
@@ -130,14 +164,15 @@ export class Checkpoints {
     return (await this.git(['write-tree'])).trim()
   }
 
-  private git(args: string[], input?: string): Promise<string> {
-    return runGit(['--git-dir', this.gitDir, '--work-tree', this.workTree, ...args], this.workTree, input)
+  private git(args: string[], input?: string, env?: NodeJS.ProcessEnv): Promise<string> {
+    return runGit(['--git-dir', this.gitDir, '--work-tree', this.workTree, ...args], this.workTree, input, env)
   }
 }
 
-function runGit(args: string[], cwd: string, input?: string): Promise<string> {
+// 跑一条 git 命令，返回完整的标准输出（不截断），退出码非 0 时报错带上标准错误
+export function runGit(args: string[], cwd: string, input?: string, env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('git', args, { cwd, env: { ...process.env, ...GIT_ENV }, windowsHide: true })
+    const child = spawn('git', args, { cwd, env: { ...process.env, ...GIT_ENV, ...env }, windowsHide: true })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))

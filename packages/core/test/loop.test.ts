@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1424,6 +1425,92 @@ describe('提交前问深度扫描', () => {
     const changedIO = askingIO('deep-scan-skip')
     await run(scannedSession, 't3', '再改再提交', changedIO)
     expect(deepScanAsks(changedIO.asked)).toHaveLength(1)
+  }, 30_000)
+})
+
+describe('拉取代码这类 Git 带进来的改动', () => {
+  const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' }
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: { ...process.env, ...identity }, encoding: 'utf8' })
+  let upstream: string
+
+  // 项目是 Git 仓库，上游是它的克隆：上游多了一个提交（改了 app.ts、新加带 eval 的 lib.ts），项目还没拉
+  beforeEach(() => {
+    git(project, 'init', '-q', '-b', 'main')
+    writeFileSync(join(project, 'app.ts'), 'export const a = 1\n')
+    git(project, 'add', '.')
+    git(project, 'commit', '-qm', 'init')
+    upstream = mkdtempSync(join(tmpdir(), 'diffra-loop-upstream-'))
+    git(upstream, 'clone', '-q', project, '.')
+    writeFileSync(join(upstream, 'app.ts'), 'export const a = 2\n')
+    writeFileSync(join(upstream, 'lib.ts'), 'export const run = (input: string) => eval(input)\n')
+    git(upstream, 'add', '.')
+    git(upstream, 'commit', '-qm', 'upstream')
+  })
+
+  afterEach(() => {
+    rmSync(upstream, { recursive: true, force: true })
+  })
+
+  const pull = (): Step => ({ toolCalls: [{ name: 'run_command', input: { command: `git pull -q --ff-only "${upstream.replace(/\\/g, '/')}" main` } }] })
+  const finish: Step = { toolCalls: [{ name: 'finish', input: { summary: '好了' } }] }
+  const security: SessionSecurity = { staticCheck: true, lightScan: false }
+
+  test('只拉代码：拉下来的文件不算这一轮的改动，finish 判定没改文件，不跑完成检查和静态检查', async () => {
+    const model = scriptedModel([pull(), finish])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'echo 不该跑' }, [], undefined, security)
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 't1', text: '拉一下最新代码' }, io)).resolves.toBe('end_turn')
+    expect(readFileSync(join(project, 'lib.ts'), 'utf8')).toContain('eval(input)')
+    expect(verifications(io)).toEqual(['no-edits'])
+    expect(checkResults(io, '完成检查')).toEqual([])
+    expect(checkResults(io, '静态检查')).toEqual([])
+    expect(await session.checkpointChanges('t1')).toEqual([])
+  }, 30_000)
+
+  test('拉了代码又改了文件：完成时只检查、审查智能体改的；撤销这一轮只退回它改的，拉下来的代码留着，记录重新载入后照样', async () => {
+    const model = scriptedModel([
+      pull(),
+      { toolCalls: [{ name: 'read_file', input: { path: 'app.ts' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: 'export const a = 2', new_string: 'export const a = 3' } }] },
+      finish,
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'echo ok' }, [], undefined, security)
+    session.startTurn('t1', '拉代码再改')
+    const io = recordingIO()
+
+    await expect(runTurn(session, { id: 't1', text: '拉代码再改' }, io)).resolves.toBe('end_turn')
+    session.endTurn('end_turn')
+    // 上游带进来的 lib.ts 里有 eval，静态检查没查它
+    expect(checkResults(io, '静态检查')).toEqual(['passed'])
+    expect(verifications(io)).toEqual(['verified'])
+    const diff = await session.checkpointDiff('t1')
+    expect(diff).toContain('+export const a = 3')
+    expect(diff).toContain('-export const a = 2')
+    expect(diff).not.toContain('lib.ts')
+    expect(await session.checkpointChanges('t1')).toEqual([{ path: 'app.ts', change: 'modified' }])
+
+    // 存盘再载入：基线跟着记录走，撤销时还认得哪些是拉下来的
+    const reloaded = await makeSession(scriptedModel([]), undefined, [], undefined, security, undefined, {}, { record: session.toRecord() })
+    expect(await reloaded.restoreCheckpoint('t1')).toEqual([{ path: 'app.ts', change: 'modified' }])
+    // 退回到拉取后磁盘上的样子；全局开了 core.autocrlf 时拉下来的是 CRLF
+    expect(readFileSync(join(project, 'app.ts'), 'utf8').replace(/\r\n/g, '\n')).toBe('export const a = 2\n')
+    expect(readFileSync(join(project, 'lib.ts'), 'utf8')).toContain('eval(input)')
+    // 工作区和拉下来的提交一致，不会留下一堆把上游改动反着撤掉的改动
+    expect(git(project, 'status', '--porcelain')).toBe('')
+  }, 30_000)
+
+  test('没挪 HEAD 的 git 命令照旧：用命令改的文件仍算这一轮的改动', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'run_command', input: { command: 'git checkout -q -b topic && echo "export const b = 1" > b.ts' } }] },
+      finish,
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: 'echo ok' })
+    const io = recordingIO()
+
+    await runTurn(session, { id: 't1', text: '开个分支写 b.ts' }, io)
+    expect(verifications(io)).toEqual(['verified'])
+    expect(await session.checkpointChanges('t1')).toEqual([{ path: 'b.ts', change: 'added' }])
   }, 30_000)
 })
 

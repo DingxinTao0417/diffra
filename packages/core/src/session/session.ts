@@ -111,6 +111,8 @@ export class Session {
   readonly alwaysAllowed = new Set<string>()
   // turnId → 这一轮开始前的快照
   readonly turnCheckpoints = new Map<string, string>()
+  // turnId → 这一轮里 Git 命令挪了 HEAD（拉取、切分支）之后的基线：开始前的快照，Git 带进来的文件换成带进来时的内容。没挪过的轮次没有
+  readonly turnGitBases = new Map<string, string>()
   // turnId → 这一轮的提问在 messages 里的位置，重新生成时从这里截断对话
   readonly messageStarts = new Map<string, number>()
   // 上下文压缩的位置和摘要；messages 保留原文，重新生成、撤销照常按位置截断
@@ -150,9 +152,10 @@ export class Session {
       this.taskState = restoredTaskState(record)
       this.messages.push(...record.messages)
       this.compaction = record.compaction
-      for (const { checkpoint, messageStart, ...turn } of record.turns) {
+      for (const { checkpoint, gitBase, messageStart, ...turn } of record.turns) {
         this.turns.push(turn)
         if (checkpoint) this.turnCheckpoints.set(turn.id, checkpoint)
+        if (gitBase) this.turnGitBases.set(turn.id, gitBase)
         if (messageStart !== null) this.messageStarts.set(turn.id, messageStart)
       }
     }
@@ -274,6 +277,7 @@ export class Session {
       turns: this.turns.map((turn) => ({
         ...turn,
         checkpoint: this.turnCheckpoints.get(turn.id) ?? null,
+        ...(this.turnGitBases.has(turn.id) ? { gitBase: this.turnGitBases.get(turn.id) } : {}),
         messageStart: this.messageStarts.get(turn.id) ?? null,
       })),
       messages: this.messages,
@@ -304,20 +308,38 @@ export class Session {
     return { system: share(chars.system), rules: share(chars.rules), tools: share(chars.tools), messages: share(chars.messages) }
   }
 
-  // 某一轮开始之后的改动，unified diff
-  async checkpointDiff(turnId: string): Promise<string> {
+  // 算「智能体从某一轮开始改了什么」的基线：这一轮开始前的快照，再把这一轮及之后 Git 命令带进来的文件（拉取、切分支）换成带进来时的内容。
+  // 看改动、撤销、重新生成、完成门禁都以它为准，拉下来的代码不算智能体的改动，撤销也只退回它改的。没有 Git 挪过 HEAD 时就是这一轮的快照
+  async changeBase(turnId: string): Promise<string | undefined> {
     const commit = this.turnCheckpoints.get(turnId)
-    if (this.checkpoints && commit) return this.checkpoints.diffSince(commit)
+    if (!this.checkpoints || !commit) return undefined
+    const index = this.turns.findIndex((turn) => turn.id === turnId)
+    // 进行中的这一轮在核心的循环测试里可能没记进 turns，自己也要算上
+    const ids = [turnId, ...(index >= 0 ? this.turns.slice(index + 1).map((turn) => turn.id) : [])]
+    let base = commit
+    for (const id of ids) {
+      const start = this.turnCheckpoints.get(id)
+      const gitBase = this.turnGitBases.get(id)
+      if (!start || !gitBase) continue
+      base = base === start ? gitBase : (await this.checkpoints.overlay(base, gitBase, await this.checkpoints.changedPaths(start, gitBase))).commit
+    }
+    return base
+  }
+
+  // 某一轮开始之后智能体的改动，unified diff
+  async checkpointDiff(turnId: string): Promise<string> {
+    const base = await this.changeBase(turnId)
+    if (this.checkpoints && base) return this.checkpoints.diffSince(base)
     // 进行中的这一轮快照还没打好：快照在任何工具运行之前打，这时还没有改动
     if (this.checkpoints && this.running && this.turns.at(-1)?.id === turnId) return ''
     throw new Error('这一轮没有检查点，看不了改动')
   }
 
-  // 本任务从第一轮之前到现在的改动（深度扫描「本任务改动」的范围），unified diff；没有检查点时返回 null
+  // 本任务从第一轮之前到现在智能体的改动（深度扫描「本任务改动」的范围），unified diff；没有检查点时返回 null
   async taskDiff(): Promise<string | null> {
     const first = this.turns.find((turn) => turn.kind === 'prompt')
-    const commit = first ? this.turnCheckpoints.get(first.id) : undefined
-    return this.checkpoints && commit ? this.checkpoints.diffSince(commit) : null
+    const base = first ? await this.changeBase(first.id) : undefined
+    return this.checkpoints && base ? this.checkpoints.diffSince(base) : null
   }
 
   // 重新生成：把这一轮及之后的文件改动和对话一起撤掉，调用方再用同样的提问发一轮
@@ -326,10 +348,10 @@ export class Session {
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const start = this.messageStarts.get(turnId)
     if (index < 0 || start === undefined) throw new Error('这一轮不能重新生成')
-    const commit = this.turnCheckpoints.get(turnId)
+    const base = await this.changeBase(turnId)
     let filesRestored = false
-    if (this.checkpoints && commit) {
-      await this.checkpoints.restore(commit, await this.checkpoints.changesSince(commit))
+    if (this.checkpoints && base) {
+      await this.checkpoints.restore(base, await this.checkpoints.changesSince(base))
       filesRestored = true
     }
     // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
@@ -343,6 +365,7 @@ export class Session {
     this.unresolvedCheck = this.consumedChecks.get(turnId) ?? null
     for (const turn of this.turns.splice(index)) {
       this.turnCheckpoints.delete(turn.id)
+      this.turnGitBases.delete(turn.id)
       this.messageStarts.delete(turn.id)
       this.consumedChecks.delete(turn.id)
     }
@@ -359,18 +382,18 @@ export class Session {
   }
 
   async checkpointChanges(turnId: string): Promise<CheckpointChange[]> {
-    const commit = this.turnCheckpoints.get(turnId)
-    if (!this.checkpoints || !commit) throw new Error('这一轮没有检查点，无法撤销')
-    return this.checkpoints.changesSince(commit)
+    const base = await this.changeBase(turnId)
+    if (!this.checkpoints || !base) throw new Error('这一轮没有检查点，无法撤销')
+    return this.checkpoints.changesSince(base)
   }
 
-  // 还原到某一轮开始前：这一轮以及之后所有轮次的文件改动都会撤掉
+  // 还原到某一轮开始前：这一轮以及之后所有轮次智能体改的文件都撤掉；Git 带进来的文件（拉取、切分支）留着，提交本来也不会退回
   async restoreCheckpoint(turnId: string): Promise<CheckpointChange[]> {
     if (this.running) throw new Error('任务还在进行中，先停止再撤销')
-    const commit = this.turnCheckpoints.get(turnId)
-    if (!this.checkpoints || !commit) throw new Error('这一轮没有检查点，无法撤销')
-    const changes = await this.checkpoints.changesSince(commit)
-    await this.checkpoints.restore(commit, changes)
+    const base = await this.changeBase(turnId)
+    if (!this.checkpoints || !base) throw new Error('这一轮没有检查点，无法撤销')
+    const changes = await this.checkpoints.changesSince(base)
+    await this.checkpoints.restore(base, changes)
     // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
     this.readHashes.clear()
     this.verifiedSnapshot = null

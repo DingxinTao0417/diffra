@@ -14,6 +14,8 @@ const SNIPPET_RADIUS = 40
 export interface StoredTurnRecord extends StoredTurn {
   // 这一轮开始前的检查点提交；没打上检查点时为 null
   checkpoint: string | null
+  // 这一轮里 Git 命令挪了 HEAD 之后的基线提交（检查点仓库里），见 Session.turnGitBases；没挪过的轮次没有
+  gitBase?: string
   // 这一轮的提问在 messages 里的位置
   messageStart: number | null
 }
@@ -98,6 +100,8 @@ const recordSchema = z.object({
       stopReason: z.string().nullable(),
       updates: z.array(z.unknown()),
       checkpoint: z.string().nullable(),
+      // 第 413 步加的，只有 Git 命令挪过 HEAD 的轮次有
+      gitBase: z.string().optional(),
       messageStart: z.number().int().nonnegative().nullable().default(null),
       // 第 17 步加的
       skills: z.array(z.string()).default([]),

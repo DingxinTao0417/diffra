@@ -48,6 +48,7 @@ import {
 import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
 import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
+import { gitBroughtPaths, projectHead } from './git-moves.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { runWaitCommand, WAIT_COMMAND_TOOL } from './wait.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
@@ -449,7 +450,9 @@ export async function runTurn(
           stop = 'deep-scan'
           return 'end_turn'
         }
+        const headBefore = call.toolName === 'run_command' && !call.invalid ? await headBeforeGit(session, call) : null
         const outcome = await runToolCall(session, call, signal, io)
+        if (headBefore) turnStartFingerprint = await shiftBaselineAfterGit(session, turn.id, headBefore, turnStartFingerprint)
         results.push(outcome.result)
         screenshots.push(...(outcome.images ?? []))
         if (outcome.edited) {
@@ -1263,7 +1266,7 @@ function showFinishCard(io: TurnIO, call: StepToolCall, verification: FinishVeri
   })
 }
 
-// 本轮对文件的改动，安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
+// 本轮智能体对文件的改动（Git 带进来的不算，见 Session.changeBase），安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
 async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: string[] = []): Promise<string | null> {
   const wanted = [
     session.config.security.staticCheck || session.config.security.lightScan ? '安全检查' : null,
@@ -1271,13 +1274,13 @@ async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: str
     ...extra,
   ].filter((item): item is string => item !== null)
   if (wanted.length === 0) return null
-  const commit = session.turnCheckpoints.get(turnId)
-  if (!session.checkpoints || !commit) {
+  if (!session.checkpoints || !session.turnCheckpoints.has(turnId)) {
     await notice(io, 'warning', `${wanted.join('和')}需要检查点（Git），这一轮跳过了`)
     return null
   }
   try {
-    return await session.checkpoints.diffSince(commit)
+    const base = await session.changeBase(turnId)
+    return base ? await session.checkpoints.diffSince(base) : null
   } catch (error) {
     console.error('[session] 读取本轮改动失败', error)
     await notice(io, 'warning', `读取本轮改动失败，${wanted.join('和')}这一轮跳过了`, error instanceof Error ? error.message : String(error))
@@ -1322,7 +1325,35 @@ async function runArchitectureCheck(session: Session, architecture: { analysis: 
   }
 }
 
-const DEEP_SCAN_OPTIONS = { scan: 'deep-scan-first', skip: 'deep-scan-skip', never: 'deep-scan-never' } as const
+// 带 git 的命令执行前先记下项目的 HEAD；不是 git 命令、没有检查点或项目不是 Git 仓库时返回 null，执行后也就不用比
+async function headBeforeGit(session: Session, call: StepToolCall): Promise<string | null> {
+  if (!session.checkpoints) return null
+  const command = typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string' ? call.input.command : null
+  if (command === null || gitSubcommands(command).length === 0) return null
+  return projectHead(session.cwd)
+}
+
+// 命令挪了项目的 HEAD（拉取、合并、切分支、reset、rebase）：跑完后和新 HEAD 一样的文件是 Git 带进来的，不是智能体改的，
+// 从这一轮的基线里扣掉（见 Session.changeBase）。完成时只检查、审查智能体自己的改动，撤销也只退回它改的。
+// 返回调整后的本轮开始指纹；读不到时原样返回，这一轮照旧按整个工作区算
+async function shiftBaselineAfterGit(session: Session, turnId: string, headBefore: string, startFingerprint: string | null): Promise<string | null> {
+  const start = session.turnCheckpoints.get(turnId)
+  if (!session.checkpoints || !start) return startFingerprint
+  try {
+    const headAfter = await projectHead(session.cwd)
+    if (!headAfter || headAfter === headBefore) return startFingerprint
+    const brought = await gitBroughtPaths(session.cwd, headBefore, headAfter)
+    if (brought.length === 0) return startFingerprint
+    const current = await session.checkpoints.fingerprint()
+    session.turnGitBases.set(turnId, (await session.checkpoints.overlay(session.turnGitBases.get(turnId) ?? start, current, brought)).commit)
+    return startFingerprint === null ? null : (await session.checkpoints.overlay(startFingerprint, current, brought)).tree
+  } catch (error) {
+    console.error('[session] 按 Git 命令调整本轮基线失败，这一轮照旧按整个工作区算', error)
+    return startFingerprint
+  }
+}
+
+const DEEP_SCAN_OPTIONS ={ scan: 'deep-scan-first', skip: 'deep-scan-skip', never: 'deep-scan-never' } as const
 const DEEP_SCAN_FIRST_NOTE =
   'The user wants a deep security scan of this task\'s changes before committing or pushing, so this command was not run. ' +
   'Diffra stops this turn now and runs the scan; the user decides what to fix and whether to commit after reading the report. Do not retry the command.'
