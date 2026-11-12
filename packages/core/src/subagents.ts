@@ -18,7 +18,30 @@ const MAX_AGENT_TYPES = 20
 const MAX_AGENT_FILE_BYTES = 50_000
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
 
+export const EXPLORE_AGENT = 'explore'
+
+// 内置的类型（第 449 步）：只读的探索工人。要在不熟的代码里大范围摸情况时，主智能体把这件事派给它，自己的上下文留给真正要做的事。
+// 项目或用户目录里同名的类型文件会盖过它
+const BUILTIN_AGENT_TYPES: AgentType[] = [
+  {
+    name: EXPLORE_AGENT,
+    description: 'finds things out by reading and searching the code and reports conclusions with file paths and line numbers; for a broad look through code you do not know yet',
+    readOnly: true,
+    instructions: [
+      'Answer the question you were given by reading the code.',
+      '- Start broad (search, outline, list_files), then read only the parts that matter. When several lookups are independent, call them in the same response: they run in parallel.',
+      '- Stop as soon as you can answer. Do not keep reading to be thorough.',
+      '- Report conclusions, not file dumps: what you found, each claim with its file path and line number, and what you could not determine. Quote only the few lines the coordinator needs to see.',
+    ].join(String.fromCharCode(10)),
+  },
+]
+
 export async function loadAgentTypes(cwd: string): Promise<AgentType[]> {
+  const custom = await loadCustomTypes(cwd)
+  return [...BUILTIN_AGENT_TYPES.filter((builtin) => !custom.some((type) => type.name === builtin.name)), ...custom]
+}
+
+async function loadCustomTypes(cwd: string): Promise<AgentType[]> {
   const types: AgentType[] = []
   for (const dir of [join(cwd, '.diffra', 'agents'), join(homedir(), '.diffra', 'agents')]) {
     const names = await readdir(dir).catch(() => [] as string[])

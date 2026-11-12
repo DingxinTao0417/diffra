@@ -5,7 +5,7 @@ import { type ModelMessage, tool, type ToolChoice, type ToolResultPart, type Too
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { ToolError } from '../tools/types.js'
-import type { AgentType } from '../subagents.js'
+import { type AgentType, EXPLORE_AGENT } from '../subagents.js'
 import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, PARENT_TOOL_CALL_META_KEY, type PromptImage } from '../protocol.js'
 import { screenshotMessage } from './browser.js'
 import { designInstructions, designTools } from './design.js'
@@ -14,9 +14,15 @@ import {
   type AgentScope,
   CONTEXT_STOP_RATIO,
   DEFAULT_CONTEXT_WINDOW,
+  assistantText,
+  callSignature,
+  describeCall,
   errorResult,
+  type PrefetchedReads,
+  prefetchReads,
   reportInvalidCall,
   runToolCall,
+  STUCK_REPEATS,
   type StepToolCall,
   streamModelStep,
   textResult,
@@ -25,6 +31,7 @@ import {
   type TurnIO,
 } from './loop.js'
 import type { Session } from './session.js'
+import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { toolDefinitionChars, TOOLS } from './tools.js'
 
 // 子智能体（工人）：主智能体用 delegate 把一块独立的活交出去，几个工人并行做，做完交回结果，主智能体再整合、检查、收尾。
@@ -35,6 +42,10 @@ export const MAX_PARALLEL_WORKERS = 4
 export const MAX_WORKERS_PER_TURN = 8
 export const WORKER_MAX_STEPS = 40
 const REPORT_TOOL = 'report'
+// 工人没交结果时带回它最近写的几段话：给主智能体的和卡片上显示的各有长度上限
+const KEPT_NOTES = 5
+const MAX_NOTES_CHARS = 2000
+const MAX_UI_NOTES_CHARS = 300
 const DESIGN_EVAL_TOOL = 'design_eval'
 const NEWLINE = String.fromCharCode(10)
 // 设计页里的内部动作：认领节点、工人结束（释放锁、收起光标）
@@ -71,20 +82,33 @@ const reportInput = z.object({
 
 const claimInput = z.object({ files: z.array(z.string().min(1)).min(1).max(50).describe('Files or directories, relative to the project') })
 
-// 设计任务里工人按画布上的节点分工；普通任务按文件
-// types 是项目里自定义的工人类型（.diffra/agents，见 subagents.ts）：列在工具说明里，主智能体用 agent 参数选
+// 设计任务里工人按画布上的节点分工；普通任务按文件。
+// types 是能派的工人类型：内置的 explore 和项目里自定义的（.diffra/agents），都在 subagents.ts；列在工具说明里，主智能体用 agent 参数选。
+// 主智能体只靠这段说明判断派不派（第 449 步）：先讲代价，再分开列该派和不该派的情况，拿不准就自己做
 export function delegateTool(design = false, types: AgentType[] = []) {
+  const explore = types.some((type) => type.name === EXPLORE_AGENT)
   return tool({
-    description:
-      (types.length > 0
-        ? `Worker types defined for this project (pass one as agent when it fits; omit agent for a general worker): ${types.map((type) => `${type.name}${type.readOnly ? ' (read-only)' : ''} — ${type.description}`).join('; ')}. `
-        : '') +
-      'Hand a self-contained part of the task to a worker agent. Call delegate several times in one step to run up to 4 workers in parallel (at most 8 per turn); the step waits until all of them report back. ' +
-      (design
-        ? 'In this design task, set up the variables, components and page frames yourself first, then give each worker its own frames or sections in nodes (several workers can work on the same page in different sections). Workers can read the whole document but only change their own nodes and the nodes they create. '
-        : 'Use it for larger changes that split into independent parts touching different files. Do not use it for small tasks, a single file, or parts that each depend on the previous one. ' +
-          'Give each worker a different set of files to own: workers can read everything but only change what they own. ') +
-      'Workers cannot call finish: after they report, read their results, make the parts fit together, and verify before calling finish.',
+    description: [
+      'Hand a self-contained piece of work to a worker agent that runs in its own context and reports back.',
+      'A worker costs more than it looks: it starts knowing only what you write in task, has to find everything else again, and you get back only its report.',
+      ...(types.length > 0
+        ? [
+            `Worker types (pass one as agent when it fits; omit agent for a general worker that can change files): ${types.map((type) => `${type.name}${type.readOnly ? ' (read-only)' : ''} — ${type.description}`).join('; ')}.`,
+          ]
+        : []),
+      ...(design
+        ? [
+            'In this design task, set up the variables, components and page frames yourself first, then give each worker its own frames or sections in nodes (several workers can work on the same page in different sections). Workers can read the whole document but only change their own nodes and the nodes they create.',
+          ]
+        : [
+            `Use it when: (1) answering a question or preparing a change needs a broad look through code you do not know yet (several modules, many files) and you only need the conclusion${explore ? `: send an ${EXPLORE_AGENT} worker and keep your own context for the work itself` : ''}; ` +
+              '(2) a larger change splits into independent parts that touch different files: one worker per part, each owning a different set of files (workers can read everything but only change what they own).',
+            'Do not use it when: a few tool calls would do; you already know which file or symbol to look at (read or search it yourself); the task is small or a single-file change; the parts depend on each other or touch the same files. When unsure, do the work yourself.',
+          ]),
+      'Call delegate several times in one step to run up to 4 workers in parallel (at most 8 per turn); the step waits until all of them report back.',
+      'In task, write: the goal and what it is for, what you already know or have ruled out, where to start (files, functions), what must not change, and what to report back.',
+      'Workers cannot call finish: after they report, read their results, check the claims you are going to rely on, make the parts fit together, and verify before calling finish.',
+    ].join(' '),
     inputSchema: delegateInput,
   })
 }
@@ -165,13 +189,16 @@ interface Worker {
   // 命令改到别人认领的文件
   boundary: string[]
   steps: number
-  // 自定义的工人类型；没指定就是通用工人
+  // 工人类型（内置的 explore 或自定义的）；没指定就是通用工人
   type: AgentType | null
+  // 最近几步里它说的话
+  notes: string[]
 }
 
 type WorkerOutcome =
   | { kind: 'reported'; summary: string; issues: string | null }
   | { kind: 'max-steps' }
+  | { kind: 'stuck'; call: string }
   | { kind: 'cancelled' }
   | { kind: 'failed'; message: string }
 
@@ -215,13 +242,18 @@ function workerIO(io: TurnIO, worker: Worker, permissions: { chain: Promise<unkn
   }
 }
 
+// 接在工人的系统提示词（prompt.ts 的 worker 那一份）后面
 function workerRules(worker: Worker, owned: string[]): string {
   return [
-    `You are "${worker.tag.name}", a worker agent. A coordinating agent split a larger task and gave you one part; other workers handle other parts at the same time. You do not see the coordinator's conversation.`,
-    '- Ignore the instructions above about finish, verify_changes, task_progress and pause_task: you do not have those tools. When your part is done, call report exactly once.',
-    `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`,
-    '- Do not start long-running commands (dev servers, watchers). Diffra runs the project checks after all workers finish; run only quick, targeted commands when they help.',
-    '- Other workers may change other files while you work. If you need something from their part, do not build it yourself: describe it in your report.',
+    `You are "${worker.tag.name}", a worker agent. A coordinating agent gave you one part of a larger task; other workers may be handling other parts at the same time. You do not see the coordinator's conversation or the user's messages: the task below is everything you were told.`,
+    `- When your part is done, call ${REPORT_TOOL} exactly once. The report is the only thing the coordinator receives, so put everything it needs in it.`,
+    ...(worker.type?.readOnly
+      ? ['- You are read-only: you cannot change files or run commands. Investigate and report.']
+      : [
+          `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`,
+          '- Do not start long-running commands (dev servers, watchers). Diffra runs the project checks after all workers finish; run only quick, targeted commands when they help.',
+          '- Other workers may change other files while you work. If you need something from their part, do not build it yourself: describe it in your report.',
+        ]),
     ...(worker.nodes.length > 0
       ? [`- On the design canvas you own these nodes: ${worker.nodes.join(', ')}. Build inside them; changing nodes other workers own is refused. You cannot use eval.`]
       : []),
@@ -247,25 +279,26 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
       team.edits.push({ agentId: worker.tag.id, path })
     },
   }
-  // 自定义类型的说明接在工人规则后面；只读类型另外写明不能改、不能跑命令，工具也只给读和搜索的
-  const typeNote = worker.type
-    ? `\n\nYou are a "${worker.type.name}" worker.${worker.type.readOnly ? ' You are read-only: you cannot change files or run commands; investigate and report.' : ''}\n${worker.type.instructions}`
-    : ''
-  const system = `${session.systemPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned)}${typeNote}`
+  // 类型的说明接在工人规则后面；只读类型工具也只给读和搜索的
+  const typeNote = worker.type ? `\n\nYou are a "${worker.type.name}" worker.\n${worker.type.instructions}` : ''
+  const system = `${session.workerPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned)}${typeNote}`
   const ownedLine = [
-    owned.length > 0 ? `Files you own: ${owned.join(', ')}` : `You do not own any files yet; call ${CLAIM_TOOL} before changing a file.`,
+    worker.type?.readOnly ? '' : owned.length > 0 ? `Files you own: ${owned.join(', ')}` : `You do not own any files yet; call ${CLAIM_TOOL} before changing a file.`,
     worker.nodes.length > 0 ? `Nodes you own: ${worker.nodes.join(', ')}` : '',
   ]
     .filter(Boolean)
     .join(NEWLINE)
   // 设计任务的工人还能用设计工具（除了 eval：它能绕过节点锁）
   const designSet = Object.fromEntries(Object.entries(designTools(session)).filter(([name]) => name !== DESIGN_EVAL_TOOL))
-  const designNames = new Set(Object.keys(designSet))
   const baseTools = worker.type?.readOnly ? Object.fromEntries(Object.entries(WORKER_TOOLS).filter(([name]) => !READ_ONLY_WORKER_EXCLUDED.has(name))) : WORKER_TOOLS
   const tools: ToolSet = { ...baseTools, ...(worker.type?.readOnly ? {} : designSet) }
   const messages: ModelMessage[] = [{ role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
   const window = active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let nearLimit = false
+  // 和主循环一样的防打转（第 452 步）：同一个调用、同样的结果连着 3 次先提醒，提醒后还犯就停下这个工人；另有只提醒不停的几种（spin.ts）
+  const repeats = new Map<string, number>()
+  let warnedStuck = false
+  const spin = newSpinTracker()
   for (let step = 0; step < WORKER_MAX_STEPS; step++) {
     // 最后一步或上下文快满时要求直接交结果
     const toolChoice: ToolChoice<ToolSet> = step === WORKER_MAX_STEPS - 1 || nearLimit ? { type: 'tool', toolName: REPORT_TOOL } : 'auto'
@@ -277,6 +310,13 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     )
     messages.push(...responseMessages)
     nearLimit = inputTokens > window * CONTEXT_STOP_RATIO
+    // 工人说的话不进主对话，留最近几段：没交结果就停下时带回给主智能体（第 451 步）
+    const said = assistantText(responseMessages).trim()
+    if (said) {
+      worker.notes.push(said)
+      if (worker.notes.length > KEPT_NOTES) worker.notes.shift()
+      noteText(spin, said)
+    }
     if (signal.aborted) return { kind: 'cancelled' }
     if (toolCalls.length === 0) {
       messages.push({ role: 'user', content: truncated ? (interrupted ? INTERRUPTION_NOTE : TRUNCATION_NOTE) : `Keep working with the tools, or call ${REPORT_TOOL} when your part is done.` })
@@ -284,7 +324,9 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     }
     const results: ToolResultPart[] = []
     const images: PromptImage[] = []
-    for (const call of toolCalls) {
+    let repeated: StepToolCall | null = null
+    const prefetched: PrefetchedReads = new Map()
+    for (const [index, call] of toolCalls.entries()) {
       if (answered.has(call.toolCallId)) {
         await reportInvalidCall(call, wio)
         continue
@@ -299,26 +341,50 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
         results.push(errorResult(call, report.error.issues.map((issue) => issue.message).join('; ')))
         continue
       }
-      if (call.toolName === CLAIM_TOOL && !call.invalid) {
+      if (call.toolName === CLAIM_TOOL && !call.invalid && Object.hasOwn(tools, CLAIM_TOOL)) {
         results.push(await claimFiles(session, team, worker, call, wio, io))
         continue
       }
-      if (!WORKER_TOOL_NAMES.includes(call.toolName as (typeof WORKER_TOOL_NAMES)[number]) && !designNames.has(call.toolName)) {
-        results.push(errorResult(call, `You cannot use ${call.toolName}. Use the file tools, run_command, ${CLAIM_TOOL} and ${REPORT_TOOL}${designNames.size > 0 ? ', and the design tools' : ''}.`))
+      // 按这个工人实际拿到的工具判断：只读类型没有 edit_file、run_command，模型硬调也不执行
+      if (!Object.hasOwn(tools, call.toolName)) {
+        results.push(errorResult(call, `You cannot use ${call.toolName}. Your tools: ${Object.keys(tools).join(', ')}.`))
         continue
       }
+      let outcome: Awaited<ReturnType<typeof runToolCall>>
       if (call.toolName === 'run_command' && !call.invalid) {
-        const outcome = await runWorkerCommand(session, team, worker, call, signal, wio, scope)
-        results.push(outcome)
-        continue
+        outcome = { result: await runWorkerCommand(session, team, worker, call, signal, wio, scope), edited: false }
+      } else {
+        prefetchReads(session, toolCalls, index, answered, prefetched, signal, wio, scope)
+        outcome = await (prefetched.get(call.toolCallId) ?? runToolCall(session, call, signal, wio, scope))
       }
-      const outcome = await runToolCall(session, call, signal, wio, scope)
       results.push(outcome.result)
       images.push(...(outcome.images ?? []))
+      if (outcome.edited) {
+        repeats.clear()
+        noteEdit(spin)
+      } else {
+        noteCall(spin, call.toolName, call.input)
+        const key = callSignature(call, outcome.result)
+        const count = (repeats.get(key) ?? 0) + 1
+        repeats.set(key, count)
+        if (count >= STUCK_REPEATS) repeated = call
+      }
     }
     if (results.length > 0) messages.push({ role: 'tool', content: results })
     if (images.length > 0) messages.push(screenshotMessage(images))
     if (truncated && toolCalls.some((call) => answered.has(call.toolCallId))) messages.push({ role: 'user', content: TRUNCATION_NOTE })
+    if (repeated && warnedStuck) return { kind: 'stuck', call: describeCall(repeated) }
+    if (repeated) {
+      warnedStuck = true
+      repeats.clear()
+      messages.push({
+        role: 'user',
+        content:
+          `[Diffra] You made the same call ${STUCK_REPEATS} times and got the same result each time, without changing any file in between. ` +
+          `Stop repeating it: try a different approach, or call ${REPORT_TOOL} and explain what is blocking you.`,
+      })
+    }
+    for (const reminder of takeSpinReminders(spin)) messages.push({ role: 'user', content: reminder })
   }
   return { kind: 'max-steps' }
 }
@@ -380,12 +446,22 @@ async function runWorkerCommand(session: Session, team: Team, worker: Worker, ca
   return { ...outcome.result, output: output.type === 'text' || output.type === 'error-text' ? { ...output, value: output.value + note } : output }
 }
 
+// 工人没交结果就停下时，它最近写过的话：查到了什么多半在这里面
+function lastNotes(worker: Worker, max: number): string {
+  const text = worker.notes.join(NEWLINE).trim()
+  return text.length > max ? `…${text.slice(-max)}` : text
+}
+
 function describeOutcome(worker: Worker, outcome: WorkerOutcome): { text: string; ui: string; ok: boolean } {
   const changed = [...worker.edited]
   const files = changed.length > 0 ? `Changed files: ${changed.join(', ')}.` : 'Changed no files.'
   const boundary = worker.boundary.length > 0 ? ` Its commands also changed files owned by other workers: ${worker.boundary.join(', ')}; check them.` : ''
   const uiFiles = changed.length > 0 ? `\n改动：${changed.join('、')}` : ''
   const uiBoundary = worker.boundary.length > 0 ? `\n命令改到了别的智能体认领的文件：${worker.boundary.join('、')}` : ''
+  const notes = lastNotes(worker, MAX_NOTES_CHARS)
+  const noted = notes ? `\nIt did not report. What it wrote before it stopped (unverified, may be incomplete):\n${notes}` : ''
+  const uiNotes = lastNotes(worker, MAX_UI_NOTES_CHARS)
+  const uiNoted = uiNotes ? `\n\n停下前写的：${uiNotes}` : ''
   switch (outcome.kind) {
     case 'reported':
       return {
@@ -395,14 +471,20 @@ function describeOutcome(worker: Worker, outcome: WorkerOutcome): { text: string
       }
     case 'max-steps':
       return {
-        text: `Worker "${worker.tag.name}" hit the step limit (${WORKER_MAX_STEPS}) without reporting. ${files}${boundary} Check its changes yourself.`,
-        ui: `到了步数上限（${WORKER_MAX_STEPS} 步），没有交回结果。${uiFiles}${uiBoundary}`,
+        text: `Worker "${worker.tag.name}" hit the step limit (${WORKER_MAX_STEPS}) without reporting. ${files}${boundary} Check its changes yourself.${noted}`,
+        ui: `到了步数上限（${WORKER_MAX_STEPS} 步），没有交回结果。${uiFiles}${uiBoundary}${uiNoted}`,
+        ok: false,
+      }
+    case 'stuck':
+      return {
+        text: `Worker "${worker.tag.name}" was stopped: it kept making the same call with the same result after a reminder (${outcome.call}). ${files}${boundary} Check its changes yourself.${noted}`,
+        ui: `提醒过后仍在重复同样的操作，已停下。${uiFiles}${uiBoundary}${uiNoted}`,
         ok: false,
       }
     case 'cancelled':
       return { text: `Worker "${worker.tag.name}" was stopped by the user. ${files}`, ui: `已停止。${uiFiles}`, ok: false }
     case 'failed':
-      return { text: `Worker "${worker.tag.name}" failed: ${outcome.message}. ${files}${boundary}`, ui: `出错：${outcome.message}${uiFiles}${uiBoundary}`, ok: false }
+      return { text: `Worker "${worker.tag.name}" failed: ${outcome.message}. ${files}${boundary}${noted}`, ui: `出错：${outcome.message}${uiFiles}${uiBoundary}${uiNoted}`, ok: false }
   }
 }
 
@@ -454,11 +536,12 @@ export async function runDelegates(
     }
     const tag: AgentTag = { id: randomUUID(), name: input.data.name, color: AGENT_COLORS[team.count % AGENT_COLORS.length]! }
     team.count++
-    const nodes = session.design ? [...new Set(input.data.nodes ?? [])] : []
-    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, readHashes: new Map(), edited: new Set(), boundary: [], steps: 0, type }
+    // 只读的工人不认领文件和节点：它不改东西，认领了反而挡住别的工人
+    const nodes = session.design && !type?.readOnly ? [...new Set(input.data.nodes ?? [])] : []
+    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, readHashes: new Map(), edited: new Set(), boundary: [], steps: 0, type, notes: [] }
     // 先把要认领的都认领下来；和正在跑的工人冲突就不派这个工人
     const refused: string[] = []
-    for (const raw of input.data.files ?? []) {
+    for (const raw of type?.readOnly ? [] : (input.data.files ?? [])) {
       const path = projectPath(session, raw)
       if (!path) {
         refused.push(`${raw} is outside the project`)

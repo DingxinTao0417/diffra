@@ -256,13 +256,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     const roots = skillRoots(cwd, pluginSkillRoots(config.plugins))
     const skills = (await loadSkills(roots)).map(({ body: _body, ...info }) => info)
     const frontend = hasFrontend(files) ? { browser: config.browser, screenshots: config.browser && config.model.supportsImages } : null
+    const promptContext = { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)) }
     const session = new Session({
       cwd,
       config,
       environment,
       checkpoints,
       rulePacks,
-      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)) }),
+      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, promptContext),
+      workerPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { ...promptContext, worker: true }),
       readRoots: roots.map((root) => root.dir),
       outputRoot: options.sessionsDir ?? null,
       agentTypes: await loadAgentTypes(cwd),

@@ -1,0 +1,11 @@
+{
+  "id": "t12-audit-trail",
+  "title": "订单状态变化的审计记录（改状态的地方散在各模块）",
+  "category": "delegation",
+  "language": "ts",
+  "prompt": "订单状态每次变化都要留一条审计记录（订单号、原状态、新状态、时间、触发来源），现在完全没有记录。src/audit/audit-log.ts 里的 AuditLog 早就搭好了，后台的审计查询接口 GET /admin/orders/:id/audit 读的就是它，但一直没有地方往里写。帮我接上，别漏掉任何一处会改状态的地方，补上测试。",
+  "checks": { "afterEdit": null, "beforeFinish": "node --test \"tests/**/*.test.ts\"" },
+  "hidden": { "command": ["node", "--test", "hidden/**/*.test.ts"] },
+  "timeoutMinutes": 20,
+  "delegate": "expected"
+}

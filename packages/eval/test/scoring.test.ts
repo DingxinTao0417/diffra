@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { scoreFindings } from '../src/deep-scan.ts'
-import { type Finding, parseFindings } from '../src/metrics.ts'
+import { type Finding, parseFindings, turnMetrics } from '../src/metrics.ts'
 
 const finding = (ruleId: string, path: string, line: number): Finding => ({ card: '深度扫描报告', level: '高危', ruleId, path, line, message: '说明' })
 
@@ -50,4 +50,23 @@ test('从报告卡片里读出问题行，跳过链路和修复', () => {
     { card: '深度扫描报告', level: '高危', ruleId: 'SEC-INJ-1', path: 'src/a.ts', line: 12, message: '搜索词拼进 SQL' },
     { card: '深度扫描报告', level: '提醒', ruleId: 'SEC-KEY-1', path: 'config.ts', line: 3, message: '密钥写死' },
   ])
+})
+
+test('派出的子智能体单独计数：卡片不算工具调用，子智能体调用的工具算在总数里并单独列出，没派成的不算', () => {
+  const call = (toolCallId: string, title: string, parent?: string) => ({
+    sessionUpdate: 'tool_call' as const,
+    toolCallId,
+    title,
+    status: 'completed' as const,
+    ...(parent ? { _meta: { diffra: { parentToolCallId: parent } } } : {}),
+  })
+  const metrics = turnMetrics([
+    call('a', 'read_file'),
+    call('card', '子智能体 探索'),
+    call('w/1', 'search', 'card'),
+    call('w/2', 'read_file', 'card'),
+    { ...call('refused', '子智能体'), status: 'failed' },
+    call('steps', '步骤'),
+  ])
+  expect(metrics).toMatchObject({ toolCalls: 3, workerToolCalls: 2, delegations: 1 })
 })

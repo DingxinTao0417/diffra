@@ -105,7 +105,7 @@ const RESUME_ERROR_LINES = 20
 const SAME_CHANGE_HINT =
   'If the remaining errors are in files that belong to the same change, update them together in the next step: edit_file can be called several times in one step.'
 // 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
-const STUCK_REPEATS = 3
+export const STUCK_REPEATS = 3
 // 回复被输出上限截断：只回了半截文字，或最后一个工具调用的参数被截断没执行，就提醒模型接着做、把改动拆小。
 // 连续截断超过这么多次不再提醒，按原来的流程走
 const MAX_TRUNCATION_RESUMES = 2
@@ -383,7 +383,7 @@ export async function runTurn(
       let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
       // 同一步里连续的只读调用一起开跑，结果照原来的顺序处理（第 443 步）；轮到这一串的第一个时才开跑，排在它前面的编辑、命令已经执行完
-      const prefetched = new Map<string, ReturnType<typeof runToolCall>>()
+      const prefetched: PrefetchedReads = new Map()
       for (let index = 0; index < toolCalls.length; index++) {
         const call = toolCalls[index]!
         // 参数不合法的调用，AI SDK 已经在返回消息里补了错误结果；再补一条会让同一调用出现两个结果
@@ -478,16 +478,7 @@ export async function runTurn(
           return 'end_turn'
         }
         const headBefore = call.toolName === 'run_command' && !call.invalid ? await headBeforeGit(session, call) : null
-        if (parallelSafe(call) && !prefetched.has(call.toolCallId)) {
-          for (let next = index; next < toolCalls.length && next < index + MAX_PARALLEL_READS; next++) {
-            const item = toolCalls[next]!
-            if (!parallelSafe(item) || answered.has(item.toolCallId)) break
-            const started = runToolCall(session, item, signal, io)
-            // 中途停止时后面的不会再等它，别留下没人接的拒绝
-            started.catch(() => {})
-            prefetched.set(item.toolCallId, started)
-          }
-        }
+        prefetchReads(session, toolCalls, index, answered, prefetched, signal, io)
         const outcome = await (prefetched.get(call.toolCallId) ?? runToolCall(session, call, signal, io))
         if (headBefore) turnStartFingerprint = await shiftBaselineAfterGit(session, turn.id, headBefore, turnStartFingerprint)
         results.push(outcome.result)
@@ -705,19 +696,44 @@ function parallelSafe(call: StepToolCall): boolean {
   return path === undefined || (typeof path === 'string' && !/^[\\/]|^[A-Za-z]:|(^|[\\/])\.\.([\\/]|$)/.test(path))
 }
 
+export type PrefetchedReads = Map<string, ReturnType<typeof runToolCall>>
+
+// 从第 index 个调用起，连续的只读调用同时发起（最多 MAX_PARALLEL_READS 个），放进 prefetched；调用方仍按顺序一个一个取结果。主循环和子智能体共用
+export function prefetchReads(
+  session: Session,
+  toolCalls: StepToolCall[],
+  index: number,
+  answered: Set<string>,
+  prefetched: PrefetchedReads,
+  signal: AbortSignal,
+  io: TurnIO,
+  scope?: AgentScope,
+): void {
+  const call = toolCalls[index]!
+  if (!parallelSafe(call) || prefetched.has(call.toolCallId)) return
+  for (let next = index; next < toolCalls.length && next < index + MAX_PARALLEL_READS; next++) {
+    const item = toolCalls[next]!
+    if (!parallelSafe(item) || answered.has(item.toolCallId)) break
+    const started = runToolCall(session, item, signal, io, scope)
+    // 中途停止时后面的不会再等它，别留下没人接的拒绝
+    started.catch(() => {})
+    prefetched.set(item.toolCallId, started)
+  }
+}
+
 // 模型这一步回复里的文字（不含思考和工具调用）
-function assistantText(messages: ModelMessage[]): string {
+export function assistantText(messages: ModelMessage[]): string {
   return messages
     .flatMap((message) => (message.role !== 'assistant' ? [] : typeof message.content === 'string' ? [message.content] : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))))
     .join('')
 }
 
 // 同一个工具、同样的参数、同样的结果算同一个调用；结果可能很长，取哈希
-function callSignature(call: StepToolCall, result: ToolResultPart): string {
+export function callSignature(call: StepToolCall, result: ToolResultPart): string {
   return createHash('sha256').update(JSON.stringify([call.toolName, call.input, result.output])).digest('hex')
 }
 
-function describeCall(call: StepToolCall): string {
+export function describeCall(call: StepToolCall): string {
   const input = JSON.stringify(call.input)
   return `${call.toolName} ${input.length > 120 ? `${input.slice(0, 120)}…` : input}`
 }

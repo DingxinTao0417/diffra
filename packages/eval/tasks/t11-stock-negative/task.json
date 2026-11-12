@@ -1,0 +1,11 @@
+{
+  "id": "t11-stock-negative",
+  "title": "库存对不上：取消和全额退款各放回一次库存",
+  "category": "delegation",
+  "language": "ts",
+  "prompt": "线上发现有的商品库存对不上，卖出去的比实际有的多。好像和取消订单、退款有关，帮我查一下原因并修掉，补上测试。",
+  "checks": { "afterEdit": null, "beforeFinish": "node --test \"tests/**/*.test.ts\"" },
+  "hidden": { "command": ["node", "--test", "hidden/**/*.test.ts"] },
+  "timeoutMinutes": 20,
+  "delegate": "expected"
+}

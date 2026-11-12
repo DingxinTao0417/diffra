@@ -23,6 +23,10 @@ export interface TaskResult {
   durationMs: number
   usage: UsageTotals
   toolCalls: number
+  workerToolCalls: number
+  delegations: number
+  // 题目标的该不该派子智能体；没标的是 null
+  delegate: EvalTask['delegate'] | null
   gateRejections: number
   checkFailures: number
   permissionRequests: number
@@ -115,6 +119,9 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
     durationMs,
     usage: usageTotals(join(dataDir, 'usage')),
     toolCalls: metrics.toolCalls,
+    workerToolCalls: metrics.workerToolCalls,
+    delegations: metrics.delegations,
+    delegate: task.delegate ?? null,
     gateRejections: metrics.gateRejections,
     checkFailures: metrics.checkFailures,
     permissionRequests,

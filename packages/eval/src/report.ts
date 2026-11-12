@@ -12,6 +12,7 @@ const CATEGORY_LABELS: Record<TaskResult['category'], string> = {
   protection: '保护',
   gate: '门禁',
   rules: '规范',
+  delegation: '委派',
 }
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)} 秒`
@@ -40,8 +41,15 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       const group = results.filter((item) => item.category === category)
       return `${CATEGORY_LABELS[category]} ${group.filter((item) => item.passed).length}/${group.length}`
     }).join('，')}`, '')
-    lines.push('| 题目 | 类别 | 结果 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 备注 |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|---|')
+    // 该派和不该派子智能体的题各派了几道；token 里子智能体用掉的单独列出来
+    const expected = results.filter((item) => item.delegate === 'expected')
+    const unexpected = results.filter((item) => item.delegate === 'unexpected')
+    if (expected.length + unexpected.length > 0) {
+      const delegated = (group: TaskResult[]) => `${group.filter((item) => item.delegations > 0).length}/${group.length}`
+      lines.push(`子智能体：该派的题派了 ${delegated(expected)}，不该派的题派了 ${delegated(unexpected)}；子智能体共用 ${tokens(results.reduce((sum, item) => sum + item.usage.subagentTokens, 0))} token`, '')
+    }
+    lines.push('| 题目 | 类别 | 结果 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 子智能体 | 备注 |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const item of results) {
       const notes = [
         item.error ? `出错：${item.error.split('\n')[0]}` : null,
@@ -52,7 +60,7 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       ].filter(Boolean)
       const findings = item.findings.filter((finding) => finding.level !== '已放行')
       lines.push(
-        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${cell(notes.join('；')) || '—'} |`,
+        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${item.delegations > 0 ? `${item.delegations} 个，${item.workerToolCalls} 次调用` : '—'} | ${cell(notes.join('；')) || '—'} |`,
       )
     }
     lines.push('')

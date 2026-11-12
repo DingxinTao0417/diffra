@@ -11,7 +11,7 @@ import { DELEGATE_TOOL, MAX_WORKERS_PER_TURN } from '../src/session/agents.js'
 import { runTurn, type TurnIO } from '../src/session/loop.js'
 import { buildSystemPrompt } from '../src/session/prompt.js'
 import { Session } from '../src/session/session.js'
-import { type AgentType, loadAgentTypes } from '../src/subagents.js'
+import { type AgentType, EXPLORE_AGENT, loadAgentTypes } from '../src/subagents.js'
 import type { ModelCallUsage } from '../src/usage/log.js'
 
 type StreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
@@ -132,6 +132,7 @@ async function makeSession(model: MockLanguageModelV4, agentTypes: AgentType[] =
     checkpoints: await Checkpoints.open(checkpointDir, project, []),
     rulePacks: [],
     systemPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths: [], rules }, []),
+    workerPrompt: await buildSystemPrompt(project, bashPath, { checks, readOnlyPaths: [], rules }, [], { skills: [], frontend: null, worker: true }),
     model,
     agentTypes,
   })
@@ -382,6 +383,116 @@ describe('子智能体', () => {
     const [card] = cards(stopIO)
     expect(lastCardUpdate(stopIO, card!.toolCallId)?.status).toBe('failed')
     expect(textOf(lastCardUpdate(stopIO, card!.toolCallId))).toContain('已停止')
+  })
+})
+
+describe('探索工人和工人的防护', () => {
+  const systemOf = (call: { prompt: Array<{ role: string; content: unknown }> }) => String(call.prompt.find((message) => message.role === 'system')?.content ?? '')
+  const toolNames = (call: { tools?: Array<{ name: string }> }) => (call.tools ?? []).map((item) => item.name)
+
+  test('内置的 explore 类型：只读、用工人自己的提示词、不认领文件、同一步的读同时跑；主智能体那边写明什么时候派、什么时候不派', async () => {
+    const types = await loadAgentTypes(project)
+    expect(types.find((type) => type.name === EXPLORE_AGENT)).toMatchObject({ readOnly: true })
+
+    const { model } = routedModel(
+      {
+        'WORKER-E': [
+          {
+            toolCalls: [
+              { name: 'read_file', input: { path: 'a.txt' } },
+              { name: 'read_file', input: { path: 'b.txt' } },
+            ],
+          },
+          // 只读工人硬调改文件的工具：不执行
+          { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'alpha', new_string: 'CHANGED' } }] },
+          { toolCalls: [{ name: 'report', input: { summary: 'a.txt:1 是 alpha，b.txt:1 是 beta' } }] },
+        ],
+      },
+      [{ toolCalls: [{ name: DELEGATE_TOOL, input: { name: '查', task: 'WORKER-E：两个文件里各写了什么', agent: EXPLORE_AGENT, files: ['a.txt'] } }] }, { text: '查完了' }],
+    )
+    const session = await makeSession(model, types)
+    const io = recordingIO()
+    expect(await runTurn(session, { id: 't1', text: '这两个文件里是什么' }, io)).toBe('end_turn')
+
+    const worker = model.doStreamCalls.find((call) => JSON.stringify(call.prompt).includes('WORKER-E'))!
+    // 工人的提示词是单独组装的：没有 finish、步骤清单、提问这些它用不了的东西
+    expect(systemOf(worker)).not.toMatch(/\bfinish\b|todo_write|ask_user|verify_changes|task_progress/)
+    expect(systemOf(worker)).toContain('You are read-only')
+    expect(systemOf(worker)).toContain('Report conclusions, not file dumps')
+    expect(systemOf(worker)).toContain(`Project directory: ${project}`)
+    expect(toolNames(worker).sort()).toEqual(['list_files', 'outline', 'read_file', 'report', 'search'])
+    expect(JSON.stringify(worker.prompt)).not.toContain('Files you own')
+    expect(JSON.stringify(worker.prompt)).not.toContain('claim_files')
+
+    // 没认领文件，也没改到文件
+    const [card] = cards(io)
+    expect((diffraOf(card!)[AGENT_META_KEY] as AgentCardMeta).files).toEqual([])
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('alpha\n')
+    expect(toolResults(session)).toContain('a.txt:1 是 alpha，b.txt:1 是 beta')
+
+    // 两个读同时发起：都开始了才有第一个结果
+    const inner = nested(io, card!.toolCallId).map((update) => update.sessionUpdate)
+    expect(inner.slice(0, 2)).toEqual(['tool_call', 'tool_call'])
+
+    const main = model.doStreamCalls[0]!
+    const delegate = JSON.stringify((main.tools ?? []).find((item) => item.name === DELEGATE_TOOL))
+    expect(delegate).toContain('explore (read-only)')
+    expect(delegate).toContain('Do not use it when')
+    expect(delegate).toContain('When unsure, do the work yourself')
+    expect(systemOf(main)).toContain('explore worker')
+  })
+
+  test('项目里同名的类型文件盖过内置的 explore', async () => {
+    mkdirSync(join(project, '.diffra', 'agents'), { recursive: true })
+    writeFileSync(join(project, '.diffra', 'agents', 'explore.md'), ['---', 'name: explore', 'description: 项目自己的探索', '---', '按项目的办法查。', ''].join('\n'))
+    const types = (await loadAgentTypes(project)).filter((type) => type.name === EXPLORE_AGENT)
+    expect(types).toEqual([{ name: EXPLORE_AGENT, description: '项目自己的探索', readOnly: false, instructions: '按项目的办法查。' }])
+  })
+
+  test('工人原地打转：同一个调用、同样的结果连着 3 次先提醒，提醒后还犯就停下这个工人，它写过的话带回给主智能体', async () => {
+    const read = { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] }
+    const { model } = routedModel({ 'WORKER-S': [{ text: '我先看 a.txt，里面应该是 alpha' }, read, read, read, read, read, read, { toolCalls: [{ name: 'report', input: { summary: '不会走到这里' } }] }] }, [
+      { toolCalls: [{ name: DELEGATE_TOOL, input: { name: '转', task: 'WORKER-S：看看 a.txt', agent: EXPLORE_AGENT } }] },
+      { text: '工人没查完' },
+    ])
+    const session = await makeSession(model, await loadAgentTypes(project))
+    const io = recordingIO()
+    expect(await runTurn(session, { id: 't1', text: '看看 a.txt' }, io)).toBe('end_turn')
+
+    // 主智能体第二次请求的对话里也有这段任务文字（它自己那次 delegate 调用），按系统提示词认工人的请求
+    const workerCalls = model.doStreamCalls.filter((call) => systemOf(call).includes('a worker agent'))
+    // 第 1 步说话、第 2–4 步三次同样的读，第 5 步的请求里有提醒；再读三次后停下，不会有第 8 步
+    expect(workerCalls).toHaveLength(7)
+    expect(JSON.stringify(workerCalls[3]!.prompt)).not.toContain('You made the same call 3 times')
+    expect(JSON.stringify(workerCalls[4]!.prompt)).toContain('You made the same call 3 times')
+    expect(toolResults(session)).toContain('kept making the same call')
+    expect(toolResults(session)).toContain('What it wrote before it stopped')
+    expect(toolResults(session)).toContain('我先看 a.txt，里面应该是 alpha')
+    const [card] = cards(io)
+    expect(lastCardUpdate(io, card!.toolCallId)?.status).toBe('failed')
+    expect(textOf(lastCardUpdate(io, card!.toolCallId))).toContain('停下前写的：我先看 a.txt，里面应该是 alpha')
+  })
+
+  test('工人中途出错：出错前写的话带回给主智能体', async () => {
+    const { model } = routedModel(
+      {
+        'WORKER-F': [
+          { text: '入口在 a.txt 第 1 行' },
+          {
+            toolCalls: [],
+            onStart: () => {
+              throw new Error('模型服务坏了')
+            },
+          },
+        ],
+      },
+      [{ toolCalls: [{ name: DELEGATE_TOOL, input: { name: '错', task: 'WORKER-F：找入口', agent: EXPLORE_AGENT } }] }, { text: '工人出错了' }],
+    )
+    const session = await makeSession(model, await loadAgentTypes(project))
+    const io = recordingIO()
+    expect(await runTurn(session, { id: 't1', text: '入口在哪' }, io)).toBe('end_turn')
+    expect(toolResults(session)).toContain('failed')
+    expect(toolResults(session)).toContain('入口在 a.txt 第 1 行')
   })
 })
 

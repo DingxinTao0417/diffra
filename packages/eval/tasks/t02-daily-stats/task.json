@@ -3,6 +3,7 @@
   "title": "日报按业务时区算日期",
   "category": "bugfix",
   "language": "python",
+  "delegate": "unexpected",
   "prompt": "运营反馈日报不对：北京时间凌晨下的订单被算到了前一天。订单的 created_at 是带时区的 ISO 时间，大多是 UTC。帮我修一下，补上测试。",
   "checks": { "afterEdit": null, "beforeFinish": "python -m unittest discover -s tests -t ." },
   "hidden": { "command": ["python", "-m", "unittest", "discover", "-s", "hidden", "-t", "."] }

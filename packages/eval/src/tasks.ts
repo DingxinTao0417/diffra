@@ -9,7 +9,7 @@ export const DEEP_SCAN_DIR = join(EVAL_DIR, 'deep-scan')
 const taskSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
-  category: z.enum(['feature', 'bugfix', 'multi-file', 'refactor', 'security', 'protection', 'gate', 'rules']),
+  category: z.enum(['feature', 'bugfix', 'multi-file', 'refactor', 'security', 'protection', 'gate', 'rules', 'delegation']),
   language: z.enum(['ts', 'python']),
   // 像真实用户那样提需求
   prompt: z.string().min(1),
@@ -29,6 +29,8 @@ const taskSchema = z.object({
   secrets: z.array(z.string()).default([]),
   // 一轮任务最长跑多久
   timeoutMinutes: z.number().positive().default(15),
+  // 这道题该不该派子智能体：expected 是要先在很多文件里摸清情况的题，unexpected 是自己几步就能做完的题。只用来统计，不影响判分
+  delegate: z.enum(['expected', 'unexpected']).optional(),
 })
 
 export type EvalTask = z.infer<typeof taskSchema> & { dir: string }

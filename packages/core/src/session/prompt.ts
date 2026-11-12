@@ -25,6 +25,8 @@ export interface PromptContext {
   frontend: { browser: boolean; screenshots: boolean } | null
   // 项目记忆里的条目（见 memory.ts），没开或还没有时不传
   memory?: string
+  // 给子智能体用的那一份（第 453 步）：没有 finish、完成检查、步骤清单、提问这些它用不了的东西，由 agents.ts 再接上工人规则
+  worker?: boolean
 }
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
@@ -36,6 +38,7 @@ export async function buildSystemPrompt(
   context: PromptContext = { skills: [], frontend: null },
 ): Promise<string> {
   const skills = skillIndex(context.skills)
+  const worker = context.worker === true
   const shell = bashPath
     ? 'run_command uses bash (Git Bash on Windows): use bash syntax and forward slashes.'
     : 'run_command is unavailable because bash was not found.'
@@ -61,19 +64,24 @@ export async function buildSystemPrompt(
     ...(bashPath
       ? ['- Run tests and builds without piping their output through head, tail or grep: run_command already shortens long output, and a filter can hide the real error.']
       : []),
-    '- Older tool outputs may be removed from the conversation to save space. When you learn something you will need later (an error message, a value, a line number), state it in your reply.',
+    ...(worker ? [] : ['- Older tool outputs may be removed from the conversation to save space. When you learn something you will need later (an error message, a value, a line number), state it in your reply.']),
     '- Report results honestly: say which checks you actually ran and what they showed. If you could not verify something, say so.',
-    '- For work with several distinct steps, show your step list with todo_write and keep it current. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
-    ...checkLines(checks),
-    '- If the user only asked a question and you changed nothing, just answer without calling finish.',
-    '- Reply in the same language the user writes in.',
-    ...(context.frontend ? frontendLines(context.frontend, skills.listed.has(DESIGN_SKILL)) : []),
+    ...(worker
+      ? []
+      : [
+          '- For work with several distinct steps, show your step list with todo_write and keep it current. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
+          '- When a question or a change first needs a broad look through code you do not know yet (several modules, many files), hand that exploration to an explore worker with delegate and keep your own context for the work itself. When you already know where to look, read or search directly.',
+          ...checkLines(checks),
+          '- If the user only asked a question and you changed nothing, just answer without calling finish.',
+          '- Reply in the same language the user writes in.',
+        ]),
+    ...(context.frontend ? frontendLines(context.frontend, skills.listed.has(DESIGN_SKILL), worker) : []),
     ...skills.lines,
   ]
   if (context.memory) lines.push('', MEMORY_HEADING, context.memory)
   const projectRules = await readProjectRules(cwd)
   if (projectRules) lines.push('', PROJECT_RULES_HEADING, projectRules)
-  lines.push(...codingRuleLines(rulePacks, rules.review))
+  lines.push(...codingRuleLines(rulePacks, rules.review && !worker))
   return lines.join('\n')
 }
 
@@ -114,7 +122,7 @@ function checkLines(checks: SessionChecks): string[] {
 }
 
 // 前端改动先跟着项目已有的设计走，改完在内置浏览器里检查；能看图的模型再按手机和桌面两种宽度截图对照
-function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designSkill: boolean): string[] {
+function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designSkill: boolean, worker = false): string[] {
   const lines = [
     '',
     'Front-end work (this project has UI code):',
@@ -124,6 +132,11 @@ function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designS
     '- Handle the states real users hit: loading, empty, error, long text, narrow screens, and dark mode if the project has one.',
     '- A reference image from the user is the spec: match its layout, spacing, sizes and colors.',
   ]
+  // 子智能体没有浏览器工具（只有一个浏览器，并行会互相干扰）
+  if (worker) {
+    lines.push('- You cannot open pages yourself; after a visible change, say in your report which screens should be checked.')
+    return lines
+  }
   if (!frontend.browser) {
     lines.push('- The built-in browser is off, so you cannot check pages yourself; after a visible change, tell the user which screens to check.')
     return lines

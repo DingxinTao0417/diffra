@@ -58,6 +58,8 @@ export interface SessionOptions {
   // 按项目语言选中的规则包，写进了 systemPrompt，完成前的审查也用它
   rulePacks: RulePack[]
   systemPrompt: string
+  // 子智能体的系统提示词（见 prompt.ts 的 worker）；不传就用 systemPrompt
+  workerPrompt?: string
   // 项目外可以只读访问的目录（Skill 目录）
   readRoots?: string[]
   // 客户端给的 MCP 服务器，连接放在 pool 里，各任务共用
@@ -109,6 +111,7 @@ export class Session {
   // 客户端配置的设计面板工具：设计任务每轮开始前由客户端配置，普通任务是 null
   design: SessionDesign | null = null
   readonly systemPrompt: string
+  readonly workerPrompt: string
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
   reviewModel: LanguageModel
@@ -183,6 +186,7 @@ export class Session {
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null
     this.systemPrompt = options.systemPrompt
+    this.workerPrompt = options.workerPrompt ?? options.systemPrompt
     const coder = options.config.model
     this.model = options.model ?? createLanguageModel(coder.endpoint, coder.modelId, coder.reasoningEffort, coder.maxOutputTokens)
     const review = options.config.reviewModel
