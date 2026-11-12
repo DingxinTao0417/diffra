@@ -11,12 +11,12 @@ const lines = Array.from({ length: 200 }, (_, index) => `行 ${index + 1}`).join
 
 // 一轮里改同一个大文件两处：改动卡片按文件里的行号显示，本轮交付按净改动算；重启后从记录载入还是一样
 async function expectEdits(window: Page): Promise<void> {
-  const group = window.getByTestId('edit-group')
-  await expect(group).toContainText('修改 1 个文件 · 2 次编辑')
+  const group = window.getByTestId('tool-group')
+  await expect(group).toContainText('修改 1 个文件')
   await expect(group).toContainText('+1')
   await expect(group).toContainText('−2')
-  // 改动组收着时没有「展开代码详情」，先点开组
-  await group.getByText('修改 1 个文件 · 2 次编辑').click()
+  // 过程组收着时没有「展开代码详情」，先点开组
+  await group.getByRole('button', { name: /执行工具 3 次/ }).click()
   await window.getByRole('button', { name: '展开代码详情', exact: true }).first().click()
   const views = window.getByTestId('diff-view')
   await expect(views).toHaveCount(2)

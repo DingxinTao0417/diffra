@@ -61,12 +61,15 @@ test('本轮结论下列出失败的命令，点一下跳到对话里那一行�
     await chooseProject(app, window, project)
     await startTask(window, '跑一下命令')
     await waitTaskDone(window)
-    await expect(window.getByRole('button', { name: '执行工具 3 次 · 1 条命令失败', exact: true })).toHaveAttribute('aria-expanded', 'true')
+    // 有失败命令的组也默认收着，标题上写着失败数；从任务监控跳过去时才展开
+    const group = window.getByRole('button', { name: '执行工具 3 次 · 1 条命令失败', exact: true })
+    await expect(group).toHaveAttribute('aria-expanded', 'false')
     const failed = window.locator('[data-testid="tool-call"][data-succeeded="false"]')
     await expect(failed).not.toBeInViewport()
     const panel = window.getByTestId('monitor-panel')
     await expect(panel).toContainText('1 条命令失败')
     await panel.getByRole('button', { name: '跳到失败的命令：false', exact: true }).click()
+    await expect(group).toHaveAttribute('aria-expanded', 'true')
     await expect(failed).toBeInViewport()
     await expect(failed.getByRole('button')).toBeFocused()
   } finally {

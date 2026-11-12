@@ -932,7 +932,8 @@ test('设备连接：远程任务页借用本机任务页——任务监控（�
     await expect(remoteTask.getByTestId('task-title')).toHaveText('改一下 hello')
     await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('只读')
     await expect(remoteTask).toContainText('改好了')
-    // 不带对方电脑上的完整路径：编辑卡按相对项目的路径显示
+    // 不带对方电脑上的完整路径：编辑卡按相对项目的路径显示（读文件和编辑收在过程组里，先点开）
+    await remoteTask.getByRole('button', { name: /执行工具 2 次/ }).click()
     await expect(remoteTask.getByRole('button', { name: '查看改动 hello.txt', exact: true })).toBeVisible()
     const shown = (await remoteTask.innerText()).replace(/\\/g, '/').toLowerCase()
     expect(shown).not.toContain(project.replace(/\\/g, '/').toLowerCase())

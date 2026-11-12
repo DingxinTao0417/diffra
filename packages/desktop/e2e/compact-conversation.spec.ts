@@ -24,10 +24,11 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await chooseProject(app, window, project)
     await startTask(window, '修改文本')
     await waitTaskDone(window)
-    const group = window.getByTestId('edit-group')
-    await expect(group).toContainText('修改 1 个文件 · 2 次编辑')
+    // 读文件和两次编辑收在一个过程组里，标题写改了几个文件
+    const group = window.getByTestId('tool-group')
+    await expect(group).toContainText('修改 1 个文件')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
-    await group.getByRole('button', { name: /修改 1 个文件/ }).click()
+    await group.getByRole('button', { name: /执行工具 3 次/ }).click()
     await expect(cards(window, 'edit')).toHaveCount(2)
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     await cards(window, 'edit').first().getByRole('button', { name: '查看改动 note.txt', exact: true }).click()
@@ -52,6 +53,55 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await expect(delivery).not.toContainText('+2')
     await delivery.getByRole('button', { name: '审阅改动', exact: true }).click()
     await expect(window.getByTestId('review-file')).toContainText('note.txt')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+test('每次调用前都先思考的模型：思考、读文件、改动收在同一个过程组里，运行中和跑完都默认收着；展开后一条一行', async () => {
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-process-group-'))
+  writeFileSync(join(project, 'note.txt'), 'original\n')
+  const model = await startScriptedModel([
+    { thinking: '先看看文件里现在写的是什么\n第二行是细节', toolCalls: [{ name: 'read_file', input: { path: 'note.txt' } }] },
+    { thinking: '把 original 换掉', toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: 'original', new_string: 'final' } }] },
+    // 慢一点：趁这一步还没回来，看运行中的样子
+    { delayMs: 2500, toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '思考测试', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '修改文本')
+
+    // 运行中：两段思考、一次读、一次改动都在同一组里，组没有自动展开
+    const group = window.getByTestId('tool-group')
+    const header = group.getByRole('button', { name: /执行工具 2 次\s*· 修改 1 个文件/ })
+    await expect(header).toHaveAttribute('aria-expanded', 'false')
+    await expect(window.getByText('进行中…')).toBeVisible()
+    await expect(group).toHaveCount(1)
+    await expect(group.getByTestId('thought')).toHaveCount(2)
+    await expect(group.getByTestId('thought').first()).toBeHidden()
+    await expect(cards(window, 'edit')).toHaveCount(1)
+
+    await waitTaskDone(window)
+    // 跑完还是收着；组外没有单独的思考行
+    await expect(header).toHaveAttribute('aria-expanded', 'false')
+    await expect(window.getByTestId('thought')).toHaveCount(2)
+
+    await header.click()
+    const first = group.getByTestId('thought').first()
+    await expect(first).toContainText('已思考')
+    await expect(first).toContainText('先看看文件里现在写的是什么')
+    await expect(first).not.toContainText('第二行是细节')
+    await first.getByRole('button').click()
+    await expect(first).toContainText('第二行是细节')
+    await expect(group.getByRole('button', { name: '查看改动 note.txt', exact: true })).toBeVisible()
+    await expect(group.locator('[data-testid="tool-call"][data-kind="tool"]')).toHaveCount(1)
   } finally {
     await app.close()
     await model.close()

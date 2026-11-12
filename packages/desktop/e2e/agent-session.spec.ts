@@ -41,6 +41,8 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     const permission = window.getByTestId('permission-card')
     await expect(permission).toContainText('echo done > done.txt', { timeout: 20_000 })
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
+    // 过程组默认收着，运行中也是：先点开再看改动
+    await window.getByRole('button', { name: /执行工具 4 次 · 2 次失败/ }).click()
     await window.getByRole('button', { name: '查看改动 hello.txt', exact: true }).click()
     await expect(window.getByTestId('diff-view')).toContainText('+hello diffra')
     await permission.getByRole('button', { name: '允许一次' }).click()
@@ -55,8 +57,8 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await expect(window.getByTestId('monitor-panel')).toContainText('禁止修改的目录')
     await expect(window.getByTestId('monitor-panel')).toContainText('data')
 
-    // 读 .env、改禁写目录的两次调用都失败了：收在「执行工具」组里，展开后能看到原因
-    await window.getByRole('button', { name: /执行工具 3 次 · 2 次失败/ }).click()
+    // 读 .env、改禁写目录的两次调用都失败了：和别的调用收在同一个过程组里（上面已经点开），标题上写着失败次数
+    await expect(window.getByRole('button', { name: /执行工具 5 次 · 2 次失败/ })).toHaveAttribute('aria-expanded', 'true')
     const failed = window.locator('[data-testid="tool-call"][data-status="failed"]')
     await expect(failed).toHaveCount(2)
     await failed.nth(0).getByRole('button').click()

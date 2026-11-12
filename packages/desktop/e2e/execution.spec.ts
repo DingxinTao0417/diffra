@@ -47,7 +47,7 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     await compactAt.getByRole('radio', { name: '90%' }).click()
     await maxSteps.getByRole('radio', { name: '无上限' }).click()
     await expect(maxSteps.getByRole('radio', { name: '无上限' })).toHaveAttribute('aria-checked', 'true')
-    await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 90, maxSteps: null, goalMaxRounds: 5 })
+    await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 90, maxSteps: null, goalMaxRounds: 5, autoMemory: false })
     await expect(window.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存，新任务生效')
     await window.screenshot({ path: 'test-results/execution-settings.png' })
     await window.getByRole('button', { name: '返回' }).click()
@@ -61,7 +61,7 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     // 改回 70%：新任务按新设置运行
     await openExecutionSettings(window)
     await compactAt.getByRole('radio', { name: '70%' }).click()
-    await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 70, maxSteps: null, goalMaxRounds: 5 })
+    await expect.poll(() => executionSettings(userDataDir)).toEqual({ compactAtPercent: 70, maxSteps: null, goalMaxRounds: 5, autoMemory: false })
     await window.getByRole('button', { name: '返回' }).click()
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
     await startTask(window, '再找一找 TODO')

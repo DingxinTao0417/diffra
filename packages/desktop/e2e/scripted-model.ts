@@ -4,10 +4,11 @@ import type { AddressInfo } from 'node:net'
 // 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复；
 // promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满。
 // 工具参数可以是函数：拿这次请求的对话（messages）算出来，比如用前一个工具返回的节点 id。
-// match：只回答第一条用户消息里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求
+// match：只回答第一条用户消息里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求。
+// thinking：回复前先出一段思考（reasoning_content，DeepSeek 的写法）
 export type ScriptMessages = Array<{ role: string; content: unknown; tool_calls?: unknown }>
 type ScriptInput = unknown | ((messages: ScriptMessages) => unknown)
-type StepTiming = { delayMs?: number; promptTokens?: number; cacheReadTokens?: number; match?: string }
+type StepTiming = { delayMs?: number; promptTokens?: number; cacheReadTokens?: number; match?: string; thinking?: string }
 export type ScriptStep =
   | ({ toolCalls: Array<{ name: string; input: ScriptInput }>; text?: string } & StepTiming)
   | ({ text: string } & StepTiming)
@@ -121,7 +122,10 @@ function chunksFor(step: ScriptStep, index: number): unknown[] {
     total_tokens: promptTokens + 20,
     ...(step.cacheReadTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: step.cacheReadTokens } }),
   }
-  const textChunks = step.text ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: step.text }, finish_reason: null }] }] : []
+  const textChunks = [
+    ...(step.thinking ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: step.thinking }, finish_reason: null }] }] : []),
+    ...(step.text ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: step.text }, finish_reason: null }] }] : []),
+  ]
   if (!('toolCalls' in step)) {
     return [...textChunks, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]
   }

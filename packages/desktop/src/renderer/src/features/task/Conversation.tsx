@@ -30,9 +30,13 @@ import { VisualCard } from './VisualCard'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
+// 过程组里的一项：思考，或者普通工具调用、改动
+type ProcessItem = Extract<TranscriptItem, { kind: 'thought' }> | ToolItem
+
 type Block =
-  | { type: 'item'; item: Exclude<TranscriptItem, ToolItem> }
-  | { type: 'tools' | 'edits' | 'checks'; id: string; items: ToolItem[] }
+  | { type: 'item'; item: Exclude<TranscriptItem, ProcessItem> }
+  | { type: 'process'; id: string; items: ProcessItem[] }
+  | { type: 'checks'; id: string; items: ToolItem[] }
   | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps'; item: ToolItem }
 
 // 模型接口出错时怎么说；auth、not-found 要去设置里改，其余可以接着发或者换个模型
@@ -107,36 +111,39 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architect
   return null
 }
 
-// 连续的读文件、搜索、命令等普通工具调用收成一组；改动、检查、审查、上下文压缩、中途验证、完成、子智能体单独显示。
-// 子智能体自己的工具调用收进它的卡片，不在这里排
+const isEdit = (item: ProcessItem): boolean => item.kind === 'tool' && toolBlockType(item) === 'edit'
+
+// 两段回复之间的过程（思考、读文件、搜索、命令、改动）收成一组（第 454 步）：思考不再把组打断，不然每次调用前都先想一下的模型会一行一行铺开。
+// 回复、提示、检查、审查、上下文压缩、中途验证、完成、子智能体等单独显示，也把组断开。子智能体自己的工具调用收进它的卡片，不在这里排
 function toBlocks(items: TranscriptItem[]): Block[] {
   const blocks: Block[] = []
+  const toProcess = (item: ProcessItem) => {
+    const last = blocks.at(-1)
+    if (last?.type === 'process') last.items.push(item)
+    else blocks.push({ type: 'process', id: item.id, items: [item] })
+  }
   for (const item of items) {
+    if (item.kind === 'thought') {
+      toProcess(item)
+      continue
+    }
     if (item.kind !== 'tool') {
       blocks.push({ type: 'item', item })
       continue
     }
     if (item.parentId) continue
     const type = toolBlockType(item)
-    if (type === 'edit') {
-      const previous = blocks.at(-1)
-      if (previous?.type === 'edits') previous.items.push(item)
-      else blocks.push({ type: 'edits', id: item.id, items: [item] })
-      continue
-    }
     if (type === 'check' || type === 'review' || type === 'architecture' || type === 'security') {
       const previous = blocks.at(-1)
       if (previous?.type === 'checks') previous.items.push(item)
       else blocks.push({ type: 'checks', id: item.id, items: [item] })
       continue
     }
-    if (type) {
+    if (type && type !== 'edit') {
       blocks.push({ type, item })
       continue
     }
-    const last = blocks.at(-1)
-    if (last?.type === 'tools') last.items.push(item)
-    else blocks.push({ type: 'tools', id: item.id, items: [item] })
+    toProcess(item)
   }
   return blocks
 }
@@ -285,7 +292,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
     const element = scrollRef.current
     if (!locate || !element) return
     const id = CSS.escape(locate.id)
-    // 所在的组被手动收起时这一行不在 DOM 里，退到组的展开按钮，不强制打开
+    // 那一行在收起的过程组里时，组已经跟着 locate 展开了（见 ProcessGroup）；在收着的子智能体卡片里时这一行不在 DOM 里，退到卡片
     const target = element.querySelector<HTMLElement>(`[data-item-id="${id}"]`) ?? element.querySelector<HTMLElement>(`[data-item-ids~="${id}"]`)
     const row = target?.firstElementChild
     if (!target || !(row instanceof HTMLElement)) return
@@ -356,6 +363,8 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
                 active={task.running && last}
                 last={last}
                 latestWork={index === workIndex}
+                // 只传给那一步所在的轮次，别的轮次 props 不变、不用重画
+                locate={locate && turn.items.some((item) => item.id === locate.id) ? locate : null}
                 onLocate={locateItem}
                 onRestore={restoreTurn}
                 onRegenerate={regenerateTurn}
@@ -401,6 +410,8 @@ interface TurnViewProps {
   last: boolean
   // 最后一个执行轮（后面只跟着定位轮时仍算）：停下说明的按钮、重新生成、子智能体卡片的「定位问题」都在它上面
   latestWork: boolean
+  // 要滚到这一轮里的哪一步（任务监控、定位结果点的），不在这一轮时是 null
+  locate: ConversationProps['locate']
   onLocate(id: string): void
   onRestore(turnId: string): void
   onRegenerate(turnId: string): void
@@ -416,7 +427,7 @@ export function lastWorkIndex(turns: Turn[]): number {
   return -1
 }
 
-const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
+const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, locate, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
   const onRestore = useCallback(() => restoreTurn(turn.id), [restoreTurn, turn.id])
   const onRegenerate = useCallback(() => regenerateTurn(turn.id), [regenerateTurn, turn.id])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
@@ -437,8 +448,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
     }
     return steps
   }, [turn.items])
-  // 整轮的「展开代码详情」只挂在第一个改动组上，一轮里不会出现两个同名按钮
-  const editToggleId = blocks.flatMap((block) => (block.type === 'edits' ? [block.id] : []))[0]
+  // 整轮的「展开代码详情」只挂在第一个有改动的过程组上，一轮里不会出现两个同名按钮
+  const editToggleId = blocks.flatMap((block) => (block.type === 'process' && block.items.some(isEdit) ? [block.id] : []))[0]
   // 目标模式一轮里有好几张完成卡片，每张只算上一张通过的卡之后的改动和失败的命令；打回的卡不切分，免得通过的卡漏掉打回前的改动
   const finishFiles = useMemo(() => {
     const result = new Map<string, { files: ChangedFile[]; commandsFailed: number }>()
@@ -476,20 +487,20 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
     <section data-testid="turn" data-turn-id={turn.id} className="group/turn flex flex-col gap-3.5">
       {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
       {turn.remote && <RemoteSourceTag source={turn.remote} />}
-      {blocks.map((block) => {
+      {blocks.map((block, index) => {
         switch (block.type) {
           case 'item':
             return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} />
-          case 'tools':
-            return <ToolGroup key={block.id} items={block.items} />
-          case 'edits':
+          case 'process':
             return (
-              <EditGroup
+              <ProcessGroup
                 key={block.id}
                 items={block.items}
                 edits={edits}
                 projectPath={task.project}
-                expanded={showEditDetails}
+                live={active && index === blocks.length - 1}
+                locate={locate}
+                showEditDetails={showEditDetails}
                 toggle={block.id === editToggleId ? <EditDetailsToggle expanded={showEditDetails} onToggle={() => setShowEditDetails(!showEditDetails)} /> : undefined}
               />
             )
@@ -634,7 +645,7 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
 
 // goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
 // imageNote：远程会话里还没过来、没同步的图片说明
-function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<TranscriptItem, ToolItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null }) {
+function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<TranscriptItem, ProcessItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null }) {
   switch (item.kind) {
     case 'user':
       if (!goal && skills.length === 0 && images.length === 0 && !imageNote) {
@@ -679,8 +690,6 @@ function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<Tra
           <Markdown text={item.text} />
         </div>
       )
-    case 'thought':
-      return <Thought text={item.text} />
     case 'notice':
       return (
         <div
@@ -699,16 +708,18 @@ function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<Tra
   }
 }
 
-function Thought({ text }: { text: string }) {
+// 一段思考：一行，和工具调用的行对齐，点开看全文。running 是模型还在想
+function Thought({ text, running = false }: { text: string; running?: boolean }) {
   const [open, setOpen] = useState(false)
   const preview = text.trim().split(/\r?\n/)[0] ?? ''
   return (
-    <div className="text-sm text-muted-foreground">
-      <button type="button" className="flex max-w-full items-center gap-1.5 hover:text-foreground" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
-        <span className="truncate">思考{preview && !open ? ` · ${preview}` : ''}</span>
-      </button>
-      {open && <div className="mt-1.5 border-l-2 pl-3 leading-relaxed whitespace-pre-wrap">{text}</div>}
+    <div className="text-sm text-muted-foreground" data-testid="thought">
+      <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="hover:text-foreground">
+        <StatusIcon status={running ? 'in_progress' : 'completed'} />
+        <span className="shrink-0">{running ? '思考中' : '已思考'}</span>
+        {preview && !open && <span className="min-w-0 truncate">· {preview}</span>}
+      </DisclosureRow>
+      {open && <div className="mt-1.5 ml-5 border-l-2 pl-3 leading-relaxed whitespace-pre-wrap">{text}</div>}
     </div>
   )
 }
@@ -722,26 +733,76 @@ function StatusIcon({ status, tone = 'muted', className }: { status: string; ton
   return <LoaderCircle className={cn('size-3.5 shrink-0 animate-spin text-muted-foreground', className)} />
 }
 
-function ToolGroup({ items }: { items: ToolItem[] }) {
-  const busy = items.some((item) => item.status !== 'completed' && item.status !== 'failed')
-  const failed = items.filter((item) => item.status === 'failed').length
-  const commandsFailed = items.filter((item) => item.succeeded === false).length
-  const [open, setOpen] = useState<boolean | null>(null)
-  if (items.length === 1 && items[0]) return <ToolStep item={items[0]} />
-  const expanded = open ?? (busy || commandsFailed > 0)
+interface ProcessGroupProps {
+  items: ProcessItem[]
+  edits: Map<string, EditTexts>
+  projectPath: string
+  // 这一轮还在跑，而且这是最后一块：模型正在这一组里干活
+  live: boolean
+  locate: ConversationProps['locate']
+  // 这一轮的改动要不要都展开代码
+  showEditDetails: boolean
+  toggle?: React.ReactNode
+}
+
+// 两段回复之间的过程：默认收起，运行中也不自动展开，标题行说做了几次、改了几个文件、正在做什么；有失败的命令也只在标题上标出来（第 455 步）。
+// 任务监控、定位结果要滚到组里的某一步时跟着展开（第 457 步）。只有一项时不套这层。
+// 收起时各项仍留在 DOM 里（hidden），按 data-kind 数卡片的地方不受影响
+function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails, toggle }: ProcessGroupProps) {
+  const [open, setOpen] = useState(false)
+  // locate 变了就在这次渲染里展开，这样外层的定位 effect 量位置时那一行已经显示出来了
+  const [seenLocate, setSeenLocate] = useState(locate)
+  if (locate !== seenLocate) {
+    setSeenLocate(locate)
+    if (locate && items.some((item) => item.id === locate.id)) setOpen(true)
+  }
+  const files = useMemo(() => filesOf(items.filter(isEdit), edits), [items, edits])
+  const last = items.at(-1)
+  const step = (item: ProcessItem, single: boolean) => {
+    if (item.kind === 'thought') return <Thought key={item.id} text={item.text} running={live && item === last} />
+    if (!isEdit(item)) return <ToolStep key={item.id} item={item} />
+    if (single) return <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={showEditDetails} toggle={toggle} />
+    return (
+      // 改动卡片的行自带 px-2，往左挪齐其他步骤的箭头
+      <div key={item.id} className="-mx-2">
+        <EditBlock item={item} projectPath={projectPath} expanded={showEditDetails} />
+      </div>
+    )
+  }
+  if (items.length === 1 && last) return step(last, true)
+  const tools = items.filter((item): item is ToolItem => item.kind === 'tool')
+  const running = tools.find((item) => item.status !== 'completed' && item.status !== 'failed')
+  const failed = tools.filter((item) => item.status === 'failed').length
+  const commandsFailed = tools.filter((item) => item.succeeded === false).length
+  const current = running ? splitTitle(running.title) : null
+  const activity = current ? `${current.action}${current.target ? ` ${current.target}` : ''}` : live && last?.kind === 'thought' ? '思考中' : null
   return (
     <div className="flex flex-col gap-1.5" data-testid="tool-group" data-item-ids={items.map((item) => item.id).join(' ')}>
-      <DisclosureRow open={expanded} onToggle={() => setOpen(!expanded)} className="text-muted-foreground hover:text-foreground">
-        <StatusIcon status={busy ? 'in_progress' : failed > 0 ? 'failed' : commandsFailed > 0 ? 'command-failed' : 'completed'} />
-        执行工具 {items.length} 次{failed > 0 ? ` · ${failed} 次失败` : ''}{commandsFailed > 0 ? ` · ${commandsFailed} 条命令失败` : ''}
-      </DisclosureRow>
-      {expanded && (
-        <div className="flex flex-col gap-0.5 pl-5">
-          {items.map((item) => (
-            <ToolStep key={item.id} item={item} />
-          ))}
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-muted-foreground hover:text-foreground">
+          <StatusIcon status={running || live ? 'in_progress' : failed > 0 ? 'failed' : commandsFailed > 0 ? 'command-failed' : 'completed'} />
+          <span className="shrink-0">
+            {tools.length > 0 ? `执行工具 ${tools.length} 次` : '思考'}
+            {failed > 0 ? ` · ${failed} 次失败` : ''}
+            {commandsFailed > 0 ? ` · ${commandsFailed} 条命令失败` : ''}
+          </span>
+          {files.length > 0 && (
+            <>
+              <span className="shrink-0">· 修改 {files.length} 个文件</span>
+              <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
+            </>
+          )}
+          {activity && (
+            <span className="min-w-0 truncate" data-testid="tool-group-activity">
+              · {activity}
+            </span>
+          )}
+        </DisclosureRow>
+        {toggle && open && <span className="ml-auto flex pr-1">{toggle}</span>}
+      </div>
+      <div hidden={!open} className="flex flex-col gap-0.5 pl-5">
+        {items.map((item) => step(item, false))}
+      </div>
     </div>
   )
 }
@@ -1184,26 +1245,6 @@ function StepList({ item }: { item: ToolItem }) {
           </li>
         ))}
       </ul>
-    </div>
-  )
-}
-
-function EditGroup({ items, edits, projectPath, expanded, toggle }: { items: ToolItem[]; edits: Map<string, EditTexts>; projectPath: string; expanded: boolean; toggle?: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  useEffect(() => setOpen(expanded), [expanded])
-  const files = useMemo(() => filesOf(items, edits), [items, edits])
-  if (items.length === 1 && items[0]) return <EditBlock item={items[0]} projectPath={projectPath} expanded={expanded} toggle={toggle} />
-  return (
-    <div className="space-y-2" data-testid="edit-group">
-      <div className="flex items-center gap-2">
-        <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-muted-foreground hover:text-foreground">
-          <StatusIcon status={items.some((item) => item.status === 'failed') ? 'failed' : items.every((item) => item.status === 'completed') ? 'completed' : 'in_progress'} />
-          修改 {files.length} 个文件 · {items.length} 次编辑
-          <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
-        </DisclosureRow>
-        {toggle && open && <span className="ml-auto flex pr-1">{toggle}</span>}
-      </div>
-      <div hidden={!open} className="space-y-2 border-l pl-3">{items.map((item) => <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={expanded} />)}</div>
     </div>
   )
 }

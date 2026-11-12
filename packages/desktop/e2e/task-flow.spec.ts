@@ -44,12 +44,13 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await waitTaskDone(window)
 
     // 对话流：读文件收成一组，Markdown 渲染；改的过程中不跑检查，两次改动连着收成一个改动组，完成时跑一次检查；监控开着时完成卡片点开计数列出改动的文件
-    await expect(window.getByRole('button', { name: '执行工具 2 次' })).toBeVisible()
+    // 回复前后各一个过程组，都收着：前一个是列文件和读文件，后一个是两次改动
+    await expect(window.getByRole('button', { name: '执行工具 2 次', exact: true })).toHaveAttribute('aria-expanded', 'false')
     await expect(window.getByTestId('agent-message').locator('strong')).toHaveText('hello world')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
-    const editGroup = window.getByTestId('edit-group')
-    await expect(editGroup).toContainText('修改 2 个文件 · 2 次编辑')
-    await editGroup.getByText('修改 2 个文件 · 2 次编辑').click()
+    const editGroup = window.getByRole('button', { name: /执行工具 2 次\s*· 修改 2 个文件/ })
+    await expect(editGroup).toHaveAttribute('aria-expanded', 'false')
+    await editGroup.click()
     await expect(window.getByRole('button', { name: '查看改动 hello.txt', exact: true })).toHaveAttribute('aria-expanded', 'false')
     await expect(window.getByRole('button', { name: '查看改动 greet.js', exact: true })).toHaveAttribute('aria-expanded', 'false')
     await window.getByRole('button', { name: '展开代码详情', exact: true }).first().click()
