@@ -12,6 +12,8 @@ export interface RemoteProjectGroup {
   projectId: string
   name: string
   level: SessionList['projects'][number]['level']
+  // 开放了「完全控制」（level 仍是 control）
+  full: boolean
   sessions: SessionList['sessions']
 }
 
@@ -45,6 +47,7 @@ export function useRemoteProjects(): RemoteProjectGroup[] {
             projectId: project.id,
             name: project.name,
             level: project.level,
+            full: project.full === true,
             sessions: list.sessions.filter((session) => session.projectId === project.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
           }))
         })

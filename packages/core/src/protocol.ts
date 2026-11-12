@@ -727,6 +727,9 @@ export const CLIENT_EXT_NOTIFICATIONS = {
 export const LOCAL_ONLY_META_KEY = 'localOnly'
 export const LOCAL_ONLY_META = { diffra: { [LOCAL_ONLY_META_KEY]: true } }
 
+// 设备连接发出的快照里，只发了开头的工具输出：文字块 _meta 里这个键记着全文多长（@diffra/remote 的 previewTurn），连接端展开时再要全文
+export const TOOL_PREVIEW_META_KEY = 'diffraRemotePreview'
+
 export const PERMISSION_OPTIONS = {
   allowOnce: 'allow_once',
   allowAlways: 'allow_always',

@@ -5,11 +5,13 @@ import { basename, dirname } from 'node:path'
 import { listSessions, remoteSnapshot } from '@diffra/core'
 import { type PromptImage, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { RELAY_HOST, RELAY_PATH } from '@diffra/relay/protocol'
+import { requestCallSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import type { RemoteAction, RemoteActionResult } from '../shared/remote'
+import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult } from '../shared/remote'
 import { coreConnection } from './core-process'
+import { listBranches, switchBranch } from './project-branch'
 import { parse } from './ipc-input'
 import { onSessionEvent } from './session-events'
 import { settlePermission } from './session-ipc'
@@ -69,6 +71,28 @@ function act(action: RemoteAction): Promise<RemoteActionResult> {
   })
 }
 
+// 远程设备读、操作任务：交给界面做（界面在后台载入任务，用本机的逻辑），一直不回就报错
+const taskCallResultSchema = z.union([z.object({ ok: z.literal(true), value: z.unknown() }), z.object({ ok: z.literal(false), error: z.string().max(2000) })])
+const pendingTaskCalls = new Map<string, (result: RemoteTaskCallResult) => void>()
+
+function askHost(call: RemoteTaskCall): Promise<unknown> {
+  const window = BrowserWindow.getAllWindows()[0]
+  if (!window) return Promise.reject(new Error('对方的 Diffra 窗口没有打开'))
+  return new Promise((resolve, reject) => {
+    const requestId = randomUUID()
+    const timer = setTimeout(() => {
+      pendingTaskCalls.delete(requestId)
+      reject(new Error('对方的 Diffra 界面没有回应'))
+    }, ACTION_TIMEOUT_MS)
+    pendingTaskCalls.set(requestId, (result) => {
+      clearTimeout(timer)
+      if (result.ok) resolve(result.value)
+      else reject(new Error(result.error))
+    })
+    window.webContents.send(IPC_CHANNELS.remoteTaskCall, { requestId, call })
+  })
+}
+
 // 测试用的环境变量（连本机的中转、缩短邀请串有效期）：未打包时认（规则同 DIFFRA_UPDATE_URL）；
 // 打包版只在 e2e 的临时数据目录（系统临时目录下的 diffra-e2e-*）里认，正式数据目录里设了也不管用
 function testOverridesAllowed(): boolean {
@@ -111,6 +135,9 @@ export function registerRemoteIpc(userDataDir: string): void {
     listSessions: async () => listSessions(await coreConnection()),
     snapshot: async (params) => remoteSnapshot(await coreConnection(), params),
     act,
+    ask: askHost,
+    branches: listBranches,
+    switchBranch,
     answerPermission: settlePermission,
     compressImages,
   })
@@ -145,6 +172,15 @@ export function registerRemoteIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.remotePage, async (_event, rawId: unknown, rawSession: unknown, rawBefore: unknown) =>
     (await service()).remotePage(parse(deviceId, rawId), parse(sessionId, rawSession), parse(z.number().int().nonnegative(), rawBefore)),
   )
+  ipcMain.handle(IPC_CHANNELS.remoteToolOutput, async (_event, rawId: unknown, rawSession: unknown, rawTurn: unknown, rawTurnId: unknown, rawToolCallId: unknown) =>
+    (await service()).remoteToolOutput(
+      parse(deviceId, rawId),
+      parse(sessionId, rawSession),
+      parse(z.number().int().nonnegative(), rawTurn),
+      parse(z.string().min(1).max(128), rawTurnId),
+      parse(z.string().min(1).max(128), rawToolCallId),
+    ),
+  )
   ipcMain.handle(IPC_CHANNELS.remoteUnsubscribe, async (_event, rawId: unknown, rawSession: unknown) => (await service()).remoteUnsubscribe(parse(deviceId, rawId), parse(sessionId, rawSession)))
   ipcMain.handle(IPC_CHANNELS.remotePrompt, async (_event, rawId: unknown, rawSession: unknown, rawText: unknown) =>
     (await service()).remotePrompt(parse(deviceId, rawId), parse(sessionId, rawSession), parse(promptText, rawText)),
@@ -162,6 +198,15 @@ export function registerRemoteIpc(userDataDir: string): void {
     if (!resolve) return
     pendingCompress.delete(requestId)
     resolve(parse(compressResultSchema, rawResult))
+  })
+  ipcMain.handle(IPC_CHANNELS.remoteCall, async (_event, rawId: unknown, rawCall: unknown) => (await service()).remoteCall(parse(deviceId, rawId), parse(requestCallSchema, rawCall)))
+  // 本机是被连接端：界面回的任务读取、操作结果
+  ipcMain.handle(IPC_CHANNELS.remoteTaskCallRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
+    const requestId = parse(z.string().min(1), rawRequestId)
+    const resolve = pendingTaskCalls.get(requestId)
+    if (!resolve) return
+    pendingTaskCalls.delete(requestId)
+    resolve(parse(taskCallResultSchema, rawResult))
   })
   // 本机是被连接端：界面做完远程操作回的结果
   ipcMain.handle(IPC_CHANNELS.remoteActionRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {

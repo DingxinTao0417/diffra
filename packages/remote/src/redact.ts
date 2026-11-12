@@ -1,5 +1,6 @@
 import { isProtectedFile } from '@diffra/core'
-import { SECRET_FORMATS, type SessionUpdate, type StoredTurn, VISUAL_META_KEY } from '@diffra/core/types'
+import { SECRET_FORMATS, type SessionUpdate, type StoredTurn, type ToolCallContent, TOOL_PREVIEW_META_KEY, VISUAL_META_KEY } from '@diffra/core/types'
+import { MAX_DIFF_CHARS, TOOL_PREVIEW_CHARS } from './messages.js'
 
 // 设备连接发出会话前的脱敏和裁剪，只作用于发出去的副本。正则抓不全，只能尽力；真正的边界是授权了哪些项目。
 // - 密钥：格式明确的（和安全检查共用 SECRET_FORMATS）、PEM 私钥整块、带引号的赋值、环境变量写法、Authorization 头、地址里的账号密码
@@ -53,6 +54,103 @@ export function redactTurn(turn: StoredTurn): StoredTurn & { omittedImages?: num
   const { images, ...rest } = turn
   const redacted = walk(rest, false) as Omit<StoredTurn, 'images'>
   return { ...redacted, images: [], ...(images.length > 0 ? { omittedImages: images.length } : {}) }
+}
+
+// 发出去的副本不带本机的目录结构：项目里的绝对路径换成相对项目的，用户目录换成 ~（不暴露 Windows 用户名）。
+// 路径字段（改动块的 path、locations、工具参数里的路径）在项目外时只留文件名；普通文字（标题、输出、消息）里只换这两个前缀，
+// 别的绝对路径只能尽力不管。改动卡片的 oldText、newText、base 不动：界面要按原文重放改动。在 redact* 之后做（保护文件按原路径认）
+export interface PathRoots {
+  project: string | null
+  home: string | null
+}
+
+const PATH_KEYS = new Set(['path', 'file_path', 'filePath', 'cwd'])
+const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/])/
+
+interface Root {
+  // 「根目录 + 分隔符」和「根目录本身（后面不再接路径字符）」
+  nested: RegExp
+  bare: RegExp
+  replacement: string
+}
+
+function rootOf(path: string | null, replacement: string): Root | null {
+  const trimmed = path?.replace(/[\\/]+$/, '')
+  if (!trimmed) return null
+  const pattern = trimmed
+    .split(/[\\/]/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\\\/]')
+  return { nested: new RegExp(`${pattern}[\\\\/]`, 'gi'), bare: new RegExp(`${pattern}(?![\\w.-])`, 'gi'), replacement }
+}
+
+export function hidePaths<T>(value: T, roots: PathRoots): T {
+  // 项目在用户目录里时先换项目
+  const list = [rootOf(roots.project, ''), rootOf(roots.home, '~')].filter((root): root is Root => root !== null)
+  return hideIn(value, list) as T
+}
+
+function hideText(text: string, roots: Root[]): string {
+  let result = text
+  for (const root of roots) {
+    result = result.replace(root.nested, root.replacement ? `${root.replacement}/` : '').replace(root.bare, root.replacement || '.')
+  }
+  return result
+}
+
+function hidePath(path: string, roots: Root[]): string {
+  if (!ABSOLUTE.test(path)) return path
+  const hidden = hideText(path, roots)
+  if (hidden !== path) return hidden.replace(/\\/g, '/') || '.'
+  return `…/${path.split(/[\\/]/).filter(Boolean).at(-1) ?? ''}`
+}
+
+function hideIn(value: unknown, roots: Root[], key?: string): unknown {
+  if (typeof value === 'string') {
+    if (key && DIFF_TEXT_KEYS.has(key)) return value
+    return key && PATH_KEYS.has(key) ? hidePath(value, roots) : hideText(value, roots)
+  }
+  if (Array.isArray(value)) return value.map((item) => hideIn(item, roots))
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, hideIn(item, roots, name)]))
+}
+
+// 任务改动的差异（git diff-tree -p，每个文件以 diff --git 开头）：可能含密钥的文件只留文件头和一行说明（界面照常能解析），
+// 其余按文字脱敏、不截单段；整份超过上限时截在文件边界，末尾说一句
+const DIFF_TRUNCATED = 'diff --git a/（太长，后面的文件没有同步） b/（太长，后面的文件没有同步）\n'
+
+export function redactDiff(diff: string): string {
+  let result = ''
+  for (const section of diff.split(/(?=^diff --git )/m)) {
+    const path = /^diff --git a\/(.+?) b\//.exec(section)?.[1]
+    const text = path && isProtectedFile(path) ? `${section.split('\n', 1)[0]}\n@@ -0,0 +1 @@\n+${OMITTED_FILE}\n` : redactText(section, false)
+    if (result.length + text.length > MAX_DIFF_CHARS) return result + DIFF_TRUNCATED
+    result += text
+  }
+  return result
+}
+
+// 快照里读取、执行、搜索这几类工具的文字输出只留开头（界面默认折叠，展开时连接端再要全文），在脱敏之后做，记的是脱敏后的长度。
+// 改动块不截（界面要按顺序重放改动），完成、计划、审查这类默认展开的卡片原样发
+const PREVIEW_KINDS = new Set(['read', 'execute', 'search'])
+
+export function previewTurn<T extends StoredTurn>(turn: T): T {
+  // 种类只在 tool_call 上，之后的 tool_call_update 不一定带
+  const kinds = new Map<string, string>()
+  const updates = turn.updates.map((update) => {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return update
+    if (update.kind) kinds.set(update.toolCallId, update.kind)
+    const kind = kinds.get(update.toolCallId)
+    if (!kind || !PREVIEW_KINDS.has(kind) || !update.content) return update
+    return { ...update, content: update.content.map(previewContent) }
+  })
+  return { ...turn, updates }
+}
+
+function previewContent(content: ToolCallContent): ToolCallContent {
+  if (content.type !== 'content' || content.content.type !== 'text' || content.content.text.length <= TOOL_PREVIEW_CHARS) return content
+  const { text } = content.content
+  return { ...content, content: { ...content.content, text: text.slice(0, TOOL_PREVIEW_CHARS), _meta: { ...content.content._meta, [TOOL_PREVIEW_META_KEY]: text.length } } }
 }
 
 function walk(value: unknown, omit: boolean, key?: string): unknown {

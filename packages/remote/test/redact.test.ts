@@ -1,6 +1,7 @@
 import type { SessionUpdate, StoredTurn } from '@diffra/core/types'
 import { describe, expect, test } from 'vitest'
-import { MAX_TEXT_CHARS, redactText, redactToolCall, redactTurn, redactUpdate } from '../src/redact.js'
+import { MAX_DIFF_CHARS } from '../src/messages.js'
+import { hidePaths, MAX_TEXT_CHARS, previewTurn, redactDiff, redactText, redactToolCall, redactTurn, redactUpdate } from '../src/redact.js'
 
 // 测试用的假密钥在运行时拼出来，仓库里不出现完整的密钥格式，免得被代码托管平台的密钥扫描拦下
 const fakeKey = (prefix: string, body: string) => `${prefix}${body}`
@@ -153,5 +154,97 @@ describe('会话更新和轮次脱敏', () => {
     expect(redactTurn(turn)).toEqual({ ...turn, prompt: '用这个 key 试试 [已脱敏：模型服务的 API Key]', images: [], omittedImages: 2 })
     const plain: StoredTurn = { ...turn, prompt: '普通的问题', images: [] }
     expect(redactTurn(plain)).toEqual(plain)
+  })
+})
+
+describe('快照里的工具输出只发开头', () => {
+  const text = (value: string) => ({ type: 'content', content: { type: 'text', text: value } })
+  const long = 'x'.repeat(5000)
+  const turn = (updates: unknown[]): StoredTurn => ({ id: 'turn-1', kind: 'prompt', prompt: '看看', startedAt: '2026-11-11T08:00:00.000Z', endedAt: null, stopReason: null, updates: updates as SessionUpdate[], skills: [], images: [] })
+
+  test('读取、执行、搜索超过 2000 字的文字输出留开头，_meta 记全文长度；种类按 tool_call 上的算', () => {
+    const result = previewTurn(
+      turn([
+        { sessionUpdate: 'tool_call', toolCallId: 'r', title: 'read_file', kind: 'read' },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'r', status: 'completed', content: [text(long)] },
+        { sessionUpdate: 'tool_call', toolCallId: 'e', title: 'run_command', kind: 'execute', content: [text(long), text('短的')] },
+      ]),
+    )
+    expect(result.updates[1]).toEqual({ sessionUpdate: 'tool_call_update', toolCallId: 'r', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'x'.repeat(2000), _meta: { diffraRemotePreview: 5000 } } }] })
+    expect(result.updates[2]).toMatchObject({ content: [{ content: { text: 'x'.repeat(2000), _meta: { diffraRemotePreview: 5000 } } }, text('短的')] })
+  })
+
+  test('改动块、别的种类（完成卡、审查）、不到 2000 字的、别的更新都原样', () => {
+    const updates = [
+      { sessionUpdate: 'tool_call', toolCallId: 'd', title: 'edit_file', kind: 'edit', content: [{ type: 'diff', path: 'a.ts', oldText: long, newText: long }] },
+      { sessionUpdate: 'tool_call', toolCallId: 'f', title: '完成', kind: 'other', content: [text(long)] },
+      { sessionUpdate: 'tool_call', toolCallId: 's', title: '搜索', kind: 'search', content: [text('x'.repeat(2000))] },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: long } },
+    ]
+    expect(previewTurn(turn(updates))).toEqual(turn(updates))
+  })
+})
+
+describe('任务改动的差异', () => {
+  const file = (path: string, line: string) => `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${line}\n`
+
+  test('可能含密钥的文件只留文件头和一行说明，其余文件里的密钥脱敏、结构不变', () => {
+    const key = `sk-${'z'.repeat(40)}`
+    const diff = file('src/a.ts', `const key = "${key}"`) + file('.env', `OPENAI_API_KEY=${key}`)
+    expect(redactDiff(diff)).toBe(
+      `${file('src/a.ts', 'const key = "[已脱敏：模型服务的 API Key]"')}diff --git a/.env b/.env\n@@ -0,0 +1 @@\n+（可能含密钥的文件，内容未同步）\n`,
+    )
+  })
+
+  test('超过上限时截在文件边界，末尾说明后面没有同步', () => {
+    const big = file('big.txt', 'x'.repeat(MAX_DIFF_CHARS - 100))
+    const result = redactDiff(file('a.txt', '第一个') + big)
+    expect(result.startsWith(file('a.txt', '第一个'))).toBe(true)
+    expect(result).not.toContain('big.txt')
+    expect(result).toContain('太长，后面的文件没有同步')
+  })
+})
+
+describe('发出去的副本不带本机的目录结构', () => {
+  const roots = { project: 'D:\\work\\proj', home: 'C:\\Users\\alice' }
+
+  test('路径字段：项目里的换成相对项目的（斜杠统一），用户目录换成 ~，别处只留文件名；相对路径不动', () => {
+    const update = {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 't1',
+      content: [
+        { type: 'diff', path: 'D:/work/proj/src/a.ts', oldText: 'x', newText: 'y' },
+        { type: 'diff', path: 'd:\\WORK\\proj\\b.ts', oldText: null, newText: 'z' },
+      ],
+      locations: [{ path: 'C:\\Users\\alice\\notes.md' }, { path: 'E:\\other\\secret\\plan.txt' }, { path: 'src/c.ts' }],
+      rawInput: { path: 'D:\\work\\proj' },
+    }
+    expect(hidePaths(update, roots)).toEqual({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 't1',
+      content: [
+        { type: 'diff', path: 'src/a.ts', oldText: 'x', newText: 'y' },
+        { type: 'diff', path: 'b.ts', oldText: null, newText: 'z' },
+      ],
+      locations: [{ path: '~/notes.md' }, { path: '…/plan.txt' }, { path: 'src/c.ts' }],
+      rawInput: { path: '.' },
+    })
+  })
+
+  test('文字里只换项目目录和用户目录这两个前缀；名字相近的目录不算；改动卡片的原文不动', () => {
+    const tool = {
+      title: '编辑 D:/work/proj/src/a.ts',
+      text: '在 D:\\work\\proj 里跑了 cd D:\\work\\proj\\pkg，日志在 C:\\Users\\alice\\AppData\\x.log，D:\\work\\proj-old 不是项目',
+      oldText: 'const root = "D:/work/proj/src"',
+    }
+    expect(hidePaths(tool, roots)).toEqual({
+      title: '编辑 src/a.ts',
+      text: '在 . 里跑了 cd pkg，日志在 ~/AppData\\x.log，D:\\work\\proj-old 不是项目',
+      oldText: 'const root = "D:/work/proj/src"',
+    })
+  })
+
+  test('不知道项目目录时只换用户目录', () => {
+    expect(hidePaths({ title: '读取 C:/Users/alice/a.txt', path: 'D:\\work\\proj\\a.txt' }, { project: null, home: 'C:\\Users\\alice' })).toEqual({ title: '读取 ~/a.txt', path: '…/a.txt' })
   })
 })

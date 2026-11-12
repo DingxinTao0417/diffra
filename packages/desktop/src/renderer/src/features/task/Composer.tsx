@@ -30,6 +30,7 @@ import { openSettings, refreshSettings } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
 import { QuestionBar } from './QuestionBar'
 import { clearComposerDraft, type ComposerDraft, type ComposerFile, type ComposerImage, readComposerDraft, writeComposerDraft } from './composer-drafts'
+import { useRemoteTask } from './remote-task'
 import { showToast, store, useAppState } from '@/state/store'
 
 // 斜杠菜单里由页面提供的命令，比如任务页的深度扫描
@@ -144,6 +145,8 @@ function highlightDraft(text: string, mentions: MentionTarget[]): ReactNode[] {
 
 export function Composer(props: ComposerProps) {
   const { size, disabled, running, onSend, onStop } = props
+  // 远程任务（借用本机任务页）：Skill 和自定义命令向对方要；MCP 提示词、附文档、优化提示词要用本机的项目和模型，远程不做
+  const remote = useRemoteTask()
   const large = size === 'large'
   // 右侧给滚动条留固定宽度：textarea 是 pr-2.5 + 10px gutter，着色层用 pr-5，换行宽度才一致
   const textLayout = large ? 'pl-4.5 pt-4 pb-2 text-base' : 'pl-3.5 pt-3 pb-1'
@@ -254,11 +257,11 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (tokenStart === null) setDismissed(null)
   }, [tokenStart])
-  const available = useProjectList(menuOpen ? props.mcpTarget : null, (target) => window.diffra.listSkills(target), '读取 Skill 失败')
-  const commandList = useProjectList(menuOpen ? props.mcpTarget : null, (target) => window.diffra.listCommands(target), '读取自定义命令失败')
-  const mcp = useMcpStatus(menuOpen ? props.mcpTarget : null)
+  const available = useProjectList(menuOpen ? props.mcpTarget : null, (target) => (remote?.listSkills ? remote.listSkills() : window.diffra.listSkills(target)), '读取 Skill 失败')
+  const commandList = useProjectList(menuOpen ? props.mcpTarget : null, (target) => (remote?.listCommands ? remote.listCommands() : window.diffra.listCommands(target)), '读取自定义命令失败')
+  const mcp = useMcpStatus(menuOpen && !remote ? props.mcpTarget : null)
   // 第一次打开时 Skill、自定义命令和 MCP prompt 还在读：先占一行，免得读完菜单突然变高、高亮项跟着跳
-  const listLoading = menuOpen && props.mcpTarget !== null && (available === null || commandList === null || (mcp.statuses === null && mcp.error === null))
+  const listLoading = menuOpen && props.mcpTarget !== null && (available === null || commandList === null || (!remote && mcp.statuses === null && mcp.error === null))
   // 有参数的 MCP prompt 和自定义命令先弹框填参数
   const [argumentsRequest, setArgumentsRequest] = useState<{ request: ArgumentsRequest; submit(args: Record<string, string>): void } | null>(null)
 
@@ -476,7 +479,9 @@ export function Composer(props: ComposerProps) {
     setAddingAttachments(true)
     try {
       const pictures = files.filter((file) => file.type.startsWith('image/'))
-      const documents = includeReferences ? files.filter((file) => !file.type.startsWith('image/')) : []
+      // 引用的是本机文件，对方电脑上没有
+      if (remote && includeReferences && pictures.length < files.length) showToast('远程任务只能附图片')
+      const documents = includeReferences && !remote ? files.filter((file) => !file.type.startsWith('image/')) : []
       const room = MAX_PROMPT_FILE_REFERENCES - fileReferences.length
       if (documents.length > room) showToast(`一条消息最多引用 ${MAX_PROMPT_FILE_REFERENCES} 个文件或文件夹`)
       const paths = documents.slice(0, Math.max(0, room)).map((file) => window.diffra.getPathForFile(file)).filter((path) => path !== '')
@@ -515,7 +520,7 @@ export function Composer(props: ComposerProps) {
     void addAttachments([...event.dataTransfer.files], true)
   }
 
-  const canEnhance = !disabled && !enhancing && draft.trim() !== '' && !draft.trimStart().startsWith('/')
+  const canEnhance = !remote && !disabled && !enhancing && draft.trim() !== '' && !draft.trimStart().startsWith('/')
   const enhance = async () => {
     if (!canEnhance) return
     const original = draft
@@ -806,20 +811,22 @@ export function Composer(props: ComposerProps) {
         )}
 
         <div className="flex-1" />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label="优化提示词"
-              disabled={!canEnhance}
-              className={cn(MENU_TRIGGER, 'shrink-0 px-1.5 text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent')}
-              onClick={() => void enhance()}
-            >
-              {enhancing ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>优化提示词：写得更具体，并列出需要你定的地方</TooltipContent>
-        </Tooltip>
+        {!remote && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="优化提示词"
+                disabled={!canEnhance}
+                className={cn(MENU_TRIGGER, 'shrink-0 px-1.5 text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent')}
+                onClick={() => void enhance()}
+              >
+                {enhancing ? <LoaderCircle className="size-4 animate-spin" /> : <WandSparkles className="size-4" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>优化提示词：写得更具体，并列出需要你定的地方</TooltipContent>
+          </Tooltip>
+        )}
         <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} />
         <ArgumentsDialog
           request={argumentsRequest?.request ?? null}
@@ -1064,7 +1071,10 @@ export function ModelMenu({
   trigger?: ReactNode
   modelsOnly?: boolean
 }) {
-  const providers = useAppState((state) => state.settings?.providers ?? null)
+  // 远程任务换成对方的模型服务
+  const remote = useRemoteTask()
+  const localProviders = useAppState((state) => state.settings?.providers ?? null)
+  const providers = remote ? (remote.providers ?? null) : localProviders
   const selectedProvider = providers?.find((provider) => provider.id === modelRef?.providerId)
   const selectedModel = selectedProvider?.models.find((model) => model.id === modelRef?.modelId)
   const efforts = selectedProvider && selectedModel ? reasoningEffortsFor(selectedProvider, selectedModel) : ['default' as const]
@@ -1091,7 +1101,8 @@ export function ModelMenu({
       onOpenChange={(open) => {
         if (!open) return
         setQuery('')
-        void refreshSettings()
+        if (remote) remote.loadProviders?.()
+        else void refreshSettings()
       }}
     >
       <DropdownMenuTrigger asChild>

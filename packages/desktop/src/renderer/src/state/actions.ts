@@ -1,7 +1,7 @@
 import { DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
-import type { RemoteAction, RemoteActionResult } from '../../../shared/remote'
+import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
 import { normalizeTodoTags, type Todo, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
@@ -200,6 +200,15 @@ export function wireCoreEvents(): () => void {
       .then((result) => window.diffra.respondRemoteCompress(requestId, result))
       .catch((error: unknown) => console.error('[remote] 回复图片压缩失败', error))
   })
+  const offRemoteTaskCall = window.diffra.onRemoteTaskCall(({ requestId, call }) => {
+    handleRemoteTaskCall(call)
+      .then(
+        (value): RemoteTaskCallResult => ({ ok: true, value }),
+        (error: unknown): RemoteTaskCallResult => ({ ok: false, error: errorMessage(error) }),
+      )
+      .then((result) => window.diffra.respondRemoteTaskCall(requestId, result))
+      .catch((error: unknown) => console.error('[remote] 回复远程任务请求失败', error))
+  })
   const offRemoteAction = window.diffra.onRemoteAction(({ requestId, action }) => {
     handleRemoteAction(action)
       .catch((error: unknown): RemoteActionResult => ({ ok: false, error: errorMessage(error) }))
@@ -247,6 +256,7 @@ export function wireCoreEvents(): () => void {
     offPermission()
     offPermissionSettled()
     offRemoteAction()
+    offRemoteTaskCall()
     offRemoteCompress()
     offTaskAction()
     offBrowserState()
@@ -366,7 +376,7 @@ async function handleRemoteAction(action: RemoteAction): Promise<RemoteActionRes
     if (store.get().live[action.sessionId]?.running) await window.diffra.cancelSession(action.sessionId)
     return { ok: true, sessionId: action.sessionId, queued: false }
   }
-  const options = { skills: action.skills, remote: action.source }
+  const options = { skills: action.skills, remote: action.source, ...(action.kind === 'send' ? { plan: action.plan ?? false, goal: action.goal ?? false, images: action.images ?? [] } : {}) }
   if (action.kind === 'send') {
     const sent = await sendInBackground(action.sessionId, action.text, options)
     if (!sent) return { ok: false, error: '没有这个会话，或者读不出来' }
@@ -374,6 +384,55 @@ async function handleRemoteAction(action: RemoteAction): Promise<RemoteActionRes
   }
   const created = await startInBackground(action.project, action.text, { design: false }, options)
   return { ok: true, sessionId: created.sessionId, queued: false }
+}
+
+// 设备连接：授权的远程设备读、操作任务（主进程已经查过授权和级别）。在后台载入任务、用本机的逻辑，不把用户从正在看的页面切走
+async function handleRemoteTaskCall(call: RemoteTaskCall): Promise<unknown> {
+  if (call.kind === 'models') return store.get().settings?.providers ?? (await window.diffra.getSettings()).providers
+  const summary = store.get().tasks.find((task) => task.sessionId === call.sessionId)
+  if (!summary) throw new Error('没有这个会话，或者读不出来')
+  const live = await loadLive(summary)
+  switch (call.kind) {
+    case 'details': {
+      const [project, branch] = await Promise.all([window.diffra.getProject(live.project).catch(() => null), window.diffra.projectBranch(live.project)])
+      const details: RemoteTaskDetails = {
+        info: live.info,
+        modelLabel: live.modelLabel,
+        ...(live.modelRef ? { modelRef: live.modelRef } : {}),
+        planLabel: live.planLabel,
+        fallbackLabel: live.fallbackLabel,
+        permissionMode: live.permissionMode,
+        planMode: live.planMode,
+        branch,
+        project,
+      }
+      return details
+    }
+    case 'diff':
+      return window.diffra.checkpointDiff(call.sessionId, call.turnId)
+    case 'skills':
+      return window.diffra.listSkills({ sessionId: call.sessionId })
+    case 'commands':
+      return window.diffra.listCommands({ sessionId: call.sessionId })
+    case 'restorePreview':
+      return window.diffra.previewCheckpoint(call.sessionId, call.turnId)
+    case 'setModel':
+      if (!(await setTaskModel(call.sessionId, call.ref))) throw new Error('切换模型失败，原因提示在对方电脑上')
+      return {}
+    case 'setPermissionMode':
+      await setPermissionMode(call.sessionId, call.mode)
+      return {}
+    case 'restore':
+      await restoreTurn(call.sessionId, call.turnId)
+      return {}
+    // 压缩、重新生成会起一轮，不等它跑完；出错在本机提示
+    case 'compact':
+      compactTask(call.sessionId).catch((error: unknown) => showToast(`远程设备要求的压缩失败：${errorMessage(error)}`))
+      return {}
+    case 'regenerate':
+      regenerate(call.sessionId, call.turnId).catch((error: unknown) => showToast(`远程设备要求的重新生成失败：${errorMessage(error)}`))
+      return {}
+  }
 }
 
 // 在后台给任务发一条消息：载入任务、起一轮（正在跑就排队），不把用户从正在看的页面切走。任务不在了返回 null

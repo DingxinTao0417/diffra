@@ -5,6 +5,7 @@ import type { ProjectState } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { DiffCounts, relativePath } from '@/features/session/DiffView'
 import { useMcpStatus } from '@/features/mcp/useMcpStatus'
+import { useRemoteTask } from './remote-task'
 import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -36,7 +37,9 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
-  const mcp = useMcpStatus({ sessionId: task.sessionId })
+  // 远程任务：MCP 状态是对方电脑上的，这里不查；改项目设置、深度扫描也不在这里做
+  const remote = useRemoteTask()
+  const mcp = useMcpStatus(remote ? null : { sessionId: task.sessionId })
   const verdict = turnVerdict(task)
   const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
   const failedCommands = verdictTurn?.items.flatMap((item) => (item.kind === 'tool' && item.succeeded === false ? [item] : [])) ?? []
@@ -230,7 +233,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         </Section>
 
         {/* 无项目任务的文件夹不是用户的项目，不给它存项目设置 */}
-        <Section title="检查" action={task.noProject ? undefined : <SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
+        <Section title="检查" action={task.noProject || remote ? undefined : <SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
           {checks && (
             <>
               <Row
@@ -251,7 +254,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           )}
         </Section>
 
-        {deepScanEnabled && (
+        {deepScanEnabled && !remote && (
           <Section
             title="深度扫描"
             hint="只读地跨文件追踪数据流，出一份报告，勾选后交给智能体修复。"
@@ -294,7 +297,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
 
           {/* 折叠只用 CSS 隐藏，内容留在 DOM 里，e2e 的 toContainText 仍能读到 */}
           <div className={cn('flex flex-col gap-4', !configOpen && 'hidden')}>
-            <Section title="安全" action={<SectionAction onClick={() => openSettings('security')}>安全设置</SectionAction>}>
+            <Section title="安全" action={remote ? undefined : <SectionAction onClick={() => openSettings('security')}>安全设置</SectionAction>}>
               <Row status={task.info.security.staticCheck ? 'on' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
               <Row status={task.info.security.lightScan ? 'on' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
             </Section>
@@ -311,7 +314,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
               )}
             </Section>
 
-            <Section title="模型" action={<SectionAction onClick={() => openSettings('models')}>模型与角色</SectionAction>}>
+            <Section title="模型" action={remote ? undefined : <SectionAction onClick={() => openSettings('models')}>模型与角色</SectionAction>}>
               <Row label="编码" value={task.modelLabel} />
               <Row label="规划" value={task.planLabel ?? '沿用编码模型'} />
               <Row label="备用" value={task.fallbackLabel ?? '不使用'} />

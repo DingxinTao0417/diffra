@@ -11,6 +11,16 @@ import {
   sessionListSchema,
   snapshotSchema,
   subscribeResultSchema,
+  type RemoteToolOutput,
+  branchesSchema,
+  commandsListSchema,
+  modelsListSchema,
+  restorePreviewSchema,
+  sessionDetailsSchema,
+  sessionDiffSchema,
+  skillsListSchema,
+  terminalOpenedSchema,
+  toolOutputSchema,
 } from '@diffra/remote/messages'
 import type { z } from 'zod'
 import type { RemoteSyncEvent } from '../../shared/remote'
@@ -31,6 +41,28 @@ const OPEN_FAILURES: Record<OpenFailure, string> = {
   off: '对方关掉了「允许连接本机」',
   'not-granted': '对方没有授权本机，或者已经撤销，要对方重新开放',
   'unknown-peer': '本机没有这台设备的密钥，要重新添加',
+}
+
+// 走通用请求（call）的方法和它们回复的格式
+const RESULT_SCHEMAS: Partial<Record<RequestCall['method'], z.ZodType>> = {
+  'session.details': sessionDetailsSchema,
+  'session.diff': sessionDiffSchema,
+  'session.prompt': promptResultSchema,
+  'models.list': modelsListSchema,
+  'skills.list': skillsListSchema,
+  'commands.list': commandsListSchema,
+  'session.restorePreview': restorePreviewSchema,
+  'session.setModel': okSchema,
+  'session.setPermissionMode': okSchema,
+  'session.compact': okSchema,
+  'session.regenerate': okSchema,
+  'session.restore': okSchema,
+  'project.branches': branchesSchema,
+  'project.switchBranch': okSchema,
+  'terminal.open': terminalOpenedSchema,
+  'terminal.input': okSchema,
+  'terminal.resize': okSchema,
+  'terminal.close': okSchema,
 }
 
 export interface GuestSyncDeps {
@@ -62,6 +94,16 @@ export class GuestSync {
 
   page(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
     return this.request(deviceId, { method: 'session.page', sessionId, before }, snapshotSchema)
+  }
+
+  call(deviceId: string, call: RequestCall): Promise<unknown> {
+    const schema = RESULT_SCHEMAS[call.method]
+    if (!schema) return Promise.reject(new Error(`不支持的请求：${call.method}`))
+    return this.request(deviceId, call, schema)
+  }
+
+  toolOutput(deviceId: string, sessionId: string, turn: number, turnId: string, toolCallId: string): Promise<RemoteToolOutput> {
+    return this.request(deviceId, { method: 'session.toolOutput', sessionId, turn, turnId, toolCallId }, toolOutputSchema)
   }
 
   prompt(deviceId: string, sessionId: string, text: string): Promise<{ queued: boolean }> {

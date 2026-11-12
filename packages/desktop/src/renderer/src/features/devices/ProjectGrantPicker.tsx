@@ -1,25 +1,23 @@
 import { TriangleAlert } from 'lucide-react'
-import type { RemoteLevel, RemoteProjectGrant } from '../../../../shared/remote'
+import { canControl, REMOTE_LEVEL_LABELS, REMOTE_LEVELS, type RemoteLevel, type RemoteProjectGrant } from '../../../../shared/remote'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Segmented } from '@/components/ui/segmented'
 import { folderName } from '@/lib/format'
 import { useAppState } from '@/state/store'
 
-const LEVEL_OPTIONS: Array<{ value: RemoteLevel; label: string }> = [
-  { value: 'view', label: '可查看' },
-  { value: 'control', label: '可查看和操作' },
-]
+const LEVEL_OPTIONS: Array<{ value: RemoteLevel; label: string }> = REMOTE_LEVELS.map((value) => ({ value, label: REMOTE_LEVEL_LABELS[value] }))
 
 export function describeGrants(projects: RemoteProjectGrant[]): string {
   if (projects.length === 0) return '不开放任何项目'
-  return projects.map((project) => `${folderName(project.path)}（${project.level === 'control' ? '可查看和操作' : '可查看'}）`).join('、')
+  return projects.map((project) => `${folderName(project.path)}（${REMOTE_LEVEL_LABELS[project.level]}）`).join('、')
 }
 
 // 给一台设备开放哪些项目、每个项目开到哪一级。可选的是侧栏里的项目，加上已经授权过的
 export function ProjectGrantPicker({ value, onChange }: { value: RemoteProjectGrant[]; onChange(value: RemoteProjectGrant[]): void }) {
   const sidebar = useAppState((state) => state.projects)
   const projects = [...new Set([...sidebar, ...value.map((grant) => grant.path)])]
-  const control = value.some((grant) => grant.level === 'control')
+  const control = value.some((grant) => canControl(grant.level))
+  const full = value.some((grant) => grant.level === 'full')
   const levelOf = (path: string) => value.find((grant) => grant.path === path)?.level ?? null
 
   const toggle = (path: string, checked: boolean) => onChange(checked ? [...value, { path, level: 'view' }] : value.filter((grant) => grant.path !== path))
@@ -51,6 +49,12 @@ export function ProjectGrantPicker({ value, onChange }: { value: RemoteProjectGr
         <p className="flex gap-2 rounded-lg bg-warning-soft px-3 py-2 text-xs text-warning" role="note">
           <TriangleAlert className="mt-px size-3.5 shrink-0" />
           「可查看和操作」等于让对方以你的 Windows 账户在这台电脑上运行命令：能让智能体跑命令，也能自己点确认。按项目授权只限定能操作哪些任务，不是沙箱，只授权给你信任的人。
+        </p>
+      )}
+      {full && (
+        <p className="flex gap-2 rounded-lg bg-destructive-soft px-3 py-2 text-xs text-destructive" role="note">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          「完全控制」还让对方能在这台电脑上开终端、把任务的权限切成「完全访问」：直接执行任意命令，不经过确认，也不限于开放的项目。只给你自己的设备。
         </p>
       )}
     </div>

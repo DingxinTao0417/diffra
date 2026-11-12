@@ -9,6 +9,7 @@ import { errorMessage } from '@/lib/errors'
 import { formatTokens } from '@/lib/format'
 import { compactTask } from '@/state/actions'
 import { showToast } from '@/state/store'
+import { useRemoteTask } from './remote-task'
 
 const USAGE_PARTS = [
   { key: 'messages', label: '对话和工具结果', className: 'bg-chart-1' },
@@ -45,6 +46,7 @@ export function CacheUsage({ usage }: { usage: Usage }) {
 }
 
 export function ContextUsage({ sessionId, usage, running }: { sessionId: string; usage: Usage; running: boolean }) {
+  const remote = useRemoteTask()
   const [open, setOpen] = useState(false)
   const percent = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0
   const high = percent >= 80
@@ -58,9 +60,11 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
     return value > 0 && ratio < 1 ? '<1%' : `${Math.round(ratio)}%`
   }
 
+  // 远程任务只读时不能压缩
+  const canCompact = !remote || Boolean(remote.compact)
   const compact = () => {
     setOpen(false)
-    compactTask(sessionId).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`))
+    ;(remote?.compact ? remote.compact() : compactTask(sessionId)).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`))
   }
 
   return (
@@ -155,12 +159,14 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
           </div>
           <span className="text-xs text-muted-foreground">最近一次模型调用的输入里，命中缓存的比例。</span>
         </div>
-        <div className="-mx-3 flex justify-end border-t px-3 pt-3">
-          <Button variant="outline" size="sm" disabled={running} onClick={compact}>
-            <Archive />
-            压缩上下文
-          </Button>
-        </div>
+        {canCompact && (
+          <div className="-mx-3 flex justify-end border-t px-3 pt-3">
+            <Button variant="outline" size="sm" disabled={running} onClick={compact}>
+              <Archive />
+              压缩上下文
+            </Button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )

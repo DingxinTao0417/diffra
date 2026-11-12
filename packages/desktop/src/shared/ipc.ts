@@ -41,8 +41,8 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
-import type { RemoteResumed, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
-import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteView } from './remote'
+import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
+import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteTaskCall, RemoteTaskCallResult, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
 import type { Todo } from './todos'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
@@ -79,6 +79,8 @@ export const IPC_CHANNELS = {
   sessionRewind: 'session:rewind',
   checkpointDiff: 'session:checkpoint-diff',
   projectBranch: 'project:branch',
+  projectBranches: 'project:branches',
+  projectSwitchBranch: 'project:switch-branch',
   projectOpenFolder: 'project:open-folder',
   sessionFolderState: 'session:folder-state',
   attachmentDescribe: 'attachment:describe',
@@ -185,6 +187,7 @@ export const IPC_CHANNELS = {
   remoteList: 'remote:list',
   remoteSubscribe: 'remote:subscribe',
   remotePage: 'remote:page',
+  remoteToolOutput: 'remote:tool-output',
   remoteUnsubscribe: 'remote:unsubscribe',
   remoteEvent: 'remote:event',
   remotePrompt: 'remote:prompt',
@@ -193,6 +196,9 @@ export const IPC_CHANNELS = {
   remotePermission: 'remote:permission',
   remoteAction: 'remote:action',
   remoteActionRespond: 'remote:action-respond',
+  remoteTaskCall: 'remote:task-call',
+  remoteTaskCallRespond: 'remote:task-call-respond',
+  remoteCall: 'remote:call',
   remoteCompress: 'remote:compress',
   remoteCompressRespond: 'remote:compress-respond',
 } as const
@@ -389,6 +395,9 @@ export interface DiffraApi {
   rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean }>
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
+  // 本地分支和当前分支；切换前检查有没有任务在跑、工作区有没有未提交的改动
+  projectBranches(projectPath: string): Promise<{ current: string | null; branches: string[] }>
+  switchProjectBranch(projectPath: string, branch: string): Promise<void>
   openProjectFolder(projectPath: string): Promise<void>
   // 删除无项目任务前，看它的文件夹是空的、不空、已经不在，还是别的任务也在用
   taskFolderState(sessionId: string): Promise<TaskFolderState>
@@ -550,6 +559,8 @@ export interface DiffraApi {
   // resume：断线前看到的位置（core 的 epoch 和 seq），对方接得上时回 resumed、之后补发缺的
   subscribeRemoteSession(deviceId: string, sessionId: string, resume?: { epoch: string; seq: number }): Promise<RemoteSnapshotPage | RemoteResumed>
   pageRemoteSession(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage>
+  // 展开只同步了开头的工具输出：turn 是这一轮在对方全部轮次里的位置
+  remoteToolOutput(deviceId: string, sessionId: string, turn: number, turnId: string, toolCallId: string): Promise<RemoteToolOutput>
   unsubscribeRemoteSession(deviceId: string, sessionId: string): Promise<void>
   onRemoteEvent(listener: (event: RemoteSyncEvent) => void): () => void
   // 操作对方授权给本机「可查看和操作」的会话：发消息（对方在跑时排队）、在开放的项目里新建任务、停止、回答对方的权限请求
@@ -560,6 +571,10 @@ export interface DiffraApi {
   // 本机是被连接端：远程设备的操作交给界面做（同任务互通），做完回结果
   onRemoteAction(listener: (event: { requestId: string; action: RemoteAction }) => void): () => void
   respondRemoteAction(requestId: string, result: RemoteActionResult): Promise<void>
+  onRemoteTaskCall(listener: (event: { requestId: string; call: RemoteTaskCall }) => void): () => void
+  respondRemoteTaskCall(requestId: string, result: RemoteTaskCallResult): Promise<void>
+  // 连接端：向对方发请求（新加的请求都走这里，主进程按协议校验请求和回复）
+  remoteCall(deviceId: string, call: RequestCall): Promise<unknown>
   // 本机是被连接端：把提问图片压成发给远程的小图，压不了的回 null
   onRemoteCompress(listener: (event: { requestId: string; images: PromptImage[] }) => void): () => void
   respondRemoteCompress(requestId: string, result: Array<PromptImage | null>): Promise<void>

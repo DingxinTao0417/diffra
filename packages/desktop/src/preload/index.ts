@@ -2,7 +2,7 @@ import type { ArchitectureEvent } from '@diffra/core/architecture'
 import type { PromptImage, SessionNotification } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
-import type { RemoteAction, RemoteSyncEvent, RemoteView } from '../shared/remote'
+import type { RemoteAction, RemoteSyncEvent, RemoteTaskCall, RemoteView } from '../shared/remote'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -37,6 +37,8 @@ const api: DiffraApi = {
   rewindSession: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionRewind, sessionId, turnId),
   checkpointDiff: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointDiff, sessionId, turnId),
   projectBranch: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectBranch, projectPath),
+  projectBranches: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectBranches, projectPath),
+  switchProjectBranch: (projectPath, branch) => ipcRenderer.invoke(IPC_CHANNELS.projectSwitchBranch, projectPath, branch),
   openProjectFolder: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectOpenFolder, projectPath),
   taskFolderState: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionFolderState, sessionId),
   describeAttachments: (paths) => ipcRenderer.invoke(IPC_CHANNELS.attachmentDescribe, paths),
@@ -148,6 +150,7 @@ const api: DiffraApi = {
   listRemoteSessions: (deviceId) => ipcRenderer.invoke(IPC_CHANNELS.remoteList, deviceId),
   subscribeRemoteSession: (deviceId, sessionId, resume) => ipcRenderer.invoke(IPC_CHANNELS.remoteSubscribe, deviceId, sessionId, resume),
   pageRemoteSession: (deviceId, sessionId, before) => ipcRenderer.invoke(IPC_CHANNELS.remotePage, deviceId, sessionId, before),
+  remoteToolOutput: (deviceId, sessionId, turn, turnId, toolCallId) => ipcRenderer.invoke(IPC_CHANNELS.remoteToolOutput, deviceId, sessionId, turn, turnId, toolCallId),
   unsubscribeRemoteSession: (deviceId, sessionId) => ipcRenderer.invoke(IPC_CHANNELS.remoteUnsubscribe, deviceId, sessionId),
   onRemoteEvent: (listener) => subscribe<RemoteSyncEvent>(IPC_CHANNELS.remoteEvent, listener),
   promptRemoteSession: (deviceId, sessionId, text) => ipcRenderer.invoke(IPC_CHANNELS.remotePrompt, deviceId, sessionId, text),
@@ -156,6 +159,9 @@ const api: DiffraApi = {
   respondRemotePermission: (deviceId, requestId, optionId) => ipcRenderer.invoke(IPC_CHANNELS.remotePermission, deviceId, requestId, optionId),
   onRemoteAction: (listener) => subscribe<{ requestId: string; action: RemoteAction }>(IPC_CHANNELS.remoteAction, listener),
   respondRemoteAction: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteActionRespond, requestId, result),
+  onRemoteTaskCall: (listener) => subscribe<{ requestId: string; call: RemoteTaskCall }>(IPC_CHANNELS.remoteTaskCall, listener),
+  respondRemoteTaskCall: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteTaskCallRespond, requestId, result),
+  remoteCall: (deviceId, call) => ipcRenderer.invoke(IPC_CHANNELS.remoteCall, deviceId, call),
   onRemoteCompress: (listener) => subscribe<{ requestId: string; images: PromptImage[] }>(IPC_CHANNELS.remoteCompress, listener),
   respondRemoteCompress: (requestId, result) => ipcRenderer.invoke(IPC_CHANNELS.remoteCompressRespond, requestId, result),
 }

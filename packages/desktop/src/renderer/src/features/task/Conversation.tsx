@@ -23,6 +23,8 @@ import { ModelMenu } from './Composer'
 import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
+import { useRemoteTask } from './remote-task'
+import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
@@ -172,10 +174,19 @@ interface ConversationProps {
   onRegenerate(turnId: string): void
   // 远程会话：只看，不提供作用于本机的操作（见 read-only.ts）
   readOnly?: boolean
+  // 远程会话：上面还有 count 轮没取过来。滚到顶继续往上拉（或点顶上那一行）取一页；count 为 0 时说已经是最早的一轮
+  earlier?: { count: number; loading: boolean; load(): void }
 }
 
-export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, readOnly = false }: ConversationProps) {
+// 滚到顶以后继续往上滚这么多像素算拉到位，开始取更早的轮次；拉的过程中顶上那一行跟着变高
+const PULL_THRESHOLD = 64
+
+export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, readOnly = false, earlier }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [pull, setPull] = useState(0)
+  const pullTimer = useRef<number | undefined>(undefined)
+  // 上一次画完时的第一轮和滚动位置：前面插进更早的轮次后，按多出来的高度把正在看的内容留在原处
+  const scrolled = useRef<{ first: string | undefined; height: number; top: number }>({ first: undefined, height: 0, top: 0 })
   // 用户停在底部时，新内容进来就跟着滚；往上翻了就不打扰
   const stickRef = useRef(true)
   // 定位和时间线跳转用的平滑滚动起步那几帧还在底部 80px 内，onScroll 会把贴底改回去，流式输出一到就被拉回底部；滚出这一带之前不改贴底
@@ -195,6 +206,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   const onScroll = () => {
     const element = scrollRef.current
     if (!element) return
+    scrolled.current = { first: task.turns[0]?.id, height: element.scrollHeight, top: element.scrollTop }
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
     if (distance >= 80) locatingRef.current = false
     if (!locatingRef.current) stickRef.current = distance < 80
@@ -206,6 +218,36 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
     }
     setActiveTurn(current ?? task.turns[0]?.id ?? null)
   }
+
+  // 往前取了一页：浏览器的滚动锚定在滚到顶时不起作用，自己按多出来的高度往下挪；每次画完记下位置
+  useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const previous = scrolled.current
+    const first = task.turns[0]?.id
+    if (previous.first && first !== previous.first && task.turns.some((turn) => turn.id === previous.first)) element.scrollTop = previous.top + element.scrollHeight - previous.height
+    scrolled.current = { first, height: element.scrollHeight, top: element.scrollTop }
+  })
+
+  // 滚到顶以后还在往上滚：顶上那一行跟着拉高，拉够了取更早的一页；停下一会儿就弹回去
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const element = scrollRef.current
+    if (!element || !earlier || earlier.count === 0 || earlier.loading) return
+    if (element.scrollTop > 0 || event.deltaY >= 0) {
+      if (pull > 0) setPull(0)
+      return
+    }
+    window.clearTimeout(pullTimer.current)
+    const next = pull - event.deltaY * (event.deltaMode === 1 ? 16 : 1) * 0.5
+    if (next >= PULL_THRESHOLD) {
+      setPull(0)
+      earlier.load()
+      return
+    }
+    setPull(next)
+    pullTimer.current = window.setTimeout(() => setPull(0), 400)
+  }
+  useEffect(() => () => window.clearTimeout(pullTimer.current), [])
 
   // 不跟随时内容在下面长高没有滚动事件，「回到底部」在这里也重算
   useLayoutEffect(() => {
@@ -290,9 +332,15 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="h-full overflow-y-auto px-8 pt-6 pb-8 [scrollbar-gutter:stable_both-edges] [mask-image:linear-gradient(to_bottom,black_calc(100%_-_24px),transparent)]"
+        onWheel={earlier ? onWheel : undefined}
+        className={cn(
+          'h-full overflow-y-auto px-8 pt-6 pb-8 [scrollbar-gutter:stable_both-edges] [mask-image:linear-gradient(to_bottom,black_calc(100%_-_24px),transparent)]',
+          // 往前插内容时自己挪位置（见上面），不让浏览器的滚动锚定再挪一次
+          earlier && '[overflow-anchor:none]',
+        )}
       >
         <div className="mx-auto flex min-h-full max-w-(--content-max) flex-col gap-7">
+          {earlier && <EarlierRow earlier={earlier} pull={pull} />}
           {task.turns.length === 0 && (
             <EmptyState icon={MessageSquare} title="描述你要做的事" description="比如「修复登录页的报错」或「给 utils 加单元测试」。" className="my-auto bg-transparent" />
           )}
@@ -323,6 +371,20 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
       )}
     </div>
     </ReadOnlyContext.Provider>
+  )
+}
+
+// 远程会话顶上那一行：还有更早的轮次时说上拉或点这里取，拉的时候跟着变高
+function EarlierRow({ earlier, pull }: { earlier: NonNullable<ConversationProps['earlier']>; pull: number }) {
+  if (earlier.count === 0) return <p className="text-center text-xs text-muted-foreground" data-testid="load-earlier">已经是最早的一轮</p>
+  return (
+    // 不加过渡：加载完那一刻要按此时的高度把正在看的位置留住，内边距还在动画里就会算偏
+    <div className="flex justify-center" style={{ paddingTop: pull }}>
+      <button type="button" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground disabled:hover:text-muted-foreground" disabled={earlier.loading} onClick={earlier.load} data-testid="load-earlier">
+        {earlier.loading && <LoaderCircle className="size-3 animate-spin" />}
+        {earlier.loading ? '正在加载更早的…' : pull > 0 ? `继续上拉，加载更早的 ${earlier.count} 轮` : `上拉或点这里，加载更早的 ${earlier.count} 轮`}
+      </button>
+    </div>
   )
 }
 
@@ -390,9 +452,11 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   const lastFinishId = last ? [...finishFiles.keys()].at(-1) : undefined
   const lastPassedId = last ? turn.items.filter((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0).at(-1)?.id : undefined
   const readOnly = useReadOnly()
-  const canRegenerate = latestWork && !readOnly
+  // 远程任务页只读（作用于本机的按钮都不显示），但对方开放了「可查看和操作」时撤销、重新生成经对方做
+  const remote = useRemoteTask()
+  const canRegenerate = latestWork && (!readOnly || Boolean(remote?.regenerate))
   // 定位轮不改文件、没有检查点
-  const canRestore = !readOnly && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
+  const canRestore = (!readOnly || Boolean(remote?.restore)) && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
   // 和 FinishCard 显示撤销按钮的条件一致：撤销过但判成没改动的卡照样留着按钮
   const cardRestore = turn.items.some((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0 && (!turn.restoredAt || finishVerdict(item).tone === 'nochange'))
 
@@ -459,7 +523,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           case 'visual':
             return <VisualCard key={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
           case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={!readOnly && !task.running && task.info.checkpoints ? onRestore : undefined} />
+            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={canRestore && !task.running ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -685,6 +749,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
   const expanded = open ?? (commandFailed || unverified || defaultOpen)
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
+  const full = useFullOutput(item, expanded)
   const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)} data-item-id={item.id} tabIndex={commandFailed && !output ? -1 : undefined}>
@@ -700,7 +765,22 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
         </div>
       )}
       {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
+  )
+}
+
+// 远程会话里只同步了开头的输出：说明一句，取全文失败时可以重试
+function OutputNote({ note, retry }: { note: string; retry: (() => void) | null }) {
+  return (
+    <p className="mt-1 ml-5 flex items-center gap-2 text-xs text-muted-foreground" data-testid="tool-output-note">
+      {note}
+      {retry && (
+        <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={retry}>
+          重试
+        </button>
+      )}
+    </p>
   )
 }
 
@@ -1196,6 +1276,7 @@ function CheckRow({ item }: { item: ToolItem }) {
   const label = item.title.slice(0, separator)
   const command = item.title.slice(separator + 1)
   const output = textOf(item)
+  const full = useFullOutput(item, open)
   const result = item.status === 'completed' ? '通过' : item.status === 'failed' ? '没通过' : '运行中…'
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="check" data-status={item.status}>
@@ -1208,6 +1289,7 @@ function CheckRow({ item }: { item: ToolItem }) {
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
       </DisclosureRow>
       {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
   )
 }

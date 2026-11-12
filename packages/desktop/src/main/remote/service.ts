@@ -2,8 +2,8 @@ import { join } from 'node:path'
 import type { PromptImage, RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { fingerprintOf, InviteError } from '@diffra/remote'
-import type { RemoteResumed, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
-import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteDeviceView, RemoteProjectGrant, RemoteRelayStatus, RemoteSyncEvent, RemoteView } from '../../shared/remote'
+import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
+import { REMOTE_LEVEL_LABELS, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteAddResult, type RemoteAuditEntry, type RemoteDeviceView, type RemoteProjectGrant, type RemoteRelayStatus, type RemoteSyncEvent, type RemoteView } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { logRemote } from '../app-log'
 import { DIRECT } from './channel'
@@ -27,10 +27,14 @@ export interface RemoteServiceOptions {
   snapshot(params: { sessionId: string; before?: number; maxTurns: number; maxChars: number }): Promise<RemoteSnapshot>
   // 授权的设备要做的操作，交给本机界面做
   act(action: RemoteAction): Promise<RemoteActionResult>
+  // 授权的设备要读、做的任务相关的事，交给本机界面做
+  ask(call: RemoteTaskCall): Promise<unknown>
   // 替本机的人回答权限请求；已经有人答过了返回 false
   answerPermission(requestId: string, optionId: string): boolean
   // 提问图片压缩成发给远程的小图，压不了的是 null
   compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
+  branches(cwd: string): Promise<{ current: string | null; branches: string[] }>
+  switchBranch(cwd: string, branch: string): Promise<void>
 }
 
 // 设备连接的总管：本机身份、中转连接、配对、授权、操作记录。
@@ -63,9 +67,13 @@ export class RemoteService {
       listSessions: () => options.listSessions(),
       snapshot: (params) => options.snapshot(params),
       act: (action) => options.act(action),
+      ask: (call) => options.ask(call),
       answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
       audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
       forget: (deviceId) => void this.revoke(deviceId, '对方删除了本机，撤销授权'),
+      terminalsChanged: () => this.changed(),
+      branches: (cwd) => options.branches(cwd),
+      switchBranch: (cwd, branch) => options.switchBranch(cwd, branch),
       compressImages: (images) => options.compressImages(images),
     })
     this.guestSync = new GuestSync({
@@ -95,6 +103,17 @@ export class RemoteService {
   remotePage(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
     this.requirePeer(deviceId)
     return this.guestSync.page(deviceId, sessionId, before)
+  }
+
+  // 新加的请求都走这里
+  remoteCall(deviceId: string, call: RequestCall): Promise<unknown> {
+    this.requirePeer(deviceId)
+    return this.guestSync.call(deviceId, call)
+  }
+
+  remoteToolOutput(deviceId: string, sessionId: string, turn: number, turnId: string, toolCallId: string): Promise<RemoteToolOutput> {
+    this.requirePeer(deviceId)
+    return this.guestSync.toolOutput(deviceId, sessionId, turn, turnId, toolCallId)
   }
 
   remoteUnsubscribe(deviceId: string, sessionId: string): Promise<void> {
@@ -162,7 +181,7 @@ export class RemoteService {
         name: request.name,
         previous: state.grants.find((grant) => grant.deviceId === request.deviceId)?.projects ?? null,
       })),
-      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects })),
+      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, terminals: this.hostSync.terminalCount(grant.deviceId) })),
       peers: state.peers.map(device),
     }
   }
@@ -415,5 +434,5 @@ export class RemoteService {
 
 function describe(projects: RemoteProjectGrant[]): string {
   if (projects.length === 0) return '不开放任何项目'
-  return projects.map((project) => `${project.path}（${project.level === 'control' ? '可查看和操作' : '可查看'}）`).join('、')
+  return projects.map((project) => `${project.path}（${REMOTE_LEVEL_LABELS[project.level]}）`).join('、')
 }

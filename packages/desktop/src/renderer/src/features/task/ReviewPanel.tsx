@@ -15,7 +15,8 @@ import { type TaskDiff, useTaskDiff } from './useTaskDiff'
 
 interface ReviewPanelProps {
   task: LiveTask
-  onRestore(turnId: string): void
+  // 不给就不能撤销（远程任务只读时）
+  onRestore?: (turnId: string) => void
 }
 
 // 审阅从某一轮开始到现在的改动；「撤销这些改动」就是撤销到那一轮之前
@@ -58,6 +59,7 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
         </>
       }
       actions={
+        onRestore && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -74,6 +76,7 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
           </TooltipTrigger>
           <TooltipContent>撤销这些改动</TooltipContent>
         </Tooltip>
+        )
       }
     >
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">

@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto'
-import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PromptImage, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
-import { REMOTE_IMAGE_MAX_CHARS, type RemoteEvent, type RemoteSnapshotPage, type RequestCall, requestSchema, type SessionList } from '@diffra/remote/messages'
-import { redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
-import type { RemoteAction, RemoteActionResult, RemoteProjectGrant } from '../../shared/remote'
+import { homedir } from 'node:os'
+import { isAbsolute, relative } from 'node:path'
+import { deflateRawSync } from 'node:zlib'
+import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PermissionMode, type PromptImage, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
+import { REMOTE_IMAGE_MAX_CHARS, type RemoteEvent, type RemoteSessionDetails, type RemoteSnapshotPage, type RemoteToolOutput, type RequestCall, requestSchema, sessionDetailsSchema, type SessionList } from '@diffra/remote/messages'
+import { hidePaths, type PathRoots, previewTurn, redactDiff, redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
+import { canControl, REMOTE_API, type RemoteAction, type RemoteActionResult, type RemoteProjectGrant, type RemoteTaskCall, type RemoteTaskDetails } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { logRemote } from '../app-log'
+import { HostTerminals } from './host-terminals'
 import type { StoredGrant } from './state'
 
 // 被连接端的会话同步（docs/decisions.md「设备连接」）：给授权的设备列会话、发快照分页、推实时更新。
@@ -18,20 +22,29 @@ import type { StoredGrant } from './state'
 const FLUSH_MS = 150
 const BATCH_MAX = 500
 const CHANGED_INTERVAL_MS = 1000
+// 一页最多 10 轮，压缩后（脱敏、工具输出只留开头之后）不超过 500 KB：中转每秒约 200 KB，一页两三秒到，不长时间占住发给这台设备的通道。
+// 一轮就超过时也给这一轮。先向 core 要最多这么多字的原文再按压缩后的大小挑
 const PAGE_TURNS = 10
-const PAGE_CHARS = 1_000_000
+const PAGE_BYTES = 500 * 1024
+const SNAPSHOT_CHARS = 8_000_000
 // 提问带的图片压缩后随快照发：一页最多这么多字（中转每秒约 200 KB，一页图片几秒内到），压过的结果缓存这么多字
 const PAGE_IMAGE_CHARS = 1_200_000
 const IMAGE_CACHE_CHARS = 8_000_000
-// 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个；读也限：取快照（订阅、翻页）60 次、列表 180 次（对方一轮跑着时每秒可能来一次）
+// 每台设备每分钟最多 30 次操作，其中新建任务最多 5 个；读也限：取快照（订阅、翻页）60 次、列表 180 次（对方一轮跑着时每秒可能来一次）、
+// 展开工具输出取全文 120 次
 const OPS_PER_MINUTE = 30
 const CREATES_PER_MINUTE = 5
 const SNAPSHOTS_PER_MINUTE = 60
 const LISTS_PER_MINUTE = 180
+const OUTPUTS_PER_MINUTE = 120
+// 远程终端的输入（连接端攒几十毫秒一发）、调整大小
+const TERMINAL_PER_MINUTE = 3000
 // 断线续传记的那一段：每个会话最多这么多条、这么多字；没人看满 5 分钟就丢
 const HISTORY_MAX_ENTRIES = 5000
 const HISTORY_MAX_CHARS = 4_000_000
 const HISTORY_IDLE_MS = 5 * 60_000
+// 审计记录里的权限模式名，和界面的 lib/permission-modes.ts 一致
+const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = { ask: '每次询问', auto: '自动审批', full: '完全访问' }
 const NOT_FOUND = '没有这个会话，或者读不出来'
 const VIEW_ONLY = '对方只开放了查看，不能操作'
 
@@ -45,6 +58,8 @@ export interface HostSyncDeps {
   snapshot(params: { sessionId: string; before?: number; maxTurns: number; maxChars: number }): Promise<RemoteSnapshot>
   // 远程操作交给本机界面做
   act(action: RemoteAction): Promise<RemoteActionResult>
+  // 任务相关的读和操作也交给本机界面（它载入任务、用本机的逻辑）
+  ask(call: RemoteTaskCall): Promise<unknown>
   // 替本机的人回答权限请求；已经有人答过了返回 false
   answerPermission(requestId: string, optionId: string): boolean
   audit(deviceId: string, name: string, action: string): void
@@ -52,10 +67,18 @@ export interface HostSyncDeps {
   compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
   // 对方删除了本机：撤销它的授权
   forget(deviceId: string): void
+  // 远程终端开了、关了（本机横幅显示开着几个）
+  terminalsChanged(): void
+  // 项目的本地分支、切换分支（和本机任务页底栏同一套检查，见 main/project-branch.ts）
+  branches(cwd: string): Promise<{ current: string | null; branches: string[] }>
+  switchBranch(cwd: string, branch: string): Promise<void>
 }
 
 // 发出去的一页：轮次是脱敏后的 StoredTurn（连接端按 snapshotSchema 校验）
 type Page = Omit<RemoteSnapshotPage, 'turns'> & { turns: Array<StoredTurn & { omittedImages?: number }> }
+
+type RateKind = 'ops' | 'creates' | 'snapshots' | 'lists' | 'outputs' | 'terminal'
+type ToolUpdate = Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>
 
 type TurnStarted = Extract<SessionEvent, { type: 'turn-started' }>
 // afterSeq：一轮开始时这个会话最后一条更新的序号
@@ -144,14 +167,14 @@ function merged(entries: Array<{ seq: number; update: SessionUpdate }>): Array<{
 }
 
 // 本机在等确认的权限请求里远程能答的部分；core 标了只在本机确认的（项目外的文件、本机终端、别的任务、用户自己的浏览器）、没有远程能选的选项时不发
-function remotePermission(event: Extract<SessionEvent, { type: 'permission' }>): PermissionRequest | null {
+function remotePermission(event: Extract<SessionEvent, { type: 'permission' }>, roots: PathRoots): PermissionRequest | null {
   const diffra = event.toolCall._meta?.diffra
   if (typeof diffra === 'object' && diffra !== null && (diffra as Record<string, unknown>)[LOCAL_ONLY_META_KEY] === true) return null
   const options = event.options.flatMap((option) =>
     option.optionId === PERMISSION_OPTIONS.allowOnce || option.optionId === PERMISSION_OPTIONS.reject ? [{ optionId: option.optionId, name: option.name.slice(0, 200) }] : [],
   )
   if (options.length === 0) return null
-  const toolCall = redactToolCall({ ...event.toolCall, title: event.toolCall.title?.slice(0, 2000) })
+  const toolCall = hidePaths(redactToolCall({ ...event.toolCall, title: event.toolCall.title?.slice(0, 2000) }), roots)
   return { type: 'event', event: 'permission.request', requestId: event.requestId, sessionId: event.sessionId, toolCall, options }
 }
 
@@ -159,15 +182,31 @@ export class HostSync {
   private readonly devices = new Map<string, Device>()
   private readonly permissions = new Map<string, PendingPermission>()
   // 限流按设备记，断线重连不清零
-  private readonly rates = new Map<string, Record<'ops' | 'creates' | 'snapshots' | 'lists', number[]>>()
+  private readonly rates = new Map<string, Record<RateKind, number[]>>()
   private readonly histories = new Map<string, History>()
+  // 会话的项目目录（取快照时记下）：发出去的内容里项目路径换成相对的（hidePaths）
+  private readonly cwds = new Map<string, string>()
   // 每个会话最后一条更新的序号，记一轮开始时用
   private readonly lastSeqs = new Map<string, number>()
   // 按轮次 id 缓存压过的图片（一轮的图片不会变）
   private readonly imageCache = new Map<string, PromptImage[]>()
   private imageCacheChars = 0
 
-  constructor(private readonly deps: HostSyncDeps) {}
+  private readonly terminals: HostTerminals
+
+  constructor(private readonly deps: HostSyncDeps) {
+    this.terminals = new HostTerminals({ send: (deviceId, message) => deps.send(deviceId, message), changed: () => deps.terminalsChanged() })
+  }
+
+  // 这个会话的项目目录和用户目录（hidePaths 用）；还没取过快照时只换用户目录
+  private roots(sessionId: string): PathRoots {
+    return rootsOf(this.cwds.get(sessionId) ?? null)
+  }
+
+  // 这台设备在本机开着几个终端
+  terminalCount(deviceId: string): number {
+    return this.terminals.count(deviceId)
+  }
 
   // 通道上来的请求
   async handle(deviceId: string, raw: unknown): Promise<void> {
@@ -231,13 +270,27 @@ export class HostSync {
       case 'session.page':
         this.limit(deviceId, 'snapshots', SNAPSHOTS_PER_MINUTE)
         return { value: (await this.page(grant, call.sessionId, call.before)).page, compress: true }
+      case 'session.toolOutput':
+        this.limit(deviceId, 'outputs', OUTPUTS_PER_MINUTE)
+        return { value: await this.toolOutput(grant, call), compress: true }
+      case 'session.details': {
+        const session = await this.viewable(grant, call.sessionId)
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        return { value: hidePaths(detailsFor((await this.deps.ask({ kind: 'details', sessionId: call.sessionId })) as RemoteTaskDetails, session.cwd), rootsOf(session.cwd)), compress: true }
+      }
+      case 'session.diff': {
+        await this.viewable(grant, call.sessionId)
+        this.limit(deviceId, 'snapshots', SNAPSHOTS_PER_MINUTE)
+        const diff = await this.deps.ask({ kind: 'diff', sessionId: call.sessionId, turnId: call.turnId })
+        return { value: { diff: redactDiff(typeof diff === 'string' ? diff : '') }, compress: true }
+      }
       case 'session.unsubscribe':
         this.devices.get(deviceId)?.subscriptions.delete(call.sessionId)
         return { value: {} }
       case 'session.prompt': {
         const { project, title } = await this.operable(grant, call.sessionId)
         this.charge(deviceId, false)
-        const result = await this.deps.act({ kind: 'send', sessionId: call.sessionId, text: call.text, skills: call.skills, source: { deviceId, name: grant.name } })
+        const result = await this.deps.act({ kind: 'send', sessionId: call.sessionId, text: call.text, skills: call.skills, source: { deviceId, name: grant.name }, plan: call.plan, goal: call.goal, images: call.images })
         if (!result.ok) throw new Error(result.error)
         this.deps.audit(deviceId, grant.name, `远程发消息：${folderName(project.path)}「${title}」`)
         return { value: { queued: result.queued } }
@@ -246,7 +299,7 @@ export class HostSync {
         // 只认项目 id，不接受对方给的路径
         const project = grant.projects.find((item) => projectIdOf(item.path) === call.projectId)
         if (!project) throw new Error('没有这个项目')
-        if (project.level !== 'control') throw new Error(VIEW_ONLY)
+        if (!canControl(project.level)) throw new Error(VIEW_ONLY)
         this.charge(deviceId, true)
         const result = await this.deps.act({ kind: 'create', project: project.path, text: call.text, skills: call.skills, source: { deviceId, name: grant.name } })
         if (!result.ok) throw new Error(result.error)
@@ -261,6 +314,84 @@ export class HostSync {
         this.deps.audit(deviceId, grant.name, `远程停止：${folderName(project.path)}「${title}」`)
         return { value: {} }
       }
+      case 'models.list':
+        // 不针对哪个任务：开放了「可查看和操作」的项目至少有一个才给
+        if (!grant.projects.some((project) => canControl(project.level))) throw new Error(VIEW_ONLY)
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        return { value: modelsFor(await this.deps.ask({ kind: 'models' })), compress: true }
+      case 'skills.list':
+      case 'commands.list': {
+        await this.operable(grant, call.sessionId)
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        const kind = call.method === 'skills.list' ? 'skills' : 'commands'
+        const items = (await this.deps.ask({ kind, sessionId: call.sessionId })) as Array<Record<string, unknown>>
+        // Skill 的目录是本机路径，不发
+        return { value: { [kind]: hidePaths(redactToolCall(items.map(({ dir: _dir, ...rest }) => rest)), this.roots(call.sessionId)) }, compress: true }
+      }
+      case 'session.restorePreview': {
+        await this.operable(grant, call.sessionId)
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        return { value: { changes: await this.deps.ask({ kind: 'restorePreview', sessionId: call.sessionId, turnId: call.turnId }) } }
+      }
+      case 'session.setModel':
+      case 'session.setPermissionMode':
+      case 'session.compact':
+      case 'session.regenerate':
+      case 'session.restore': {
+        const { project, title } = await this.operable(grant, call.sessionId)
+        // 完全访问：智能体执行命令不再确认，等于在本机执行任意命令，要「完全控制」
+        if (call.method === 'session.setPermissionMode' && call.mode === 'full' && project.level !== 'full') throw new Error('对方没有开放「完全控制」，不能切到完全访问')
+        this.charge(deviceId, false)
+        const task = `${folderName(project.path)}「${title}」`
+        switch (call.method) {
+          case 'session.setModel':
+            await this.deps.ask({ kind: 'setModel', sessionId: call.sessionId, ref: call.ref })
+            this.deps.audit(deviceId, grant.name, `远程切换模型：${task} → ${call.ref.modelId}`)
+            break
+          case 'session.setPermissionMode':
+            await this.deps.ask({ kind: 'setPermissionMode', sessionId: call.sessionId, mode: call.mode })
+            this.deps.audit(deviceId, grant.name, `远程切换权限模式：${task} → ${PERMISSION_MODE_LABELS[call.mode]}`)
+            break
+          case 'session.compact':
+            await this.deps.ask({ kind: 'compact', sessionId: call.sessionId })
+            this.deps.audit(deviceId, grant.name, `远程压缩上下文：${task}`)
+            break
+          case 'session.regenerate':
+          case 'session.restore':
+            await this.deps.ask({ kind: call.method === 'session.regenerate' ? 'regenerate' : 'restore', sessionId: call.sessionId, turnId: call.turnId })
+            this.deps.audit(deviceId, grant.name, `远程${call.method === 'session.regenerate' ? '重新生成' : '撤销'}：${task}`)
+            break
+        }
+        return { value: {} }
+      }
+      case 'project.branches': {
+        const { project } = await this.operable(grant, call.sessionId)
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        return { value: await this.deps.branches(project.path) }
+      }
+      case 'project.switchBranch': {
+        const { project } = await this.operable(grant, call.sessionId)
+        this.charge(deviceId, false)
+        await this.deps.switchBranch(project.path, call.branch)
+        this.deps.audit(deviceId, grant.name, `远程切换分支：${folderName(project.path)} → ${call.branch}`)
+        return { value: {} }
+      }
+      case 'terminal.open': {
+        const { project } = await this.operable(grant, call.sessionId)
+        if (project.level !== 'full') throw new Error('对方没有开放「完全控制」，不能开终端')
+        this.charge(deviceId, false)
+        const terminalId = this.terminals.open(deviceId, project.path, { cols: call.cols, rows: call.rows })
+        this.deps.audit(deviceId, grant.name, `远程打开终端：${folderName(project.path)}`)
+        return { value: { terminalId } }
+      }
+      case 'terminal.input':
+      case 'terminal.resize':
+      case 'terminal.close':
+        this.limit(deviceId, 'terminal', TERMINAL_PER_MINUTE)
+        if (call.method === 'terminal.input') this.terminals.input(deviceId, call.terminalId, call.data)
+        else if (call.method === 'terminal.resize') this.terminals.resize(deviceId, call.terminalId, { cols: call.cols, rows: call.rows })
+        else this.terminals.close(deviceId, call.terminalId)
+        return { value: {} }
       case 'device.forget':
         // 先回复再撤销：撤销会断开通道
         return { value: {}, after: () => this.deps.forget(deviceId) }
@@ -350,12 +481,19 @@ export class HostSync {
     }
   }
 
+  // 看得到的会话（同列表的规则）。没授权和不存在说法一样
+  private async viewable(grant: StoredGrant, sessionId: string): Promise<StoredSessionSummary> {
+    const session = (await this.deps.listSessions()).find((item) => item.sessionId === sessionId)
+    if (!session || !visible(grant, session)) throw new Error(NOT_FOUND)
+    return session
+  }
+
   // 能操作的会话：看得到（同列表的规则），项目开放了「可查看和操作」。没授权和不存在说法一样
   private async operable(grant: StoredGrant, sessionId: string): Promise<{ project: RemoteProjectGrant; title: string }> {
     const session = (await this.deps.listSessions()).find((item) => item.sessionId === sessionId)
     const project = session ? visible(grant, session) : null
     if (!session || !project) throw new Error(NOT_FOUND)
-    if (project.level !== 'control') throw new Error(VIEW_ONLY)
+    if (!canControl(project.level)) throw new Error(VIEW_ONLY)
     return { project, title: session.title }
   }
 
@@ -364,9 +502,9 @@ export class HostSync {
   }
 
   // 一分钟内的次数到上限就拒绝；then 在记下这一次之前再查别的上限（新建同时算一次操作）
-  private limit(deviceId: string, kind: 'ops' | 'creates' | 'snapshots' | 'lists', max: number, then?: () => void): void {
+  private limit(deviceId: string, kind: RateKind, max: number, then?: () => void): void {
     const now = Date.now()
-    const rate = this.rates.get(deviceId) ?? { ops: [], creates: [], snapshots: [], lists: [] }
+    const rate = this.rates.get(deviceId) ?? { ops: [], creates: [], snapshots: [], lists: [], outputs: [], terminal: [] }
     this.rates.set(deviceId, rate)
     rate[kind] = rate[kind].filter((at) => now - at < 60_000)
     if (rate[kind].length >= max) throw new Error('操作太频繁，过一会儿再试')
@@ -377,7 +515,8 @@ export class HostSync {
   // 正看着这个会话、能操作的设备才发；它重新订阅时再发一次（连接端关掉任务页、断线时就丢了）
   private offerPermission(deviceId: string, cwd: string, pending: PendingPermission): void {
     const grant = this.deps.grant(deviceId)
-    if (!grant || projectFor(grant, cwd)?.level !== 'control') return
+    const level = grant ? projectFor(grant, cwd)?.level : undefined
+    if (!level || !canControl(level)) return
     pending.sentTo.add(deviceId)
     this.deps.send(deviceId, pending.request)
   }
@@ -385,41 +524,60 @@ export class HostSync {
   private async list(grant: StoredGrant): Promise<SessionList> {
     const sessions = await this.deps.listSessions()
     return {
-      projects: grant.projects.map((project) => ({ id: projectIdOf(project.path), name: folderName(project.path), level: project.level })),
+      api: REMOTE_API,
+      projects: grant.projects.map((project) => ({ id: projectIdOf(project.path), name: folderName(project.path), level: canControl(project.level) ? 'control' : 'view', ...(project.level === 'full' ? { full: true } : {}) })),
       sessions: sessions.flatMap((session) => {
         const project = visible(grant, session)
         if (!project) return []
-        return [{ sessionId: session.sessionId, projectId: projectIdOf(project.path), title: redactText(session.title).slice(0, 200), updatedAt: session.updatedAt, running: session.running, turnCount: session.turnCount }]
+        return [{ sessionId: session.sessionId, projectId: projectIdOf(project.path), title: hidePaths(redactText(session.title), rootsOf(session.cwd)).slice(0, 200), updatedAt: session.updatedAt, running: session.running, turnCount: session.turnCount }]
       }),
     }
   }
 
   private async page(grant: StoredGrant, sessionId: string, before?: number): Promise<{ page: Page; cwd: string; epoch: string; seq: number; turnIds: Set<string> }> {
-    const snapshot = await this.deps.snapshot({ sessionId, ...(before === undefined ? {} : { before }), maxTurns: PAGE_TURNS, maxChars: PAGE_CHARS }).catch((error: unknown) => {
+    const snapshot = await this.deps.snapshot({ sessionId, ...(before === undefined ? {} : { before }), maxTurns: PAGE_TURNS, maxChars: SNAPSHOT_CHARS }).catch((error: unknown) => {
       logRemote('读会话快照失败', error)
       throw new Error('没有这个会话，或者读不出来')
     })
     const project = visible(grant, snapshot)
     // 没授权和不存在说法一样，不让对方试探本机有哪些会话
     if (!project) throw new Error('没有这个会话，或者读不出来')
+    this.cwds.set(sessionId, snapshot.cwd)
+    const roots = rootsOf(snapshot.cwd)
+    const prepared = fitPage(snapshot.turns.map((turn) => hidePaths(previewTurn(redactTurn(turn)), roots)))
+    const originals = snapshot.turns.slice(snapshot.turns.length - prepared.length)
     const page: Page = {
       sessionId,
       projectId: projectIdOf(project.path),
-      title: redactText(snapshot.title).slice(0, 200),
+      title: hidePaths(redactText(snapshot.title), roots).slice(0, 200),
       running: snapshot.running,
       ...(snapshot.taskState ? { taskState: snapshot.taskState } : {}),
       totalTurns: snapshot.totalTurns,
-      start: snapshot.start,
-      turns: await this.withImages(snapshot.turns),
+      start: snapshot.start + snapshot.turns.length - prepared.length,
+      turns: await this.withImages(originals, prepared),
       epoch: snapshot.epoch,
       seq: snapshot.seq,
     }
-    return { page, cwd: snapshot.cwd, epoch: snapshot.epoch, seq: snapshot.seq, turnIds: new Set(snapshot.turns.map((turn) => turn.id)) }
+    return { page, cwd: snapshot.cwd, epoch: snapshot.epoch, seq: snapshot.seq, turnIds: new Set(originals.map((turn) => turn.id)) }
   }
 
-  // 轮次脱敏，提问图片换成压过的小图：新的轮次先占这一页的额度，超出的、压不了的只说张数
-  private async withImages(turns: StoredTurn[]): Promise<Page['turns']> {
-    const result: Page['turns'] = turns.map(redactTurn)
+  // 展开只发了开头的工具输出：按位置取那一轮，id 对得上才给（对方翻出来之后，记录可能被撤销、重新生成过）。脱敏和快照一样
+  private async toolOutput(grant: StoredGrant, call: Extract<RequestCall, { method: 'session.toolOutput' }>): Promise<RemoteToolOutput> {
+    const snapshot = await this.deps.snapshot({ sessionId: call.sessionId, before: call.turn + 1, maxTurns: 1, maxChars: 1 }).catch((error: unknown) => {
+      logRemote('读会话快照失败', error)
+      throw new Error(NOT_FOUND)
+    })
+    if (!visible(grant, snapshot)) throw new Error(NOT_FOUND)
+    const turn = snapshot.turns[0]
+    if (!turn || turn.id !== call.turnId) throw new Error('这一轮已经变了，重新打开这个任务')
+    const update = turn.updates.findLast((item): item is ToolUpdate => (item.sessionUpdate === 'tool_call' || item.sessionUpdate === 'tool_call_update') && item.toolCallId === call.toolCallId && Boolean(item.content))
+    if (!update) throw new Error('找不到这一步的输出')
+    return { content: hidePaths((redactUpdate(update) as ToolUpdate).content ?? [], rootsOf(snapshot.cwd)) }
+  }
+
+  // 提问图片换成压过的小图（prepared 是同样这几轮脱敏后的样子）：新的轮次先占这一页的额度，超出的、压不了的只说张数
+  private async withImages(turns: StoredTurn[], prepared: Page['turns']): Promise<Page['turns']> {
+    const result = [...prepared]
     let budget = PAGE_IMAGE_CHARS
     for (let index = turns.length - 1; index >= 0; index--) {
       const turn = turns[index]!
@@ -461,7 +619,7 @@ export class HostSync {
   sessionEvent(event: SessionEvent): void {
     if (event.type === 'changed') return this.broadcastChanged()
     if (event.type === 'permission') {
-      const request = remotePermission(event)
+      const request = remotePermission(event, this.roots(event.sessionId))
       if (!request) return
       const pending: PendingPermission = { sessionId: event.sessionId, request, sentTo: new Set() }
       this.permissions.set(event.requestId, pending)
@@ -485,7 +643,7 @@ export class HostSync {
     if (event.type === 'update' && tracked) {
       const seq = seqOf(event.notification.update)
       if (seq !== Number.MAX_SAFE_INTEGER) this.lastSeqs.set(sessionId, Math.max(this.lastSeqs.get(sessionId) ?? 0, seq))
-      item = { kind: 'update', seq, update: redactUpdate(event.notification.update) }
+      item = { kind: 'update', seq, update: hidePaths(redactUpdate(event.notification.update), this.roots(sessionId)) }
     } else if (event.type === 'turn-started') item = { kind: 'turn', afterSeq: this.lastSeqs.get(sessionId) ?? 0, event }
     const history = this.histories.get(sessionId)
     if (history && event.type === 'reset') this.histories.delete(sessionId)
@@ -519,13 +677,18 @@ export class HostSync {
     if (event.type === 'turn-started') this.broadcastChanged()
   }
 
-  // 授权改了：已经看不到的会话让对方重新订阅（会被拒），列表也让它重新取；改成只能看的，发出去的确认收回
+  // 授权改了：已经看不到的会话让对方重新订阅（会被拒），列表也让它重新取；改成只能看的，发出去的确认收回；
+  // 项目不再开放「完全控制」的，终端结束
   grantsChanged(): void {
+    this.terminals.prune((deviceId, cwd) => {
+      const grant = this.deps.grant(deviceId)
+      return Boolean(grant && projectFor(grant, cwd)?.level === 'full')
+    })
     for (const [deviceId, device] of this.devices) {
       const grant = this.deps.grant(deviceId)
       for (const [requestId, pending] of this.permissions) {
         const cwd = device.subscriptions.get(pending.sessionId)?.ready?.cwd
-        if (!pending.sentTo.has(deviceId) || (grant && cwd !== undefined && projectFor(grant, cwd)?.level === 'control')) continue
+        if (!pending.sentTo.has(deviceId) || (grant && cwd !== undefined && canControl(projectFor(grant, cwd)?.level ?? 'view'))) continue
         pending.sentTo.delete(deviceId)
         this.deps.send(deviceId, { type: 'event', event: 'permission.settled', requestId })
       }
@@ -544,6 +707,7 @@ export class HostSync {
   }
 
   closed(deviceId: string): void {
+    this.terminals.closeDevice(deviceId)
     const device = this.devices.get(deviceId)
     if (!device) return
     if (device.flushTimer) clearTimeout(device.flushTimer)
@@ -569,9 +733,9 @@ export class HostSync {
       sessionId: subscription.sessionId,
       turnId: event.turnId,
       kind: event.kind,
-      prompt: redactText(event.prompt),
+      prompt: hidePaths(redactText(event.prompt), this.roots(subscription.sessionId)),
       startedAt: event.startedAt,
-      ...(event.from ? { from: { sessionId: event.from.sessionId, title: redactText(event.from.title).slice(0, 200) } } : {}),
+      ...(event.from ? { from: { sessionId: event.from.sessionId, title: hidePaths(redactText(event.from.title), this.roots(subscription.sessionId)).slice(0, 200) } } : {}),
       ...(event.remote ? { remote: event.remote } : {}),
       ...(event.imageCount ? { imageCount: event.imageCount } : {}),
     })
@@ -608,4 +772,33 @@ export class HostSync {
       }, wait)
     }
   }
+}
+
+// 从最新的一轮往前放，压缩后放不下就停，至少一轮（见 PAGE_BYTES）
+function fitPage<T>(turns: T[]): T[] {
+  let bytes = 0
+  let start = turns.length
+  while (start > 0) {
+    const size = deflateRawSync(JSON.stringify(turns[start - 1])).length
+    if (start < turns.length && bytes + size > PAGE_BYTES) break
+    bytes += size
+    start--
+  }
+  return turns.slice(start)
+}
+
+// 本机界面回的任务配置：Git Bash 只说有没有、禁止修改的目录换成相对项目的（不发本机路径），检查命令这些文字脱敏，再按协议校验
+function detailsFor(details: RemoteTaskDetails, cwd: string): RemoteSessionDetails {
+  const project = details.project ? { checks: details.project.checks, readOnlyPaths: details.project.readOnlyPaths.map((path) => (isAbsolute(path) ? relative(cwd, path) || '.' : path)) } : null
+  return sessionDetailsSchema.parse(redactToolCall({ ...details, info: { ...details.info, bashPath: details.info.bashPath ? 'Git Bash' : null }, project }))
+}
+
+// 本机的模型服务发给能操作的设备切换模型用：去掉地址（可能是内网地址）和密钥提示
+function modelsFor(providers: unknown): { providers: unknown[] } {
+  const list = Array.isArray(providers) ? (providers as Array<Record<string, unknown>>) : []
+  return { providers: list.map(({ baseUrl: _baseUrl, keyHint: _keyHint, ...rest }) => ({ ...rest, baseUrl: '' })) }
+}
+
+function rootsOf(cwd: string | null): PathRoots {
+  return { project: cwd, home: homedir() }
 }

@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import {
   cancelSession,
   checkpointDiff,
@@ -53,6 +51,7 @@ import {
 import { modelDisplayName, type ModelRef } from '../shared/settings'
 import { reasoningEffortsFor } from '../shared/reasoning'
 import { coreConnection } from './core-process'
+import { currentBranch, listBranches, switchBranch } from './project-branch'
 import { browserHost } from './browser'
 import { designHost } from './design'
 import { devServer, killTerminalsIn, pathInside, stopDevServer } from './terminal-ipc'
@@ -69,8 +68,6 @@ import {
   projectSettingsSchema,
   type SettingsStore,
 } from './settings-store'
-
-const execFileAsync = promisify(execFile)
 
 const sessionOptionsSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
@@ -399,20 +396,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     checkpointDiff(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
 
-  // 当前分支名，分离头指针时是提交号；不是 git 仓库或没装 git 时为 null。
-  // symbolic-ref 在还没有提交的新仓库里也能拿到分支名
-  ipcMain.handle(IPC_CHANNELS.projectBranch, async (_event, rawPath: unknown) => {
-    const path = parse(z.string().min(1), rawPath)
-    const git = async (args: string[]) => {
-      try {
-        const { stdout } = await execFileAsync('git', args, { cwd: path, timeout: 5000, windowsHide: true })
-        return stdout.trim() || null
-      } catch {
-        return null
-      }
-    }
-    return (await git(['symbolic-ref', '--short', '-q', 'HEAD'])) ?? (await git(['rev-parse', '--short', 'HEAD']))
-  })
+  ipcMain.handle(IPC_CHANNELS.projectBranch, async (_event, rawPath: unknown) => currentBranch(parse(z.string().min(1), rawPath)))
+  ipcMain.handle(IPC_CHANNELS.projectBranches, async (_event, rawPath: unknown) => listBranches(parse(z.string().min(1), rawPath)))
+  ipcMain.handle(IPC_CHANNELS.projectSwitchBranch, async (_event, rawPath: unknown, rawBranch: unknown) => switchBranch(parse(z.string().min(1), rawPath), parse(z.string().min(1).max(200), rawBranch)))
 
   ipcMain.handle(IPC_CHANNELS.projectOpenFolder, async (_event, rawPath: unknown) => {
     const message = await shell.openPath(parse(z.string().min(1), rawPath))

@@ -1,20 +1,48 @@
-import { useEffect, useMemo } from 'react'
-import type { SessionInfo } from '@diffra/core/types'
-import { Eye, LoaderCircle, MousePointerClick, WifiOff } from 'lucide-react'
-import type { PermissionRequestEvent } from '../../../../shared/ipc'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { PermissionMode, SessionChecks, SessionInfo } from '@diffra/core/types'
+import { Archive, Eye, MousePointerClick, ShieldAlert, WifiOff } from 'lucide-react'
+import type { PermissionRequestEvent, ProjectState } from '../../../../shared/ipc'
+import { REMOTE_API } from '../../../../shared/remote'
+import type { ModelRef } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PermissionCard } from '@/features/session/PermissionCard'
-import { Conversation } from '@/features/task/Conversation'
+import type { Turn } from '@/features/session/transcript'
+import { Composer, type ComposerCommand } from '@/features/task/Composer'
+import { composerDraftKey } from '@/features/task/composer-drafts'
+import type { RemoteTaskSource } from '@/features/task/remote-task'
+import { TaskPage } from '@/features/task/TaskView'
+import { errorMessage } from '@/lib/errors'
 import { formatTime } from '@/lib/format'
 import type { LiveTask } from '@/state/store'
-import { useAppState } from '@/state/store'
+import { showToast, useAppState } from '@/state/store'
 import { RemoteComposer } from './RemoteComposer'
-import { answerRemotePermission, dropRemoteTask, loadEarlierRemote, markRemoteOffline, type RemotePermission, remoteKey, retryRemote, sendRemote, stopRemote, subscribeRemote, unsubscribeRemote } from './remote-tasks'
+import { RemoteTerminalPanel } from './RemoteTerminalPanel'
+import {
+  answerRemotePermission,
+  changeRemote,
+  dropRemoteTask,
+  loadEarlierRemote,
+  loadRemoteDetails,
+  loadRemoteProviders,
+  loadRemoteToolOutput,
+  markRemoteOffline,
+  type RemotePermission,
+  remoteBranches,
+  remoteCommands,
+  remoteDiff,
+  remoteKey,
+  remoteRestorePreview,
+  remoteSkills,
+  retryRemote,
+  sendRemote,
+  stopRemote,
+  subscribeRemote,
+  unsubscribeRemote,
+} from './remote-tasks'
 
-// 远程会话没有本机的检查点、规范包这些，对话里依赖它们的按钮本来也都藏了（只读）
+// 对方是 0.3.x、或者配置还没取到时：没有检查点（不显示文件改动）、规范包这些
 const REMOTE_INFO: SessionInfo = { bashPath: null, checkpoints: false, rulePacks: [], security: { staticCheck: false, lightScan: false }, checks: null }
-const noop = () => {}
 // 订阅失败后自动重试：隔 2、4、8 秒各一次
 const AUTO_RETRIES = 3
 
@@ -28,8 +56,22 @@ function permissionEventOf(sessionId: string, permission: RemotePermission): Per
   }
 }
 
-// 别的设备授权给本机的会话，复用本机任务的对话渲染（Conversation 的 readOnly：撤销、重新生成这些远程都不能做）。
-// 项目开放了「可查看和操作」时底下有输入框和对方发来的确认
+// 文件可能变了的信号（任务监控、审阅改动据此重新向对方要改动）：编辑、执行这类步骤完成的个数，加上结束的轮数、撤销过的轮数和提示（「已撤销……」）
+function changeVersionOf(turns: Turn[]): number {
+  let version = 0
+  for (const turn of turns) {
+    if (turn.endedAt) version++
+    if (turn.restoredAt) version++
+    for (const item of turn.items) {
+      if (item.kind === 'notice') version++
+      else if (item.kind === 'tool' && item.status === 'completed' && (item.toolKind === 'edit' || item.toolKind === 'execute' || item.toolKind === 'delete' || item.toolKind === 'move')) version++
+    }
+  }
+  return version
+}
+
+// 别的设备授权给本机的会话：借用本机的任务页（TaskPage），顶栏标题前标出设备和级别；对话、任务监控、审阅改动和本机一样，数据向对方要。
+// 只读时撤销、重新生成这些不显示；项目开放了「可查看和操作」时底下有输入框和对方发来的确认
 export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sessionId: string }) {
   const key = remoteKey(deviceId, sessionId)
   const peer = useAppState((state) => state.remote?.peers.find((item) => item.deviceId === deviceId) ?? null)
@@ -56,12 +98,52 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
     const timer = setTimeout(() => retryRemote(key, true), 2000 * 2 ** retries)
     return () => clearTimeout(timer)
   }, [failed, online, retries, key])
+  // 任务页的配置：订阅上之后、一轮开始和结束时（对方可能换了模型、切了分支）向对方要；对方是 0.3.x 时不要（它不认这个请求）
+  const supported = (list?.api ?? 1) >= REMOTE_API
+  const ready = task?.status === 'ready'
+  const running = task?.running ?? false
+  useEffect(() => {
+    if (ready && supported) void loadRemoteDetails(key)
+  }, [ready, running, supported, key])
 
   // 订阅成功之前（或者失败了）先按列表里的信息显示标题和能不能操作
   const listed = list?.sessions.find((item) => item.sessionId === sessionId)
   const project = list?.projects.find((item) => item.id === (task?.projectId || listed?.projectId))
   const control = project?.level === 'control'
+  const full = project?.full === true
   const permission = useMemo(() => (task?.permission ? permissionEventOf(sessionId, task.permission) : null), [task?.permission, sessionId])
+  const loadToolOutput = useCallback((toolCallId: string) => loadRemoteToolOutput(key, toolCallId), [key])
+  // 对方开放了「可查看和操作」（对方是新版）：模型、Skill、压缩、撤销、重新生成这些都经对方做
+  const operable = control && supported
+  const providers = task?.providers
+  const source = useMemo<RemoteTaskSource>(
+    () => ({
+      diff: (turnId: string) => remoteDiff(key, turnId),
+      ...(operable
+        ? {
+            providers,
+            loadProviders: () => void loadRemoteProviders(key),
+            listSkills: () => remoteSkills(key),
+            listCommands: () => remoteCommands(key),
+            compact: () => changeRemote(key, { method: 'session.compact' }),
+            previewRestore: (turnId: string) => remoteRestorePreview(key, turnId),
+            restore: (turnId: string) => changeRemote(key, { method: 'session.restore', turnId }),
+            regenerate: (turnId: string) => changeRemote(key, { method: 'session.regenerate', turnId }),
+            listBranches: () => remoteBranches(key),
+            switchBranch: (branch: string) => changeRemote(key, { method: 'project.switchBranch', branch }),
+          }
+        : {}),
+    }),
+    [key, operable, providers],
+  )
+  // 「先出计划」开关在本机记，发消息时带上
+  const [planMode, setPlanMode] = useState(false)
+  // 对方电脑上的终端（「完全控制」）：面板关了、离开任务时对方的终端结束
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const details = task?.details ?? null
+  const turns = task?.turns
+  const changeVersion = useMemo(() => changeVersionOf(turns ?? []), [turns])
+  const title = task?.title || listed?.title || '…'
   const live = useMemo<LiveTask | null>(
     () =>
       task
@@ -70,51 +152,48 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
             sessionId: `remote:${key}`,
             project: project?.name ?? '',
             noProject: false,
-            title: task.title,
-            modelLabel: '',
-            planLabel: null,
-            fallbackLabel: null,
-            permissionMode: 'ask',
+            title,
+            modelLabel: details?.modelLabel ?? '',
+            ...(details?.modelRef ? { modelRef: details.modelRef as unknown as ModelRef } : {}),
+            planLabel: details?.planLabel ?? null,
+            fallbackLabel: details?.fallbackLabel ?? null,
+            permissionMode: (details?.permissionMode ?? 'ask') as PermissionMode,
             design: false,
-            planMode: false,
-            info: REMOTE_INFO,
+            planMode: details?.planMode ?? false,
+            info: details ? (details.info as unknown as SessionInfo) : REMOTE_INFO,
             turns: task.turns,
             running: task.running && task.status === 'ready',
             usage: task.usage,
             permission: null,
             queue: [],
-            changeVersion: 0,
+            changeVersion,
             unread: false,
             progress: task.progress,
           }
         : null,
-    [task, key, project?.name],
+    [task, key, project?.name, title, details, changeVersion],
+  )
+  const projectState = useMemo<ProjectState | null>(
+    () => (details?.project ? { path: project?.name ?? '', checks: details.project.checks as unknown as SessionChecks, readOnlyPaths: details.project.readOnlyPaths } : null),
+    [details, project?.name],
   )
 
   if (!peer) return <p className="p-8 text-sm text-muted-foreground">本机已经不再连接这台设备。</p>
 
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="remote-task">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b px-4 text-sm">
-        <Badge variant="outline" className="gap-1" data-testid="remote-task-level">
-          {control ? <MousePointerClick className="size-3" /> : <Eye className="size-3" />}
-          {control ? '可操作' : '只读'}
-        </Badge>
-        <span className="truncate text-muted-foreground">
-          {peer.name}
-          {project && ` · ${project.name}`}
-        </span>
-        <span className="min-w-0 truncate font-bold" data-testid="remote-task-title">
-          {task?.title || listed?.title || '…'}
-        </span>
-        <span className="flex-1" />
-        {task?.running && task.status === 'ready' && (
-          <span className="flex items-center gap-1.5 text-muted-foreground" data-testid="remote-task-running">
-            <LoaderCircle className="size-3.5 animate-spin" />
-            运行中
-          </span>
-        )}
-      </header>
+  const badge = (
+    <>
+      <Badge variant="outline" className="shrink-0 gap-1" data-testid="remote-task-level">
+        {full ? <ShieldAlert className="size-3" /> : control ? <MousePointerClick className="size-3" /> : <Eye className="size-3" />}
+        {full ? '完全控制' : control ? '可操作' : '只读'}
+      </Badge>
+      <span className="shrink-0 text-muted-foreground">
+        {peer.name}
+        {project && ` · ${project.name}`}
+      </span>
+    </>
+  )
+  const notice = (
+    <>
       {(!online || task?.status === 'offline') && (
         <p className="flex items-center gap-2 border-b bg-soft px-4 py-2 text-sm text-muted-foreground" role="status" data-testid="remote-offline">
           <WifiOff className="size-4" />
@@ -129,30 +208,86 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
           </Button>
         </div>
       )}
-      {task && task.start > 0 && task.status !== 'error' && (
-        <div className="flex justify-center border-b py-1.5">
-          <Button variant="ghost" size="sm" disabled={task.loadingEarlier || !online} onClick={() => void loadEarlierRemote(key)}>
-            {task.loadingEarlier ? '读取中…' : `看更早的 ${task.start} 轮`}
-          </Button>
+    </>
+  )
+
+  // 还没取到第一页：只有顶栏和提示
+  if (!task || !live || (live.turns.length === 0 && task.status !== 'ready')) {
+    return (
+      <div className="flex h-full min-h-0 flex-col" data-testid="remote-task">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
+          {badge}
+          <span className="min-w-0 truncate" data-testid="task-title">
+            {title}
+          </span>
+        </header>
+        {notice}
+        <p className="flex-1 p-8 text-sm text-muted-foreground">{task?.status === 'error' ? '' : '读取中…'}</p>
+      </div>
+    )
+  }
+
+  const toastFailure = (action: string) => (error: unknown) => showToast(`${action}失败：${errorMessage(error)}`)
+  const commands: ComposerCommand[] = live.running ? [] : [{ id: 'compact', label: 'compact', description: '手动压缩早期上下文，保留最近内容和完整聊天历史', keywords: ['compact', '压缩', '上下文'], icon: Archive, run: () => void changeRemote(key, { method: 'session.compact' }).catch(toastFailure('压缩')) }]
+  const composer = control ? (
+    <>
+      {permission && (
+        <div className="[&_pre]:max-h-40">
+          <PermissionCard request={permission} onRespond={(optionId) => answerRemotePermission(key, optionId === 'allow_once' ? 'allow_once' : 'reject')} />
         </div>
       )}
-      {live && live.turns.length > 0 ? (
-        <Conversation task={live} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} readOnly />
+      {operable ? (
+        <Composer
+          size="normal"
+          draftKey={composerDraftKey.task(live.sessionId)}
+          projectPath={null}
+          mcpTarget={{ sessionId: live.sessionId }}
+          commands={commands}
+          disabled={!online || task.status !== 'ready'}
+          running={live.running}
+          permissionMode={live.permissionMode}
+          onPermissionModeChange={(mode) => void changeRemote(key, { method: 'session.setPermissionMode', mode }).catch(toastFailure('切换权限模式'))}
+          modelLabel={live.modelLabel || null}
+          modelRef={live.modelRef}
+          modelLocked={live.running}
+          onModelChange={(ref) => void changeRemote(key, { method: 'session.setModel', ref }).catch(toastFailure('切换模型'))}
+          planMode={planMode}
+          onPlanModeChange={setPlanMode}
+          onSend={(text, extras) => sendRemote(key, text, { ...extras, plan: planMode })}
+          onStop={() => stopRemote(key)}
+        />
       ) : (
-        <p className="flex-1 p-8 text-sm text-muted-foreground">{task?.status === 'loading' || !task ? '读取中…' : task.status === 'error' ? '' : '这个任务还没有内容。'}</p>
+        // 对方是 0.3.x：只能发文字
+        <RemoteComposer deviceName={peer.name} running={task.running && task.status === 'ready'} disabled={!online || task.status !== 'ready'} onSend={(text) => sendRemote(key, text)} onStop={() => stopRemote(key)} />
       )}
-      {control && task && (
-        <div className="px-8 pb-3.5">
-          <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
-            {permission && (
-              <div className="[&_pre]:max-h-40">
-                <PermissionCard request={permission} onRespond={(optionId) => answerRemotePermission(key, optionId === 'allow_once' ? 'allow_once' : 'reject')} />
-              </div>
-            )}
-            <RemoteComposer deviceName={peer.name} running={task.running && task.status === 'ready'} disabled={!online || task.status !== 'ready'} onSend={(text) => sendRemote(key, text)} onStop={() => stopRemote(key)} />
-          </div>
-        </div>
-      )}
+    </>
+  ) : null
+
+  return (
+    <div className="h-full min-h-0" data-testid="remote-task">
+      <TaskPage
+        task={live}
+        remote={{
+          badge,
+          notice,
+          composer,
+          readOnly: true,
+          earlier: online && task.status !== 'error' ? { count: task.start, loading: task.loadingEarlier, load: () => void loadEarlierRemote(key) } : undefined,
+          loadToolOutput,
+          source,
+          project: projectState,
+          branch: details?.branch ?? null,
+          ...(full && supported
+            ? {
+                terminal: {
+                  open: terminalOpen,
+                  toggle: () => setTerminalOpen((open) => !open),
+                  panel: <RemoteTerminalPanel deviceId={deviceId} sessionId={sessionId} deviceName={peer.name} onClose={() => setTerminalOpen(false)} />,
+                },
+              }
+            : {}),
+        }}
+      />
     </div>
   )
 }

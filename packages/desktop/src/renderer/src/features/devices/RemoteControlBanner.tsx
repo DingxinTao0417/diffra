@@ -4,7 +4,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/lib/errors'
 import { showToast, useAppState } from '@/state/store'
-import type { RemoteGrantView } from '../../../../shared/remote'
+import { canControl, type RemoteGrantView } from '../../../../shared/remote'
 
 const NO_GRANTS: never[] = []
 
@@ -13,17 +13,18 @@ export function RemoteControlBanner() {
   const allowIncoming = useAppState((state) => state.remote?.allowIncoming ?? false)
   const grants = useAppState((state) => state.remote?.grants ?? NO_GRANTS)
   const [revoking, setRevoking] = useState<RemoteGrantView | null>(null)
-  const controlling = allowIncoming ? grants.filter((grant) => grant.online && grant.projects.some((project) => project.level === 'control')) : []
+  const controlling = allowIncoming ? grants.filter((grant) => grant.online && grant.projects.some((project) => canControl(project.level))) : []
   if (controlling.length === 0 && !revoking) return null
   return (
     <>
       {controlling.map((grant) => {
-        const count = grant.projects.filter((project) => project.level === 'control').length
+        const count = grant.projects.filter((project) => canControl(project.level)).length
+        const full = grant.projects.filter((project) => project.level === 'full').length
         return (
           <div key={grant.deviceId} role="status" className="flex shrink-0 items-center gap-2 border-b border-sidebar-border px-4 py-1.5 text-sm" data-testid="remote-control-banner">
             <MonitorSmartphone className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">
-              「{grant.name}」在线，可以在本机的 {count} 个项目里发消息、新建任务、回答确认
+              {full > 0 ? `「${grant.name}」在线，能在本机开终端、执行任意命令（${full} 个项目完全控制${grant.terminals > 0 ? `，开着 ${grant.terminals} 个终端` : ''}）` : `「${grant.name}」在线，可以在本机的 ${count} 个项目里发消息、新建任务、回答确认`}
             </span>
             <Button variant="ghost" size="sm" onClick={() => setRevoking(grant)}>
               断开这台设备

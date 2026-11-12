@@ -39,7 +39,7 @@ const terminals = new Map<string, TerminalEntry>()
 const watched = new WeakSet<WebContents>()
 
 // Windows 用 PowerShell（系统自带，和 VS Code 的默认一致）；其他系统用登录 shell
-function defaultShell(): { file: string; args: string[] } {
+export function defaultShell(): { file: string; args: string[] } {
   if (process.platform === 'win32') return { file: 'powershell.exe', args: ['-NoLogo'] }
   return { file: process.env.SHELL || '/bin/bash', args: ['-l'] }
 }

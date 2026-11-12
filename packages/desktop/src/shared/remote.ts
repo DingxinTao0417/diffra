@@ -1,11 +1,23 @@
-import type { RemoteSource } from '@diffra/core/types'
+import type { PermissionMode, PromptImage, RemoteSource, SessionInfo } from '@diffra/core/types'
 import type { RemoteEvent } from '@diffra/remote/messages'
+import type { ProjectState } from './ipc'
+import type { ModelRef } from './settings'
 
 // 设备连接（docs/decisions.md「设备连接」）：主进程和界面之间交换的状态。
 // 被连接端 = 数据所在、「允许连接本机」那台；连接端 = 「连接其他设备」那台
 
-export const REMOTE_LEVELS = ['view', 'control'] as const
+// 被连接端在列表里报的设备连接接口版本：2 起认 session.details、session.diff 这些新请求（0.3.x 不报，按 1 算）。
+// 连接端按它决定发不发新请求：老版本被连接端收到不认识的请求会当成格式不对、断开通道
+export const REMOTE_API = 2
+
+// 「完全控制」包含「可查看和操作」，再加上开终端、把权限模式切成「完全访问」：等于在本机执行任意命令，不限于开放的项目
+export const REMOTE_LEVELS = ['view', 'control', 'full'] as const
 export type RemoteLevel = (typeof REMOTE_LEVELS)[number]
+export const REMOTE_LEVEL_LABELS: Record<RemoteLevel, string> = { view: '可查看', control: '可查看和操作', full: '完全控制' }
+
+export function canControl(level: RemoteLevel): boolean {
+  return level !== 'view'
+}
 
 export interface RemoteProjectGrant {
   path: string
@@ -23,9 +35,10 @@ export interface RemoteDeviceView {
   lastSeenAt: string | null
 }
 
-// 本机授权给它的设备
+// 本机授权给它的设备；terminals：它在本机开着几个终端（「完全控制」）
 export interface RemoteGrantView extends RemoteDeviceView {
   projects: RemoteProjectGrant[]
+  terminals: number
 }
 
 // 有设备凭邀请串连上来、等本机的人点允许或拒绝
@@ -64,9 +77,34 @@ export type RemoteSyncEvent =
 
 // 被连接端：远程设备要做的操作，主进程交给界面去做（和任务互通同一条路：界面发送前自己建新的一轮，主进程直接调 core 的话这一轮会串进上一轮）
 export type RemoteAction =
-  | { kind: 'send'; sessionId: string; text: string; skills: string[]; source: RemoteSource }
+  | { kind: 'send'; sessionId: string; text: string; skills: string[]; source: RemoteSource; plan?: boolean; goal?: boolean; images?: PromptImage[] }
   | { kind: 'create'; project: string; text: string; skills: string[]; source: RemoteSource }
   | { kind: 'cancel'; sessionId: string }
+
+// 远程设备读、操作一个任务：主进程查过级别以后交给本机界面做（界面在后台载入这个任务，用本机的逻辑，见 state/actions.ts 的 handleRemoteTaskCall），
+// 主进程再把结果脱敏后发回去
+export type RemoteTaskCall =
+  | { kind: 'details'; sessionId: string }
+  | { kind: 'diff'; sessionId: string; turnId: string }
+  | { kind: 'models' }
+  | { kind: 'skills' | 'commands' | 'compact'; sessionId: string }
+  | { kind: 'setModel'; sessionId: string; ref: ModelRef }
+  | { kind: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
+  | { kind: 'regenerate' | 'restorePreview' | 'restore'; sessionId: string; turnId: string }
+export type RemoteTaskCallResult = { ok: true; value: unknown } | { ok: false; error: string }
+
+// details 的回答：任务页要的配置（本机界面里这个任务的样子），主进程整理、脱敏后发出去
+export interface RemoteTaskDetails {
+  info: SessionInfo
+  modelLabel: string
+  modelRef?: ModelRef
+  planLabel: string | null
+  fallbackLabel: string | null
+  permissionMode: PermissionMode
+  planMode: boolean
+  branch: string | null
+  project: ProjectState | null
+}
 
 // queued：对方正在跑，消息排在这一轮后面
 export type RemoteActionResult = { ok: true; sessionId: string; queued: boolean } | { ok: false; error: string }

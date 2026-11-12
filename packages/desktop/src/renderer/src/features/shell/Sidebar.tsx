@@ -457,7 +457,7 @@ function RemoteProject({ group, collapsed, expanded, activeSession }: { group: R
   const hasTasks = group.sessions.length > 0
   const recent = group.sessions.filter((session, index) => index < RECENT_TASK_LIMIT || session.sessionId === activeSession)
   const hiddenCount = group.sessions.length - recent.length
-  const where = group.online ? `「${group.deviceName}」上的项目，${control ? '可以操作' : '只读'}` : `「${group.deviceName}」不在线，显示的是之前的内容`
+  const where = group.online ? `「${group.deviceName}」上的项目，${group.full ? '完全控制' : control ? '可以操作' : '只读'}` : `「${group.deviceName}」不在线，显示的是之前的内容`
   return (
     <div className="space-y-px" data-testid="sidebar-remote-project">
       <div className={cn('group/project relative flex h-7.5 items-center gap-2 rounded-lg pl-2 hover:bg-accent', control ? 'pr-13' : 'pr-7')}>

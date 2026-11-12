@@ -58,18 +58,23 @@ function currentFontSize(): number {
   return Math.round(Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.93)
 }
 
-function createView(id: string): TerminalView {
+// 本机终端和远程终端（features/devices/RemoteTerminalPanel.tsx）共用的 xterm：字体、配色跟着外观，输入交给 onData
+export function createXterm(onData: (data: string) => void): { term: Terminal; fit: FitAddon; element: HTMLDivElement } {
   const element = document.createElement('div')
   element.className = 'h-full w-full'
   const term = new Terminal({ fontFamily: FONT_FAMILY, fontSize: currentFontSize(), theme: currentTheme(), cursorBlink: true, scrollback: SCROLLBACK_LINES })
   const fit = new FitAddon()
   term.loadAddon(fit)
-  term.onData((data) => window.diffra.writeTerminal(id, data))
+  term.onData(onData)
   // Ctrl+` 留给应用收起终端，不发给 shell
   term.attachCustomKeyEventHandler((event) => !(event.ctrlKey && event.key === '`'))
-  const view = { term, fit, element, opened: false }
+  return { term, fit, element }
+}
+
+function createView(id: string): TerminalView {
+  const view = { ...createXterm((data) => window.diffra.writeTerminal(id, data)), opened: false }
   views.set(id, view)
-  for (const chunk of pending.get(id) ?? []) term.write(chunk)
+  for (const chunk of pending.get(id) ?? []) view.term.write(chunk)
   pending.delete(id)
   return view
 }

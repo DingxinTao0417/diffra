@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '@/lib/errors'
 import { type FileDiff, parseUnifiedDiff } from '@/lib/unified-diff'
+import { type RemoteTaskSource, useRemoteTask } from './remote-task'
 
 export type TaskDiff = { state: 'loading' } | { state: 'ready'; files: FileDiff[] } | { state: 'error'; message: string }
 
@@ -19,8 +20,11 @@ function remember(key: string, version: number, diff: TaskDiff) {
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string)
 }
 
-// 从某一轮开始到现在的文件改动；文件可能变了（changeVersion 变化）就重新读
-export function useTaskDiff(sessionId: string, sinceTurnId: string | null, enabled: boolean, changeVersion: number): TaskDiff | null {
+// 从某一轮开始到现在的文件改动；文件可能变了（changeVersion 变化）就重新读。远程任务向对方要（会话 id 带着设备，缓存不会撞）；
+// 远程任务页的上下文在 TaskPage 里面才有，TaskPage 自己用时把来源直接传进来
+export function useTaskDiff(sessionId: string, sinceTurnId: string | null, enabled: boolean, changeVersion: number, source?: RemoteTaskSource): TaskDiff | null {
+  const context = useRemoteTask()
+  const remote = source ?? context
   const key = sinceTurnId ? `${sessionId}:${sinceTurnId}` : null
   const [shown, setShown] = useState<{ key: string; version: number; diff: TaskDiff } | null>(null)
   const lastRead = useRef(0)
@@ -36,7 +40,7 @@ export function useTaskDiff(sessionId: string, sinceTurnId: string | null, enabl
     // 第一次立即读；工具调用连着完成时每 300ms 最多读一次，不用等这一串结束才刷新
     const timer = setTimeout(() => {
       lastRead.current = Date.now()
-      window.diffra.checkpointDiff(sessionId, sinceTurnId).then(
+      ;(remote ? remote.diff(sinceTurnId) : window.diffra.checkpointDiff(sessionId, sinceTurnId)).then(
         (text) => {
           const diff: TaskDiff = { state: 'ready', files: parseUnifiedDiff(text) }
           remember(key, changeVersion, diff)
@@ -46,7 +50,7 @@ export function useTaskDiff(sessionId: string, sinceTurnId: string | null, enabl
       )
     }, Math.max(0, lastRead.current + 300 - Date.now()))
     return () => clearTimeout(timer)
-  }, [sessionId, sinceTurnId, key, enabled, changeVersion])
+  }, [sessionId, sinceTurnId, key, enabled, changeVersion, remote])
 
   if (!key) return null
   if (shown?.key === key) return shown.diff

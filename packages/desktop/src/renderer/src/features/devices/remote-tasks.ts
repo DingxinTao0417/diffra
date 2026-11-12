@@ -1,6 +1,7 @@
-import type { SessionUpdate, StoredTurn, TaskProgressView } from '@diffra/core/types'
-import type { RemoteEvent, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
+import type { CheckpointChange, CommandInfo, PermissionMode, PromptImage, SessionUpdate, SkillInfo, StoredTurn, TaskProgressView, ToolCallContent } from '@diffra/core/types'
+import type { RemoteEvent, RemoteSessionDetails, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteSyncEvent } from '../../../../shared/remote'
+import type { ModelRef, ProviderView } from '../../../../shared/settings'
 import { applySilence, applyUpdate, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, type Usage, usageOf } from '@/features/session/transcript'
 import { errorMessage } from '@/lib/errors'
 import { showToast, store } from '@/state/store'
@@ -44,6 +45,10 @@ export interface RemoteTask {
   // 订阅失败后自动重试过几次；对方明确拒绝（关了总开关、没授权本机）时不自动重试
   retries: number
   refused: boolean
+  // 对方任务页的配置（模型、权限模式、分支、检查命令……），对方是 0.3.x 时没有
+  details: RemoteSessionDetails | null
+  // 对方的模型服务（切换模型时取）
+  providers?: ProviderView[]
 }
 
 export const remoteKey = (deviceId: string, sessionId: string) => `${deviceId}/${sessionId}`
@@ -104,6 +109,7 @@ export async function subscribeRemote(deviceId: string, sessionId: string): Prom
           resumable: false,
           retries: 0,
           refused: false,
+          details: null,
         }
     return { ...state, remoteTasks: { ...state.remoteTasks, [key]: task } }
   })
@@ -181,6 +187,41 @@ export async function loadEarlierRemote(key: string): Promise<void> {
   }
 }
 
+// 对方任务页的配置：订阅上之后、一轮结束时取。拿不到只记日志，任务页照样能看对话
+export async function loadRemoteDetails(key: string): Promise<void> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return
+  try {
+    const details = (await window.diffra.remoteCall(task.deviceId, { method: 'session.details', sessionId: task.sessionId })) as RemoteSessionDetails
+    updateTask(key, (current) => ({ ...current, details }))
+  } catch (error) {
+    console.error('[remote] 读对方任务的配置失败', error)
+  }
+}
+
+// 从某一轮开始到现在的文件改动（任务监控、审阅改动）
+export async function remoteDiff(key: string, turnId: string): Promise<string> {
+  const task = store.get().remoteTasks[key]
+  if (!task) throw new Error('这个任务已经关了')
+  const { diff } = (await window.diffra.remoteCall(task.deviceId, { method: 'session.diff', sessionId: task.sessionId, turnId })) as { diff: string }
+  return diff
+}
+
+// 展开只同步了开头的工具输出：向对方要这一步的全部输出，写回这一步。对方按这一轮在全部轮次里的位置找，再核对轮次 id
+export async function loadRemoteToolOutput(key: string, toolCallId: string): Promise<void> {
+  const task = store.get().remoteTasks[key]
+  const index = task ? task.turns.findIndex((turn) => turn.items.some((item) => item.kind === 'tool' && item.id === toolCallId)) : -1
+  const turn = task?.turns[index]
+  if (!task || !turn) throw new Error('找不到这一步，重新打开这个任务')
+  const { content } = await window.diffra.remoteToolOutput(task.deviceId, task.sessionId, task.start + index, turn.id, toolCallId)
+  updateTask(key, (current) => ({
+    ...current,
+    turns: current.turns.map((item) =>
+      item.id === turn.id ? { ...item, items: item.items.map((entry) => (entry.kind === 'tool' && entry.id === toolCallId ? { ...entry, content: content as unknown as ToolCallContent[] } : entry)) } : item,
+    ),
+  }))
+}
+
 // 和本机任务收会话更新的办法一样（state/actions.ts 的 wireCoreEvents）
 function applyLive(task: RemoteTask, update: SessionUpdate): RemoteTask {
   const usage = usageOf(update)
@@ -197,6 +238,32 @@ function applyLive(task: RemoteTask, update: SessionUpdate): RemoteTask {
     progress: taskProgressOf(update) ?? task.progress,
     turns: [...task.turns.slice(0, -1), { ...last, items: applyUpdate(last.items, update), outcome: outcome ?? last.outcome, ...(outcome ? { endedAt: Date.now() } : {}) }],
   }
+}
+
+// 远程终端的输出、结束：按终端 id 交给开着它的面板（RemoteTerminalPanel）；面板还没登记（开终端的回复还没到）时先攒着，
+// 攒满就不再攒；没人登记就结束了的直接丢掉
+type TerminalItem = { data: string } | { exit: number | null }
+interface TerminalListener {
+  data(data: string): void
+  exit(code: number | null): void
+}
+const terminalListeners = new Map<string, TerminalListener>()
+const terminalPending = new Map<string, TerminalItem[]>()
+const MAX_TERMINAL_PENDING = 256
+
+export function listenRemoteTerminal(terminalId: string, listener: TerminalListener): () => void {
+  terminalListeners.set(terminalId, listener)
+  for (const item of terminalPending.get(terminalId) ?? []) deliverTerminal(terminalId, item)
+  terminalPending.delete(terminalId)
+  return () => terminalListeners.delete(terminalId)
+}
+
+function deliverTerminal(terminalId: string, item: TerminalItem): void {
+  const listener = terminalListeners.get(terminalId)
+  if (listener) return 'data' in item ? listener.data(item.data) : listener.exit(item.exit)
+  if ('exit' in item) return void terminalPending.delete(terminalId)
+  const pending = terminalPending.get(terminalId) ?? []
+  if (pending.length < MAX_TERMINAL_PENDING) terminalPending.set(terminalId, [...pending, item])
 }
 
 export function applyRemoteEvent(payload: RemoteSyncEvent): void {
@@ -267,6 +334,12 @@ export function applyRemoteEvent(payload: RemoteSyncEvent): void {
     case 'permission.request':
       updateTask(remoteKey(deviceId, event.sessionId), (task) => ({ ...task, permission: event }))
       return
+    case 'terminal.data':
+      deliverTerminal(event.terminalId, { data: event.data })
+      return
+    case 'terminal.exit':
+      deliverTerminal(event.terminalId, { exit: event.exitCode })
+      return
     case 'permission.settled':
       store.set((state) => ({
         ...state,
@@ -278,12 +351,15 @@ export function applyRemoteEvent(payload: RemoteSyncEvent): void {
   }
 }
 
-// 以下是操作，对方按授权检查；出错只提示，不改这一页的状态（结果会经推送回来）
-export async function sendRemote(key: string, text: string): Promise<boolean> {
+// 以下是操作，对方按授权检查；出错只提示，不改这一页的状态（结果会经推送回来）。
+// extras：本机输入框的 Skill、目标、计划模式和图片（对方 0.3.x 时不带，只发文字）
+export async function sendRemote(key: string, text: string, extras?: { skills: string[]; goal: boolean; plan: boolean; images: PromptImage[] }): Promise<boolean> {
   const task = store.get().remoteTasks[key]
   if (!task) return false
   try {
-    const { queued } = await window.diffra.promptRemoteSession(task.deviceId, task.sessionId, text)
+    const { queued } = extras
+      ? ((await window.diffra.remoteCall(task.deviceId, { method: 'session.prompt', sessionId: task.sessionId, text, ...extras })) as { queued: boolean })
+      : await window.diffra.promptRemoteSession(task.deviceId, task.sessionId, text)
     if (queued) showToast('对方正在跑，这条消息排在这一轮后面')
     return true
   } catch (error) {
@@ -316,4 +392,61 @@ export async function createRemoteTask(deviceId: string, projectId: string, text
     showToast(errorMessage(error))
     return null
   }
+}
+
+// 对方的模型服务：打开模型菜单时取
+export async function loadRemoteProviders(key: string): Promise<void> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return
+  try {
+    const { providers } = (await window.diffra.remoteCall(task.deviceId, { method: 'models.list' })) as { providers: ProviderView[] }
+    updateTask(key, (current) => ({ ...current, providers }))
+  } catch (error) {
+    showToast(`读对方的模型失败：${errorMessage(error)}`)
+  }
+}
+
+// 斜杠菜单里对方的 Skill 和自定义命令
+export async function remoteSkills(key: string): Promise<SkillInfo[]> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return []
+  const { skills } = (await window.diffra.remoteCall(task.deviceId, { method: 'skills.list', sessionId: task.sessionId })) as { skills: SkillInfo[] }
+  return skills
+}
+
+export async function remoteCommands(key: string): Promise<CommandInfo[]> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return []
+  const { commands } = (await window.diffra.remoteCall(task.deviceId, { method: 'commands.list', sessionId: task.sessionId })) as { commands: CommandInfo[] }
+  return commands
+}
+
+// 对方项目的本地分支（底栏的分支菜单）
+export async function remoteBranches(key: string): Promise<{ current: string | null; branches: string[] }> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return { current: null, branches: [] }
+  return (await window.diffra.remoteCall(task.deviceId, { method: 'project.branches', sessionId: task.sessionId })) as { current: string | null; branches: string[] }
+}
+
+// 撤销之前列出会改回去的文件
+export async function remoteRestorePreview(key: string, turnId: string): Promise<CheckpointChange[]> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return []
+  const { changes } = (await window.diffra.remoteCall(task.deviceId, { method: 'session.restorePreview', sessionId: task.sessionId, turnId })) as { changes: CheckpointChange[] }
+  return changes
+}
+
+// 改对方任务的操作：做完再取一次配置（模型、权限模式变了）；撤销、重新生成改了整段记录，对方会推 session.reset 让这一页重来
+type RemoteChange =
+  | { method: 'session.setModel'; ref: ModelRef }
+  | { method: 'session.setPermissionMode'; mode: PermissionMode }
+  | { method: 'session.compact' }
+  | { method: 'session.regenerate' | 'session.restore'; turnId: string }
+  | { method: 'project.switchBranch'; branch: string }
+
+export async function changeRemote(key: string, change: RemoteChange): Promise<void> {
+  const task = store.get().remoteTasks[key]
+  if (!task) return
+  await window.diffra.remoteCall(task.deviceId, { ...change, sessionId: task.sessionId })
+  void loadRemoteDetails(key)
 }

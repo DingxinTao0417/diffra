@@ -24,5 +24,5 @@ export function useProject(path: string | null) {
     }
   }, [path])
 
-  return { project, setProject, branch }
+  return { project, setProject, branch, setBranch }
 }

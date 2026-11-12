@@ -62,6 +62,10 @@ describe('应用层消息', () => {
     ]
     for (const message of valid) expect(remoteMessageSchema.safeParse(message).success, JSON.stringify(message)).toBe(true)
     expect(sessionListSchema.safeParse({ projects: [{ id: 'p_1', name: 'diffra', level: 'control' }], sessions: [{ sessionId: SESSION, projectId: 'p_1', title: '任务', updatedAt: '2026-11-10T08:00:00.000Z', running: false, turnCount: 3 }] }).success).toBe(true)
+    // 「完全控制」：level 照旧是 control（0.3.x 的连接端只认这两个值），另带 full
+    expect(sessionListSchema.safeParse({ projects: [{ id: 'p_1', name: 'diffra', level: 'control', full: true }], sessions: [] }).success).toBe(true)
+    expect(sessionListSchema.safeParse({ projects: [{ id: 'p_1', name: 'diffra', level: 'full' }], sessions: [] }).success).toBe(false)
+    expect(remoteMessageSchema.safeParse({ type: 'request', id: 12, call: { method: 'session.toolOutput', sessionId: SESSION, turn: 3, turnId: 'turn-1', toolCallId: 'call-1' } }).success).toBe(true)
     expect(snapshotSchema.safeParse({ sessionId: SESSION, projectId: 'p_1', title: '任务', running: true, taskState: { status: 'running', reason: null, requirements: [] }, totalTurns: 1, start: 0, turns: [turn], epoch: 'e1', seq: 5 }).success).toBe(true)
     // 同步过来的提问图片：只认图片类型、base64、有大小上限
     const withImage = (images: unknown) => snapshotSchema.safeParse({ sessionId: SESSION, projectId: 'p_1', title: '任务', running: false, totalTurns: 1, start: 0, turns: [{ ...turn, images, omittedImages: 1 }], epoch: 'e1', seq: 5 }).success
