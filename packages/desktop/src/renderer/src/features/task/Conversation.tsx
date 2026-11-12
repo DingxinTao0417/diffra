@@ -761,13 +761,7 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
   const step = (item: ProcessItem, single: boolean) => {
     if (item.kind === 'thought') return <Thought key={item.id} text={item.text} running={live && item === last} />
     if (!isEdit(item)) return <ToolStep key={item.id} item={item} />
-    if (single) return <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={showEditDetails} toggle={toggle} />
-    return (
-      // 改动卡片的行自带 px-2，往左挪齐其他步骤的箭头
-      <div key={item.id} className="-mx-2">
-        <EditBlock item={item} projectPath={projectPath} expanded={showEditDetails} />
-      </div>
-    )
+    return <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={showEditDetails} toggle={single ? toggle : undefined} />
   }
   if (items.length === 1 && last) return step(last, true)
   const tools = items.filter((item): item is ToolItem => item.kind === 'tool')
@@ -944,16 +938,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
       {open && (
         <div className="ml-5.5 flex flex-col gap-1 border-l pl-3" data-testid="agent-steps">
           {steps.length === 0 && <p className="text-xs text-muted-foreground">还没有动作</p>}
-          {/* 改动卡片的行自带 px-2，往左挪齐其他步骤的箭头 */}
-          {steps.map((step) =>
-            toolBlockType(step) === 'edit' ? (
-              <div key={step.id} className="-mx-2">
-                <EditBlock item={step} projectPath={projectPath} />
-              </div>
-            ) : (
-              <ToolStep key={step.id} item={step} />
-            ),
-          )}
+          {steps.map((step) => (toolBlockType(step) === 'edit' ? <EditBlock key={step.id} item={step} projectPath={projectPath} /> : <ToolStep key={step.id} item={step} />))}
         </div>
       )}
     </div>
@@ -1249,7 +1234,8 @@ function StepList({ item }: { item: ToolItem }) {
   )
 }
 
-// 每个文件只有一行标题：收起时是普通行，展开后这一行就是改动卡片的顶栏，代码区直接接在下面
+// 每个文件只有一行标题：收起时是普通行，展开后这一行就是改动卡片的顶栏，代码区直接接在下面。
+// 收起时和 DisclosureRow 的行一样高、箭头对齐：边框占的 1px 用负边距抵掉（横向是 px-1.5 加边框，界面字号可调，所以按 rem 算）
 function EditBlock({ item, projectPath, expanded = false, toggle }: { item: ToolItem; projectPath: string; expanded?: boolean; toggle?: React.ReactNode }) {
   const [open, setOpen] = useState(expanded)
   useEffect(() => setOpen(expanded), [expanded])
@@ -1259,9 +1245,9 @@ function EditBlock({ item, projectPath, expanded = false, toggle }: { item: Tool
       {diffs.map((content, index) => {
         const path = relativePath(content.path, projectPath)
         return (
-          <div key={content.path} className={cn('overflow-hidden rounded-lg border', !open && 'border-transparent')}>
+          <div key={content.path} className={cn('mx-[calc(-0.375rem-1px)] overflow-hidden rounded-lg border', !open && '-my-px border-transparent')}>
             <div className={cn('flex items-center', open ? 'border-b bg-muted/50 hover:bg-accent dark:bg-muted dark:hover:bg-accent' : 'hover:bg-muted/60')}>
-              <button type="button" aria-expanded={open} aria-label={`查看改动 ${path}`} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm focus-visible:-outline-offset-2" onClick={() => setOpen(!open)}>
+              <button type="button" aria-expanded={open} aria-label={`查看改动 ${path}`} className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 text-left text-sm focus-visible:-outline-offset-2', open ? 'py-1.5' : 'py-0.5')} onClick={() => setOpen(!open)}>
                 {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
                 <StatusIcon status={item.status} />
                 <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>

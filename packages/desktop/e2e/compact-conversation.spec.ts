@@ -100,7 +100,13 @@ test('每次调用前都先思考的模型：思考、读文件、改动收在�
     await expect(first).not.toContainText('第二行是细节')
     await first.getByRole('button').click()
     await expect(first).toContainText('第二行是细节')
-    await expect(group.getByRole('button', { name: '查看改动 note.txt', exact: true })).toBeVisible()
+    const editRow = group.getByRole('button', { name: '查看改动 note.txt', exact: true })
+    await expect(editRow).toBeVisible()
+    // 改动那一行和思考那一行箭头对齐、一样高
+    const thoughtRow = group.getByTestId('thought').nth(1).getByRole('button')
+    const [thoughtArrow, editArrow, thoughtBox, editBox] = await Promise.all([thoughtRow.locator('svg').first().boundingBox(), editRow.locator('svg').first().boundingBox(), thoughtRow.boundingBox(), editRow.boundingBox()])
+    expect(editArrow?.x).toBeCloseTo(thoughtArrow?.x ?? -1, 0)
+    expect(editBox?.height).toBeCloseTo(thoughtBox?.height ?? -1, 0)
     await expect(group.locator('[data-testid="tool-call"][data-kind="tool"]')).toHaveCount(1)
   } finally {
     await app.close()
