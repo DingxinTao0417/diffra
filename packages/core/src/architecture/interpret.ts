@@ -4,6 +4,7 @@ import { type LanguageModelUsage, streamText, tool, ToolChoiceViolationError } f
 import { z } from 'zod'
 import { rejectsToolChoice } from '../models/errors.js'
 import { createLanguageModel, MODEL_CALL_HEADERS } from '../models/operations.js'
+import { streamParts } from '../models/stream.js'
 import type { SessionModel } from '../protocol.js'
 import { IdMaker, keepPinned, verifyDiagram } from './diagrams.js'
 import { topLevelGroups } from './engine.js'
@@ -41,6 +42,7 @@ async function submitOnce<T>(model: SessionModel, system: string, prompt: string
   const languageModel = createLanguageModel(model.endpoint, model.modelId, model.reasoningEffort, model.maxOutputTokens)
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   const ask = async (toolChoice: 'auto' | { type: 'tool'; toolName: string }) => {
+    const attempt = new AbortController()
     const result = streamText({
       model: languageModel,
       system,
@@ -48,18 +50,19 @@ async function submitOnce<T>(model: SessionModel, system: string, prompt: string
       tools: { [toolName]: tool({ description: 'Submit the result.', inputSchema: schema }) },
       toolChoice,
       maxRetries: 1,
-      abortSignal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      abortSignal: AbortSignal.any([...(signal ? [signal] : []), timeout, attempt.signal]),
       headers: MODEL_CALL_HEADERS,
     })
     let input: unknown
     let usage: LanguageModelUsage | null = null
-    for await (const part of result.fullStream) {
-      if (part.type === 'tool-call' && part.toolName === toolName) input = part.input
-      if (part.type === 'finish-step') usage = part.usage
-      if (part.type === 'error') {
-        if (ToolChoiceViolationError.isInstance(part.error)) break
-        throw part.error
+    try {
+      for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
+        if (part.type === 'tool-call' && part.toolName === toolName) input = part.input
+        if (part.type === 'finish-step') usage = part.usage
       }
+    } catch (error) {
+      // 模型只回了文字、没调提交工具：和没交结果一样说
+      if (!ToolChoiceViolationError.isInstance(error)) throw error
     }
     return { input, usage }
   }

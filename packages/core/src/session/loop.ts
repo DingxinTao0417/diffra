@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, RetryError, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
 import { overloadedModelError, rejectsToolChoice, retryableModelError, toModelError } from '../models/errors.js'
+import { streamParts } from '../models/stream.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
@@ -780,11 +781,8 @@ export async function streamModelStep(
       let truncated = false
       // 这次请求已经推给界面的回复文字，连接中途断开时交回对话让模型接着说
       let emitted = ''
-      // 流里报的错先记下，读完再抛：从 for await 里直接抛出去会取消这个流，AI SDK 内部留下一个没人接的 rejection（原因是 undefined）
-      let failure: { error: unknown } | null = null
       try {
-        for await (const part of result.fullStream) {
-          if (failure) continue
+        for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
           // 中断后流里还会出一条 abort，那不是模型的输出
           if (!attempt.signal.aborted) await silence.heard()
           switch (part.type) {
@@ -810,14 +808,8 @@ export async function streamModelStep(
               truncated = part.finishReason === 'length'
               await io.recordUsage({ ...settings.usage, usage: part.usage })
               break
-            case 'error':
-              failure = { error: part.error }
-              // 服务报了错却不关连接时，中断这次请求让流马上结束
-              attempt.abort()
-              break
           }
         }
-        if (failure) throw failure.error
       } catch (error) {
         if (retrying && !signal.aborted) continue
         // 要求直接交结果（指定工具）被服务拒绝时改用 auto 再发一次；系统提示词和工具说明里都写了要交结果

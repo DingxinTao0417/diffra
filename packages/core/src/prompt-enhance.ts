@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { designStyleById } from './design-styles.js'
 import { rejectsToolChoice } from './models/errors.js'
 import { createLanguageModel, MODEL_CALL_HEADERS } from './models/operations.js'
+import { streamParts } from './models/stream.js'
 import type { PromptQuestion, SessionModel } from './protocol.js'
 import type { Session } from './session/session.js'
 
@@ -108,6 +109,7 @@ export async function enhancePrompt(request: EnhanceRequest, session: Session | 
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   // 和其他模型调用一样走流式接口；强制只调 submit_prompt，服务不接受时改用 auto（系统提示词里也要求了调它）
   const ask = async (toolChoice: 'auto' | { type: 'tool'; toolName: 'submit_prompt' }) => {
+    const attempt = new AbortController()
     const result = streamText({
       model,
       system: SYSTEM,
@@ -115,19 +117,19 @@ export async function enhancePrompt(request: EnhanceRequest, session: Session | 
       tools: { submit_prompt: tool({ description: 'Submit the improved request and the questions.', inputSchema: enhanceInput }) },
       toolChoice,
       maxRetries: 1,
-      abortSignal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      abortSignal: AbortSignal.any([...(signal ? [signal] : []), timeout, attempt.signal]),
       headers: MODEL_CALL_HEADERS,
     })
     let input: unknown
     let usage: LanguageModelUsage | null = null
-    for await (const part of result.fullStream) {
-      if (part.type === 'tool-call' && part.toolName === 'submit_prompt') input = part.input
-      if (part.type === 'finish-step') usage = part.usage
-      if (part.type === 'error') {
-        // 模型只回了文字、没调 submit_prompt：和没交结果一样说
-        if (ToolChoiceViolationError.isInstance(part.error)) break
-        throw part.error
+    try {
+      for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
+        if (part.type === 'tool-call' && part.toolName === 'submit_prompt') input = part.input
+        if (part.type === 'finish-step') usage = part.usage
       }
+    } catch (error) {
+      // 模型只回了文字、没调 submit_prompt：和没交结果一样说
+      if (!ToolChoiceViolationError.isInstance(error)) throw error
     }
     return { input, usage }
   }

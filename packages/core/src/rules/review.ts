@@ -1,5 +1,6 @@
 import { type LanguageModel, type LanguageModelUsage, streamText } from 'ai'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
+import { streamParts } from '../models/stream.js'
 import type { RulePack } from '../protocol.js'
 import { languageOf } from './languages.js'
 import { packsForPaths, renderRules } from './select.js'
@@ -133,13 +134,13 @@ export async function callReviewer(
   request: { system: string; prompt: string },
   signal: AbortSignal,
 ): Promise<{ text: string; usage: LanguageModelUsage | null }> {
-  const result = streamText({ model, ...request, maxRetries: 2, abortSignal: signal, headers: MODEL_CALL_HEADERS })
+  const attempt = new AbortController()
+  const result = streamText({ model, ...request, maxRetries: 2, abortSignal: AbortSignal.any([signal, attempt.signal]), headers: MODEL_CALL_HEADERS })
   let text = ''
   let usage: LanguageModelUsage | null = null
-  for await (const part of result.fullStream) {
+  for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
     if (part.type === 'text-delta') text += part.text
     if (part.type === 'finish-step') usage = part.usage
-    if (part.type === 'error') throw part.error
   }
   return { text, usage }
 }

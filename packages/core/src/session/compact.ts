@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { type ModelMessage, streamText, type ToolResultPart } from 'ai'
 import { toModelError } from '../models/errors.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
+import { streamParts } from '../models/stream.js'
 import { DEFAULT_CONTEXT_WINDOW, type ActiveModel, type TurnIO } from './loop.js'
 import type { StopReason, UsageCache } from '../protocol.js'
 import { SCREENSHOT_MARKER } from './browser.js'
@@ -296,6 +297,7 @@ function recentStepsStart(messages: ModelMessage[], from: number): number | null
 async function summarize(session: Session, model: ActiveModel, cut: number, signal: AbortSignal, io: TurnIO): Promise<string> {
   const context = session.contextMessages()
   const kept = session.messages.length - cut
+  const attempt = new AbortController()
   const result = streamText({
     model: model.language,
     system: session.systemPrompt,
@@ -303,16 +305,15 @@ async function summarize(session: Session, model: ActiveModel, cut: number, sign
     tools: session.toolSet(),
     toolChoice: 'none',
     maxRetries: 2,
-    abortSignal: signal,
+    abortSignal: AbortSignal.any([signal, attempt.signal]),
     headers: MODEL_CALL_HEADERS,
   })
   let text = ''
-  for await (const part of result.fullStream) {
+  for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
     if (part.type === 'text-delta') text += part.text
     if (part.type === 'finish-step') {
       await io.recordUsage({ role: 'coder', provider: model.config.provider, modelId: model.config.modelId, usage: part.usage })
     }
-    if (part.type === 'error') throw part.error
   }
   if (!text.trim()) throw new Error('模型没有返回摘要')
   return text.trim()
