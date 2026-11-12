@@ -8,6 +8,7 @@ import { chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTas
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
 import { startScriptedModel } from './scripted-model'
+import { IPC_CHANNELS } from '../src/shared/ipc'
 
 // 设备连接：两个开发版实例（各自的临时数据目录）经测试进程里起的本机中转配对。不连真实的 relay.diffra.dev
 
@@ -402,6 +403,18 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
         })
       })
     })()`)
+    // 连接端取列表慢 1.5 秒：这一轮的结论先到、列表后到（CI 的慢机器上常见），图片也要过来
+    await guest.app.evaluate(({ ipcMain }, channel) => {
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: unknown[]) => Promise<unknown>> })._invokeHandlers
+      const original = handlers.get(channel)
+      if (!original) throw new Error(`没有 ${channel} 的处理函数`)
+      handlers.set(channel, async (...args) => {
+        const result = await original(...args)
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        return result
+      })
+      ;(globalThis as { restoreRemoteList?: () => void }).restoreRemoteList = () => handlers.set(channel, original)
+    }, IPC_CHANNELS.remoteList)
     await send(host.window, '实时的一轮')
     await expect.poll(() => guest.window.evaluate('window.runningAtStart')).toBe(true)
     await expect(remoteTask.getByTestId('task-status')).toHaveAttribute('data-tone', 'running')
@@ -416,6 +429,7 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     await expect.poll(async () => (await imageSizes(host.window, '[data-testid="turn"]:last-of-type')).at(-1)).toEqual([1600, 800])
     await expect.poll(async () => (await imageSizes(guest.window, '[data-testid="remote-task"]')).at(-1)).toEqual([1024, 512])
     await guest.window.screenshot({ path: 'test-results/devices-remote-task.png' })
+    await guest.app.evaluate(() => (globalThis as { restoreRemoteList?: () => void }).restoreRemoteList?.())
 
     // 跑到一半中转断了，断线期间对方把这一轮跑完：重连后续传补发这段输出（不重新取整页），不丢不重
     const hostLog: string[] = []

@@ -72,10 +72,14 @@ export async function loadRemoteList(deviceId: string): Promise<void> {
   try {
     const list = await window.diffra.listRemoteSessions(deviceId)
     store.set((state) => ({ ...state, remoteLists: { ...state.remoteLists, [deviceId]: { list, loading: false, error: null } } }))
-    // 对方一轮跑完、开始：列表里的状态和正在看的不一样了，跑完的重新订阅拿最后的样子
+    // 对方一轮跑完、开始：列表里的状态和正在看的不一样了，跑完的重新订阅拿最后的样子。
+    // 这一轮的结论可能比列表先到（结论随会话更新 150 毫秒一批，列表变动一秒最多说一次），那时这边已经是「没在跑」，
+    // 所以最后一轮还有没过来的图片时也要重新订阅，不然图片一直不来
     for (const session of list.sessions) {
       const task = store.get().remoteTasks[remoteKey(deviceId, session.sessionId)]
-      if (!task || task.status !== 'ready' || task.running === session.running) continue
+      if (!task || task.status !== 'ready') continue
+      const imagesPending = !session.running && Boolean(task.turns.at(-1)?.pendingImages)
+      if (task.running === session.running && !imagesPending) continue
       updateTask(remoteKey(deviceId, session.sessionId), (current) => (session.running ? { ...current, running: true } : { ...current, generation: current.generation + 1 }))
     }
   } catch (error) {
