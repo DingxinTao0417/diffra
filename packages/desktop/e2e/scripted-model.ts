@@ -31,6 +31,8 @@ export interface ScriptedModel {
   requests(): number
   // 每次对话请求的原始请求体，按收到的顺序
   bodies(): string[]
+  // 每次对话请求收到的时间（毫秒时间戳），和 bodies 一一对应
+  times(): number[]
   // 收到的轻量安全扫描请求数
   securityReviews(): number
   // 收到的完成前规范审查请求数
@@ -53,6 +55,7 @@ export async function startScriptedModel(
   let reviews = 0
   let ruleReviews = 0
   const bodies: string[] = []
+  const times: number[] = []
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -88,6 +91,7 @@ export async function startScriptedModel(
         step = at >= 0 ? steps[at]! : { text: '（剧本已结束）' }
         if ('toolCalls' in step) step = { ...step, toolCalls: step.toolCalls.map((call) => ({ ...call, input: typeof call.input === 'function' ? call.input(messages) : call.input })) }
         bodies.push(body)
+        times.push(Date.now())
         index = served++
       }
       setTimeout(() => {
@@ -103,6 +107,7 @@ export async function startScriptedModel(
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests: () => served,
     bodies: () => [...bodies],
+    times: () => [...times],
     securityReviews: () => reviews,
     ruleReviews: () => ruleReviews,
     close: () =>

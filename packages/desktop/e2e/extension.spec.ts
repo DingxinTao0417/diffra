@@ -59,6 +59,28 @@ async function bridgeConnections(window: Page): Promise<number> {
   return window.evaluate<number>('window.diffra.getBrowserBridgeStatus().then((status) => status.connections.length)')
 }
 
+// CI 上这一轮偶尔 60 秒还在跑，本机复现不了（第 472 步）：失败时打出界面上每个工具调用的状态、模型每次收到请求的时间、
+// 最后一次请求里各工具的结果（超时、出错的原因在这里）和主进程的输出，看卡在哪一步
+async function dumpTurn(window: Page, model: { bodies(): string[]; times(): number[] }, started: number, output: string[]): Promise<void> {
+  const calls = await window.locator('[data-testid="tool-call"]').evaluateAll((nodes) =>
+    nodes.map((node) => `${node.getAttribute('data-kind')} ${node.getAttribute('data-status')} ${(node.textContent ?? '').replace(/\s+/g, ' ').slice(0, 200)}`),
+  )
+  const last = model.bodies().at(-1)
+  const results = last ? (JSON.parse(last) as { messages: ScriptMessages }).messages.filter((message) => message.role === 'tool').map((message) => JSON.stringify(message.content).slice(0, 400)) : []
+  console.log(
+    [
+      `[诊断] 现在是开始后 ${Date.now() - started} 毫秒`,
+      '[诊断] 界面上的工具调用：',
+      ...calls,
+      `[诊断] 模型请求（开始后毫秒）：${model.times().map((time) => time - started).join('、')}`,
+      '[诊断] 最后一次请求里的工具结果：',
+      ...results,
+      '[诊断] 主进程输出：',
+      ...output.slice(-80),
+    ].join('\n'),
+  )
+}
+
 // 面板投屏画面中间那个点是什么颜色
 async function mirrorColor(window: Page): Promise<Color | 'none'> {
   const rgb = await window.evaluate<number[] | null>(`new Promise((resolve) => {
@@ -217,8 +239,16 @@ test('用户自己的浏览器：智能体开的第二个标签页、别的窗�
     await expect.poll(() => bridgeConnections(window), { timeout: 20_000 }).toBe(1)
 
     await chooseProject(app, window, project)
+    const output: string[] = []
+    const started = Date.now()
+    for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (chunk: Buffer) => output.push(`+${Date.now() - started}ms ${String(chunk).trimEnd()}`))
     await startTask(window, '开两个标签页')
-    await waitTaskDone(window, 60_000)
+    try {
+      await waitTaskDone(window, 60_000)
+    } catch (error) {
+      await dumpTurn(window, model, started, output)
+      throw error
+    }
     expect(lastToolResult((JSON.parse(model.bodies().at(-1)!) as { messages: ScriptMessages }).messages)).toContain('blue')
     // 智能体现在用的是第二个标签页：画面是它的
     await expect(window.getByTestId('browser-panel')).toBeVisible()
