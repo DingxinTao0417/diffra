@@ -37,22 +37,26 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    // 首页不再有检查入口；这里只关心任务页，直接按项目设置弹窗保存时走的接口配好快速检查
-    await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: 'echo check-ok', beforeFinish: null }, readOnlyPaths: [] })`)
+    // 首页不再有检查入口；这里只关心任务页，直接按项目设置弹窗保存时走的接口配好完成检查
+    await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: null, beforeFinish: 'echo check-ok' }, readOnlyPaths: [] })`)
 
     await startTask(window, '改问候语')
     await waitTaskDone(window)
 
-    // 对话流：读文件收成一组，Markdown 渲染，两张改动卡片，每次改动后跑了快速检查，监控开着时完成卡片点开计数列出改动的文件
+    // 对话流：读文件收成一组，Markdown 渲染；改的过程中不跑检查，两次改动连着收成一个改动组，完成时跑一次检查；监控开着时完成卡片点开计数列出改动的文件
     await expect(window.getByRole('button', { name: '执行工具 2 次' })).toBeVisible()
     await expect(window.getByTestId('agent-message').locator('strong')).toHaveText('hello world')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
+    const editGroup = window.getByTestId('edit-group')
+    await expect(editGroup).toContainText('修改 2 个文件 · 2 次编辑')
+    await editGroup.getByText('修改 2 个文件 · 2 次编辑').click()
     await expect(window.getByRole('button', { name: '查看改动 hello.txt', exact: true })).toHaveAttribute('aria-expanded', 'false')
     await expect(window.getByRole('button', { name: '查看改动 greet.js', exact: true })).toHaveAttribute('aria-expanded', 'false')
-    await window.getByRole('button', { name: '展开代码详情', exact: true }).click()
+    await window.getByRole('button', { name: '展开代码详情', exact: true }).first().click()
     await expect(cards(window, 'edit')).toHaveCount(2)
     await expect(window.getByTestId('diff-view')).toHaveCount(2)
-    await expect(cards(window, 'check')).toHaveCount(3)
+    await expect(cards(window, 'check')).toHaveCount(1)
+    await expect(cards(window, 'check').first()).toContainText('完成检查')
     await expect(cards(window, 'check').first()).toContainText('通过')
     await cards(window, 'finish').getByTestId('finish-counts').click()
     await expect(cards(window, 'finish').getByText('greet.js')).toBeVisible()

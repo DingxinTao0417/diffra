@@ -97,14 +97,16 @@ export interface BrowserSettings {
 
 export const DEFAULT_BROWSER: BrowserSettings = { agent: 'builtin', allowSites: [], blockSites: [] }
 
-// 完成前的安全检查，所有项目共用；深度扫描是在任务页手动发起的，这里只控制入口
+// 三层安全检查和完成前的规范审查，所有项目共用，改了对已经打开的任务立即生效。
+// 静态检查、轻量扫描、规范审查在完成前；深度扫描在智能体提交或推送前问要不要先扫，任务页也能手动发起
 export interface SecuritySettings {
   staticCheck: boolean
   lightScan: boolean
   deepScan: boolean
+  review: boolean
 }
 
-export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true }
+export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true, review: true }
 
 export const COMPACT_AT_PERCENTS = [50, 60, 70, 80, 90] as const
 export const MAX_STEP_OPTIONS = [30, 50, 80, 100] as const

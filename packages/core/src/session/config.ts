@@ -41,6 +41,10 @@ const rulePackSchema = z.object({
 
 const providerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) }).nullable()
 
+const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean().optional() })
+
+export const checkSwitchesSchema = securitySchema.extend({ review: z.boolean() })
+
 export const modelConfigSchema = z.object({
   reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
   endpoint: endpointSchema,
@@ -60,7 +64,7 @@ export const sessionConfigSchema = z.object({
   readOnlyPaths: z.array(z.string().trim().min(1)),
   rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),
   permissionMode: z.enum(['ask', 'auto', 'full']),
-  security: z.object({ staticCheck: z.boolean(), lightScan: z.boolean() }),
+  security: securitySchema,
   limits: z.object({
     compactAtPercent: z.number().int().min(50).max(90),
     maxSteps: z.number().int().positive().nullable(),

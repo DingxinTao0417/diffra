@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import { type ModelEndpoint, type ModelError, requestListModels, requestTestModel } from '@diffra/core'
+import { configureSecurity, type ModelEndpoint, type ModelError, requestListModels, requestTestModel } from '@diffra/core'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
@@ -115,6 +115,11 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     )
     await settings.update((current) => ({ ...current, ...change }))
     if (change.browser) browserHost.pushSites()
+    // 检查开关对已经打开的任务立即生效；推送失败时设置照样存下，之后新建、载入的任务按设置
+    if (change.security) {
+      const switches = change.security
+      await configureSecurity(await coreConnection(), switches).catch((error: unknown) => console.error('[settings] 同步检查开关到 core 失败', error))
+    }
     return view()
   })
 

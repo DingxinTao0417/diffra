@@ -82,7 +82,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
     items: [
       { id: 'models', label: '模型与角色', icon: Bot, keywords: '供应商 API Key 编码 评审 规划' },
       { id: 'permissions', label: '命令权限', icon: ShieldCheck, keywords: '权限模式 询问 自动 完全访问' },
-      { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 漏洞 注入 密钥' },
+      { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 规范审查 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
       { id: 'browser', label: '浏览器', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 网站 允许 禁止 登录' },
       { id: 'mcp', label: 'MCP 服务器', icon: Plug, keywords: 'MCP 工具 提示词模板 prompt 外部工具' },
@@ -430,10 +430,18 @@ const SECURITY_LEVELS: Array<{ key: keyof SecuritySettings; label: string; trigg
   {
     key: 'deepScan',
     label: '深度扫描',
-    trigger: '手动',
+    trigger: '提交前询问',
     cost: '多次模型调用',
-    description: '在任务页显示深度扫描入口。',
-    detail: '从任务页发起后，只读地跨文件追踪数据流，从外部输入一路查到危险调用，出一份报告，勾选后交给智能体修复。',
+    description: '智能体要提交或推送这个任务的改动时，先问你要不要做一次深度扫描；任务页也能随时手动发起。',
+    detail: '只读地跨文件追踪数据流，从外部输入一路查到危险调用，出一份报告，勾选后交给智能体修复。扫过之后代码没再变，再提交就不问。',
+  },
+  {
+    key: 'review',
+    label: '规范审查',
+    trigger: '完成前自动',
+    cost: '每轮多一次模型调用',
+    description: '让评审模型按规则包审查本轮改动，违反强制级规则就打回修改。',
+    detail: '规则包按项目里的语言自动选；只审这一轮新增的代码，不翻旧代码的账。',
   },
 ]
 
@@ -448,8 +456,7 @@ function SecuritySection() {
     try {
       const settings = await window.diffra.savePreferences({ security: updated })
       store.set((state) => ({ ...state, settings }))
-      // 深度扫描只控制任务页的入口，改了立即生效
-      flashSaved(key !== 'deepScan')
+      flashSaved()
     } catch (error) {
       store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, security } } : state))
       showToast(`保存失败：${errorMessage(error)}`)
@@ -460,8 +467,8 @@ function SecuritySection() {
     <>
       <SettingsHeader
         title="安全"
-        description="让智能体写出的代码在完成前过安全检查，问题打回给它修。"
-        actions={<SavedHint saved={saved} note="新任务生效" />}
+        description="让智能体写出的代码过安全检查和规范审查，问题交给它修。改了对已经打开的任务立即生效，关掉的就不再检查。"
+        actions={<SavedHint saved={saved} />}
       />
       <SettingsGroup data-testid="security-levels">
         {SECURITY_LEVELS.map((level) => (

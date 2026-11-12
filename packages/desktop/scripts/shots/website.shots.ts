@@ -291,7 +291,7 @@ for (const theme of ['light', 'dark'] as const) {
       const window = await app.firstWindow()
       await configureCoderModel(window, { name: 'DeepSeek', baseUrl: model.baseUrl, apiKey: 'demo-key-123456', modelId: 'deepseek-chat' })
       await chooseProject(app, window, project)
-      await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: 'node --test', beforeFinish: null }, readOnlyPaths: [] })`)
+      await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: null, beforeFinish: 'node --test' }, readOnlyPaths: [] })`)
       const newTask = () => window.getByTestId('sidebar').getByRole('button', { name: '新任务', exact: true }).click()
 
       // 侧栏里先有两个别的任务

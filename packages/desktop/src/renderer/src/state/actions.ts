@@ -634,12 +634,15 @@ async function runTurnOnCore(
     let next: LiveTask['queue'][number] | undefined
     const route = store.get().route
     const viewing = route.name === 'task' && route.sessionId === sessionId
+    // 智能体提交前用户选了先做深度扫描：接着扫本任务的改动，排队的消息等扫完再发
+    const scanFirst = store.get().live[sessionId]?.turns.find((turn) => turn.id === turnId)?.outcome?.stop === 'deep-scan'
     updateLive(sessionId, (current) => {
-      next = current.queue[0]
-      return { ...current, running: false, permission: null, queue: current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
+      next = scanFirst ? undefined : current.queue[0]
+      return { ...current, running: false, permission: null, queue: scanFirst ? current.queue : current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
     })
     await refreshTasks()
-    if (next) void sendMessage(sessionId, next.text, next.options)
+    if (scanFirst) void runDeepScan(sessionId, 'task')
+    else if (next) void sendMessage(sessionId, next.text, next.options)
   }
 }
 

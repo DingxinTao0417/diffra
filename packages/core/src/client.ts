@@ -7,6 +7,7 @@ import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelR
 import {
   ACP_MAX_MESSAGE_BYTES,
   type CheckDetection,
+  type CheckSwitches,
   type CheckpointChange,
   type CheckRunResult,
   type BrowserActionParams,
@@ -313,6 +314,10 @@ export function updateSession(
 
 export async function setBrowserSites(connection: acp.ClientConnection, sites: BrowserSites): Promise<void> {
   await requestOf(connection)(SESSION_EXT_METHODS.browserSites, sites, extRequestOptions())
+}
+
+export async function configureSecurity(connection: acp.ClientConnection, switches: CheckSwitches): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.securityConfigure, switches, extRequestOptions())
 }
 
 export async function configureSession(

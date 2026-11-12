@@ -138,7 +138,7 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
 }
 
 const FINISH_OUTCOMES = ['verified', 'unverified', 'no-edits'] as const satisfies readonly NonNullable<TurnOutcome['finish']>[]
-const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted'] as const satisfies readonly TurnStop[]
+const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted', 'deep-scan'] as const satisfies readonly TurnStop[]
 const MODEL_ERROR_KINDS = ['auth', 'not-found', 'unsupported', 'rate-limit', 'server', 'timeout', 'network', 'unknown'] as const satisfies readonly ModelErrorKind[]
 const CHECK_RESULTS = ['passed', 'warned', 'partial', 'error', 'failed'] as const satisfies readonly CheckResult[]
 const FINISH_VERIFICATIONS = ['verified', 'reused', 'unverified', 'no-edits', 'failed'] as const satisfies readonly FinishVerification[]

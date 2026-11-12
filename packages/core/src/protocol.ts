@@ -17,9 +17,9 @@ export type {
 } from '@agentclientprotocol/sdk'
 
 export interface SessionChecks {
-  // 某一步改了文件后自动跑的快速检查，比如 pnpm typecheck
+  // 旧的「快速检查」：第 431 步起不再每步跑，只在 beforeFinish 没填时当完成检查用；界面不再单独编辑它
   afterEdit: string | null
-  // 模型调用 finish 时跑的完整检查，比如 pnpm test；不填就用 afterEdit
+  // 模型调用 finish 时跑的检查，比如 pnpm typecheck && pnpm test；改的过程中不跑
   beforeFinish: string | null
 }
 
@@ -61,10 +61,18 @@ export interface ModelProvider {
   name: string
 }
 
-// 完成前的安全检查：静态检查按规则匹配本轮新增的代码，轻量扫描用评审模型审查本轮改动
+// 三层安全检查：静态检查完成前按规则匹配本轮新增的代码，轻量扫描完成前用评审模型审查本轮改动，
+// 深度扫描在智能体提交或推送前问用户要不要先扫；没传 deepScan 时不问
 export interface SessionSecurity {
   staticCheck: boolean
   lightScan: boolean
+  deepScan?: boolean
+}
+
+// 设置里改了检查开关，所有已经打开的会话下一次检查就按新值（SESSION_EXT_METHODS.securityConfigure）
+export interface CheckSwitches extends SessionSecurity {
+  // 完成前的规范审查，对应 SessionRules.review
+  review: boolean
 }
 
 // 单次任务的上限：上下文用到窗口的百分之多少时压缩；最多跑多少步，null 不限（靠卡死检测兜底）
@@ -93,7 +101,8 @@ export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edit
 // finish 是本轮所有被接受的 finish 合并后的值（unverified > verified > no-edits，reused 算 verified），没有被接受的 finish 为 null；
 // stop 是没走到「finish 被接受」就停下的原因，正常结束为 null
 export const TURN_OUTCOME_META_KEY = 'turnOutcome'
-export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted'
+// check-exhausted 只有旧记录里有：快速检查不再每步跑，不会再因它停下。deep-scan 是用户在提交前选了先做深度扫描，客户端接着发起一轮深度扫描
+export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted' | 'deep-scan'
 export interface TurnOutcome {
   finish: 'verified' | 'unverified' | 'no-edits' | null
   stop: TurnStop | null
@@ -180,6 +189,8 @@ export const TERMINAL_READ_PERMISSION_PREFIX = 'terminal-read:'
 export const SCREENSHOT_MIN_WIDTH = 320
 export const SCREENSHOT_MAX_WIDTH = 1920
 export const EXTERNAL_ACCESS_SCOPE = 'exact-path'
+// 提交或推送前问要不要先做深度扫描的确认卡：rawInput.scope 是它，界面按它出标题和说明
+export const DEEP_SCAN_ASK_SCOPE = 'deep-scan-before-commit'
 
 // 格式明确的密钥：安全检查按它打回写进代码的密钥，设备连接发出会话前按它脱敏。
 // 不带 g 标志，test 没有状态，可以共用；要全局替换的按 source 另建
@@ -668,6 +679,8 @@ export const SESSION_EXT_METHODS = {
   sessionSearch: '_diffra/session/search',
   // 会话中途切换模型、权限模式
   sessionConfigure: '_diffra/session/configure',
+  // 设置里的检查开关（三层安全检查、规范审查）：所有已经打开的会话立即按新值
+  securityConfigure: '_diffra/security/configure',
   // 重新生成：撤掉某一轮及之后的文件改动和对话
   sessionRewind: '_diffra/session/rewind',
   checkpointDiff: '_diffra/checkpoint/diff',

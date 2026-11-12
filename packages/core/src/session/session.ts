@@ -119,6 +119,9 @@ export class Session {
   lastContext: { inputTokens: number; chars: number; cacheRead: number | null; cacheWrite: number | null } | null = null
   // 验证缓存仅存于内存，恢复后重新验证；Git 快照覆盖未跟踪文件。
   verifiedSnapshot: string | null = null
+  // 提交前问深度扫描：上次深度扫描跑完时的工作区指纹（代码没再变就不问），和用户选了「这个任务不再问」。只在内存里，重新打开任务后会再问
+  deepScannedFingerprint: string | null = null
+  deepScanDeclined = false
   // 最近一次因检查卡住停下时还没修好的错误，下一个执行轮开始时交给模型一次；只在内存里，撤销后作废
   unresolvedCheck: UnresolvedCheck | null = null
   // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到
@@ -308,6 +311,13 @@ export class Session {
     // 进行中的这一轮快照还没打好：快照在任何工具运行之前打，这时还没有改动
     if (this.checkpoints && this.running && this.turns.at(-1)?.id === turnId) return ''
     throw new Error('这一轮没有检查点，看不了改动')
+  }
+
+  // 本任务从第一轮之前到现在的改动（深度扫描「本任务改动」的范围），unified diff；没有检查点时返回 null
+  async taskDiff(): Promise<string | null> {
+    const first = this.turns.find((turn) => turn.kind === 'prompt')
+    const commit = first ? this.turnCheckpoints.get(first.id) : undefined
+    return this.checkpoints && commit ? this.checkpoints.diffSince(commit) : null
   }
 
   // 重新生成：把这一轮及之后的文件改动和对话一起撤掉，调用方再用同样的提问发一轮

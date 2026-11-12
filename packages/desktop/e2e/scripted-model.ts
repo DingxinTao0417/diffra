@@ -38,7 +38,7 @@ export interface ScriptedModel {
 }
 
 // 轻量安全扫描和完成前规范审查的请求按系统提示词认出来，分别按 securityReplies、reviewReplies 回复，
-// 不占剧本的步骤；用完后回「没有问题」。规范审查一直开着，改了文件的任务都会多一次审查请求
+// 不占剧本的步骤；用完后回「没有问题」。规范审查默认开着，改了文件的任务都会多一次审查请求
 const SECURITY_REVIEW_MARKER = 'You are a security reviewer'
 const RULE_REVIEW_MARKER = 'You review a code change against coding rules.'
 

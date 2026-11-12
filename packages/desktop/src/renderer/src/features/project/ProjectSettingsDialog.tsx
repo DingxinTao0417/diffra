@@ -45,18 +45,18 @@ interface Suggestion {
   checks: DetectedCheck[]
 }
 
-// core 用 ` && ` 把检测到的命令连成每栏的建议值（detect.ts 的 chain），拆开才能对回每条的来源；完成检查只列快速检查没列过的
-function suggestionsOf(result: CheckDetection): { afterEdit: Suggestion | null; beforeFinish: Suggestion | null } {
-  const checksIn = (command: string) => command.split(' && ').flatMap((part) => result.checks.filter((check) => check.command === part))
-  const afterEdit = result.afterEdit === null ? null : { command: result.afterEdit, checks: checksIn(result.afterEdit) }
-  const beforeFinish =
-    result.beforeFinish === null ? null : { command: result.beforeFinish, checks: checksIn(result.beforeFinish).filter((check) => !afterEdit?.checks.includes(check)) }
-  return { afterEdit, beforeFinish }
+// core 用 ` && ` 把检测到的命令连成建议值（detect.ts 的 chain），拆开才能对回每条的来源。
+// 只有一栏完成检查：有测试时建议类型检查、lint 加测试，没有测试时就是类型检查和 lint
+function suggestionOf(result: CheckDetection): Suggestion | null {
+  const command = result.beforeFinish ?? result.afterEdit
+  if (command === null) return null
+  return { command, checks: command.split(' && ').flatMap((part) => result.checks.filter((check) => check.command === part)) }
 }
 
 function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettingsDialogProps, 'open' | 'project'> & { project: ProjectState }) {
-  const [afterEdit, setAfterEdit] = useState(project.checks.afterEdit ?? '')
-  const [beforeFinish, setBeforeFinish] = useState(project.checks.beforeFinish ?? '')
+  // 第 431 步以前存的快速检查只在没填完成检查时当完成检查用，这里按实际会跑的那条显示，保存时只存完成检查
+  const savedFinish = project.checks.beforeFinish ?? project.checks.afterEdit ?? ''
+  const [finish, setFinish] = useState(savedFinish)
   const [readOnly, setReadOnly] = useState(project.readOnlyPaths.join(', '))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -71,11 +71,10 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
     }
   }
 
-  const suggestions = detection?.state === 'ready' ? suggestionsOf(detection.result) : null
+  const suggestion = detection?.state === 'ready' ? suggestionOf(detection.result) : null
   const notes = detection?.state === 'ready' ? detection.result.notes : []
   const noChecks = detection?.state === 'ready' && detection.result.checks.length === 0
-  const checksChanged = afterEdit.trim() !== (project.checks.afterEdit ?? '') || beforeFinish.trim() !== (project.checks.beforeFinish ?? '')
-  const showTrustNote = checksChanged && (afterEdit.trim() !== '' || beforeFinish.trim() !== '')
+  const showTrustNote = finish.trim() !== savedFinish && finish.trim() !== ''
 
   const save = async (event: FormEvent) => {
     event.preventDefault()
@@ -83,7 +82,7 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
     setError(null)
     try {
       const updated = await window.diffra.saveProject(project.path, {
-        checks: { afterEdit: afterEdit.trim() || null, beforeFinish: beforeFinish.trim() || null },
+        checks: { afterEdit: null, beforeFinish: finish.trim() || null },
         readOnlyPaths: readOnly.split(/[,，\s]+/).filter(Boolean),
       })
       onSaved(updated)
@@ -124,29 +123,19 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
             )}
           </div>
           <CheckField
-            id="check-after-edit"
-            label="快速检查"
-            hint="每步改动文件后运行；不填就不跑。"
-            placeholder="例如 pnpm typecheck"
-            value={afterEdit}
-            onChange={setAfterEdit}
-            suggestion={suggestions?.afterEdit ?? null}
-            projectPath={project.path}
-          />
-          <CheckField
             id="check-before-finish"
             label="完成检查"
-            hint="任务完成前运行；不填就用快速检查。"
-            placeholder="例如 pnpm test"
-            value={beforeFinish}
-            onChange={setBeforeFinish}
-            suggestion={suggestions?.beforeFinish ?? null}
+            hint="智能体做完、调用完成时跑一次，改的过程中不跑；不填就不自动检查。"
+            placeholder="例如 pnpm typecheck && pnpm test"
+            value={finish}
+            onChange={setFinish}
+            suggestion={suggestion}
             projectPath={project.path}
           />
           {showTrustNote && (
             <div className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-sm" role="note">
               <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-              <p>保存后这些命令会在任务里自动运行，不再逐次确认。只保存你信任的命令。</p>
+              <p>保存后这条命令会在任务里自动运行，不再逐次确认。只保存你信任的命令。</p>
             </div>
           )}
         </section>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
 import { ShieldAlert } from 'lucide-react'
-import { EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
+import { DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { agentOfMeta } from './transcript'
@@ -15,6 +15,7 @@ const EXTERNAL_ACCESS_NOTE = '授权仅适用于上方确切路径和读/写操�
 export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   const command = commandOf(request.toolCall.rawInput)
   const external = isExternalAccess(request.toolCall.rawInput)
+  const deepScanAsk = scopeOf(request.toolCall.rawInput) === DEEP_SCAN_ASK_SCOPE
   // 子智能体发起的请求写明是哪一个
   const agent = agentOfMeta(request.toolCall._meta)
   const allowOnce = request.options.find((option) => option.kind === 'allow_once')
@@ -51,7 +52,7 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
     >
       <div className="flex items-center gap-2 font-bold">
         <ShieldAlert className="size-4 text-warning" />
-        {titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
+        {deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
         {agent && (
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground" data-testid="permission-agent">
             <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: agent.color }} aria-hidden="true" />
@@ -66,6 +67,11 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       {external && (
         <p className="truncate text-xs text-muted-foreground" title={EXTERNAL_ACCESS_NOTE}>
           仅限上方路径和这类操作；项目外的修改无法用检查点撤销
+        </p>
+      )}
+      {deepScanAsk && (
+        <p className="text-xs text-muted-foreground">
+          只读地跨文件追踪这个任务改过的代码，会多次调用模型。扫完出报告，你勾选要修的再交给智能体；这一轮先停下，命令不执行。
         </p>
       )}
       <div className="flex flex-wrap gap-2">
@@ -104,7 +110,11 @@ function isEditable(element: Element | null): boolean {
 }
 
 function isExternalAccess(rawInput: unknown): boolean {
-  return typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput && rawInput.scope === EXTERNAL_ACCESS_SCOPE
+  return scopeOf(rawInput) === EXTERNAL_ACCESS_SCOPE
+}
+
+function scopeOf(rawInput: unknown): unknown {
+  return typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput ? rawInput.scope : null
 }
 
 function commandOf(rawInput: unknown): string | null {

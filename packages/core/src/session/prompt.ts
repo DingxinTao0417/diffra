@@ -94,19 +94,16 @@ function checkLines(checks: SessionChecks): string[] {
     '- Before multi-stage work, define immutable task_progress completion requirements covering the whole user request. Release tasks require commit, push, ci, publish ids; match real command receipts and concrete expected SHA/version/output. Never fabricate evidence or use echo/printf as proof of external actions. Use read-only queries against Git, CI and the actual update source.',
     '- Use pause_task with waiting/blocked and a reason for missing credentials, permissions or unfinished CI; do not call finish to report a blocker. Saved requirements persist across turns and restarts.',
   ]
-  if (checks.afterEdit) {
-    lines.push(
-      `- After every step in which you edit files, Diffra automatically runs \`${checks.afterEdit}\` and tells you if it fails. Do not run it yourself.`,
-    )
-  } else {
-    lines.push('- After changing code, verify it, for example by running the relevant tests with run_command.')
-  }
   if (finishCheck) {
     lines.push(
       `- When the task is done, call finish with a short summary. If you changed files, Diffra then runs \`${finishCheck}\`; if it fails, fix the problems and call finish again.`,
+      '- Diffra runs that check only when you call finish, not after each step. Do not run it yourself while you are still changing code; finish the whole change first.',
     )
   } else {
-    lines.push('- When the task is done, call finish with a short summary. No project checks are configured, so make sure you verified your changes.')
+    lines.push(
+      '- After changing code, verify it, for example by running the relevant tests with run_command.',
+      '- When the task is done, call finish with a short summary. No project checks are configured, so make sure you verified your changes.',
+    )
   }
   return lines
 }

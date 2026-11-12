@@ -7,7 +7,7 @@ import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
 
-test('完成前规范审查（一直开着）：违规被打回，改好后审查通过再完成', async () => {
+test('完成前规范审查（默认开着）：违规被打回，改好后审查通过再完成', async () => {
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-review-'))

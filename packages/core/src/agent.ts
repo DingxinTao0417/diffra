@@ -38,6 +38,7 @@ import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
 import { inspectPlugin, pluginMcpServers, pluginSkillRoots } from './plugins.js'
 import {
+  checkSwitchesSchema,
   endpointSchema,
   mcpServerSchema,
   modelConfigSchema,
@@ -625,6 +626,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.sessionSearch, z.object({ query: z.string() }), ({ params }) => requireStore().search(params.query))
     .onRequest(SESSION_EXT_METHODS.browserSites, browserSitesParams, ({ params }) => {
       setBrowserSites(params)
+      return {}
+    })
+    // 已经打开的会话都换成新开关；正在跑的一轮从下一次检查起按新值。之后新建、载入的会话由客户端按设置传
+    .onRequest(SESSION_EXT_METHODS.securityConfigure, checkSwitchesSchema, ({ params }) => {
+      const { review, ...security } = params
+      for (const session of sessions.values()) session.config = { ...session.config, security, rules: { ...session.config.rules, review } }
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.sessionConfigure, sessionConfigureParams, ({ params }) => {

@@ -106,7 +106,20 @@ export function commandKeys(command: string): string[] {
   return segments.filter((argv) => !isReadOnly(argv)).map(commandKey)
 }
 
-const DANGEROUS_RM_TARGETS = new Set(['/', '/*', '~', '~/', '~/*', '$HOME', '$HOME/', '..', '../', '.', './', '*'])
+// 命令里每段 git 的子命令，跳过 -C 路径、-c 键=值和其他全局参数；用来认出提交和推送
+export function gitSubcommands(command: string): string[] {
+  return (splitSegments(command.trim(), true) ?? []).flatMap((argv) => {
+    if (programName(argv[0] ?? '') !== 'git') return []
+    for (let index = 1; index < argv.length; index++) {
+      const arg = argv[index]!
+      if (arg === '-C' || arg === '-c') index++
+      else if (!arg.startsWith('-')) return [arg.toLowerCase()]
+    }
+    return []
+  })
+}
+
+const DANGEROUS_RM_TARGETS =new Set(['/', '/*', '~', '~/', '~/*', '$HOME', '$HOME/', '..', '../', '.', './', '*'])
 
 function isRecursiveDeleteOfRoot(argv: string[]): boolean {
   if (programName(argv[0] ?? '') !== 'rm') return false

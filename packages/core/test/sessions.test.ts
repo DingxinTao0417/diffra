@@ -11,6 +11,7 @@ import { McpPool } from '../src/mcp.js'
 import {
   cancelSession,
   checkpointDiff,
+  configureSecurity,
   configureSession,
   compactSession,
   connectToCore,
@@ -42,11 +43,16 @@ let project: string
 let dataDir: string
 let server: ScriptedServer | null = null
 let notifications: acp.SessionNotification[] = []
+// 客户端收到的确认请求；answerPermission 不给或返回 null 时按取消回复
+let permissionRequests: acp.RequestPermissionRequest[] = []
+let answerPermission: ((request: acp.RequestPermissionRequest) => string | null) | null = null
 
 beforeEach(() => {
   project = mkdtempSync(join(tmpdir(), 'diffra-sessions-project-'))
   dataDir = mkdtempSync(join(tmpdir(), 'diffra-sessions-data-'))
   notifications = []
+  permissionRequests = []
+  answerPermission = null
 })
 
 afterEach(async () => {
@@ -63,7 +69,11 @@ async function startCore(mcpPool?: McpPool) {
   createAgent({ sessionsDir: join(dataDir, 'sessions'), mcpPool }).connect(acp.ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent)))
   const connection = connectToCore(toAgent, toClient, {
     onSessionUpdate: (notification) => notifications.push(notification),
-    onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
+    onPermissionRequest: async (request) => {
+      permissionRequests.push(request)
+      const optionId = answerPermission?.(request) ?? null
+      return optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } }
+    },
   })
   await handshake(connection, 5000)
   return connection
@@ -659,6 +669,67 @@ describe('深度安全扫描', () => {
     await sendPrompt(core, sessionId, 'turn-2', '继续')
     expect(server.bodies[6]).not.toContain('security auditor')
     expect(server.bodies[6]).not.toContain('req.query')
+  })
+
+  test('开着深度扫描时提交前先问，选先扫描这一轮记 deep-scan；扫完代码没再变，再提交不问', async () => {
+    const commit = { toolCalls: [{ name: 'run_command', input: { command: 'git commit -m 加路由' } }] }
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'edit_file', input: { path: 'route.ts', old_string: '', new_string: 'app.get("/file", read)\n' } }] },
+      commit,
+      // 深度扫描直接交报告
+      { toolCalls: [{ name: 'report', input: { summary: '看过了新加的路由', findings: [] } }] },
+      // 扫完再提交：不再问深度扫描，命令照常确认
+      commit,
+      { text: '提交了' },
+    ])
+    // 深度扫描的确认选「先做深度扫描」，命令确认选「允许一次」，都是 allow_once
+    answerPermission = (request) => request.options.find((option) => option.kind === 'allow_once')?.optionId ?? null
+    const deepScanAsks = () => permissionRequests.filter((request) => JSON.stringify(request.toolCall.rawInput).includes('deep-scan-before-commit'))
+    const outcomes = () =>
+      notifications.flatMap(({ update }) => (update.sessionUpdate === 'session_info_update' && update._meta ? [(update._meta.diffra as Record<string, unknown>).turnOutcome] : [])).filter(Boolean)
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), security: { staticCheck: false, lightScan: false, deepScan: true } })
+
+    await sendPrompt(core, sessionId, 'turn-1', '加一个路由并提交')
+    expect(deepScanAsks()).toHaveLength(1)
+    expect(outcomes().at(-1)).toEqual({ finish: null, stop: 'deep-scan' })
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'waiting' })
+
+    expect(await deepScan(core, sessionId, 'scan-1', 'task')).toEqual({ stopReason: 'end_turn' })
+    await sendPrompt(core, sessionId, 'turn-2', '提交')
+    expect(deepScanAsks()).toHaveLength(1)
+    expect(permissionRequests.filter((request) => request.toolCall.kind === 'execute')).toHaveLength(1)
+  })
+})
+
+describe('检查开关', () => {
+  const staticCards = (from: number) =>
+    notifications.slice(from).filter(({ update }) => update.sessionUpdate === 'tool_call' && update.title === '静态检查')
+
+  test('设置里改了检查开关，已经打开的会话下一次检查就按新值', async () => {
+    const evalLine = (name: string) => `export const ${name} = (input: string) => eval(input)\n`
+    server = await startScriptedServer([
+      // 打开静态检查之后：写了 eval，完成前打回，改掉后完成
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: evalLine('calc') } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了计算' } }] },
+      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '改成 Number' } }] },
+      // 关掉之后：写了 eval 也不查
+      { toolCalls: [{ name: 'edit_file', input: { path: 'other.ts', old_string: '', new_string: evalLine('other') } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '加了另一个计算' } }] },
+    ])
+    const core = await startCore()
+    // 建会话时静态检查是关的
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await configureSecurity(core, { staticCheck: true, lightScan: false, deepScan: false, review: false })
+    await sendPrompt(core, sessionId, 'turn-1', '加一个计算函数')
+    expect(staticCards(0)).toHaveLength(2)
+
+    const mark = notifications.length
+    await configureSecurity(core, { staticCheck: false, lightScan: false, deepScan: false, review: false })
+    await sendPrompt(core, sessionId, 'turn-2', '再加一个')
+    expect(staticCards(mark)).toHaveLength(0)
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed' })
   })
 })
 

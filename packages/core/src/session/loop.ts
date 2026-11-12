@@ -6,7 +6,7 @@ import { rejectsToolChoice, toModelError } from '../models/errors.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import { commandKeys, classifyCommand } from '../permissions.js'
+import { commandKeys, classifyCommand, gitSubcommands } from '../permissions.js'
 import { truncateLines } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
@@ -18,6 +18,7 @@ import {
   type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
+  DEEP_SCAN_ASK_SCOPE,
   EXTERNAL_ACCESS_SCOPE,
   type FinishVerification,
   LOCAL_ONLY_META,
@@ -190,8 +191,7 @@ export async function runTurn(
   let active: ActiveModel = { language: session.model, config: session.config.model }
   const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let escalated = false
-  // 快速检查、完成检查各自按进展计数，这一轮的检查失败总数两者合计
-  let editChecks = newCheckTracker()
+  // 完成检查按进展计数，这一轮的失败总数有上限
   let finishChecks = newCheckTracker()
   let checkFailures = 0
   // 完成门禁因检查命令以外的原因打回、只回文字被拉回的次数；检查命令不过的打回不算，那部分按进展计数
@@ -202,7 +202,6 @@ export async function runTurn(
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
     // 不管因为哪一项换的人，各项计数都重新开始，否则另一项马上到头、备用模型一步没做就停了；上次失败的输出留着，备用模型的失败照样和它比
-    editChecks.stalled = 0
     finishChecks.stalled = 0
     checkFailures = 0
     gateAttempts = 0
@@ -218,15 +217,14 @@ export async function runTurn(
   let turnFinish: TurnOutcome['finish'] = null
   let stop: TurnStop | null = null
   let errorKind: TurnOutcome['errorKind']
-  // 检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
-  const checkStuck = async (label: '快速检查' | '完成检查', command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
+  // 完成检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
+  const checkStuck = async (command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
     const stalled = exhaustion === 'stalled'
-    const subject = label === '快速检查' ? `The automatic check \`${command}\`` : `The finish check \`${command}\``
     const escalatedNow = await escalate(
-      stalled ? `${label}连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展` : `检查这一轮已经失败 ${MAX_CHECK_FAILURES_PER_TURN} 次`,
+      stalled ? `完成检查连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展` : `完成检查这一轮已经失败 ${MAX_CHECK_FAILURES_PER_TURN} 次`,
       stalled
-        ? `${subject} failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
-        : `The checks failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
+        ? `The finish check \`${command}\` failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
+        : `The finish check failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
     )
     if (escalatedNow) return false
     const parsed = tracker.last!
@@ -239,13 +237,13 @@ export async function runTurn(
     await notice(
       io,
       'warning',
-      stalled ? `${label}连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展，已停止` : '检查失败次数到上限，已停止',
-      `${stalled ? '' : `这一轮快速检查和完成检查一共失败了 ${MAX_CHECK_FAILURES_PER_TURN} 次。`}${list}\n发「继续」可以接着修，或者先手动处理这几处。`,
+      stalled ? `完成检查连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展，已停止` : '完成检查失败次数到上限，已停止',
+      `${stalled ? '' : `这一轮完成检查一共失败了 ${MAX_CHECK_FAILURES_PER_TURN} 次。`}${list}\n发「继续」可以接着修，或者先手动处理这几处。`,
     )
     const resume = remainingLines(parsed, RESUME_ERROR_LINES).map(clip)
     if (count !== null && count > resume.length) resume.push(`(${count - resume.length} more)`)
     session.unresolvedCheck = { command, lines: resume }
-    stop = label === '快速检查' ? 'check-exhausted' : 'gate-exhausted'
+    stop = 'gate-exhausted'
     return true
   }
 
@@ -370,7 +368,7 @@ export async function runTurn(
           continue
         }
         if (call.toolName === DELEGATE_TOOL && !call.invalid) {
-          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，之后照常跑快速检查
+          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，完成时照常过完成门禁
           const batch = [call]
           while (index + batch.length < toolCalls.length) {
             const next = toolCalls[index + batch.length]!
@@ -440,6 +438,17 @@ export async function runTurn(
           continue
         }
         if (call.toolName === 'run_command' || call.toolName === 'dev_server_start' || call.toolName.startsWith('mcp__')) commandedThisTurn = true
+        if (call.toolName === 'run_command' && !call.invalid && (await deepScanFirst(session, call, io))) {
+          // 用户选了先做深度扫描：这条命令和这一步后面的调用都不执行，这一轮停下，客户端接着发起本任务改动的深度扫描
+          results.push(errorResult(call, DEEP_SCAN_FIRST_NOTE))
+          const remaining = toolCalls.slice(index + 1).filter((item) => !answered.has(item.toolCallId))
+          results.push(...remaining.map((item) => errorResult(item, 'Stopped for a deep security scan before committing; this batched call was not executed.')))
+          session.messages.push({ role: 'tool', content: results })
+          session.taskState = { ...session.taskState, status: 'waiting', reason: '提交前先做深度扫描：看完报告再决定修哪些、要不要提交。' }
+          await notice(io, 'info', '提交前先做深度扫描', '这条命令没有执行。扫完看报告，再决定修哪些、要不要提交。')
+          stop = 'deep-scan'
+          return 'end_turn'
+        }
         const outcome = await runToolCall(session, call, signal, io)
         results.push(outcome.result)
         screenshots.push(...(outcome.images ?? []))
@@ -486,7 +495,6 @@ export async function runTurn(
         round++
         gateAttempts = 0
         checkFailures = 0
-        editChecks = newCheckTracker()
         finishChecks = newCheckTracker()
         editedThisTurn = false
         editsCarried = false
@@ -533,27 +541,9 @@ export async function runTurn(
         })
       }
 
-      const afterEdit = session.config.checks.afterEdit
-      if (editedThisStep && afterEdit) {
-        const check = await runCheck(session, afterEdit, '快速检查', signal, io)
-        if (signal.aborted) return 'cancelled'
-        if (check.passed) {
-          recordCheckPass(editChecks)
-        } else {
-          const parsed = parseCheckErrors(check.full, session.cwd)
-          const progress = progressSummary(parsed, recordCheckFailure(editChecks, parsed))
-          checkFailures++
-          session.messages.push({
-            role: 'user',
-            content: `[Diffra] The automatic check \`${afterEdit}\` failed after your edits.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems before continuing.`,
-          })
-          const exhaustion = checkExhaustion(editChecks, checkFailures)
-          if (exhaustion && (await checkStuck('快速检查', afterEdit, editChecks, exhaustion))) return 'end_turn'
-        }
-      }
-      // 快速检查卡住、换了备用模型时计数已经清零，这里不会再判到头
+      // 改的过程中不跑任何检查（第 431 步）：检查命令、安全检查、规范审查都在 finish 时一起跑
       const finishExhaustion = failedFinishCheck ? checkExhaustion(finishChecks, checkFailures) : null
-      if (failedFinishCheck && finishExhaustion && (await checkStuck('完成检查', failedFinishCheck, finishChecks, finishExhaustion))) return 'end_turn'
+      if (failedFinishCheck && finishExhaustion && (await checkStuck(failedFinishCheck, finishChecks, finishExhaustion))) return 'end_turn'
       if (gateAttempts >= MAX_GATE_ATTEMPTS) {
         const escalatedNow = await escalate(
           `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`,
@@ -1105,7 +1095,7 @@ async function runMcpToolCall(
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: output.text } }],
     })
-    // 不知道 MCP 工具改没改文件，不算编辑：不触发快速检查，也不重置卡死检测
+    // 不知道 MCP 工具改没改文件，不算编辑：不重置卡死检测
     return { result: textResult(call, output.text), edited: false }
   } catch (error) {
     if (signal.aborted) return fail('Cancelled by the user.')
@@ -1181,85 +1171,72 @@ async function runFinishGate(
     return { result: textResult(call, 'Workspace validation reused. Only finish ends the task.'), passed: true, summary, goalMet, verification: 'reused' }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
-  if (command) {
-    const check = await runCheck(session, command, '完成检查', signal, io)
-    if (!check.passed) {
-      await showFinish('failed', `完成检查没有通过：${command}`)
-      const parsed = parseCheckErrors(check.full, session.cwd)
-      const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
-      return {
-        result: errorResult(
-          call,
-          `The check \`${command}\` failed, so the task is not finished.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems and call finish again.`,
-        ),
-        passed: false,
-        summary,
-        goalMet,
-        verification: 'failed',
-        failedCheck: command,
-      }
-    }
-    recordCheckPass(checks)
-  }
-  // 检查通过（或没配检查）之后再做安全检查、规范审查和架构检查，免得对跑不通的代码提意见
+  // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回：以前检查命令过了才审查，每打回一类问题都要重跑一遍检查命令。
+  // 代价是检查命令不过时审查照样调模型，可能对还要改的代码提意见。本轮改动在检查命令开跑前取，审查看不到检查命令自己生成的文件
   const architecture = await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
     console.error('[session] 读取目标架构失败，这一轮不做架构检查', error)
     return null
   })
   const diff = await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
-  const security = diff === null ? [] : await runSecurityChecks(session, diff, summary, signal, io)
+  const [check, security, findings, violations] = await Promise.all([
+    command ? runCheck(session, command, '完成检查', signal, io) : null,
+    diff === null ? [] : runSecurityChecks(session, diff, summary, signal, io),
+    diff === null ? [] : runReview(session, diff, summary, signal, io),
+    architecture && diff !== null ? runArchitectureCheck(session, architecture, diff, io) : [],
+  ])
   if (signal.aborted) return cancelled()
+  // 每类问题一张卡片上的说明和一段给模型的说明
+  const rejected: Array<{ card: string; text: string }> = []
+  let failedCheck: string | null = null
+  if (command && check && !check.passed) {
+    const parsed = parseCheckErrors(check.full, session.cwd)
+    const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
+    failedCheck = command
+    rejected.push({
+      card: `完成检查没有通过：${command}`,
+      text: `The check \`${command}\` failed, so the task is not finished.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems and call finish again.`,
+    })
+  } else if (check) recordCheckPass(checks)
   const blockers = blocking(security)
   if (blockers.length > 0) {
-    await showFinish('failed', `安全检查发现 ${blockers.length} 处高危问题`)
     const list = blockers.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
-    return {
-      result: errorResult(
-        call,
+    rejected.push({
+      card: `安全检查发现 ${blockers.length} 处高危问题`,
+      text:
         `Security checks found high-risk problems in the code you changed, so the task is not finished:\n${list}\n` +
-          'Fix them and call finish again. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
-          'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
-          'for any other finding, explain in the finish summary why it is safe.',
-      ),
-      passed: false,
-      summary,
-      goalMet,
-      verification: 'failed',
-    }
+        'Fix them and call finish again. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
+        'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
+        'for any other finding, explain in the finish summary why it is safe.',
+    })
   }
-  const findings = diff === null ? [] : await runReview(session, diff, summary, signal, io)
-  if (signal.aborted) return cancelled()
   if (findings.length > 0) {
-    await showFinish('failed', `规范审查发现 ${findings.length} 处问题`)
     const list = findings.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
-    return {
-      result: errorResult(
-        call,
+    rejected.push({
+      card: `规范审查发现 ${findings.length} 处问题`,
+      text:
         `The rule review found violations in the code you changed, so the task is not finished:\n${list}\n` +
-          'Fix them and call finish again. If you are sure a finding is wrong, keep the code and explain why in the finish summary.',
-      ),
-      passed: false,
-      summary,
-      goalMet,
-      verification: 'failed',
-    }
+        'Fix them and call finish again. If you are sure a finding is wrong, keep the code and explain why in the finish summary.',
+    })
   }
-  const violations = architecture && diff !== null ? await runArchitectureCheck(session, architecture, diff, io) : []
-  if (signal.aborted) return cancelled()
   if (violations.length > 0) {
-    await showFinish('failed', `架构检查发现 ${violations.length} 处新增的依赖违反目标架构`)
     const list = violations.map((item) => `- ${item.path}:${item.line} \`${item.specifier}\`: ${item.message}`).join('\n')
-    return {
-      result: errorResult(
-        call,
+    rejected.push({
+      card: `架构检查发现 ${violations.length} 处新增的依赖违反目标架构`,
+      text:
         `The imports you added break the project's target architecture (set by the user in Diffra's 架构 page), so the task is not finished:\n${list}\n` +
-          'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it), then call finish again. ' +
-          'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in the finish summary; the user can change the target architecture.',
-      ),
+        'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it), then call finish again. ' +
+        'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in the finish summary; the user can change the target architecture.',
+    })
+  }
+  if (rejected.length > 0) {
+    await showFinish('failed', rejected.map((item) => item.card).join('；'))
+    return {
+      result: errorResult(call, rejected.map((item) => item.text).join('\n\n')),
       passed: false,
       summary,
       goalMet,
       verification: 'failed',
+      ...(failedCheck ? { failedCheck } : {}),
     }
   }
   if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
@@ -1343,6 +1320,49 @@ async function runArchitectureCheck(session: Session, architecture: { analysis: 
     await finishCard('failed', 'error', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
     return []
   }
+}
+
+const DEEP_SCAN_OPTIONS = { scan: 'deep-scan-first', skip: 'deep-scan-skip', never: 'deep-scan-never' } as const
+const DEEP_SCAN_FIRST_NOTE =
+  'The user wants a deep security scan of this task\'s changes before committing or pushing, so this command was not run. ' +
+  'Diffra stops this turn now and runs the scan; the user decides what to fix and whether to commit after reading the report. Do not retry the command.'
+
+// 智能体要提交或推送时，开着深度扫描、本任务改过代码、而且上次深度扫描之后代码又变了，先问用户要不要先扫。
+// 选「这个任务不再问」后这个会话不再问；只在内存里，重新打开任务后会再问。判断不了（没有检查点、读改动失败）时不问
+async function deepScanFirst(session: Session, call: StepToolCall, io: TurnIO): Promise<boolean> {
+  if (!session.config.security.deepScan || session.deepScanDeclined || !session.checkpoints) return false
+  const command = typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string' ? call.input.command : null
+  const verbs = command === null ? [] : gitSubcommands(command).filter((sub) => sub === 'commit' || sub === 'push')
+  if (command === null || verbs.length === 0) return false
+  try {
+    const diff = await session.taskDiff()
+    if (diff === null || annotateDiff(diff).addedLines.size === 0) return false
+    if ((await session.checkpoints.fingerprint()) === session.deepScannedFingerprint) return false
+  } catch (error) {
+    console.error('[session] 提交前判断要不要问深度扫描失败', error)
+    return false
+  }
+  const verb = verbs.includes('commit') ? '提交' : '推送'
+  const choice = await io.requestPermission(
+    { toolCallId: call.toolCallId, title: `${verb}前先做一次深度扫描？`, kind: 'other', status: 'pending', rawInput: { command, scope: DEEP_SCAN_ASK_SCOPE } },
+    [
+      { optionId: DEEP_SCAN_OPTIONS.scan, name: '先做深度扫描', kind: 'allow_once' },
+      { optionId: DEEP_SCAN_OPTIONS.skip, name: `直接${verb}`, kind: 'reject_once' },
+      { optionId: DEEP_SCAN_OPTIONS.never, name: '这个任务不再问', kind: 'reject_always' },
+    ],
+  )
+  if (choice === DEEP_SCAN_OPTIONS.never) session.deepScanDeclined = true
+  if (choice !== DEEP_SCAN_OPTIONS.scan) return false
+  await io.update({
+    sessionUpdate: 'tool_call',
+    toolCallId: call.toolCallId,
+    title: startTitle('run_command', call.input),
+    kind: 'execute',
+    status: 'failed',
+    rawInput: call.input,
+    content: [{ type: 'content', content: { type: 'text', text: '先做深度扫描，这条命令没有执行' } }],
+  })
+  return true
 }
 
 async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO): Promise<SecurityFinding[]> {

@@ -278,7 +278,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
     if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
-    // 审查一直开着；没分配评审角色时 core 用编码模型审查
+    // 规范审查按设置开关；没分配评审角色时 core 用编码模型审查
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
     const fallback = await resolveRole('fallback', '备用')
@@ -290,9 +290,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         fallbackModel: fallback?.model ?? null,
         checks: project.checks,
         readOnlyPaths: project.readOnlyPaths,
-        rules: SESSION_RULES,
+        rules: { ...SESSION_RULES, review: settings.get().security.review },
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
-        security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan },
+        security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan, deepScan: settings.get().security.deepScan },
         limits: {
           compactAtPercent: settings.get().execution.compactAtPercent,
           maxSteps: settings.get().execution.maxSteps,

@@ -1,7 +1,7 @@
 // 检查失败后和上一次失败比较：上次的错误至少修好一条、或者认出的错误以外的输出变了，就算有进展；
 // 新冒出来的错误不影响判断，跨文件改动常常修一处、牵出一处
 export const MAX_CHECKS_WITHOUT_PROGRESS = 3
-// 每轮检查失败（快速检查和完成检查合计）的总上限，防止在不同错误之间来回打转
+// 每轮完成检查失败的总上限，防止在不同错误之间来回打转
 export const MAX_CHECK_FAILURES_PER_TURN = 12
 
 export interface CheckError {

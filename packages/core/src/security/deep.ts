@@ -68,10 +68,9 @@ async function scanBrief(session: Session, scope: DeepScanScope): Promise<string
     'Audit the whole project. Start by finding entry points: HTTP routes and handlers, RPC or message handlers, CLI argument ' +
     'parsing, file upload handling, and authentication middleware. Then trace untrusted input from them.'
   if (scope === 'project') return projectBrief
-  const firstTurn = session.turns.find((turn) => turn.kind === 'prompt')
-  const commit = firstTurn ? session.turnCheckpoints.get(firstTurn.id) : undefined
-  if (!session.checkpoints || !commit) return `${projectBrief}\n(The changes of this task are not available, so audit the project instead.)`
-  const diff = annotateDiff(await session.checkpoints.diffSince(commit))
+  const raw = await session.taskDiff()
+  if (raw === null) return `${projectBrief}\n(The changes of this task are not available, so audit the project instead.)`
+  const diff = annotateDiff(raw)
   if (diff.addedLines.size === 0) return `${projectBrief}\n(This task did not change any code files yet.)`
   return [
     'Audit the code changed in this task. Start from the changed lines below: find where their inputs come from and where their ' +
@@ -115,7 +114,14 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
       io,
     )
     if (outcome === 'cancelled') return 'cancelled'
-    if (outcome === 'done') return 'end_turn'
+    if (outcome === 'done') {
+      // 扫过的这份代码再提交、推送时不再问；之后代码变了再问
+      session.deepScannedFingerprint = await session.checkpoints?.fingerprint().catch((error: unknown) => {
+        console.error('[security] 记录深度扫描时的工作区指纹失败', error)
+        return null
+      }) ?? null
+      return 'end_turn'
+    }
     await notice(io, 'warning', `深度扫描达到步数上限（${MAX_STEPS} 步），没有给出报告`)
     return 'max_turn_requests'
   } catch (error) {

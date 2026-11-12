@@ -105,7 +105,8 @@ export const browserSettingsSchema = z.object({
 
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
-export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean() })
+// review 是第 426 步加的，旧设置文件里没有
+export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean(), review: z.boolean().default(true) })
 
 // goalMaxRounds 是第 17 步加的，旧设置文件里没有
 export const executionSchema = z.object({

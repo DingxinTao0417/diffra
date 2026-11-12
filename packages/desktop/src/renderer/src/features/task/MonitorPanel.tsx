@@ -37,8 +37,11 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
   const filesExpanded = expandedSessionId === task.sessionId
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
+  const securitySettings = useAppState((state) => state.settings?.security ?? null)
   // 远程任务：MCP 状态是对方电脑上的，这里不查；改项目设置、深度扫描也不在这里做
   const remote = useRemoteTask()
+  // 本机任务的检查开关跟着设置走（改了立即生效）；远程任务看对方建会话时报的
+  const security = !remote && securitySettings ? securitySettings : { ...task.info.security, deepScan: false, review: task.info.rulePacks.length > 0 }
   const mcp = useMcpStatus(remote ? null : { sessionId: task.sessionId })
   const verdict = turnVerdict(task)
   const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
@@ -234,23 +237,15 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
 
         {/* 无项目任务的文件夹不是用户的项目，不给它存项目设置 */}
         <Section title="检查" action={task.noProject || remote ? undefined : <SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
+          {/* 只有完成检查一栏：旧设置里的快速检查在没填完成检查时就是完成时跑的那条 */}
           {checks && (
-            <>
-              <Row
-                status={checks.afterEdit ? 'on' : 'off'}
-                label="快速检查"
-                value={checks.afterEdit ?? '未配置'}
-                mono={!!checks.afterEdit}
-                note={projectChecks && projectChecks.afterEdit !== checks.afterEdit ? '新任务生效' : undefined}
-              />
-              <Row
-                status={checks.beforeFinish || checks.afterEdit ? 'on' : 'off'}
-                label="完成检查"
-                value={checks.beforeFinish ?? (checks.afterEdit ? '同快速检查' : '未配置')}
-                mono={!!checks.beforeFinish}
-                note={projectChecks && (projectChecks.beforeFinish ?? projectChecks.afterEdit) !== (checks.beforeFinish ?? checks.afterEdit) ? '新任务生效' : undefined}
-              />
-            </>
+            <Row
+              status={checks.beforeFinish || checks.afterEdit ? 'on' : 'off'}
+              label="完成检查"
+              value={checks.beforeFinish ?? checks.afterEdit ?? '未配置'}
+              mono={!!(checks.beforeFinish ?? checks.afterEdit)}
+              note={projectChecks && (projectChecks.beforeFinish ?? projectChecks.afterEdit) !== (checks.beforeFinish ?? checks.afterEdit) ? '新任务生效' : undefined}
+            />
           )}
         </Section>
 
@@ -298,12 +293,17 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
           {/* 折叠只用 CSS 隐藏，内容留在 DOM 里，e2e 的 toContainText 仍能读到 */}
           <div className={cn('flex flex-col gap-4', !configOpen && 'hidden')}>
             <Section title="安全" action={remote ? undefined : <SectionAction onClick={() => openSettings('security')}>安全设置</SectionAction>}>
-              <Row status={task.info.security.staticCheck ? 'on' : 'off'} label="静态检查" value={task.info.security.staticCheck ? '完成前自动检查' : '未开'} />
-              <Row status={task.info.security.lightScan ? 'on' : 'off'} label="轻量扫描" value={task.info.security.lightScan ? '完成前自动扫描' : '未开'} />
+              <Row status={security.staticCheck ? 'on' : 'off'} label="静态检查" value={security.staticCheck ? '完成前自动检查' : '未开'} />
+              <Row status={security.lightScan ? 'on' : 'off'} label="轻量扫描" value={security.lightScan ? '完成前自动扫描' : '未开'} />
+              {!remote && <Row status={security.deepScan ? 'on' : 'off'} label="深度扫描" value={security.deepScan ? '提交前询问' : '未开'} />}
             </Section>
 
             <Section title="规范">
-              {task.info.rulePacks.length > 0 ? <Row status="on" label="完成前规范审查" value="已开" /> : <Row status="off" label="没有选中的规则包，不会审查" />}
+              {task.info.rulePacks.length === 0 ? (
+                <Row status="off" label="没有选中的规则包，不会审查" />
+              ) : (
+                <Row status={security.review ? 'on' : 'off'} label="完成前规范审查" value={security.review ? '已开' : '已关'} />
+              )}
               {task.info.rulePacks.length > 0 && (
                 <div className="flex gap-2">
                   <span className="size-3.5 shrink-0" />
