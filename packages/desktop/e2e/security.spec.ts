@@ -77,9 +77,10 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
 
     await chooseProject(app, window, project)
     await startTask(window, '加一个读文件的函数和一个计算函数')
-    const finishes = cards(window, 'finish')
-    await expect(finishes).toHaveCount(3, { timeout: 30_000 })
+    await expect(cards(window, 'security')).toHaveCount(5, { timeout: 30_000 })
     await waitTaskDone(window)
+    // 打回和通过都看安全检查的卡，对话里不再有完成卡（第 526 步）
+    await expect(cards(window, 'finish')).toHaveCount(0)
 
     // 改的过程中不查；第一次完成：静态检查打回 eval；第二次：轻量扫描打回路径穿越；第三次通过
     const security = cards(window, 'security')
@@ -92,8 +93,6 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     await expect(security.nth(2)).toContainText('轻量扫描 · 1 处高危问题，已打回')
     await expect(security.nth(2)).toContainText('SEC-INJ-4')
     await expect(security.nth(4)).toContainText('没有发现安全问题')
-    await expect(finishes.nth(0)).toContainText('安全检查发现 1 处高危问题')
-    await expect(finishes.nth(2)).toHaveAttribute('data-status', 'completed')
     expect(model.securityReviews()).toBe(2)
     expect(readFileSync(join(project, 'files.ts'), 'utf8')).toContain('path.basename(name)')
     await expect(window.getByTestId('monitor-panel')).toContainText('完成前自动检查')

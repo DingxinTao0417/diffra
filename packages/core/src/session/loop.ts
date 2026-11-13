@@ -1279,12 +1279,12 @@ async function runEndGate(
 ): Promise<{ passed: true; verification: FinishVerification | null } | { passed: false; feedback: string; failedCheck?: string }> {
   if (changes === 'none') return { passed: true, verification: null }
   const cardId = `finish-${randomUUID()}`
-  if (changes === 'unknown') {
-    // 检查命令可能配了，不带「没配检查命令」的 unverified 标记
-    await showFinishCard(io, cardId, 'unverified', '', false)
+  const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
+  // 没有检查点、判断不了改没改文件：没配检查就直接完成；配了就照常跑（第 526 步：配了检查就是要多一轮检查，判断不了不是跳过的理由）
+  if (changes === 'unknown' && !command) {
+    await showFinishCard(io, cardId, 'unverified', '')
     return { passed: true, verification: 'unverified' }
   }
-  const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
   // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回。
   // 代价是检查命令不过时审查照样调模型，可能对还要改的代码提意见。本轮改动在检查命令开跑前取，审查看不到检查命令自己生成的文件
   const architecture = await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {

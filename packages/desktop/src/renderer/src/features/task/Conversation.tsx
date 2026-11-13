@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { type ModelErrorKind, parseSteps, type PromptImage, type RemoteSource, STEPS_CARD_TITLE, type TaskProgressView } from '@diffra/core/types'
+import { type ModelErrorKind, parseSteps, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
 import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
@@ -37,12 +37,12 @@ type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ProcessItem> }
   | { type: 'process'; id: string; items: ProcessItem[] }
   | { type: 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps'; item: ToolItem }
 
 const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' && item.status !== 'completed' && item.status !== 'failed'
 
 // 这几种块在跑的时候自己会转圈（StatusIcon、LoaderCircle）；步骤清单、计划、可视化、定位结果、深度扫描报告不转
-const SPINNING_BLOCKS = new Set<Block['type']>(['edit', 'agent', 'task', 'compaction', 'finish', 'verify', 'wait'])
+const SPINNING_BLOCKS = new Set<Block['type']>(['edit', 'agent', 'task', 'compaction', 'verify', 'wait'])
 
 // 这一轮最后一块已经在显示进度时（过程组在跑、思考中、工具调用在跑），下面不再多一行「进行中…」，免得两个圈一起转（第 496 步）。
 // 运行中的过程组标题行一直在转；只有一项时是那一行自己：思考在转，工具调用跑完就不转了
@@ -147,6 +147,8 @@ function toBlocks(items: TranscriptItem[]): Block[] {
     }
     if (item.parentId) continue
     const type = toolBlockType(item)
+    // 结束门禁的结论卡（标题「完成」）不画（第 526 步）：结论看顶栏，检查的结果在检查卡上，改了哪些文件写在这一轮底部
+    if (type === 'finish') continue
     if (type === 'check' || type === 'review' || type === 'architecture' || type === 'security') {
       const previous = blocks.at(-1)
       if (previous?.type === 'checks') previous.items.push(item)
@@ -454,7 +456,6 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   const [showEditDetails, setShowEditDetails] = useState(false)
   // 远程会话：对方正在跑的这一轮带的图片跑完才过来；超出额度、对方压不了的只有张数
   const imageNote = turn.pendingImages ? `（带了 ${turn.pendingImages} 张图片，这一轮跑完后显示）` : turn.omittedImages ? `（${turn.omittedImages} 张图片没有同步过来）` : null
-  const monitorOpen = useAppState((state) => state.panel === 'monitor')
   // 这一轮每次改动前后的全文（改动卡片只带变化的那段，按顺序重放还原），算改了哪些文件、净增删多少行
   const edits = useMemo(() => replayEdits(turn.items), [turn.items])
   // 每张子智能体卡片里的工具调用，按发生顺序
@@ -468,32 +469,20 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   }, [turn.items])
   // 整轮的「展开代码详情」只挂在第一个有改动的过程组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'process' && block.items.some(isEdit) ? [block.id] : []))[0]
-  // 目标模式一轮里有好几张完成卡片，每张只算上一张通过的卡之后的改动和失败的命令；打回的卡不切分，免得通过的卡漏掉打回前的改动
-  const finishFiles = useMemo(() => {
-    const result = new Map<string, { files: ChangedFile[]; commandsFailed: number }>()
-    let start = 0
-    turn.items.forEach((item, index) => {
-      if (item.kind !== 'tool' || toolBlockType(item) !== 'finish') return
-      const scope = turn.items.slice(start, index + 1)
-      result.set(item.id, { files: filesOf(scope, edits), commandsFailed: scope.filter((entry) => entry.kind === 'tool' && entry.succeeded === false).length })
-      if (item.status === 'completed') start = index + 1
-    })
-    return result
-  }, [turn.items])
-  const lastFinishId = last ? [...finishFiles.keys()].at(-1) : undefined
-  const lastPassedId = last ? turn.items.filter((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0).at(-1)?.id : undefined
+  // 这一轮改了哪些文件、净增删多少行：写在这一轮底部，点开审阅（第 526 步起不再有完成卡）
+  const turnFiles = useMemo(() => filesOf(turn.items, edits), [turn.items, edits])
+  const showFiles = turnFiles.length > 0 && !turn.restoredAt
+  const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   const readOnly = useReadOnly()
   // 远程任务页只读（作用于本机的按钮都不显示），但对方开放了「可查看和操作」时撤销、重新生成经对方做
   const remote = useRemoteTask()
   const canRegenerate = latestWork && (!readOnly || Boolean(remote?.regenerate))
   // 定位轮不改文件、没有检查点
   const canRestore = (!readOnly || Boolean(remote?.restore)) && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
-  // 和 FinishCard 显示撤销按钮的条件一致：撤销过但判成没改动的卡照样留着按钮
-  const cardRestore = turn.items.some((item) => item.kind === 'tool' && toolBlockType(item) === 'finish' && item.status === 'completed' && (finishFiles.get(item.id)?.files.length ?? 0) > 0 && (!turn.restoredAt || finishVerdict(item).tone === 'nochange'))
 
   const copy = () => {
     const text = turn.items
-      .flatMap((item) => (item.kind === 'agent' ? [item.text] : item.kind === 'tool' && item.title === '完成' ? [textOf(item)] : []))
+      .flatMap((item) => (item.kind === 'agent' ? [item.text] : []))
       .join('\n\n')
     navigator.clipboard.writeText(text).then(
       () => showToast('已复制回复'),
@@ -555,8 +544,6 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
             return <ToolStep key={block.item.id} item={block.item} />
           case 'visual':
             return <VisualCard key={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
-          case 'finish':
-            return <FinishCard key={block.item.id} item={block.item} files={finishFiles.get(block.item.id)?.files ?? []} commandsFailed={finishFiles.get(block.item.id)?.commandsFailed ?? 0} projectPath={task.project} latest={block.item.id === lastPassedId} restored={Boolean(turn.restoredAt)} progress={block.item.id === lastFinishId ? task.progress : undefined} compactFiles={monitorOpen && task.info.checkpoints} onRestore={canRestore && !task.running ? onRestore : undefined} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
@@ -597,8 +584,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
               <RefreshCw className="size-4" />
             </ActionButton>
           )}
-          {/* 完成卡上已经有撤销按钮，同一个动作不再放第二个按钮 */}
-          {canRestore && !cardRestore && (
+          {canRestore && (
             <>
               <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
               <ActionButton label="撤销这一轮及之后的改动" disabled={task.running} onClick={onRestore}>
@@ -606,7 +592,19 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
               </ActionButton>
             </>
           )}
-          {turn.startedAt && turn.endedAt && <span className="ml-auto text-xs tabular-nums">用时 {formatDuration(turn.endedAt - turn.startedAt)}</span>}
+          {showFiles && (
+            <button
+              type="button"
+              aria-label={`审阅这一轮改的 ${turnFiles.length} 个文件`}
+              className="ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs tabular-nums hover:bg-accent hover:text-foreground"
+              data-testid="turn-files"
+              onClick={openReview}
+            >
+              {turnFiles.length} 个文件{' '}
+              <DiffCounts added={turnFiles.reduce((total, file) => total + file.added, 0)} removed={turnFiles.reduce((total, file) => total + file.removed, 0)} />
+            </button>
+          )}
+          {turn.startedAt && turn.endedAt && <span className={cn('text-xs tabular-nums', !showFiles && 'ml-auto')}>用时 {formatDuration(turn.endedAt - turn.startedAt)}</span>}
         </div>
       )}
     </section>
@@ -1617,109 +1615,6 @@ function filesOf(items: TranscriptItem[], edits: Map<string, EditTexts>): Change
     }
   }
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
-}
-
-function FinishCard({ item, files, commandsFailed, projectPath, latest, restored, compactFiles, onRestore, progress }: { item: ToolItem; files: ChangedFile[]; commandsFailed: number; projectPath: string; latest: boolean; restored: boolean; compactFiles: boolean; onRestore?: () => void; progress?: TaskProgressView }) {
-  const [filesOpen, setFilesOpen] = useState(false)
-  const text = textOf(item)
-  const passed = item.status === 'completed'
-  const verdict = finishVerdict(item)
-  const noChecks = passed && item.unverified === true
-  // 没有检查点时 core 判断不了命令或 MCP 工具改没改文件，直接放行、不跑检查；这条路径不带「没配检查命令」的标记
-  const unknownChanges = verdict.tone === 'unverified' && !noChecks
-  // 最终检查通过了，过程中失败的命令不再需要留意，只作说明
-  const verified = verdict.tone === 'verified'
-  // 之后撤销过：改动不一定还在，结论不再上色、不提醒，也不再指向审阅和撤销。
-  // 不看 files：只靠命令改的文件没有 diff，files 为空，但检查照样跑过、照样会画成已验证
-  const undone = restored && passed && verdict.tone !== 'nochange'
-  const warnings = passed && !undone
-    ? [noChecks && '没有配置检查命令', unknownChanges && '没有检查点，无法判断命令或 MCP 工具是否改了文件，这次没有跑检查', commandsFailed > 0 && !verified && `有 ${commandsFailed} 条命令失败`].filter((warning): warning is string => warning !== false)
-    : []
-  const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
-  const counts = (
-    <>
-      {files.length} 个文件 <DiffCounts added={files.reduce((total, file) => total + file.added, 0)} removed={files.reduce((total, file) => total + file.removed, 0)} />
-    </>
-  )
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" data-testid="tool-call" data-kind="finish" data-status={item.status} data-unverified={noChecks ? 'true' : undefined} data-restored={undone ? 'true' : undefined}>
-      <div className={cn('flex items-center gap-2 font-bold', !undone && verdict.tone === 'failed' && 'text-destructive', !undone && verdict.tone === 'unverified' && 'text-warning')}>
-        {undone ? (
-          <StatusIcon status={item.status} className="size-4" />
-        ) : verdict.tone === 'unverified' ? (
-          <CircleAlert className="size-4 shrink-0" />
-        ) : verified ? (
-          // success-color-allow: 完成卡只在经检查命令验证过（或复用已验证的工作区）时画绿色，旧卡没有 verification，不会走到这里
-          <Check className="size-4 shrink-0 text-success" strokeWidth={2.6} />
-        ) : (
-          <StatusIcon status={item.status} className="size-4" />
-        )}
-        {verdict.label}
-        {undone && <span className="font-normal text-muted-foreground">· 之后撤销过改动</span>}
-        {passed && files.length > 0 && (compactFiles ? (
-          <button type="button" aria-expanded={filesOpen} className="-mr-1.5 ml-auto flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-muted-foreground tabular-nums hover:bg-accent/60" onClick={() => setFilesOpen(!filesOpen)}>
-            <span className="flex items-center gap-1.5" data-testid="finish-counts">{counts}</span>
-            {filesOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-          </button>
-        ) : (
-          <span className="ml-auto flex items-center gap-1.5 text-xs font-normal text-muted-foreground tabular-nums" data-testid="finish-counts">
-            {counts}
-          </span>
-        ))}
-      </div>
-      {warnings.length > 0 && (
-        <div className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2 text-sm" role="note" data-testid="finish-warnings">
-          <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-          <div className="flex flex-col gap-0.5">
-            {warnings.map((warning) => (
-              <p key={warning}>{warning}</p>
-            ))}
-          </div>
-        </div>
-      )}
-      {verified && commandsFailed > 0 && !undone && <p className="text-sm text-muted-foreground">过程中有 {commandsFailed} 条命令失败（最终检查已通过）</p>}
-      {text && (passed ? <Markdown text={text} /> : <p className="text-sm text-muted-foreground">{text}</p>)}
-      {passed && progress && progress.requirements.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {/* success-color-allow: 完成条件的证据已核对 */}
-        {progress.requirements.map((requirement) => <span key={requirement.id} className="flex items-center gap-1">{requirement.receiptId ? <Check className="size-3 text-success" /> : <span>○</span>}{requirement.title} · {requirement.receiptId ? '证据已核对' : '待完成'}</span>)}
-      </div>}
-      {/* 监控开着时那边已经列出整个任务的改动，这里收成标题行的计数；收起时留在 DOM 里（hidden） */}
-      {passed && files.length > 0 && (
-        <div hidden={compactFiles && !filesOpen} className="-mx-2 flex flex-col">
-          {files.map((file) => {
-            const path = relativePath(file.path, projectPath)
-            const slash = path.lastIndexOf('/')
-            const row = (
-              <>
-                <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                  {slash >= 0 && <span className="text-muted-foreground">{path.slice(0, slash + 1)}</span>}
-                  {path.slice(slash + 1)}
-                </span>
-                <span className="tabular-nums">
-                  <DiffCounts added={file.added} removed={file.removed} />
-                </span>
-              </>
-            )
-            return undone ? (
-              <div key={file.path} title={path} className="flex items-center gap-2 px-2 py-1 text-muted-foreground">
-                {row}
-              </div>
-            ) : (
-              <button key={file.path} type="button" title={path} className="flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-accent" onClick={openReview}>
-                {row}
-              </button>
-            )
-          })}
-        </div>
-      )}
-      {passed && files.length > 0 && !undone && (
-        <div className="flex items-center gap-2">
-          <Button variant={latest ? 'default' : 'outline'} size="sm" onClick={openReview}>审阅改动</Button>
-          {onRestore && <Button variant="ghost" size="sm" onClick={onRestore}>撤销改动</Button>}
-        </div>
-      )}
-    </div>
-  )
 }
 
 function Timeline({ turns, activeTurn, onJump }: { turns: Turn[]; activeTurn: string | null; onJump(turnId: string): void }) {

@@ -71,6 +71,7 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
     return { level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' }
   }
   if (policy.trusted.some((item) => item.trim() === trimmed)) return { level: 'allow' }
+  if (loose.some(killsByName)) return { level: 'ask' }
   // 涉及禁写目录的非只读命令，哪种模式、之前选没选过「同类命令始终允许」都要再问；
   // 重定向也按分隔符拆开，echo x > data/db.json 的目标路径同样算在内
   const touchesReadOnly = (argv: string[]) =>
@@ -105,6 +106,14 @@ const PACKAGE_CHANGES = new Set(['install', 'i', 'add', 'remove', 'rm', 'uninsta
 const NETWORK = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'scp', 'ssh', 'rsync', 'ftp'])
 
 // 自动审批模式下仍要询问的命令：改 git 历史或远端、装卸依赖、下载即执行、联网传输、递归删除、提权
+// 按进程名、按条件结束进程（taskkill /IM、/FI，pkill，killall）：会把用户别的程序一起结束。
+// 第 525 步：评测里模型停不掉自己起的服务，跑了 taskkill //IM node.exe。哪种模式、选没选过「同类命令始终允许」都要问；按 PID 结束的不在此列
+function killsByName(argv: string[]): boolean {
+  const program = programName(argv[0] ?? '')
+  if (program === 'pkill' || program === 'killall') return true
+  return program === 'taskkill' && argv.slice(1).some((arg) => /^[-/]+(im|fi)$/i.test(arg))
+}
+
 function isRisky(argv: string[]): boolean {
   const program = programName(argv[0] ?? '')
   const sub = (argv[1] ?? '').toLowerCase()

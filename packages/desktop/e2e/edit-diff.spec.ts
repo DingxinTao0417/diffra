@@ -23,7 +23,7 @@ async function expectEdits(window: Page): Promise<void> {
   await expect(views.nth(0)).toContainText('@@ -97,7 +97,7 @@')
   await expect(views.nth(0)).toContainText('行 100（改）')
   await expect(views.nth(1)).toContainText('@@ -147,7 +147,6 @@')
-  const counts = window.getByTestId('finish-counts').first()
+  const counts = window.getByTestId('turn-files').first()
   await expect(counts).toContainText('+1')
   await expect(counts).toContainText('−2')
 }

@@ -72,7 +72,8 @@ test('在任务监控里自动检测完成检查，确认、试运行后保存�
     await expect(checks.nth(0)).toContainText('完成检查')
     await expect(checks.nth(0)).toContainText('npm run typecheck')
     await expect(checks.nth(0)).toContainText('通过')
-    await expect(cards(window, 'finish')).toHaveAttribute('data-status', 'completed')
+    // 结论看顶栏，对话里不再有完成卡（第 526 步）
+    await expect(cards(window, 'finish')).toHaveCount(0)
     await waitTaskStatus(window, 'verified')
   } finally {
     await app.close()

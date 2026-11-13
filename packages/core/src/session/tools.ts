@@ -12,6 +12,7 @@ import { viewImageTool } from '../tools/view-image.js'
 // 弱模型常把数字写成字符串（"30"）。只认明确的写法，别的照样报参数错误；发给模型的 JSON Schema 仍是 number
 const looseNumber = (value: unknown) => (typeof value === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(value) ? Number(value) : value)
 const intField = () => z.preprocess(looseNumber, z.number().int())
+const looseBoolean = (value: unknown) => (value === 'true' ? true : value === 'false' ? false : value)
 
 const execCommandInput = z.object({
   cmd: z.string().describe('Shell command to run (bash).'),
@@ -19,10 +20,11 @@ const execCommandInput = z.object({
   yield_time_ms: intField().optional().describe('How long to wait for output before returning, in milliseconds (default 10000, 250 to 30000). A command still running after that keeps running in the background.'),
   max_output_tokens: intField().optional().describe('Maximum output tokens to return (default 10000).'),
   justification: z.string().optional().describe('Only for commands that need the user\'s approval: one sentence the user will see, saying why you need to run it.'),
+  stdin: z.preprocess(looseBoolean, z.boolean()).optional().describe('Keep the program\'s input open so you can type into it later with write_stdin (for programs that ask questions or read input). Off by default: with input open, commands such as rg without a path wait for input.'),
 })
 const writeStdinInput = z.object({
   session_id: intField().describe('Session ID returned by exec_command for a process that is still running.'),
-  chars: z.string().optional().describe('Leave empty to wait for more output. Send "\\u0003" (Ctrl-C) to stop the process. Other input is not supported: commands run without a terminal.'),
+  chars: z.string().optional().describe('Leave empty to wait for more output. To stop the process, send the Ctrl-C control character "\\u0003". Other text is typed into the program (include "\\n" to press Enter; "\\u0004" closes its input); this only works for a command started with stdin: true.'),
   yield_time_ms: intField().optional().describe('How long to wait for output, in milliseconds (default 5000 when polling, up to 300000).'),
   max_output_tokens: intField().optional().describe('Maximum output tokens to return (default 10000).'),
 })
@@ -38,7 +40,7 @@ export const TOOLS = {
     inputSchema: execCommandInput,
   }),
   write_stdin: tool({
-    description: 'Read more output from a command started by exec_command that is still running, or stop it with "\\u0003". Returns the new output since the last read.',
+    description: 'Read more output from a command started by exec_command that is still running, type into it (if it was started with stdin: true), or stop it with "\\u0003". Returns the new output since the last call.',
     inputSchema: writeStdinInput,
   }),
   apply_patch: tool({ description: APPLY_PATCH_DESCRIPTION, inputSchema: applyPatchInput }),
@@ -72,8 +74,10 @@ export function startTitle(name: string, input: unknown): string {
   switch (name) {
     case 'exec_command':
       return field('cmd') ? `执行 ${field('cmd')}` : name
-    case 'write_stdin':
-      return `查看命令输出`
+    case 'write_stdin': {
+      const chars = field('chars')
+      return chars === null ? '查看命令输出' : /^(\u0003|\\u0003|\\x03|\^C)$/.test(chars) ? '结束命令' : '向命令输入'
+    }
     case 'apply_patch':
       return '修改文件'
     case 'view_image':

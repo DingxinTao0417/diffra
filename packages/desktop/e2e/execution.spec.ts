@@ -196,7 +196,7 @@ test('撤销到的那一轮开始时就有没验证的改动：撤销原因说�
     await waitTaskDone(window)
     expect(model.requests()).toBe(9)
 
-    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
+    await window.getByTestId('turn-actions').last().getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     await expect(window.getByTestId('restore-list')).toContainText('b.txt')
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
     await window.getByTestId('restore-confirm').click()

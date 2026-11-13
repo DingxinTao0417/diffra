@@ -292,18 +292,22 @@ describe('主循环', () => {
     expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
   })
 
-  test('没有检查点时跑过命令就停下记 unverified，不跑检查命令冒充验证；没跑命令时算没改动', async () => {
+  // 第 526 步：配了检查就是要多一轮检查，判断不了改没改文件不是跳过的理由
+  test('没有检查点时跑过命令：配了检查命令就照常跑；没配就直接完成；没跑命令时算没改动', async () => {
     const commanded = scriptedModel([{ toolCalls: [exec('printf x > out.txt')] }, { text: '写好了' }])
     const io = recordingIO()
     await runTurn(await makeSession(commanded, { afterEdit: null, beforeFinish: 'true' }, [], undefined, undefined, undefined, {}, { checkpoints: null }), { id: 't', text: '写 out.txt' }, io)
-    const [card] = finishCards(io)
-    // 检查命令配了，不带表示「没配检查命令」的 unverified 标记，说明由界面写
-    expect(card).toMatchObject({ status: 'completed', content: [] })
-    expect(card?._meta).toEqual({ diffra: { verification: 'unverified' } })
-    expect(checkResults(io, '完成检查')).toEqual([])
+    expect(checkResults(io, '完成检查')).toEqual(['passed'])
+    expect(verifications(io)).toEqual(['verified'])
     expect(commanded.doStreamCalls).toHaveLength(2)
-    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
     expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: false })
+
+    const unchecked = scriptedModel([{ toolCalls: [exec('printf x > out.txt')] }, { text: '写好了' }])
+    const uncheckedIO = recordingIO()
+    await runTurn(await makeSession(unchecked, undefined, [], undefined, undefined, undefined, {}, { checkpoints: null }), { id: 't', text: '写 out.txt' }, uncheckedIO)
+    expect(verifications(uncheckedIO)).toEqual(['unverified'])
+    expect(turnOutcomes(uncheckedIO)).toEqual([{ finish: 'unverified', stop: null }])
 
     const answered = scriptedModel([{ text: '这个文件是配置' }])
     const answerIO = recordingIO()

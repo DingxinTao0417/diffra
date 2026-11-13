@@ -104,7 +104,7 @@ test('无项目任务：直接发送建在默认位置、侧栏归入「无项�
     // 撤销 A 只还原 A 的文件夹，B 写的文件还在
     await window.getByTestId('sidebar').getByRole('button', { name: '整理笔记 A', exact: true }).click()
     await expect(window.getByTestId('task-title')).toHaveText('整理笔记 A')
-    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
+    await window.getByTestId('turn-actions').last().getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 1 个文件')
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 1 个文件的改动' })).toBeVisible()

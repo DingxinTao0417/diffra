@@ -54,9 +54,11 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     await permission.getByRole('button', { name: '允许一次' }).click()
 
     await waitTaskDone(window)
-    await expect(cards(window, 'finish')).toHaveAttribute('data-unverified', 'true')
-    await expect(cards(window, 'finish')).toContainText('已完成 · 未经自动验证')
-    await expect(cards(window, 'finish').getByTestId('finish-warnings')).toContainText('没有配置检查命令')
+    // 没配检查：结论就是「已完成」，对话里没有完成卡、也不提醒没配检查（第 526 步）；这一轮改的文件写在底部
+    await expect(window.getByTestId('task-status')).toContainText('已完成')
+    await expect(window.getByTestId('task-status')).not.toContainText('验证')
+    await expect(cards(window, 'finish')).toHaveCount(0)
+    await expect(window.getByTestId('turn-files')).toHaveText('1 个文件 +1 −1')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
     expect(readFileSync(join(project, 'done.txt'), 'utf8').trim()).toBe('done')
     expect(model.requests()).toBe(6)
@@ -81,9 +83,8 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     await window.keyboard.press('Escape')
     await window.screenshot({ path: 'test-results/agent-session.png' })
 
-    // 撤销这一轮：完成卡上有撤销按钮，操作栏就不再放 ↶；先列出受影响的文件，确认后恢复
-    await expect(window.getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' })).toHaveCount(0)
-    await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
+    // 撤销这一轮：按钮在这一轮底部的操作栏里；先列出受影响的文件，确认后恢复
+    await window.getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     const list = window.getByTestId('restore-list')
     await expect(list).toContainText('hello.txt')
     await expect(list).toContainText('done.txt')
@@ -92,9 +93,8 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     await window.getByTestId('restore-confirm').click()
     await expect(window.getByTestId('notice').filter({ hasText: '已撤销 2 个文件的改动' })).toBeVisible()
     await waitTaskStatus(window, 'unfinished')
-    // 完成卡还在，但标成之后撤销过，不再指向审阅
-    await expect(cards(window, 'finish')).toHaveAttribute('data-restored', 'true')
-    await expect(cards(window, 'finish').getByRole('button', { name: '审阅改动' })).toHaveCount(0)
+    // 撤销过的这一轮底部不再写改了哪些文件
+    await expect(window.getByTestId('turn-files')).toHaveCount(0)
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'done.txt'))).toBe(false)
   } finally {

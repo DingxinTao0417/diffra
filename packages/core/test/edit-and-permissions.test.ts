@@ -225,4 +225,16 @@ describe('权限模式', () => {
     expect(classifyCommand('echo x > data/db.json', policy('full', ['data']))).toEqual({ level: 'ask' })
     expect(classifyCommand('cat data/db.json', policy('full', ['data']))).toEqual({ level: 'allow' })
   })
+
+  // 第 525 步：评测里模型停不掉自己起的服务，跑了 taskkill //IM node.exe，会连用户别的 node 程序一起结束
+  test('按进程名、按条件结束进程：哪种模式都要问，选过「同类命令始终允许」也问；按 PID 结束照旧', () => {
+    for (const mode of ['full', 'auto', 'ask'] as const) {
+      for (const command of ['taskkill //F //IM node.exe', 'taskkill /f /im node.exe', 'taskkill /FI "IMAGENAME eq node.exe"', 'pkill -f vite', 'killall node', 'sleep 1; taskkill -im node.exe']) {
+        expect(classifyCommand(command, policy(mode)), `${mode}: ${command}`).toEqual({ level: 'ask' })
+      }
+    }
+    expect(classifyCommand('taskkill //IM node.exe //F', { ...policy('ask'), alwaysAllowed: new Set(['taskkill']) })).toEqual({ level: 'ask' })
+    expect(classifyCommand('taskkill //PID 11572 //F', policy('full'))).toEqual({ level: 'allow' })
+    expect(classifyCommand('kill 11572', policy('full'))).toEqual({ level: 'allow' })
+  })
 })

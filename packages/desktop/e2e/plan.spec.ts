@@ -58,7 +58,8 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     await content.fill(`${await content.inputValue()}\n额外：标题用 demo`)
     await window.screenshot({ path: 'test-results/plan-card.png' })
     await planCard.getByRole('button', { name: '按计划执行' }).click()
-    await expect(cards(window, 'finish')).toHaveCount(1, { timeout: 20_000 })
+    // 按计划执行的那一轮改了文件：做完后这一轮底部写着改了哪些文件（第 526 步起没有完成卡）
+    await expect(window.getByTestId('turn-files').last()).toBeVisible({ timeout: 20_000 })
     await waitTaskDone(window)
 
     const request = window.getByTestId('user-message').last()

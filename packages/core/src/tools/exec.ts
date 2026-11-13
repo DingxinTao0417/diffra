@@ -7,15 +7,17 @@ import { commandEnv, missingCommandHint, saveFullOutput } from './command.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
 
 // 命令执行，参照 Codex 的 unified exec（第 506 步）：一个 exec_command 跑命令，到点还没结束就返回会话号，进程在后台接着跑，
-// 之后用 write_stdin 取新的输出（或发 Ctrl-C 结束）。没有硬超时：长命令、开发服务器、watch 都用这一个工具。
-// 和 Codex 一样默认用管道不用终端：stdin 是关着的，write_stdin 只能空轮询或发 Ctrl-C
+// 之后用 write_stdin 取新的输出、往里输入（或发 Ctrl-C 结束）。没有硬超时：长命令、开发服务器、watch 都用这一个工具。
+// 和 Codex 一样用管道不用终端。输入默认关着：开着的话 rg foo 这类不带路径的命令会去等输入、一直卡住；
+// 要往程序里输入时用 stdin: true 打开（第 523 步）
 
-// 等待时间：exec_command 默认 10 秒，250 毫秒到 30 秒；write_stdin 空轮询 5 秒到 5 分钟，发 Ctrl-C 时等到进程退出
+// 等待时间：exec_command 默认 10 秒，250 毫秒到 30 秒；write_stdin 空轮询 5 秒到 5 分钟，输入后默认 1 秒，发 Ctrl-C 时等到进程退出
 export const DEFAULT_EXEC_YIELD_MS = 10_000
 const MIN_EXEC_YIELD_MS = 250
 const MAX_EXEC_YIELD_MS = 30_000
 const MIN_POLL_YIELD_MS = 5_000
 const MAX_POLL_YIELD_MS = 300_000
+const DEFAULT_INPUT_YIELD_MS = 1_000
 // 每个进程留着的输出：头尾各 512 KiB，中间丢掉的记个数
 const HEAD_BYTES = 512 * 1024
 const TAIL_BYTES = 512 * 1024
@@ -23,6 +25,9 @@ const TAIL_BYTES = 512 * 1024
 const MAX_SESSIONS = 64
 const PROTECTED_RECENT = 8
 const CTRL_C = '\u0003'
+const CTRL_D = '\u0004'
+// 模型常把控制字符写成转义的文字（第 522 步：评测里把 Ctrl-C 写成了六个字符的 \u0003，停不掉服务，转去按进程名杀 node）
+const CONTROL_SPELLINGS: Record<string, string> = { '\\u0003': CTRL_C, '\\x03': CTRL_C, '^C': CTRL_C, '\\u0004': CTRL_D, '\\x04': CTRL_D, '^D': CTRL_D }
 // 停止后最多等进程退出这么久
 const STOP_WAIT_MS = 5_000
 
@@ -34,9 +39,10 @@ interface ExecProcess {
   lastUsed: number
   // 上次交给模型之后新来的输出
   pending: { head: string; tail: string; omittedBytes: number; bytes: number }
-  // 从开始到现在的全部输出（头尾各留一半），存完整输出文件用
   exitCode: number | null
   exited: boolean
+  // 是我们结束的（Ctrl-C、用户点停止）：退出码不算命令失败
+  stopped: boolean
   waiters: Set<() => void>
 }
 
@@ -68,7 +74,8 @@ export class ExecSessions {
     return [...this.processes.keys()]
   }
 
-  start(command: string, cwd: string, bashPath: string, rgPath?: string): ExecProcess {
+  // keepStdin：输入开着，之后能用 write_stdin 往里写
+  start(command: string, cwd: string, bashPath: string, rgPath?: string, keepStdin = false): ExecProcess {
     hookExit(this)
     this.evict()
     let id = randomInt(1000, 100_000)
@@ -77,17 +84,19 @@ export class ExecSessions {
       cwd,
       env: commandEnv(rgPath),
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [keepStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
     const now = Date.now()
-    const entry: ExecProcess = { id, command, child, started: now, lastUsed: now, pending: emptyPending(), exitCode: null, exited: false, waiters: new Set() }
+    const entry: ExecProcess = { id, command, child, started: now, lastUsed: now, pending: emptyPending(), exitCode: null, exited: false, stopped: false, waiters: new Set() }
     const collect = (chunk: Buffer) => {
       appendOutput(entry, chunk.toString('utf8'))
       for (const wake of entry.waiters) wake()
     }
     child.stdout?.on('data', collect)
     child.stderr?.on('data', collect)
+    // 进程先退出了再往里写会报 EPIPE：交给 writeStdinTool 按进程已结束处理，这里不能让它变成没人接的错误
+    child.stdin?.on('error', () => {})
     const finish = (code: number | null) => {
       if (entry.exited) return
       entry.exited = true
@@ -115,7 +124,9 @@ export class ExecSessions {
 
   kill(id: number): void {
     const entry = this.processes.get(id)
-    if (entry && !entry.exited) killTree(entry.child.pid)
+    if (!entry || entry.exited) return
+    entry.stopped = true
+    killTree(entry.child.pid)
   }
 
   // sync：内核退出前调，等进程真的结束再返回
@@ -181,11 +192,15 @@ function waitFor(entry: ExecProcess, yieldMs: number, signal: AbortSignal): Prom
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
+function statusLine(entry: ExecProcess): string {
+  if (!entry.exited) return `Process running with session ID ${entry.id}`
+  return entry.stopped ? 'Process stopped (Ctrl-C)' : `Process exited with code ${entry.exitCode ?? -1}`
+}
+
 function report(entry: ExecProcess, wallMs: number, output: string, maxTokens: number): { text: string; full: string } {
   const shown = truncateForModel(output, maxTokens)
-  const status = entry.exited ? `Process exited with code ${entry.exitCode ?? -1}` : `Process running with session ID ${entry.id}`
   return {
-    text: [`Wall time: ${(wallMs / 1000).toFixed(4)} seconds`, status, ...(shown.truncated ? [`Original token count: ${shown.originalTokens}`] : []), 'Output:', shown.text].join('\n'),
+    text: [`Wall time: ${(wallMs / 1000).toFixed(4)} seconds`, statusLine(entry), ...(shown.truncated ? [`Original token count: ${shown.originalTokens}`] : []), 'Output:', shown.text].join('\n'),
     full: output,
   }
 }
@@ -196,6 +211,7 @@ export interface ExecCommandInput {
   yield_time_ms?: number
   max_output_tokens?: number
   justification?: string
+  stdin?: boolean
 }
 
 export async function execCommandTool(context: ToolContext, input: ExecCommandInput): Promise<ToolOutput> {
@@ -208,7 +224,7 @@ export async function execCommandTool(context: ToolContext, input: ExecCommandIn
   const permission = await context.requestCommandPermission(input.cmd, input.justification)
   if (!permission.allowed) throw new ToolError(permission.reason)
   const started = Date.now()
-  const entry = context.execSessions.start(input.cmd, cwd, context.bashPath, context.rgPath)
+  const entry = context.execSessions.start(input.cmd, cwd, context.bashPath, context.rgPath, input.stdin === true)
   await waitFor(entry, clamp(input.yield_time_ms ?? DEFAULT_EXEC_YIELD_MS, MIN_EXEC_YIELD_MS, MAX_EXEC_YIELD_MS), context.signal)
   return finishReport(context, entry, started, input.max_output_tokens, `执行 ${input.cmd}`)
 }
@@ -225,16 +241,35 @@ export async function writeStdinTool(context: ToolContext, input: WriteStdinInpu
   if (!entry) {
     throw new ToolError(`No running process with session ID ${input.session_id}. Running sessions: ${context.execSessions?.ids().join(', ') || 'none'}.`)
   }
-  const chars = input.chars ?? ''
-  if (chars !== '' && chars !== CTRL_C) {
-    throw new ToolError('stdin is closed for this process (commands run without a terminal). You can only poll it with empty chars, or send "\\u0003" (Ctrl-C) to stop it.')
-  }
-  if (chars === CTRL_C) context.execSessions!.kill(entry.id)
+  const raw = input.chars ?? ''
+  const chars = CONTROL_SPELLINGS[raw] ?? raw
   const started = Date.now()
-  // 发了 Ctrl-C 就等进程真的退出（最多 STOP_WAIT_MS，退出了马上返回）：Windows 上 taskkill 要一会儿，早返回时进程还占着目录
-  const yieldMs = chars === CTRL_C ? STOP_WAIT_MS : clamp(input.yield_time_ms ?? MIN_POLL_YIELD_MS, MIN_POLL_YIELD_MS, MAX_POLL_YIELD_MS)
+  let yieldMs: number
+  let action: string
+  if (chars === CTRL_C) {
+    context.execSessions!.kill(entry.id)
+    // 等进程真的退出（最多 STOP_WAIT_MS，退出了马上返回）：Windows 上 taskkill 要一会儿，早返回时进程还占着目录
+    yieldMs = STOP_WAIT_MS
+    action = '结束'
+  } else if (chars !== '') {
+    const stdin = entry.child.stdin
+    if (!stdin || !stdin.writable) {
+      throw new ToolError(
+        entry.exited
+          ? 'The process has already exited; there is nothing to type into. Poll it with empty chars to read its last output.'
+          : 'This process was started without input, so you cannot type into it. To type into a program, start it again with exec_command and stdin: true. To stop this one, send "\\u0003" (the Ctrl-C control character).',
+      )
+    }
+    if (chars === CTRL_D) stdin.end()
+    else stdin.write(chars)
+    yieldMs = clamp(input.yield_time_ms ?? DEFAULT_INPUT_YIELD_MS, MIN_EXEC_YIELD_MS, MAX_EXEC_YIELD_MS)
+    action = '输入'
+  } else {
+    yieldMs = clamp(input.yield_time_ms ?? MIN_POLL_YIELD_MS, MIN_POLL_YIELD_MS, MAX_POLL_YIELD_MS)
+    action = '查看'
+  }
   await waitFor(entry, yieldMs, context.signal)
-  return finishReport(context, entry, started, input.max_output_tokens, `${chars === CTRL_C ? '结束' : '查看'} ${entry.command}`)
+  return finishReport(context, entry, started, input.max_output_tokens, `${action} ${entry.command}`)
 }
 
 async function finishReport(context: ToolContext, entry: ExecProcess, started: number, maxTokens: number | undefined, title: string): Promise<ToolOutput> {
@@ -250,12 +285,14 @@ async function finishReport(context: ToolContext, entry: ExecProcess, started: n
   const { text } = report(entry, Date.now() - started, output.text.trim(), limit)
   const shortened = truncateForModel(output.text, limit).truncated
   const saved = shortened ? await saveFullOutput(context.outputDir, output.raw) : ''
-  const hint = entry.exited && entry.exitCode === 127 ? await missingCommandHint(context, output.text) : ''
+  const hint = entry.exited && !entry.stopped && entry.exitCode === 127 ? await missingCommandHint(context, output.text) : ''
   if (entry.exited) context.execSessions?.remove(entry.id)
+  const header = !entry.exited ? `运行中（会话 ${entry.id}）` : entry.stopped ? '已停止' : `Exit code: ${entry.exitCode}`
   return {
     text: text + saved + hint,
     title,
-    terminalOutput: `${entry.exited ? `Exit code: ${entry.exitCode}` : `运行中（会话 ${entry.id}）`}\n${output.text.trim() || '(no output)'}`,
-    ...(entry.exited ? { commandSucceeded: entry.exitCode === 0 } : {}),
+    terminalOutput: `${header}\n${output.text.trim() || '(no output)'}`,
+    // 我们结束的进程退出码不算命令失败（第 524 步：停服务不该在界面上变成「有 1 条命令失败」）
+    ...(entry.exited && !entry.stopped ? { commandSucceeded: entry.exitCode === 0 } : {}),
   }
 }

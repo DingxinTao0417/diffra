@@ -60,8 +60,8 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await expect(cards(window, 'check')).toHaveCount(1)
     await expect(cards(window, 'check').first()).toContainText('完成检查')
     await expect(cards(window, 'check').first()).toContainText('通过')
-    await cards(window, 'finish').getByTestId('finish-counts').click()
-    await expect(cards(window, 'finish').getByText('greet.js')).toBeVisible()
+    // 这一轮改了哪些文件写在这一轮底部（第 526 步起没有完成卡）
+    await expect(window.getByTestId('turn-files').first()).toContainText('2 个文件')
 
     // 任务监控和审阅面板列出两个改动文件
     await expect(window.getByTestId('monitor-file')).toHaveCount(2)
@@ -101,7 +101,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     expect(model.requests()).toBe(8)
 
     // 撤销到第一轮之前：文件恢复，新建的文件删掉
-    await window.getByTestId('turn').first().getByRole('button', { name: '撤销改动', exact: true }).click()
+    await window.getByTestId('turn').first().getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     await expect(window.getByTestId('restore-list')).toContainText('greet.js')
     await expect(window.getByTestId('restore-confirm')).toHaveText('撤销 2 个文件')
     await window.getByTestId('restore-confirm').click()

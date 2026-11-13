@@ -102,7 +102,8 @@ export async function buildSystemPrompt(
           `- Commands run in bash${process.platform === 'win32' ? ' (Git Bash on Windows)' : ''}: use bash syntax and forward slashes.`,
           "- Search with rg (rg -n for text, rg --files for file names). Read files with sed -n 'START,ENDp' path, about 250 lines at a time, or cat for short files; nl -ba adds line numbers.",
           '- When several commands do not depend on each other (reading or searching several files), call them in the same response: read-only commands run in parallel.',
-          '- A command still running when yield_time_ms is up keeps running in the background and you get a session ID: poll it with write_stdin, stop it with "\\u0003". Use this for dev servers, watchers and long builds; stop servers you no longer need.',
+          '- A command still running when yield_time_ms is up keeps running in the background and you get a session ID: poll it with write_stdin, stop it by sending the Ctrl-C control character "\\u0003". Use this for dev servers, watchers and long builds; stop the servers you started once you no longer need them. Never stop processes by name (taskkill /IM, pkill, killall): that also kills the user\'s other programs.',
+          '- To answer a program that asks for input, start it with stdin: true and type into it with write_stdin.',
           '- Run tests and builds without piping their output through head, tail or grep: long output is already shortened to its beginning and end, and a filter can hide the real error.',
           "- Commands that may change things can need the user's approval; give a one-sentence justification for those. If the user rejects a command, do not retry it or get around it.",
         ]

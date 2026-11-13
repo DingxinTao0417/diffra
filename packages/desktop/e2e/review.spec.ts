@@ -32,15 +32,12 @@ test('完成前规范审查（默认开着）：违规被打回，改好后审�
 
     await startTask(window, '在 app.ts 里调用 run')
     const reviews = cards(window, 'review')
-    const finishes = cards(window, 'finish')
-    await expect(finishes).toHaveCount(2, { timeout: 20_000 })
+    await expect(reviews).toHaveCount(2, { timeout: 20_000 })
     await waitTaskDone(window)
+    // 打回和通过都看审查卡，对话里不再有完成卡（第 526 步）
+    await expect(cards(window, 'finish')).toHaveCount(0)
     await expect(window.getByTestId('monitor-rule-packs')).toHaveText('通用、安全、TypeScript / JavaScript')
     await expect(window.getByTestId('monitor-panel')).toContainText('完成前规范审查已开')
-    await expect(finishes.nth(0)).toHaveAttribute('data-status', 'failed')
-    await expect(finishes.nth(0)).toContainText('规范审查发现 1 处问题')
-    await expect(finishes.nth(1)).toHaveAttribute('data-status', 'completed')
-    await expect(reviews).toHaveCount(2)
     await expect(reviews.nth(0)).toHaveAttribute('data-status', 'failed')
     await expect(reviews.nth(0)).toContainText('1 处问题，已打回')
     await expect(reviews.nth(0)).toContainText('GEN-ERR-1')

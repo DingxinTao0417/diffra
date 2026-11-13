@@ -1018,7 +1018,7 @@ test('设备连接：可操作的远程任务页用本机的输入框——切�
     await expect(host.window.getByTestId('permission-mode')).toContainText('自动审批')
 
     // 撤销这一轮：先列出会改回去的文件，确认后对方的文件改回去
-    await remoteTask.locator('[data-testid="tool-call"][data-kind="finish"]').getByRole('button', { name: '撤销改动', exact: true }).click()
+    await remoteTask.getByTestId('turn-actions').last().getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
     await expect(guest.window.getByTestId('restore-list')).toContainText('hello.txt')
     await guest.window.getByTestId('restore-confirm').click()
     await expect.poll(() => readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')

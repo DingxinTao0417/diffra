@@ -156,15 +156,48 @@ describe('exec_command 和 write_stdin', () => {
     expect(polled.text).toContain('middle')
     expect(polled.text).not.toContain('start')
     const stopped = await writeStdinTool(context, { session_id: id, chars: '\u0003', yield_time_ms: 2000 })
-    expect(stopped.text).toContain('Process exited')
+    // 我们结束的进程不算命令失败（第 524 步）
+    expect(stopped.text).toContain('Process stopped (Ctrl-C)')
+    expect(stopped.commandSucceeded).toBeUndefined()
+    expect(stopped.terminalOutput?.startsWith('已停止')).toBe(true)
     await expect(writeStdinTool(context, { session_id: id })).rejects.toThrow(`No running process with session ID ${id}`)
   }, 20_000)
 
-  test('stdin 是关着的：write_stdin 只接受空轮询和 Ctrl-C', async () => {
+  // 第 522 步：评测里模型把 Ctrl-C 写成了六个字符的文字，停不掉服务
+  test('Ctrl-C 写成转义的文字（\\u0003、\\x03、^C）也照样结束进程', async () => {
+    for (const chars of ['\\u0003', '\\x03', '^C']) {
+      const started = await execCommandTool(context, { cmd: 'sleep 30', yield_time_ms: 250 })
+      const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
+      const stopped = await writeStdinTool(context, { session_id: id, chars })
+      expect(stopped.text, chars).toContain('Process stopped (Ctrl-C)')
+    }
+    expect(execSessions.size).toBe(0)
+  }, 30_000)
+
+  test('没开输入的命令不能往里输入，报错说清用 stdin: true', async () => {
     const started = await execCommandTool(context, { cmd: 'sleep 5', yield_time_ms: 250 })
     const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
-    await expect(writeStdinTool(context, { session_id: id, chars: 'y\n' })).rejects.toThrow('stdin is closed')
+    await expect(writeStdinTool(context, { session_id: id, chars: 'y\n' })).rejects.toThrow('start it again with exec_command and stdin: true')
   })
+
+  // 第 523 步：stdin: true 时输入开着，能回答程序的提问；\u0004 结束输入
+  test('stdin: true 时能往程序里输入，\\u0004 结束输入', async () => {
+    const script = "let all = ''; process.stdin.on('data', (chunk) => { all += chunk; process.stdout.write('got:' + chunk) }); process.stdin.on('end', () => { console.log('lines=' + all.trim().split(/\\n/).length) })"
+    writeFileSync(join(project, 'echo.js'), script)
+    const started = await execCommandTool(context, { cmd: 'node echo.js', yield_time_ms: 500, stdin: true })
+    const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
+    const first = await writeStdinTool(context, { session_id: id, chars: 'alice\n' })
+    expect(first.text).toContain('got:alice')
+    expect(first.title).toBe('输入 node echo.js')
+    await writeStdinTool(context, { session_id: id, chars: 'bob\n' })
+    const ended = await writeStdinTool(context, { session_id: id, chars: '\u0004', yield_time_ms: 5000 })
+    expect(ended.text).toContain('Process exited with code 0')
+    expect(ended.text).toContain('lines=2')
+    expect(ended.commandSucceeded).toBe(true)
+    // 开着输入也不影响普通命令：rg 不带路径照样搜当前目录（输入关着时不会去等输入）
+    const searched = await execCommandTool(context, { cmd: 'rg -l alice' })
+    expect(searched.text).toContain('Process exited')
+  }, 30_000)
 
   test('用户停下时正在等的命令一起结束', async () => {
     const controller = new AbortController()

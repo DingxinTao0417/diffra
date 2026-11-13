@@ -81,11 +81,9 @@ export function turnVerdict(task: Pick<LiveTask, 'permission' | 'running' | 'tur
   if (legacyStop) return verdict('stopped', legacyStop)
   // 改了文件没调 finish；或撤销之后 core 把状态改回 blocked，要求重新验证
   if (stop === 'no-finish' || (progress?.status === 'blocked' && progress.needsVerification)) return verdict('unfinished', progress?.reason ?? null)
-  if (outcome?.finish === 'unverified') return verdict('unverified')
+  // 没配检查（unverified）就是正常完成，靠模型自己验证，不额外提醒（第 526 步）；配了检查、跑过了才写「已验证」
   if (outcome?.finish === 'verified') return verdict('verified')
   if (outcome?.finish === 'no-edits') return verdict('nochange')
-  // 旧记录永远不显示已验证：完成卡带 unverified 标记的算未经自动验证，其余只说已完成
-  if (legacy && subject.items.findLast((item): item is ToolItem => item.kind === 'tool' && item.title === '完成')?.unverified) return verdict('unverified')
   return verdict('done')
 }
 
