@@ -20,7 +20,7 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'mcp__demo__whoami', input: {} }] },
     { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'from mcp' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '记好了' } }] },
+    { text: '记好了' },
     { text: '这次没有 MCP 工具' },
   ])
   const app = await launchApp(userDataDir)

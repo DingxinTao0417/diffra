@@ -97,7 +97,7 @@ export function withSkills(text: string, skills: Skill[]): string {
   if (skills.length === 0) return text
   const blocks = skills.map((skill) => `<skill name="${skill.name}" dir="${skill.dir.replace(/\\/g, '/')}">\n${skill.body}\n</skill>`)
   return [
-    '[Diffra] The user attached these skills to this request. Follow their instructions. Files they mention are in the skill directory; you can read them with read_file using absolute paths.',
+    '[Diffra] The user attached these skills to this request. Follow their instructions. Files they mention are in the skill directory; you can read them with exec_command (cat, sed -n) using absolute paths.',
     ...blocks,
     '',
     'User request:',

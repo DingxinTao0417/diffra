@@ -2,44 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { classifyCommand, type CommandPolicy, commandKeys, MAX_SCAN_ENTRIES } from '../src/permissions.js'
-import { applyEdit } from '../src/tools/edit-match.js'
+import { classifyCommand, type CommandPolicy, commandKeys, isReadOnlyCommand, MAX_SCAN_ENTRIES } from '../src/permissions.js'
 import { isProtectedFile, isUnderReadOnly } from '../src/tools/protected.js'
-
-describe('applyEdit', () => {
-  const file = ['function a() {', '  return 1', '}', '', 'function b() {', '  return 1', '}'].join('\n')
-
-  test('唯一精确匹配时直接替换', () => {
-    const result = applyEdit(file, 'function a() {\n  return 1', 'function a() {\n  return 2', false)
-    expect(result).toMatchObject({ kind: 'ok', count: 1, firstLine: 1, fuzzy: false })
-    if (result.kind === 'ok') expect(result.content.split('\n')[1]).toBe('  return 2')
-  })
-
-  test('匹配多处时报出行号，replace_all 时全部替换', () => {
-    expect(applyEdit(file, '  return 1', '  return 2', false)).toEqual({ kind: 'multiple', lines: [2, 6] })
-    const all = applyEdit(file, '  return 1', '  return 2', true)
-    expect(all).toMatchObject({ kind: 'ok', count: 2 })
-  })
-
-  test('缩进抄错时按文件里的缩进替换', () => {
-    const result = applyEdit(file, 'function b() {\nreturn 1\n}', 'function b() {\nreturn 3\n}', false)
-    expect(result).toMatchObject({ kind: 'ok', fuzzy: true, firstLine: 5 })
-    if (result.kind === 'ok') expect(result.content.split('\n').slice(4)).toEqual(['function b() {', 'return 3', '}'])
-  })
-
-  test('缩进抄错且模型给的缩进一致时保留相对缩进', () => {
-    const nested = ['if (x) {', '    call()', '}'].join('\n')
-    const result = applyEdit(nested, '  call()', '  call()\n  next()', false)
-    expect(result).toMatchObject({ kind: 'ok', fuzzy: true })
-    if (result.kind === 'ok') expect(result.content.split('\n')).toEqual(['if (x) {', '    call()', '    next()', '}'])
-  })
-
-  test('找不到时给出最相近的片段', () => {
-    const result = applyEdit(file, 'function b() {\n  return 9\n}', 'x', false)
-    expect(result.kind).toBe('none')
-    if (result.kind === 'none') expect(result.closest?.snippet).toContain('5\tfunction b() {')
-  })
-})
 
 describe('classifyCommand', () => {
   const policy = (overrides: Partial<CommandPolicy> = {}): CommandPolicy => ({
@@ -49,6 +13,21 @@ describe('classifyCommand', () => {
     readOnlyPaths: [],
     mode: 'ask',
     ...overrides,
+  })
+
+  // 只读的智能体（探索工人、计划、定位、深度扫描）只能跑这种命令（第 508 步）
+  test('isReadOnlyCommand：每一段都是只读命令，没有重定向和命令替换', () => {
+    expect(isReadOnlyCommand('rg -n foo src | head -20')).toBe(true)
+    expect(isReadOnlyCommand("sed -n '1,80p' src/a.ts && git log --oneline -5")).toBe(true)
+    expect(isReadOnlyCommand('rg --files')).toBe(true)
+    expect(isReadOnlyCommand('cat a.ts > b.ts')).toBe(false)
+    expect(isReadOnlyCommand('echo $(rm -rf x)')).toBe(false)
+    expect(isReadOnlyCommand('sed -i s/a/b/ a.ts')).toBe(false)
+    expect(isReadOnlyCommand("sed -n '1,80p;w out.txt' a.ts")).toBe(false)
+    expect(isReadOnlyCommand('sed -n 1,20p')).toBe(false)
+    expect(isReadOnlyCommand("nl -ba a.ts | sed -n '5,9p' a.ts")).toBe(true)
+    expect(isReadOnlyCommand('npm test')).toBe(false)
+    expect(isReadOnlyCommand('')).toBe(false)
   })
 
   test('只读命令和管道自动放行', () => {
@@ -114,6 +93,19 @@ describe('classifyCommand', () => {
       for (const command of ['cd src && grep -rn token ..', 'cd $HOME && grep -r x .']) expect(classifyCommand(command, auto), command).toEqual({ level: 'ask' })
       // 字面写出名字（含 *.pem 这种扩展名）的照旧要问
       for (const command of ['grep KEY .env', 'head -c 200 *.pem']) expect(classifyCommand(command, here), command).toEqual({ level: 'ask' })
+      // 选项的值（-g 的过滤规则、--include 的通配符、-e 给的模式）不是要读的路径：rg 默认跳过 .env 这类隐藏文件，--files 只列名字
+      for (const command of [
+        "pwd; rg --files -g '!data/**' -g '!**/__pycache__/**'",
+        "rg -n foo -g '*.ts' -t ts src",
+        "rg -e 'a*b' src",
+        "grep -n --include '*.ts' -e token src/a.ts",
+        'rg --files src',
+      ]) {
+        expect(classifyCommand(command, here), command).toEqual({ level: 'allow' })
+      }
+      for (const command of ['rg --files -g "*.pem" certs/*.pem', 'rg -e KEY .env', 'grep -e KEY -- .env', 'rg -uu --files -g "*.env"']) {
+        expect(classifyCommand(command, here), command).toEqual({ level: 'ask' })
+      }
     } finally {
       rmSync(project, { recursive: true, force: true })
     }

@@ -6,9 +6,9 @@ import { MAX_PROMPT_FILE_REFERENCES } from '../src/shared/attachments'
 import { chooseProject, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { exec, startScriptedModel } from './scripted-model'
 
-test('通用占位与精简按钮，本地文件文件夹拖入、移除和外部文件读取仍需授权', async () => {
+test('通用占位与精简按钮，本地文件文件夹拖入、移除；外部文件只带路径，内容要智能体自己读', async () => {
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-drop-project-'))
   const outside = mkdtempSync(join(tmpdir(), 'diffra-drop-outside-'))
@@ -21,8 +21,9 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除和外�
   writeFileSync(external, 'external-only-content')
   writeFileSync(credential, 'API_KEY=should-not-be-attached')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: external } }] },
-    { text: '已读到授权文件' },
+    // 项目外的文本文件用命令读（没有 read_file 了）；只读命令不问权限，项目外读取的确认只剩 view_image 这类按路径读的工具
+    { toolCalls: [exec(`cat '${external.replaceAll('\\', '/')}'`)] },
+    { text: '已读到外部文件' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -76,12 +77,9 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除和外�
     // 仅附件也能发送，消息只含路径，不提前泄露外部内容。
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await expect(window.getByTestId('task-title')).toBeVisible()
-    const permission = window.getByTestId('permission-card')
-    await expect(permission).toContainText('项目外读取')
+    await waitTaskDone(window)
     expect(model.bodies()[0]).toContain('outside.txt')
     expect(model.bodies()[0]).not.toContain('external-only-content')
-    await permission.getByRole('button', { name: '仅允许本次操作', exact: true }).click()
-    await waitTaskDone(window)
     expect(model.bodies()[1]).toContain('external-only-content')
     await expect(taskInput(window)).toHaveAttribute('placeholder', '请输入指令')
     await expect(window.getByTestId('composer-file')).toHaveCount(0)

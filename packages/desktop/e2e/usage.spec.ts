@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { read, startScriptedModel } from './scripted-model'
 
 test('用量页：每次模型调用都记上，按范围、模型、项目、任务汇总', async () => {
   test.setTimeout(60_000)
@@ -27,7 +27,7 @@ test('用量页：每次模型调用都记上，按范围、模型、项目、�
   line(3, null, null)
   writeFileSync(join(usageDir, `${now.toISOString().slice(0, 7)}.jsonl`), '{"broken\n', { flag: 'a' })
 
-  const model = await startScriptedModel([{ toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] }, { text: '看完了' }])
+  const model = await startScriptedModel([{ toolCalls: [read('a.txt')] }, { text: '看完了' }])
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()

@@ -34,7 +34,7 @@ const IGNORE_OFF_FLAG = /^-{1,2}([a-zA-Z]*u[a-zA-Z]*|no-ignore|hidden|no-ignore-
 // 只读命令：不改文件、不联网、不执行别的程序
 const READ_ONLY = new Set([
   'basename', 'cat', 'cut', 'date', 'df', 'diff', 'dirname', 'du', 'echo', 'false', 'file', 'grep', 'head',
-  'ls', 'printf', 'pwd', 'realpath', 'rg', 'sort', 'stat', 'tail', 'tree', 'true', 'uniq', 'wc', 'which', 'whoami',
+  'ls', 'nl', 'printf', 'pwd', 'realpath', 'rg', 'sort', 'stat', 'tail', 'tree', 'true', 'uniq', 'wc', 'which', 'whoami',
 ])
 
 const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame', 'grep'])
@@ -76,7 +76,7 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   const touchesReadOnly = (argv: string[]) =>
     !isReadOnly(argv) && argv.some((arg) => argumentPaths(arg).some((path) => isUnderReadOnly(policy.cwd, path, policy.readOnlyPaths)))
   // 完全访问只剩上面的直接拒绝和禁写目录（第 495 步）：和 Claude Code 的 bypassPermissions、Codex 的完全访问一样，
-  // 不因为命令可能读到 .env 再问。read_file 读不了受保护文件这条另算，不受模式影响
+  // 不因为命令可能读到 .env 再问。apply_patch 改不了受保护文件这条另算，不受模式影响
   if (policy.mode === 'full') return loose.some(touchesReadOnly) ? { level: 'ask' } : { level: 'allow' }
   // 通配符、递归搜索、关掉忽略规则能读到 .env 这类受保护文件：真会读到才问，要搜的地方没有就放行
   if (mayReadSecret(loose, policy.cwd)) return { level: 'ask' }
@@ -199,14 +199,43 @@ function mayReadSecret(segments: string[][], cwd: string): boolean {
     if (!CONTENT_READERS.has(program)) continue
     const args = argv.slice(1)
     const recursive = (program === 'grep' && args.some((arg) => GREP_RECURSIVE.test(arg))) || (program === 'rg' && args.some((arg) => IGNORE_OFF_FLAG.test(arg)))
-    // grep/rg 的第一个非选项参数是搜索模式，可能带正则里的 *；只看它后面的文件参数
-    const firstValue = args.findIndex((arg) => !arg.startsWith('-'))
-    const files = (program === 'grep' || program === 'rg' ? args.slice(firstValue + 1) : args).filter((arg) => !arg.startsWith('-'))
+    const files = program === 'grep' || program === 'rg' ? searchPaths(program, args) : args.filter((arg) => !arg.startsWith('-'))
     // grep -r、rg 不写路径时搜当前目录
     if (recursive && (files.length > 0 ? files : ['.']).some((arg) => reachesProtected(dir, arg, true))) return true
     if (files.some((arg) => /[*?]/.test(arg) && couldMatchProtected(arg) && reachesProtected(dir, arg, false))) return true
   }
   return false
+}
+
+// grep、rg 后面要跟一个值的选项：值是过滤规则、行数、文件类型，不是要读的路径（rg -g '!**/x/**' 里的 * 不是在读文件）
+const SEARCH_VALUE_OPTIONS: Record<'grep' | 'rg', Set<string>> = {
+  grep: new Set(['-e', '-f', '-m', '-A', '-B', '-C', '-d', '-D', '--regexp', '--file', '--max-count', '--after-context', '--before-context', '--context', '--include', '--exclude', '--exclude-dir', '--label', '--binary-files', '--devices', '--directories', '--color', '--colour']),
+  rg: new Set([
+    '-e', '-f', '-g', '-m', '-A', '-B', '-C', '-M', '-t', '-T', '-j', '-E', '-r', '-d',
+    '--regexp', '--file', '--glob', '--iglob', '--max-count', '--after-context', '--before-context', '--context', '--max-columns', '--type', '--type-not',
+    '--threads', '--encoding', '--replace', '--max-depth', '--type-add', '--type-clear', '--sort', '--sortr', '--color', '--colors', '--path-separator',
+    '--pre', '--pre-glob', '--max-filesize', '--ignore-file', '--engine', '--context-separator', '--field-match-separator', '--field-context-separator',
+  ]),
+}
+
+// grep、rg 要读的路径：跳过选项和它们的值；第一个剩下的是搜索模式，除非用 -e、-f 给了模式，或者 rg --files 只列文件
+function searchPaths(program: 'grep' | 'rg', args: string[]): string[] {
+  const positional: string[] = []
+  let patternGiven = false
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!
+    if (arg === '--') {
+      positional.push(...args.slice(index + 1))
+      break
+    }
+    if (!arg.startsWith('-') || arg === '-') {
+      positional.push(arg)
+      continue
+    }
+    if (/^(-e|-f|--regexp|--file)(=|$)/.test(arg) || /^-[ef]./.test(arg) || (program === 'rg' && (arg === '--files' || arg === '--type-list'))) patternGiven = true
+    if (SEARCH_VALUE_OPTIONS[program].has(arg)) index++
+  }
+  return patternGiven ? positional : positional.slice(1)
 }
 
 // 递归搜索、通配符最多看这么多个目录项，看不完就当会读到受保护文件。一万项在本机几十毫秒，普通项目（跳过依赖和 .git）够用
@@ -280,12 +309,30 @@ function globMatches(pattern: string, name: string): boolean {
   }
 }
 
+// 整条命令都是只读的（每一段都是只读命令，没有重定向、命令替换、后台执行）：只读的智能体只能跑这种（第 508 步）
+export function isReadOnlyCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (/\$\(|`|<\(|>\(/.test(trimmed)) return false
+  const segments = splitSegments(trimmed)
+  return segments !== null && segments.length > 0 && segments.every(isReadOnly)
+}
+
 function isReadOnly(argv: string[]): boolean {
   const program = programName(argv[0] ?? '')
   if (program === 'git') return READ_ONLY_GIT.has(argv[1] ?? '')
   if (program === 'find') return !argv.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint'].includes(arg))
   if (program === 'sort') return !argv.some((arg) => arg === '-o' || arg.startsWith('--output'))
+  if (program === 'sed') return isSedPrint(argv)
   return READ_ONLY.has(program)
+}
+
+// sed 只认 -n 'N,Mp' 这种按行号打印一段的写法（第 508 步起读文件靠它，和 Codex 早先的安全命令表一样）；
+// -i、w、e 这些会改文件、跑命令的写法都不算
+function isSedPrint(argv: string[]): boolean {
+  const args = argv.slice(1)
+  if (!args.includes('-n') || args.some((arg) => arg.startsWith('-') && arg !== '-n')) return false
+  const [script, ...files] = args.filter((arg) => arg !== '-n')
+  return script !== undefined && /^(\d+|\$)(,(\d+|\$))?p$/.test(script) && files.length > 0
 }
 
 function programName(token: string): string {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isReadOnlyCommand } from '../permissions.js'
 
 // 卡死检测的补充（第 440 步，参照 qwen-code 的 loopDetectionService）。主循环原有的检测只认「同一个调用、结果也一样」；
 // 这里补三种原地打转的样子，都只提醒一次、不停下：提醒错了代价只是多一句话，停错了会打断正常的任务。成功改了文件就重新算
@@ -7,7 +8,12 @@ const READ_STREAK = 12
 const SAME_TEXT_REPEATS = 3
 // 太短的话（「好的」「继续」）重复出现很正常，不算
 const MIN_TEXT_CHARS = 20
-const READ_TOOLS = new Set(['read_file', 'list_files', 'search', 'outline'])
+// 只读的调用（第 508 步起读文件、搜索都是跑只读命令）：只读命令和看图。轮询后台命令算在等它，不算只读
+function isReadCall(toolName: string, input: unknown): boolean {
+  if (toolName === 'view_image') return true
+  if (toolName !== 'exec_command' || typeof input !== 'object' || input === null || !('cmd' in input)) return false
+  return typeof input.cmd === 'string' && isReadOnlyCommand(input.cmd)
+}
 
 type SpinKind = 'same-call' | 'read-only' | 'same-text'
 
@@ -48,13 +54,22 @@ export function noteEdit(tracker: SpinTracker): void {
   tracker.pending = []
 }
 
+// 空轮询还在跑的命令（write_stdin 不带输入）：在等它，反复调用、结果一样都正常
+export function isPolling(toolName: string, input: unknown): boolean {
+  if (toolName !== 'write_stdin') return false
+  const chars = typeof input === 'object' && input !== null && 'chars' in input ? input.chars : undefined
+  return chars === undefined || chars === ''
+}
+
 // 一次没改文件的工具调用
 export function noteCall(tracker: SpinTracker, toolName: string, input: unknown): void {
-  const key = createHash('sha256').update(JSON.stringify([toolName, input])).digest('hex')
-  const count = (tracker.calls.get(key) ?? 0) + 1
-  tracker.calls.set(key, count)
-  if (count >= SAME_CALL_REPEATS) flag(tracker, 'same-call')
-  if (!READ_TOOLS.has(toolName)) {
+  if (!isPolling(toolName, input)) {
+    const key = createHash('sha256').update(JSON.stringify([toolName, input])).digest('hex')
+    const count = (tracker.calls.get(key) ?? 0) + 1
+    tracker.calls.set(key, count)
+    if (count >= SAME_CALL_REPEATS) flag(tracker, 'same-call')
+  }
+  if (!isReadCall(toolName, input)) {
     tracker.acted = true
     tracker.readStreak = 0
     return

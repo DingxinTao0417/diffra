@@ -1,16 +1,12 @@
 import { MEMORY_HEADING } from './memory.js'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { RulePack, SessionChecks, SessionConfig, SkillInfo, SkillSource } from '../protocol.js'
 import { renderRules } from '../rules/select.js'
 
-// 项目里的规则文件，按顺序都读，合计最多 8000 字
-const RULE_FILES = ['AGENTS.md', 'CLAUDE.md']
-const MAX_RULES_CHARS = 8000
-const PROJECT_RULES_HEADING = 'Project rules from the repository (follow them):'
+// 系统提示词（第 514 步起照 Codex 默认提示词的结构：工作方式、AGENTS.md、进度说明、计划、执行、验证、最终回复、工具用法）。
+// 项目目录、系统、日期、权限模式、AGENTS.md 不在这里，作为对话里的上下文消息发（见 world-state.ts），这一份在会话里不变，提示缓存一直命中
 const CODING_RULES_HEADING = 'Coding rules (written in Chinese; each starts with its rule ID).'
 const SKILLS_HEADING =
-  "Skills: instructions for specific kinds of work. When a request matches a skill's description, read its SKILL.md with read_file before you start and follow it; " +
+  "Skills: instructions for specific kinds of work. When a request matches a skill's description, read its SKILL.md (cat it) before you start and follow it; " +
   'read other files in the skill folder only when SKILL.md points to them. Skills the user attached to a request are already included in it.'
 // Skill 索引只放名称、截短的描述和 SKILL.md 的位置，全文由模型按需去读
 const MAX_SKILL_DESCRIPTION_CHARS = 150
@@ -25,13 +21,12 @@ export interface PromptContext {
   frontend: { browser: boolean; screenshots: boolean } | null
   // 项目记忆里的条目（见 memory.ts），没开或还没有时不传
   memory?: string
-  // 给子智能体用的那一份（第 453 步）：没有 finish、完成检查、步骤清单、提问这些它用不了的东西，由 agents.ts 再接上工人规则
+  // 给子智能体用的那一份（第 453 步）：没有结束门禁、计划、提问、派工这些它用不了的东西，由 agents.ts 再接上工人规则
   worker?: boolean
 }
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
 export async function buildSystemPrompt(
-  cwd: string,
   bashPath: string | null,
   { checks, readOnlyPaths, rules }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules'>,
   rulePacks: RulePack[],
@@ -39,94 +34,121 @@ export async function buildSystemPrompt(
 ): Promise<string> {
   const skills = skillIndex(context.skills)
   const worker = context.worker === true
-  const shell = bashPath
-    ? 'run_command uses bash (Git Bash on Windows): use bash syntax and forward slashes.'
-    : 'run_command is unavailable because bash was not found.'
   const lines = [
-    'You are Diffra, a coding agent working in the user\'s project.',
-    `Project directory: ${cwd}`,
-    `Operating system: ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : process.platform}. ${shell}`,
+    "You are Diffra, a coding agent working in the user's project on their computer. You run commands with exec_command, change files with apply_patch, and talk to the user through your messages. Be precise, safe and helpful.",
     '',
-    'How to work:',
-    '- Explore before you edit: use list_files, search and read_file. Never guess what a file contains.',
-    '- For an overview of a directory or a large file (its functions, classes and their line numbers), use outline before reading files one by one.',
-    '- Read a file before editing it. Make small, focused edits with edit_file, copying old_string exactly from read_file output (without line numbers).',
-    '- When a change reaches into several files (a function signature, a type, a renamed export), edit all affected files in the same step: call edit_file several times in one response.',
-    '- Work inside the project directory by default. If the task requires an external path, call the file tools with that path: Diffra will request user approval for the exact path and read/write operation. Chat messages alone do not grant permission. Never bypass a rejection using shell commands. Session approval applies only to that path and operation, not the whole computer.',
-    '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: you cannot read, search or edit them. If you need something from them, ask the user.',
-    ...(readOnlyPaths.length > 0
-      ? [`- Never modify anything under these paths, they hold the user's data: ${readOnlyPaths.join(', ')}. Reading them is fine.`]
-      : []),
-    '- Do not weaken tests to make them pass: no deleting or skipping tests, no catch-all exception handling, no hard-coded expected values, unless the user asks for it.',
-    '- Do what was asked and nothing more: no extra features, refactors, options or abstractions the request does not need, and no handling for cases that cannot happen.',
-    '- When something fails, read the error and find the cause before changing approach. Do not repeat the same attempt unchanged, and do not give up after one failure.',
-    '- Do not take destructive shortcuts past an obstacle (such as --no-verify, git reset --hard, or deleting lock files); find out what the unfamiliar file or state is first.',
-    ...(bashPath
-      ? ['- Run tests and builds without piping their output through head, tail or grep: run_command already shortens long output, and a filter can hide the real error.']
-      : []),
-    ...(worker ? [] : ['- Older tool outputs may be removed from the conversation to save space. When you learn something you will need later (an error message, a value, a line number), state it in your reply.']),
-    '- Report results honestly: say which checks you actually ran and what they showed. If you could not verify something, say so.',
+    '# How you work',
+    '',
+    'Your tone is concise, direct and friendly. Keep the user informed about what you are doing without unnecessary detail, state your assumptions, and do not over-explain.',
+    '',
+    '## AGENTS.md',
+    '- Repositories can contain AGENTS.md files (some use CLAUDE.md) anywhere. They hold instructions for working in that part of the code: conventions, layout, how to build and test.',
+    '- A file applies to the whole directory tree that contains it. For every file you change, follow every AGENTS.md whose tree includes it. Deeper files win when they conflict; direct instructions from the user win over AGENTS.md.',
+    '- The files from the project root down to the working directory are already in your context; do not read them again. When you work in a subdirectory or outside the working directory, look for AGENTS.md files that apply there.',
+    '',
+    '## Context from Diffra',
+    '- Messages that start with "[Diffra]" or that hold <environment_context>, AGENTS.md instructions or <turn_aborted> come from Diffra, not from the user: the environment, instruction files, check results and reminders. A later update replaces the matching part of an earlier one.',
+    '',
+    '## Progress messages',
+    '- Before a group of related tool calls, say in one short sentence what you are about to do, building on what you found so far. Skip it for a single quick read.',
+    '- On long tasks, give a brief update now and then: what is done and what comes next.',
     ...(worker
       ? []
       : [
-          '- When a task spans several modules or the user asked for several things at once, show your step list with todo_write and send its updates together with your next tool call; skip it for ordinary read-change-test work. When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
-          '- When a question or a change first needs a broad look through code you do not know yet (several modules, many files), hand that exploration to an explore worker with delegate and keep your own context for the work itself. When you already know where to look, read or search directly.',
-          ...checkLines(checks),
-          '- If the user only asked a question and you changed nothing, just answer without calling finish.',
-          '- Reply in the same language the user writes in.',
+          '',
+          '## Planning',
+          '- Use update_plan for work with several distinct phases, or when the user asked for several things. Do not use it for questions or for simple changes you can make in a few actions, and do not pad a plan with obvious steps.',
+          '- Keep steps short (5-7 words), ordered and checkable. Keep exactly one step in_progress; mark steps completed as you finish them, in the same response as your next tool call. When the plan changes, send the new plan with a short explanation.',
+          '- Do not repeat the plan in your messages: the user sees it.',
         ]),
+    '',
+    '## Task execution',
+    ...(worker
+      ? ['- Keep going until your part is fully done, then report.']
+      : [
+          '- Keep going until the request is completely resolved before you end your turn. End your turn when the work is done, or when you genuinely need the user. Do not guess or make up answers: look at the code and run things.',
+          ...checkLines(checks),
+          '- When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
+          '- Start by looking at the project yourself: list the files (rg --files) and read the ones that matter. Hand exploration to an explore worker with delegate only when that first look shows the question or change reaches through many modules you do not know yet; for a small project or a change in a few files, do it yourself.',
+        ]),
+    '- Fix problems at the root cause, not with surface patches. Keep changes minimal, focused and consistent with the style of the surrounding code.',
+    '- Do what was asked and nothing more: no extra features, refactors, options or abstractions the request does not need, and no handling for cases that cannot happen. Do not fix unrelated bugs or tests; mention them instead.',
+    '- Do not weaken tests to make them pass: no deleting or skipping tests, no catch-all exception handling, no hard-coded expected values, unless the user asks for it.',
+    '- When something fails, read the error and find the cause before changing approach. Do not repeat the same attempt unchanged, and do not give up after one failure.',
+    '- Do not take destructive shortcuts past an obstacle (such as --no-verify, git reset --hard, or deleting lock files); find out what the unfamiliar file or state is first.',
+    '- Do not commit, create branches or push unless the user asks. Do not add license headers. Add comments only to explain a non-obvious reason, not to narrate the code.',
+    '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: apply_patch cannot change them, and you should not print them. If you need something from them, ask the user.',
+    ...(readOnlyPaths.length > 0 ? ["- Never change anything under the read-only paths listed in the environment context: they hold the user's data. Reading them is fine."] : []),
+    "- Work inside the project directory by default. Changing files outside it needs the user's approval, which Diffra asks for when you patch them. Chat messages alone do not grant permission, and a rejection must not be worked around with another command.",
+    '',
+    '## Validating your work',
+    '- When the project can be built or tested, use that to check your work: start with the tests closest to what you changed, then go broader. Add a test where the neighbouring code has tests; do not add a test setup to a project without one.',
+    "- Use the project's formatter or linter if it has one; do not add one.",
+    '- Report results honestly: say which checks you actually ran and what they showed. If you could not verify something, say so.',
+    '',
+    '## Ambition vs. precision',
+    '- In an existing codebase, do exactly what was asked with surgical precision: do not rename files or variables unnecessarily. For something brand new with loose requirements, you can be more ambitious.',
+    '',
+    '## Final message',
+    '- End with a message that reads like a concise update from a teammate: what you did, what you verified, anything left or worth doing next. Lead with the outcome; keep it short unless the user needs detail.',
+    '- Plain text with light Markdown. Put commands, paths and identifiers in backticks; reference code as `path:line`. Do not paste large files you wrote: the user has them.',
+    ...(worker ? [] : ['- If the user only asked a question, just answer it.', '- Reply in the same language the user writes in.']),
+    '',
+    '# Tool guidelines',
+    '',
+    '## exec_command',
+    ...(bashPath
+      ? [
+          `- Commands run in bash${process.platform === 'win32' ? ' (Git Bash on Windows)' : ''}: use bash syntax and forward slashes.`,
+          "- Search with rg (rg -n for text, rg --files for file names). Read files with sed -n 'START,ENDp' path, about 250 lines at a time, or cat for short files; nl -ba adds line numbers.",
+          '- When several commands do not depend on each other (reading or searching several files), call them in the same response: read-only commands run in parallel.',
+          '- A command still running when yield_time_ms is up keeps running in the background and you get a session ID: poll it with write_stdin, stop it with "\\u0003". Use this for dev servers, watchers and long builds; stop servers you no longer need.',
+          '- Run tests and builds without piping their output through head, tail or grep: long output is already shortened to its beginning and end, and a filter can hide the real error.',
+          "- Commands that may change things can need the user's approval; give a one-sentence justification for those. If the user rejects a command, do not retry it or get around it.",
+        ]
+      : ['- exec_command is unavailable because bash was not found.']),
+    '',
+    '## apply_patch',
+    '- apply_patch is the only way to create, change, delete or rename files; do not write files with shell commands. One patch can change several files: change everything a change touches (a signature, a type, a renamed export) in one patch.',
+    '- Copy context lines exactly from the current file. Do not read a file again after patching it: the patch fails if it did not apply.',
     ...(context.frontend ? frontendLines(context.frontend, skills.listed.has(DESIGN_SKILL), worker) : []),
     ...skills.lines,
   ]
   if (context.memory) lines.push('', MEMORY_HEADING, context.memory)
-  const projectRules = await readProjectRules(cwd)
-  if (projectRules) lines.push('', PROJECT_RULES_HEADING, projectRules)
   lines.push(...codingRuleLines(rulePacks, rules.review && !worker))
   return lines.join('\n')
 }
 
-// 编码规范排在项目规则之后，并写明优先级更低；只约束这次写或改的代码，免得模型顺手大改旧代码
+// 编码规范排在最后，并写明优先级低于用户和 AGENTS.md；只约束这次写或改的代码，免得模型顺手大改旧代码
 function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
   const { text, omitted } = renderRules(rulePacks)
   if (!text) return []
   return [
     '',
-    `${CODING_RULES_HEADING} They rank below the user's instructions and the project rules: when they conflict, follow those. ` +
+    `${CODING_RULES_HEADING} They rank below the user's instructions and AGENTS.md: when they conflict, follow those. ` +
       'Apply them to the code you write or change; do not rewrite unrelated existing code just to satisfy them.',
-    ...(review ? ['When you call finish, a reviewer checks your changes against these rules and reports violations by rule ID.'] : []),
+    ...(review ? ['When you end your turn after changing code, a reviewer checks your changes against these rules and reports violations by rule ID.'] : []),
     text,
     ...(omitted > 0 ? [`(${omitted} more rules were left out to save space.)`] : []),
   ]
 }
 
-// 告诉模型哪些检查会自动跑，免得它自己再跑一遍、还多弹一次权限确认
+// 结束门禁会自动跑哪些检查：告诉模型，免得它自己再跑一遍、还多弹一次权限确认
 function checkLines(checks: SessionChecks): string[] {
-  const finishCheck = checks.beforeFinish ?? checks.afterEdit
-  const lines: string[] = [
-    '- finish is TERMINAL, never an intermediate check. It runs the project checks itself, so when the change is the whole task call finish directly. Use verify_changes only when more steps follow the checks (commit, push, waiting for CI, publication), and remember that passing checks is not task completion.',
-    '- Define task_progress completion requirements only for release work, work that spans several turns, or a request with several separate parts; ordinary change-and-test work needs none and should just end with finish. Release tasks require commit, push, ci, publish ids; match real command receipts and concrete expected SHA/version/output. Never fabricate evidence or use echo/printf as proof of external actions. Use read-only queries against Git, CI and the actual update source.',
-    '- If you wrote a requirement of a non-release task wrong, call task_progress define again: the new list replaces the old one and its evidence is dropped. Release requirements cannot be removed, weakened or replaced.',
-    '- Use pause_task with waiting/blocked and a reason for missing credentials, permissions or unfinished CI; do not call finish to report a blocker. Saved requirements persist across turns and restarts.',
-  ]
-  if (finishCheck) {
-    lines.push(
-      `- When the task is done, call finish with a short summary. If you changed files, Diffra then runs \`${finishCheck}\`; if it fails, fix the problems and call finish again.`,
-      '- Diffra runs that check only when you call finish, not after each step. Do not run it yourself while you are still changing code; finish the whole change first.',
-    )
-  } else {
-    lines.push(
-      '- After changing code, verify it, for example by running the relevant tests with run_command.',
-      '- When the task is done, call finish with a short summary. No project checks are configured, so make sure you verified your changes.',
-    )
+  const command = checks.beforeFinish ?? checks.afterEdit
+  if (command) {
+    return [
+      `- When you end your turn after changing files, Diffra runs \`${command}\` automatically. If it fails, you get the errors and continue: fix them and end your turn again. Do not run that command yourself while you are still changing code; finish the whole change first.`,
+    ]
   }
-  return lines
+  return ['- No project checks are configured: after changing code, verify it yourself, for example by running the relevant tests.']
 }
 
 // 前端改动先跟着项目已有的设计走，改完在内置浏览器里检查；能看图的模型再按手机和桌面两种宽度截图对照
 function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designSkill: boolean, worker = false): string[] {
   const lines = [
     '',
-    'Front-end work (this project has UI code):',
+    '## Front-end work (this project has UI code)',
     '- Before changing UI, learn how the project builds it: the styling setup (Tailwind config, CSS variables or theme tokens), the shared components, and a similar existing screen. ' +
       'Reuse those components, colors, spacing and font sizes; do not add new colors, fonts or one-off sizes unless the user asks.',
     `- Match the screens around the change. For a new page or a redesign with no existing style to follow, settle on a clear visual direction before writing code${designSkill ? ` (read the ${DESIGN_SKILL} skill listed below)` : ''}.`,
@@ -154,7 +176,7 @@ function frontendLines(frontend: NonNullable<PromptContext['frontend']>, designS
   return lines
 }
 
-// 已装的 Skill 列成索引，任务对得上时模型自己用 read_file 读全文（Skill 目录本来就可以只读访问）
+// 已装的 Skill 列成索引，任务对得上时模型自己读全文（Skill 目录本来就可以只读访问）
 function skillIndex(skills: SkillInfo[]): { lines: string[]; listed: Set<string> } {
   const listed = new Set<string>()
   if (skills.length === 0) return { lines: [], listed }
@@ -185,19 +207,9 @@ function skillIndex(skills: SkillInfo[]): { lines: string[]; listed: Set<string>
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text)
 
-async function readProjectRules(cwd: string): Promise<string> {
-  const parts: string[] = []
-  for (const name of RULE_FILES) {
-    const text = await readFile(join(cwd, name), 'utf8').catch(() => null)
-    if (text?.trim()) parts.push(`--- ${name} ---\n${text.trim()}`)
-  }
-  const joined = parts.join('\n\n')
-  return joined.length > MAX_RULES_CHARS ? `${joined.slice(0, MAX_RULES_CHARS)}\n... (truncated)` : joined
-}
-
-// 系统提示词里通用说明和规则（项目规则、编码规范）各占多少字，用来估算上下文分项
+// 系统提示词里通用说明和编码规范各占多少字，用来估算上下文分项（AGENTS.md 在对话里，由 Session.usageBreakdown 另算）
 export function promptSections(prompt: string): { base: number; rules: number } {
-  const starts = [prompt.indexOf(PROJECT_RULES_HEADING), prompt.indexOf(CODING_RULES_HEADING)].filter((index) => index >= 0)
-  const base = starts.length > 0 ? Math.min(...starts) : prompt.length
+  const start = prompt.indexOf(CODING_RULES_HEADING)
+  const base = start >= 0 ? start : prompt.length
   return { base, rules: prompt.length - base }
 }

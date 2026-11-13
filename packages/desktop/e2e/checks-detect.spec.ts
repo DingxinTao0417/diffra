@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { read, replaceLines, startScriptedModel } from './scripted-model'
 
 test('在任务监控里自动检测完成检查，确认、试运行后保存，新任务完成时按它检查', async () => {
   test.setTimeout(90_000)
@@ -24,9 +24,9 @@ test('在任务监控里自动检测完成检查，确认、试运行后保存�
   )
   const model = await startScriptedModel([
     { text: '看过了' },
-    { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'old', new_string: 'new' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    { toolCalls: [read('a.txt')] },
+    { toolCalls: [replaceLines('a.txt', 'old', 'new')] },
+    { text: '改好了' },
   ])
   const app = await launchApp(userDataDir)
   try {

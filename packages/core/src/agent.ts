@@ -263,8 +263,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       environment,
       checkpoints,
       rulePacks,
-      systemPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, promptContext),
-      workerPrompt: await buildSystemPrompt(cwd, environment.bashPath, config, rulePacks, { ...promptContext, worker: true }),
+      systemPrompt: await buildSystemPrompt(environment.bashPath, config, rulePacks, promptContext),
+      workerPrompt: await buildSystemPrompt(environment.bashPath, config, rulePacks, { ...promptContext, worker: true }),
       readRoots: roots.map((root) => root.dir),
       outputRoot: options.sessionsDir ?? null,
       agentTypes: await loadAgentTypes(cwd),
@@ -455,6 +455,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     }))
     .onRequest(acp.methods.agent.session.delete, async ({ params }) => {
       if (sessions.get(params.sessionId)?.running) throw new Error('任务还在进行中，先停止再删除')
+      sessions.get(params.sessionId)?.execSessions.killAll()
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
       updateSeqs.delete(params.sessionId)

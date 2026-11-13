@@ -5,12 +5,12 @@ import { expect, type Page, test } from '@playwright/test'
 import { cards, chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { type ScriptStep, startScriptedModel } from './scripted-model'
+import { addFile, exec, read, replaceLines, type ScriptStep, startScriptedModel } from './scripted-model'
 
 // 搜六次，第六次报 11 万输入 token：没配窗口的模型按 12.8 万算，约 86%
 const searches = (round: string): ScriptStep[] =>
   Array.from({ length: 6 }, (_, index) => ({
-    toolCalls: [{ name: 'search', input: { pattern: `${round}-${index}` } }],
+    toolCalls: [exec(`grep -rn "${round}-${index}" .`)],
     promptTokens: index === 5 ? 110_000 : 1200,
   }))
 
@@ -20,6 +20,9 @@ async function openExecutionSettings(window: Page) {
 }
 
 const executionSettings = (userDataDir: string) => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).execution
+
+// 每次结果都一样的失败调用：改一个不存在的文件
+const stuckPatch: ScriptStep = { toolCalls: [replaceLines('missing.txt', 'TODO', 'DONE')] }
 
 test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务压缩成摘要接着做，卡片能展开看摘要', async () => {
   test.setTimeout(90_000)
@@ -71,7 +74,7 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     const card = cards(window, 'compaction')
     await expect(card).toHaveCount(1)
     await expect(card).toHaveAttribute('data-status', 'completed')
-    await expect(card).toContainText('较早的对话压缩成了下面的摘要')
+    await expect(card).toContainText('之前的对话压缩成了下面的交接摘要')
     await expect(card).not.toContainText('搜了六种写法都没找到')
     await card.getByRole('button').click()
     await expect(card).toContainText('用户要找 TODO；搜了六种写法都没找到。')
@@ -88,7 +91,8 @@ test('智能体反复做同样的操作：先提醒，再重复就停下并说�
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-stuck-'))
-  const same: ScriptStep = { toolCalls: [{ name: 'search', input: { pattern: 'TODO' } }] }
+  // 同一条命令、同样的输出（结果里的 Wall time 每次不同，不该让它们算成不同的结果）
+  const same: ScriptStep = { toolCalls: [exec('ls')] }
   const model = await startScriptedModel([same, same, same, same, same, same, { text: '不会走到这里' }])
   const app = await launchApp(userDataDir)
   try {
@@ -100,7 +104,7 @@ test('智能体反复做同样的操作：先提醒，再重复就停下并说�
 
     const notice = window.getByTestId('notice').filter({ hasText: '智能体在重复同样的操作，已停止' })
     await expect(notice).toBeVisible()
-    await expect(notice).toContainText('search {"pattern":"TODO"}')
+    await expect(notice).toContainText('exec_command {"cmd":"ls"}')
     expect(model.requests()).toBe(6)
   } finally {
     await app.close()
@@ -115,16 +119,15 @@ test('改了文件后卡住停下，撤销这一轮：结论改成未完成，�
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-stuck-restore-'))
   writeFileSync(join(project, 'hello.txt'), 'hello world\n')
-  const same: ScriptStep = { toolCalls: [{ name: 'search', input: { pattern: 'TODO' } }] }
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
-    same,
-    same,
-    same,
-    same,
-    same,
-    same,
+    { toolCalls: [read('hello.txt')] },
+    { toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')] },
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
     { text: '不会走到这里' },
   ])
   let app = await launchApp(userDataDir)
@@ -166,15 +169,17 @@ test('撤销到的那一轮开始时就有没验证的改动：撤销原因说�
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-carried-restore-'))
-  // 第一轮改完只回文字：拉回三次还不调 finish，记成没调 finish，改动带到第二轮
+  // 第一轮改完卡住停下，没走到结束门禁：改动还没验证，带到第二轮
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'first\n' } }] },
-    { text: '改好了' },
-    { text: '改好了' },
-    { text: '改好了' },
-    { text: '改好了' },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'second\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '两个文件都改好了' } }] },
+    { toolCalls: [addFile('a.txt', 'first\n')] },
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    stuckPatch,
+    { toolCalls: [addFile('b.txt', 'second\n')] },
+    { text: '两个文件都改好了' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -182,14 +187,14 @@ test('撤销到的那一轮开始时就有没验证的改动：撤销原因说�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '改一下 a')
-    await waitTaskStatus(window, 'unfinished')
-    expect(model.requests()).toBe(5)
+    await waitTaskStatus(window, 'stopped')
+    expect(model.requests()).toBe(7)
 
     await taskInput(window).fill('再改一下 b')
     await window.keyboard.press('Control+Enter')
     await expect(window.getByTestId('turn')).toHaveCount(2)
     await waitTaskDone(window)
-    expect(model.requests()).toBe(7)
+    expect(model.requests()).toBe(9)
 
     await cards(window, 'finish').getByRole('button', { name: '撤销改动', exact: true }).click()
     await expect(window.getByTestId('restore-list')).toContainText('b.txt')

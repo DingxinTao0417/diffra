@@ -3,7 +3,7 @@ import { EDIT_DIFF_META_KEY, type EditDiffMeta, type SessionUpdate, type StoredT
 // 改动卡片只带变化的那段，说明见 protocol.ts 的 EditDiffMeta
 const CONTEXT_LINES = 3
 
-type Diff = { path: string; oldText: string | null; newText: string }
+type Diff = { path: string; oldText: string | null; newText: string; deleted?: boolean }
 type DiffContent = Extract<ToolCallContent, { type: 'diff' }>
 
 // known：这一轮里每个文件最近一次改完后的全文（只在内存里）；和这次改之前的全文对不上时这次带上整份 base
@@ -20,7 +20,7 @@ export function compactEdit(known: Map<string, string>, diff: Diff): DiffContent
   const keepTail = Math.max(0, tail - CONTEXT_LINES)
   const oldPart = before.slice(from, before.length - keepTail)
   const newPart = after.slice(from, after.length - keepTail)
-  const meta: EditDiffMeta = { startLine: from + 1, oldLines: oldPart.length, newLines: newPart.length, ...(needsBase && diff.oldText !== null ? { base: diff.oldText } : {}) }
+  const meta: EditDiffMeta = { startLine: from + 1, oldLines: oldPart.length, newLines: newPart.length, ...(needsBase && diff.oldText !== null ? { base: diff.oldText } : {}), ...(diff.deleted ? { deleted: true } : {}) }
   return { type: 'diff', path: diff.path, oldText: diff.oldText === null ? null : oldPart.join('\n'), newText: newPart.join('\n'), _meta: { diffra: { [EDIT_DIFF_META_KEY]: meta } } }
 }
 

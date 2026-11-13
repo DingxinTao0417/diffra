@@ -5,14 +5,14 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, exec, read, startScriptedModel } from './scripted-model'
 
 test('任务监控默认十条改动，可展开全部和收起，审阅仍保留完整列表', async () => {
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-monitor-files-'))
   const model = await startScriptedModel([
-    { toolCalls: Array.from({ length: 12 }, (_, index) => ({ name: 'edit_file', input: { path: `file-${index}.txt`, old_string: '', new_string: 'content\n' } })) },
-    { toolCalls: [{ name: 'finish', input: { summary: '新增十二个文件' } }] },
+    { toolCalls: Array.from({ length: 12 }, (_, index) => addFile(`file-${index}.txt`, 'content\n')) },
+    { text: '新增十二个文件' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -46,9 +46,9 @@ test('本轮结论下列出失败的命令，点一下跳到对话里那一行�
     // false 在只读命令名单里，默认权限下直接执行，退出码 1；和前后两个工具收进同一个组
     {
       toolCalls: [
-        { name: 'list_files', input: { path: '.' } },
-        { name: 'run_command', input: { command: 'false' } },
-        { name: 'read_file', input: { path: 'notes.txt' } },
+        exec('ls'),
+        exec('false'),
+        read('notes.txt'),
       ],
     },
     // 一大段回复把上面的工具组挤出视口
@@ -87,11 +87,11 @@ test('同一条命令反复失败只列一行，按最近一次排序、标次�
     // 都在只读命令名单里，直接执行、都会失败；false 只重复两次，不到原地打转的三次
     {
       toolCalls: [
-        { name: 'run_command', input: { command: 'false' } },
-        { name: 'run_command', input: { command: 'cat a.txt' } },
-        { name: 'run_command', input: { command: 'false' } },
-        { name: 'run_command', input: { command: 'cat b.txt' } },
-        { name: 'run_command', input: { command: 'ls c' } },
+        exec('false'),
+        exec('cat a.txt'),
+        exec('false'),
+        exec('cat b.txt'),
+        exec('ls c'),
       ],
     },
     { text: Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 段说明`).join('\n\n') },

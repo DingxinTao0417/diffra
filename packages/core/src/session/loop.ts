@@ -4,13 +4,13 @@ import { basename, isAbsolute, join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, RetryError, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
-import { overloadedModelError, rejectsToolChoice, retryableModelError, toModelError } from '../models/errors.js'
+import { overloadedModelError, rejectsToolChoice, retryableStreamError, toModelError } from '../models/errors.js'
 import { streamParts } from '../models/stream.js'
 import { devServerParamsSchema } from './config.js'
-import { newTaskState, pauseTaskSchema, pendingRequirements, recordTaskReceipt, releaseEvidenceProblem, requiresReleaseContract, TASK_STATE_META_KEY, updateTask } from './task-state.js'
+import { newTaskState, TASK_STATE_META_KEY } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import { commandKeys, classifyCommand, gitSubcommands } from '../permissions.js'
-import { truncateLines } from '../process.js'
+import { type CommandPolicy, commandKeys, classifyCommand, gitSubcommands, isReadOnlyCommand } from '../permissions.js'
+import { truncateForModel } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
 import {
@@ -55,10 +55,11 @@ import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
 import { gitBroughtPaths, projectHead } from './git-moves.js'
 import { runHook } from './hooks.js'
-import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
+import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
-import { runWaitCommand, WAIT_COMMAND_TOOL } from './wait.js'
+import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
+import { injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
   annotateDiff,
@@ -81,7 +82,7 @@ import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import { compactEdit } from './edit-diff.js'
 import type { Session } from './session.js'
-import { executeTool, isToolName, parseFinishInput, startTitle, TOOL_KINDS } from './tools.js'
+import { executeTool, isToolName, startTitle, TOOL_KINDS } from './tools.js'
 import {
   type CheckExhaustion,
   checkExhaustion,
@@ -96,14 +97,14 @@ import {
   remainingLines,
 } from './check-progress.js'
 
-// finish 门禁因检查命令以外的原因（完成条件、证据、安全检查、规范审查）连续打回，或只回文字被拉回，超过次数就停下交给用户；
+// 结束门禁因检查命令以外的原因（安全检查、规范审查、架构检查）连续打回，超过次数就停下交给用户；
 // 检查命令不过按错误有没有进展计数，见 check-progress.ts
 const MAX_GATE_ATTEMPTS = 3
 // 检查卡住停下时，提示里列几条剩余错误；下一轮交给模型几条
 const STOP_ERROR_LINES = 5
 const RESUME_ERROR_LINES = 20
 const SAME_CHANGE_HINT =
-  'If the remaining errors are in files that belong to the same change, update them together in the next step: edit_file can be called several times in one step.'
+  'If the remaining errors are in files that belong to the same change, fix them together: one apply_patch can change several files.'
 // 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
 export const STUCK_REPEATS = 3
 // 回复被输出上限截断：只回了半截文字，或最后一个工具调用的参数被截断没执行，就提醒模型接着做、把改动拆小。
@@ -112,17 +113,26 @@ const MAX_TRUNCATION_RESUMES = 2
 // 流式回复说到一半连接断了（第 438 步）：已经说出的文字交回对话，让模型接着往下说
 export const INTERRUPTION_NOTE =
   '[Diffra] Your previous response was cut off by a network error before it finished. Continue exactly from where it stopped, with no apology and no recap of what you already wrote.'
-// 服务暂时出错、连接中途断开时，同一步最多自动重发几次，每次多等一会儿
-const MAX_STREAM_RETRIES = 3
-const STREAM_RETRY_DELAY_MS = 2000
+// 服务暂时出错、连接中途断开、太久没有输出时，同一步最多自动重发几次；退避从 200 毫秒起每次翻倍，上下浮动一成（第 513 步，Codex 的默认值）
+const MAX_STREAM_RETRIES = 5
+const STREAM_RETRY_BASE_MS = 200
+// 用户停下这一轮时写进对话的标记，下一轮模型知道上一轮是被打断的（参照 Codex 的 <turn_aborted>）
+export const TURN_ABORTED_NOTE =
+  '<turn_aborted>\nThe user interrupted the previous turn on purpose. Commands that were running at that moment were stopped; processes started earlier may still be running in the background. If any tool calls were aborted, they may have partially executed.\n</turn_aborted>'
+
+function retryDelay(attempt: number): number {
+  return STREAM_RETRY_BASE_MS * 2 ** (attempt - 1) * (0.9 + Math.random() * 0.2)
+}
 export const TRUNCATION_NOTE =
   '[Diffra] Your previous response was cut off by the output token limit. Continue from where it stopped, with no apology and no recap. ' +
-  'A tool call that was cut off was not executed: make that change again in smaller pieces (several edit_file calls instead of one large one; ' +
-  'write a large new file in parts). Keep each response shorter.'
+  'A tool call that was cut off was not executed: make that change again in smaller pieces (several smaller apply_patch calls instead of one large one; ' +
+  'add a large new file in parts). Keep each response shorter.'
 // 深度扫描用：上下文用到这个比例时要求交报告
 export const CONTEXT_STOP_RATIO = 0.8
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const CHECK_TIMEOUT_SECONDS = 300
+// 结束门禁里检查命令的输出交给模型时的上限（token）
+const CHECK_OUTPUT_TOKENS = 3_000
 
 // 主循环和外界（ACP 客户端）打交道的两个口子，测试时可以替换
 export interface TurnIO {
@@ -173,19 +183,9 @@ export function modelLabel(model: SessionModel): string {
   return model.provider ? `${model.provider.name} / ${model.modelId}` : model.modelId
 }
 
-// goalMaxRounds：目标模式，模型每轮做完调 finish 并说明目标达成没有，没达成就自动开始下一轮，最多这么多轮
+// goalMaxRounds：目标模式，模型停下时目标还没标完成就自动接着做下一轮，最多这么多轮（见 goal.ts）
 export interface TurnOptions {
   goalMaxRounds?: number
-}
-
-function goalRequest(text: string, maxRounds: number): string {
-  return [
-    `[Diffra] Goal mode. Work toward the goal below on your own over up to ${maxRounds} rounds; do not wait for the user between rounds.`,
-    'In each round make concrete progress, verify it, then call finish. In finish set goal_met to true only when the goal and its completion criteria are fully met and verified; otherwise set goal_met to false and say in the summary what remains.',
-    '',
-    'Goal:',
-    text,
-  ].join('\n')
 }
 
 // 提问的文字和图片；没有图片时就是一段文字
@@ -194,6 +194,8 @@ function userContent(text: string, images: PromptImage[]): ModelMessage['content
   return [{ type: 'text', text }, ...images.map((image) => ({ type: 'image' as const, image: image.data, mediaType: image.mimeType }))]
 }
 
+// 一轮的主循环（第 504 步起参照 Codex）：模型不再调工具就是想停下。停下前过结束门禁：这一轮改了文件就跑检查，
+// 没过把问题交回去让它接着改，过了这一轮才算完成。没有 finish 这类「我做完了」的工具
 export async function runTurn(
   session: Session,
   turn: { id: string; text: string; images?: PromptImage[] },
@@ -206,17 +208,20 @@ export async function runTurn(
   // 重新生成沿用同一个轮次 id，上一次的清单不能拿来收尾
   session.stepList = null
   if (session.taskState.status === 'completed') session.taskState = newTaskState()
-  session.taskState = { ...session.taskState, status: 'running', reason: null, contractRequired: session.taskState.contractRequired || requiresReleaseContract(turn.text), releaseVersion: session.taskState.releaseVersion ?? turn.text.match(/\bv?(\d+\.\d+\.\d+)\b/)?.[1] ?? null }
+  session.taskState = { ...session.taskState, status: 'running', reason: null }
   const goalMaxRounds = options.goalMaxRounds ?? null
+  // 目标模式里模型用 update_goal 标的状态
+  let goal: GoalStatus | null = goalMaxRounds === null ? null : 'active'
+  let goalReason: string | null = null
   // 目标模式每一轮都有一份步数上限
   const maxSteps = (session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY) * (goalMaxRounds ?? 1)
   let active: ActiveModel = { language: session.model, config: session.config.model }
   const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let escalated = false
-  // 完成检查按进展计数，这一轮的失败总数有上限
-  let finishChecks = newCheckTracker()
+  // 结束门禁的检查命令按进展计数，这一轮的失败总数有上限
+  let endChecks = newCheckTracker()
   let checkFailures = 0
-  // 完成门禁因检查命令以外的原因打回、只回文字被拉回的次数；检查命令不过的打回不算，那部分按进展计数
+  // 结束门禁因检查命令以外的原因（安全检查、规范审查、架构检查）连续打回的次数
   let gateAttempts = 0
   // 卡住或连续失败时，配了兜底模型就换它做这一轮剩下的部分；每轮最多换一次。换成了返回 true
   const escalate = async (reason: string, note: string): Promise<boolean> => {
@@ -224,7 +229,7 @@ export async function runTurn(
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
     // 不管因为哪一项换的人，各项计数都重新开始，否则另一项马上到头、备用模型一步没做就停了；上次失败的输出留着，备用模型的失败照样和它比
-    finishChecks.stalled = 0
+    endChecks.stalled = 0
     checkFailures = 0
     gateAttempts = 0
     active = { language: session.fallbackModel, config: fallback }
@@ -235,18 +240,18 @@ export async function runTurn(
     })
     return true
   }
-  // 本轮被接受的 finish 合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
+  // 本轮结束门禁合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
   let turnFinish: TurnOutcome['finish'] = null
   let stop: TurnStop | null = null
   let errorKind: TurnOutcome['errorKind']
-  // 完成检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
+  // 结束门禁的检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
   const checkStuck = async (command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
     const stalled = exhaustion === 'stalled'
     const escalatedNow = await escalate(
       stalled ? `完成检查连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展` : `完成检查这一轮已经失败 ${MAX_CHECK_FAILURES_PER_TURN} 次`,
       stalled
-        ? `The finish check \`${command}\` failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
-        : `The finish check failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
+        ? `The check \`${command}\` failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
+        : `The check failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
     )
     if (escalatedNow) return false
     const parsed = tracker.last!
@@ -274,15 +279,13 @@ export async function runTurn(
     await prepareMcpTools(session, io)
     // MCP 服务器启动时可能写文件，指纹在它之后取
     let turnStartFingerprint = await workspaceFingerprint(session)
-    const requestIndex = session.messages.length
+    // 环境、项目说明文件放在这一轮的提问前面（第一次是全量，之后只有变化）
+    await injectWorldState(session)
     session.messages.push({
       role: 'user',
       content: userContent(goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds), turn.images ?? []),
     } as ModelMessage)
     await publishTaskState(session, io)
-    if (session.taskState.contractRequired || session.taskState.requirements.length > 0) {
-      session.messages.push({ role: 'user', content: `[Diffra] Saved completion contract: ${JSON.stringify(session.taskState)}. Define concrete completion requirements with task_progress before release work (ids commit, push, ci, publish). Continue unfinished stages; checks passing alone is not completion. Use pause_task for blockers.` })
-    }
     if (session.unresolvedCheck) {
       session.messages.push({
         role: 'user',
@@ -295,10 +298,8 @@ export async function runTurn(
     }
     let round = 1
 
-    session.verifiedSnapshot = null
+    // 待验证从之前的轮次带过来时，这一轮停下前同样要过结束门禁
     let editedThisTurn = session.taskState.needsVerification
-    // 待验证是从之前的轮次带过来的、本轮还没改过文件：拉回时不能说「本轮改了文件」
-    let editsCarried = editedThisTurn
     let commandedThisTurn = false
     const compaction: CompactionState = { cooldownUntil: 0 }
     // 调用签名 → 自上次成功编辑以来出现的次数
@@ -312,7 +313,7 @@ export async function runTurn(
     const team = newTeam()
 
     for (let step = 0; step < maxSteps; step++) {
-      const compacted = await compactIfNeeded(session, { window: contextWindow(), requestIndex, step, state: compaction, model: active }, signal, io)
+      const compacted = await compactIfNeeded(session, { window: contextWindow(), step, state: compaction, model: active }, signal, io)
       if (compacted.kind === 'cancelled') return 'cancelled'
       if (compacted.kind === 'too-large') {
         await notice(io, 'warning', '上下文压缩后仍然太大，已停止', '最近几步的内容太多（比如一次读了很大的文件）。可以开一个新会话继续，或缩小任务范围。')
@@ -325,17 +326,20 @@ export async function runTurn(
         return 'max_tokens'
       }
 
+      // 每一步重新看一次：说明文件改了、日期变了、权限模式换了，追加一条变化；压缩、撤销后模型不知道的部分重新发
+      await injectWorldState(session)
       const sentChars = contextChars(session)
       let stepResult: Awaited<ReturnType<typeof streamStep>>
       try {
-        stepResult = await streamStep(session, active, signal, io)
+        stepResult = await streamStep(session, active, signal, io, goal === null ? undefined : GOAL_TOOLS)
       } catch (error) {
         // 限流或服务过载，自动重试用完了还是这样（第 438 步）：配了备用模型就换它接着这一步，没配照旧停下
         if (!signal.aborted && overloadedModelError(error) && (await escalate('编码模型的服务一直限流或暂时不可用', 'The previous model\'s service kept rejecting requests (rate limit or overload).'))) continue
         throw error
       }
       const { toolCalls, inputTokens, cacheRead, cacheWrite, answered, truncated, interrupted } = stepResult
-      noteText(spin, assistantText(stepResult.responseMessages))
+      const said = assistantText(stepResult.responseMessages)
+      noteText(spin, said)
       if (!truncated) truncations = 0
       const resumeTruncated = truncated && truncations < MAX_TRUNCATION_RESUMES && !signal.aborted
       if (inputTokens > 0) {
@@ -354,42 +358,75 @@ export async function runTurn(
           session.messages.push({ role: 'user', content: interrupted ? INTERRUPTION_NOTE : TRUNCATION_NOTE })
           continue
         }
-        // 命令或 MCP 工具改的文件平时到 finish 才比指纹，只回文字时也比一次，改了就和 edit_file 一样拉回来走完成门禁
-        // 待验证是带过来的时候 finish 不再比指纹，拉回时靠这次比较说清本轮改没改
-        const commandEdits = commandedThisTurn && !signal.aborted && (!editedThisTurn || editsCarried) && (await changesOutsideEdits(session, turnStartFingerprint, true)) === 'edited'
-        if (commandEdits) {
+        if (signal.aborted) return 'cancelled'
+        // 目标模式里模型标了受阻：照原样停下，改动留着待验证（和以前的 pause_task 一样不跑门禁）
+        if (goal === 'blocked') {
+          session.taskState = { ...session.taskState, status: 'blocked', reason: goalReason ?? '目标模式遇到阻塞，需要你处理后再继续。' }
+          stop = 'paused'
+          return 'end_turn'
+        }
+        // 结束门禁（参照 Codex 的 Stop 钩子）：命令、MCP 工具改的文件靠工作区指纹看出来
+        const changes = editedThisTurn ? 'edited' : await changesOutsideEdits(session, turnStartFingerprint, commandedThisTurn)
+        if (changes === 'edited') {
           editedThisTurn = true
           session.taskState.needsVerification = true
         }
-        // 改了文件却没调 finish：拉回来走完成门禁；目标模式里只回了文字也要拉回来，让它说明目标达成没有
-        const finishExpected = editedThisTurn || goalMaxRounds !== null || session.taskState.contractRequired || pendingRequirements(session.taskState).length > 0
-        if (finishExpected && gateAttempts < MAX_GATE_ATTEMPTS && !signal.aborted) {
+        const gate = await runEndGate(session, turn.id, changes, said, endChecks, signal, io)
+        if (signal.aborted) return 'cancelled'
+        if (!gate.passed) {
+          // 检查没过，目标也就还没完成
+          if (goal === 'complete') goal = 'active'
+          session.messages.push({ role: 'user', content: gate.feedback })
+          if (gate.failedCheck) {
+            checkFailures++
+            const exhaustion = checkExhaustion(endChecks, checkFailures)
+            if (exhaustion && (await checkStuck(gate.failedCheck, endChecks, exhaustion))) return 'end_turn'
+            continue
+          }
           gateAttempts++
-          session.messages.push({
-            role: 'user',
-            content: editedThisTurn
-              ? editsCarried
-                ? commandEdits
-                  ? '[Diffra] File changes from earlier turns, and the files your commands or MCP tools changed in this turn, have not been verified yet. Verify them, then call finish.'
-                  : '[Diffra] File changes from earlier turns have not been verified yet. Verify them, then call finish.'
-                : '[Diffra] You changed files but did not call finish. Verify your changes, then call finish.'
-              : goalMaxRounds !== null ? '[Diffra] Goal mode: keep working, and call finish with goal_met when this round is done.'
-              : '[Diffra] Completion requirements remain unfinished. Continue executing the saved stages and satisfy them using real receipts, or call pause_task with a specific blocker. Do not stop after checks pass.',
-          })
+          if (gateAttempts >= MAX_GATE_ATTEMPTS) {
+            const escalatedNow = await escalate(`结束前的检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`, `The checks before ending the turn failed ${MAX_GATE_ATTEMPTS} times in a row.`)
+            if (!escalatedNow) {
+              await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
+              stop = 'gate-exhausted'
+              return 'end_turn'
+            }
+          }
           continue
         }
-        if (finishExpected) stop = 'no-finish'
-        return signal.aborted ? 'cancelled' : 'end_turn'
+        if (gate.verification) turnFinish = mergeFinish(turnFinish, gate.verification)
+        session.taskState.needsVerification = false
+        if (goal === null || goal === 'complete') {
+          session.taskState = { ...session.taskState, status: 'completed', reason: null }
+          await settleSteps(session, io)
+          if (goal === 'complete') await notice(io, 'info', `目标已完成（用了 ${round} 轮）`)
+          return 'end_turn'
+        }
+        if (round >= goalMaxRounds!) {
+          await notice(io, 'warning', `目标模式已用完 ${goalMaxRounds} 轮，目标还没完成`, '改动保留在工作区，发「继续」可以接着做。')
+          stop = 'goal-exhausted'
+          return 'end_turn'
+        }
+        // 目标还没完成：自动开始下一轮（参照 Codex 的 goal 续跑），各项计数从这一轮重新开始
+        round++
+        gateAttempts = 0
+        checkFailures = 0
+        endChecks = newCheckTracker()
+        editedThisTurn = false
+        commandedThisTurn = false
+        turnStartFingerprint = await workspaceFingerprint(session)
+        warnedStuck = false
+        repeats.clear()
+        await notice(io, 'info', `目标模式第 ${round} 轮`)
+        session.messages.push({ role: 'user', content: goalContinuation(round, goalMaxRounds!) })
+        continue
       }
 
       const results: ToolResultPart[] = []
-      const screenshots: PromptImage[] = []
+      const images: PromptImage[] = []
       let editedThisStep = false
-      // 这一步 finish 或 verify_changes 被检查命令打回时是那条命令
-      let failedFinishCheck: string | null = null
-      let finished: { summary: string; goalMet: boolean } | null = null
       let repeated: StepToolCall | null = null
-      // 同一步里连续的只读调用一起开跑，结果照原来的顺序处理（第 443 步）；轮到这一串的第一个时才开跑，排在它前面的编辑、命令已经执行完
+      // 同一步里连续的只读调用一起开跑，结果照原来的顺序处理（第 509 步，参照 Codex 的读写锁）；轮到这一串的第一个时才开跑，排在它前面的改动已经做完
       const prefetched: PrefetchedReads = new Map()
       for (let index = 0; index < toolCalls.length; index++) {
         const call = toolCalls[index]!
@@ -402,8 +439,30 @@ export async function runTurn(
           results.push(errorResult(call, 'Cancelled by the user.'))
           continue
         }
+        if (call.toolName === UPDATE_GOAL_TOOL && goal !== null) {
+          const parsed = goalInput.safeParse(call.input)
+          if (!parsed.success) {
+            results.push(errorResult(call, parsed.error.issues.map((issue) => issue.message).join('; ')))
+            continue
+          }
+          goal = parsed.data.status
+          goalReason = parsed.data.reason ?? null
+          await io.update({
+            sessionUpdate: 'tool_call',
+            toolCallId: call.toolCallId,
+            title: goal === 'complete' ? '标记目标完成' : '标记目标受阻',
+            kind: 'other',
+            status: 'completed',
+            rawInput: call.input,
+            ...(goalReason ? { content: [{ type: 'content', content: { type: 'text', text: goalReason } }] } : {}),
+          })
+          results.push(textResult(call, goal === 'complete'
+            ? 'Goal marked complete. End your turn with a short summary for the user; Diffra runs the project checks before the turn ends.'
+            : 'Goal marked blocked. End your turn and tell the user what you need from them.'))
+          continue
+        }
         if (call.toolName === DELEGATE_TOOL && !call.invalid) {
-          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，完成时照常过完成门禁
+          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，停下时照常过结束门禁
           const batch = [call]
           while (index + batch.length < toolCalls.length) {
             const next = toolCalls[index + batch.length]!
@@ -417,64 +476,14 @@ export async function runTurn(
             if (!outcome.edited) continue
             editedThisStep = true
             editedThisTurn = true
-            editsCarried = false
             session.taskState.needsVerification = true
             repeats.clear()
           }
           continue
         }
-        if (call.toolName === 'pause_task' && !call.invalid) {
-          const paused = pauseTaskSchema.safeParse(call.input)
-          if (!paused.success) { results.push(errorResult(call, paused.error.message)); continue }
-          session.taskState = { ...session.taskState, ...paused.data }
-          results.push(textResult(call, 'Task paused, NOT completed. Remaining requirements are saved.'))
-          const remaining = toolCalls.slice(toolCalls.indexOf(call) + 1).filter((item) => !answered.has(item.toolCallId))
-          results.push(...remaining.map((item) => errorResult(item, 'Task paused; this batched call was not executed.')))
-          session.messages.push({ role: 'tool', content: results })
-          await publishTaskState(session, io)
-          stop = 'paused'
-          return signal.aborted ? 'cancelled' : 'end_turn'
-        }
-        if ((call.toolName === 'finish' || call.toolName === 'verify_changes') && !call.invalid) {
-          if (call.toolName === 'finish' && toolCalls.indexOf(call) < toolCalls.length - 1) {
-            results.push(errorResult(call, 'finish must be the final call in a batch. Execute all remaining actions, then finish separately.'))
-            continue
-          }
-          const verificationOnly = call.toolName === 'verify_changes'
-          const missing = pendingRequirements(session.taskState)
-          if (!verificationOnly && (missing.length > 0 || (session.taskState.contractRequired && session.taskState.requirements.length === 0))) {
-            await showFinishCard(io, call, 'failed', `完成条件未满足：${missing.map((item) => item.title).join('、') || '还没有定义提交、推送、CI 和发布这几项'}`)
-            results.push(errorResult(call, `Task is NOT complete. Define/satisfy task_progress requirements with real command receipts before finish. Remaining: ${missing.map((item) => item.title).join(', ') || 'commit, push, ci, publish'}. Use verify_changes for intermediate validation or pause_task for blockers.`))
-            gateAttempts++
-            continue
-          }
-          const evidenceProblem = verificationOnly ? null : releaseEvidenceProblem(session.taskState)
-          if (evidenceProblem) {
-            await showFinishCard(io, call, 'failed', evidenceProblem)
-            results.push(errorResult(call, evidenceProblem))
-            gateAttempts++
-            continue
-          }
-          const changes = verificationOnly || editedThisTurn ? 'edited' : await changesOutsideEdits(session, turnStartFingerprint, commandedThisTurn)
-          // 命令或 MCP 改了文件，和 edit_file 一样记下：门禁打回后只回文字也要拉回来
-          if (changes === 'edited' && !verificationOnly) {
-            editedThisTurn = true
-            session.taskState.needsVerification = true
-          }
-          const gate = await runFinishGate(session, call, turn.id, changes, finishChecks, signal, io, verificationOnly)
-          results.push(gate.result)
-          if (gate.passed && !verificationOnly) {
-            finished = { summary: gate.summary, goalMet: gate.goalMet }
-            turnFinish = mergeFinish(turnFinish, gate.verification)
-            await settleSteps(session, io)
-          } else if (!gate.passed && gate.failedCheck) {
-            failedFinishCheck = gate.failedCheck
-            checkFailures++
-          } else if (!gate.passed) gateAttempts++
-          continue
-        }
-        if (call.toolName === 'run_command' || call.toolName === 'dev_server_start' || call.toolName.startsWith('mcp__')) commandedThisTurn = true
-        if (call.toolName === 'run_command' && !call.invalid && (await deepScanFirst(session, call, io))) {
+        const command = execCommandOf(call)
+        if ((command !== null && !isReadOnlyCommand(command)) || call.toolName === 'write_stdin' || call.toolName === 'dev_server_start' || call.toolName.startsWith('mcp__')) commandedThisTurn = true
+        if (await deepScanFirst(session, call, io)) {
           // 用户选了先做深度扫描：这条命令和这一步后面的调用都不执行，这一轮停下，客户端接着发起本任务改动的深度扫描
           results.push(errorResult(call, DEEP_SCAN_FIRST_NOTE))
           const remaining = toolCalls.slice(index + 1).filter((item) => !answered.has(item.toolCallId))
@@ -485,72 +494,36 @@ export async function runTurn(
           stop = 'deep-scan'
           return 'end_turn'
         }
-        const headBefore = call.toolName === 'run_command' && !call.invalid ? await headBeforeGit(session, call) : null
+        const headBefore = await headBeforeGit(session, call)
         prefetchReads(session, toolCalls, index, answered, prefetched, signal, io)
         const outcome = await (prefetched.get(call.toolCallId) ?? runToolCall(session, call, signal, io))
         if (headBefore) turnStartFingerprint = await shiftBaselineAfterGit(session, turn.id, headBefore, turnStartFingerprint)
         results.push(outcome.result)
-        screenshots.push(...(outcome.images ?? []))
+        images.push(...(outcome.images ?? []))
         if (outcome.edited) {
           editedThisStep = true
           editedThisTurn = true
-          editsCarried = false
           session.taskState.needsVerification = true
           repeats.clear()
           noteEdit(spin)
         } else {
           noteCall(spin, call.toolName, call.input)
-          const key = callSignature(call, outcome.result)
-          const count = (repeats.get(key) ?? 0) + 1
-          repeats.set(key, count)
-          if (count >= STUCK_REPEATS) repeated = call
+          // 轮询还在跑的命令，结果一样是在等它，不算原地打转；轮询报错（会话号不对）照样算
+          if (!isPolling(call.toolName, call.input) || outcome.result.output.type === 'error-text') {
+            const key = callSignature(call, outcome.result)
+            const count = (repeats.get(key) ?? 0) + 1
+            repeats.set(key, count)
+            if (count >= STUCK_REPEATS) repeated = call
+          }
         }
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
       if (editedThisStep) await publishTaskState(session, io)
-      if (screenshots.length > 0) session.messages.push(screenshotMessage(screenshots))
+      if (images.length > 0) session.messages.push(screenshotMessage(images))
       // 截断的工具调用参数不完整，AI SDK 已经回了参数错误；再说清是被截断了，免得模型原样重发同样长的调用
       if (resumeTruncated && toolCalls.some((call) => answered.has(call.toolCallId))) {
         truncations++
         session.messages.push({ role: 'user', content: TRUNCATION_NOTE })
-      }
-
-      if (signal.aborted) return 'cancelled'
-      if (finished && goalMaxRounds === null) {
-        session.taskState = { ...session.taskState, status: 'completed', needsVerification: false, reason: null }
-        return 'end_turn'
-      }
-      if (finished && finished.goalMet) {
-        session.taskState = { ...session.taskState, status: 'completed', needsVerification: false, reason: null }
-        await notice(io, 'info', `目标已完成（用了 ${round} 轮）`)
-        return 'end_turn'
-      }
-      if (finished && round >= goalMaxRounds!) {
-        // 目标没达成，但这次 finish 已经过了完成门禁，改动不再算没验证的
-        session.taskState.needsVerification = false
-        await notice(io, 'warning', `目标模式已用完 ${goalMaxRounds} 轮，目标还没完成`, `最后一轮的总结：${finished.summary}`)
-        stop = 'goal-exhausted'
-        return 'end_turn'
-      }
-      if (finished) {
-        round++
-        gateAttempts = 0
-        checkFailures = 0
-        finishChecks = newCheckTracker()
-        editedThisTurn = false
-        editsCarried = false
-        // 上一轮的改动已经过了那一轮的完成门禁，指纹从这一轮开始比
-        commandedThisTurn = false
-        turnStartFingerprint = await workspaceFingerprint(session)
-        warnedStuck = false
-        repeats.clear()
-        await notice(io, 'info', `目标模式第 ${round} 轮`, `上一轮还剩：${finished.summary}`)
-        session.taskState.needsVerification = false
-        session.messages.push({
-          role: 'user',
-          content: `[Diffra] Goal mode, round ${round} of ${goalMaxRounds}: the goal is not met yet. Continue toward it.`,
-        })
-        continue
       }
       if (signal.aborted) return 'cancelled'
 
@@ -578,26 +551,11 @@ export async function runTurn(
           role: 'user',
           content:
             `[Diffra] You made the same call ${STUCK_REPEATS} times and got the same result each time, without changing any file in between. ` +
-            'Stop repeating it: try a different approach, or call finish and explain what is blocking you.',
+            'Stop repeating it: try a different approach, or stop and tell the user what is blocking you.',
         })
       }
 
       for (const reminder of takeSpinReminders(spin)) session.messages.push({ role: 'user', content: reminder })
-
-      // 改的过程中不跑任何检查（第 431 步）：检查命令、安全检查、规范审查都在 finish 时一起跑
-      const finishExhaustion = failedFinishCheck ? checkExhaustion(finishChecks, checkFailures) : null
-      if (failedFinishCheck && finishExhaustion && (await checkStuck(failedFinishCheck, finishChecks, finishExhaustion))) return 'end_turn'
-      if (gateAttempts >= MAX_GATE_ATTEMPTS) {
-        const escalatedNow = await escalate(
-          `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`,
-          `Finishing was rejected ${MAX_GATE_ATTEMPTS} times in a row.`,
-        )
-        if (!escalatedNow) {
-          await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
-          stop = 'gate-exhausted'
-          return 'end_turn'
-        }
-      }
     }
     await notice(io, 'warning', `已达到单次任务的步数上限（${maxSteps} 步），已停止`, '发消息让它继续，或在「设置 → 任务执行」里调整上限。')
     stop = 'step-limit'
@@ -615,7 +573,8 @@ export async function runTurn(
     if (signal.aborted) {
       stop = 'cancelled'
       session.taskState = { ...session.taskState, status: 'cancelled', reason: '用户取消，任务并未完成。' }
-    } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '本轮已停止，未通过完整任务完成门禁；可继续执行剩余步骤。' }
+      session.messages.push({ role: 'user', content: TURN_ABORTED_NOTE })
+    } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '这一轮没有走完就停了，任务还没完成；可以接着执行剩余步骤。' }
     session.activeTurn = null
     // 设计页收起主智能体的光标
     if (session.design) await endDesignAgent(io)
@@ -634,8 +593,8 @@ async function afterEditHook(session: Session, path: string, written: string, si
   const hook = await runHook(session, 'afterEdit', { DIFFRA_FILE: path }, signal)
   if (!hook.ok) return `\n[The project's after-edit hook failed: ${hook.output || 'no output'}]`
   const now = await readFile(path, 'utf8').catch(() => null)
-  // 钩子改了文件：模型手里的内容过期了，下次编辑前得重读（read-before-edit 的哈希对不上，也会要求它重读）
-  return now !== null && now !== written ? '\n[The project\'s after-edit hook changed this file (for example a formatter). Read it again before editing it further.]' : ''
+  // 钩子改了文件：模型手里的内容过期了，下次改之前得重读
+  return now !== null && now !== written ? `\n[The project's after-edit hook changed ${basename(path)} (for example a formatter). Read it again before patching it further.]` : ''
 }
 
 // 每轮开始时取一次 MCP 工具，这一轮里不变；连不上的服务器提示一下，照常开始
@@ -667,7 +626,7 @@ async function workspaceFingerprint(session: Session): Promise<string | null> {
 
 type TurnChanges = 'edited' | 'none' | 'unknown'
 
-// 没用 edit_file 等工具改文件时，工作区指纹变了也算有改动；取不到指纹又跑过命令或 MCP 工具，就不知道有没有改
+// 没用 apply_patch 改文件时，工作区指纹变了也算有改动（命令、MCP 工具改的）；取不到指纹又跑过命令或 MCP 工具，就不知道有没有改
 async function changesOutsideEdits(session: Session, startFingerprint: string | null, commanded: boolean): Promise<TurnChanges> {
   if (startFingerprint !== null) {
     const current = await workspaceFingerprint(session)
@@ -677,13 +636,13 @@ async function changesOutsideEdits(session: Session, startFingerprint: string | 
   return commanded ? 'unknown' : 'none'
 }
 
-async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO) {
+async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO, extraTools?: ToolSet) {
   const step = await streamModelStep(
     {
       model: active.language,
       system: session.systemPrompt + designInstructions(session),
       messages: session.contextMessages(),
-      tools: session.toolSet(),
+      tools: extraTools ? { ...session.toolSet(), ...extraTools } : session.toolSet(),
       usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
     },
     signal,
@@ -694,14 +653,24 @@ async function streamStep(session: Session, active: ActiveModel, signal: AbortSi
   return step
 }
 
-// 能和相邻的只读调用同时跑的调用：读文件、列文件、搜索、大纲，而且路径在项目里（相对路径、不带 ..）。
-// 项目外的路径可能要弹确认，一次只能问一个，照旧一个一个来
-const PARALLEL_READ_TOOLS = new Set(['read_file', 'list_files', 'search', 'outline'])
+// 能和相邻调用同时跑的（第 509 步，参照 Codex 的读写锁：只读的共享，改东西的独占）：不用确认的只读命令、轮询后台命令、看项目里的图片、只读的 MCP 工具。
+// 改文件、要确认的命令、项目外的路径（可能要弹确认，一次只能问一个）照旧一个一个来
 const MAX_PARALLEL_READS = 8
-function parallelSafe(call: StepToolCall): boolean {
-  if (call.invalid || !PARALLEL_READ_TOOLS.has(call.toolName)) return false
-  const path = typeof call.input === 'object' && call.input !== null && 'path' in call.input ? call.input.path : undefined
-  return path === undefined || (typeof path === 'string' && !/^[\\/]|^[A-Za-z]:|(^|[\\/])\.\.([\\/]|$)/.test(path))
+const OUTSIDE_PATH = /^[\\/~]|^[A-Za-z]:|(^|[\\/])\.\.([\\/]|$)/
+function parallelSafe(session: Session, call: StepToolCall): boolean {
+  if (call.invalid || typeof call.input !== 'object' || call.input === null) return false
+  const input = call.input as Record<string, unknown>
+  const inProject = (value: unknown) => value === undefined || (typeof value === 'string' && !OUTSIDE_PATH.test(value))
+  switch (call.toolName) {
+    case 'exec_command':
+      return typeof input.cmd === 'string' && isReadOnlyCommand(input.cmd) && inProject(input.workdir) && classifyCommand(input.cmd, commandPolicy(session)).level === 'allow'
+    case 'write_stdin':
+      return input.chars === undefined || input.chars === ''
+    case 'view_image':
+      return inProject(input.path)
+    default:
+      return session.mcpTools?.byName.get(call.toolName)?.readOnly === true
+  }
 }
 
 export type PrefetchedReads = Map<string, ReturnType<typeof runToolCall>>
@@ -718,10 +687,10 @@ export function prefetchReads(
   scope?: AgentScope,
 ): void {
   const call = toolCalls[index]!
-  if (!parallelSafe(call) || prefetched.has(call.toolCallId)) return
+  if (!parallelSafe(session, call) || prefetched.has(call.toolCallId)) return
   for (let next = index; next < toolCalls.length && next < index + MAX_PARALLEL_READS; next++) {
     const item = toolCalls[next]!
-    if (!parallelSafe(item) || answered.has(item.toolCallId)) break
+    if (!parallelSafe(session, item) || answered.has(item.toolCallId)) break
     const started = runToolCall(session, item, signal, io, scope)
     // 中途停止时后面的不会再等它，别留下没人接的拒绝
     started.catch(() => {})
@@ -737,8 +706,10 @@ export function assistantText(messages: ModelMessage[]): string {
 }
 
 // 同一个工具、同样的参数、同样的结果算同一个调用；结果可能很长，取哈希
+// exec_command 的结果里耗时、会话号每次都不一样，不算进去
 export function callSignature(call: StepToolCall, result: ToolResultPart): string {
-  return createHash('sha256').update(JSON.stringify([call.toolName, call.input, result.output])).digest('hex')
+  const output = JSON.stringify(result.output).replace(/Wall time: [\d.]+ seconds/g, 'Wall time').replace(/session ID \d+/g, 'session ID')
+  return createHash('sha256').update(JSON.stringify([call.toolName, call.input, output])).digest('hex')
 }
 
 export function describeCall(call: StepToolCall): string {
@@ -786,6 +757,14 @@ export async function streamModelStep(
     }
     retry?.handles.set(retry.key, handle)
     const silence = watchModelSilence(io)
+    // 太久一点输出都没有：当成连接断了，中断这次请求、按重试处理
+    let idle = false
+    const idleLimit = modelIdleMs()
+    let idleTimer = setTimeout(onIdle, idleLimit)
+    function onIdle() {
+      idle = true
+      attempt.abort()
+    }
     try {
       const result = streamText({
         model: settings.model,
@@ -793,8 +772,8 @@ export async function streamModelStep(
         messages: settings.messages,
         tools: settings.tools,
         toolChoice,
-        // 请求还没开始返回时的重试交给 AI SDK：指数退避（2、4、8 秒），会看服务给的 Retry-After
-        maxRetries: 3,
+        // 请求还没开始返回时的重试交给 AI SDK：指数退避，会看服务给的 Retry-After
+        maxRetries: 4,
         abortSignal: attempt.signal,
         headers: MODEL_CALL_HEADERS,
       })
@@ -808,7 +787,11 @@ export async function streamModelStep(
       try {
         for await (const part of streamParts(result.fullStream, () => attempt.abort())) {
           // 中断后流里还会出一条 abort，那不是模型的输出
-          if (!attempt.signal.aborted) await silence.heard()
+          if (!attempt.signal.aborted) {
+            clearTimeout(idleTimer)
+            idleTimer = setTimeout(onIdle, idleLimit)
+            await silence.heard()
+          }
           switch (part.type) {
             case 'text-delta':
               emitted += part.text
@@ -834,6 +817,7 @@ export async function streamModelStep(
               break
           }
         }
+        if (idle && !signal.aborted) throw new Error(`模型 ${Math.round(idleLimit / 1000)} 秒没有输出`)
       } catch (error) {
         if (retrying && !signal.aborted) continue
         // 要求直接交结果（指定工具）被服务拒绝时改用 auto 再发一次；系统提示词和工具说明里都写了要交结果
@@ -844,9 +828,9 @@ export async function streamModelStep(
         // 服务暂时出错、连接中途断开（第 438 步）：只说了文字就把这段交回对话，让模型接着说；
         // 什么都还没说、或已经出了工具调用（还没执行）就整步重发。界面上已经显示的半截文字留着，和「重试这一步」一样
         // AI SDK 已经重试到头的（RetryError）不再套一层重试，不然一个连不上的服务要等好几分钟才报错
-        if (!signal.aborted && !RetryError.isInstance(error) && retryableModelError(error) && streamRetries < MAX_STREAM_RETRIES) {
+        if (!signal.aborted && (idle || (!RetryError.isInstance(error) && retryableStreamError(error))) && streamRetries < MAX_STREAM_RETRIES) {
           streamRetries++
-          console.error(`[session] 模型回复中途出错，第 ${streamRetries} 次自动重试`, error)
+          console.error(`[session] ${idle ? `模型 ${Math.round(idleLimit / 1000)} 秒没有输出` : '模型回复中途出错'}，第 ${streamRetries} 次自动重试`, error)
           if (emitted && toolCalls.length === 0) {
             return {
               toolCalls: [],
@@ -859,11 +843,13 @@ export async function streamModelStep(
               interrupted: true,
             }
           }
-          await delay(STREAM_RETRY_DELAY_MS * streamRetries, undefined, { signal }).catch(() => {})
+          await delay(retryDelay(streamRetries), undefined, { signal }).catch(() => {})
           if (!signal.aborted) continue
         }
         throw error
       }
+      // 流已经读完，后面等的不是模型输出
+      clearTimeout(idleTimer)
       if (retrying && !signal.aborted) continue
       const responseMessages = await result.responseMessages
       const answered = new Set(
@@ -873,6 +859,7 @@ export async function streamModelStep(
       )
       return { toolCalls, inputTokens, cacheRead, cacheWrite, answered, responseMessages, truncated }
     } finally {
+      clearTimeout(idleTimer)
       signal.removeEventListener('abort', forward)
       if (retry?.handles.get(retry.key) === handle) retry.handles.delete(retry.key)
       await silence.stop(signal.aborted)
@@ -880,10 +867,15 @@ export async function streamModelStep(
   }
 }
 
-// 模型这么久一点数据都没吐，就在界面上提示可能卡住了。不中断也不重试：不显示思考过程的模型可能真要想这么久。
+// 模型这么久一点数据都没吐，就在界面上提示可能卡住了；到 modelIdleMs 还没有才中断重试。
 // DIFFRA_MODEL_SILENCE_MS 只给测试缩短用
 function modelSilenceMs(): number {
   return Number(process.env.DIFFRA_MODEL_SILENCE_MS) || 3 * 60_000
+}
+
+// 这么久一点数据都没有就当连接断了、自动重试（Codex 的流空闲超时是 5 分钟）；DIFFRA_MODEL_IDLE_MS 只给测试缩短用
+function modelIdleMs(): number {
+  return Number(process.env.DIFFRA_MODEL_IDLE_MS) || 5 * 60_000
 }
 
 function watchModelSilence(io: TurnIO): { heard(): Promise<void>; stop(aborted: boolean): Promise<void> } {
@@ -928,31 +920,30 @@ export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise
   })
 }
 
-// 子智能体执行工具时的差别：自己的读文件记录（主智能体不能借它跳过阅读），写文件前按认领检查，改了哪些文件记下来
+// 子智能体执行工具时的差别：写文件前按认领检查，改了哪些文件记下来
 export interface AgentScope {
-  readHashes: Map<string, string>
   beforeWrite(target: { absolute: string; display: string }): void
   onEdited(absolutePath: string): void
 }
 
-// 工具执行时的环境：项目目录、读过的文件、权限确认。项目外的路径按调用逐个问
+// 工具执行时的环境：项目目录、后台进程、权限确认。项目外的路径按调用逐个问
 export function toolContext(session: Session, call: StepToolCall, signal: AbortSignal, io: TurnIO, scope?: AgentScope): ToolContext {
   return {
     cwd: session.cwd,
     rgPath: session.environment.rgPath,
     bashPath: session.environment.bashPath,
     signal,
-    readHashes: scope?.readHashes ?? session.readHashes,
+    execSessions: session.execSessions,
     ...(scope ? { beforeWrite: (target) => scope.beforeWrite(target) } : {}),
     trustedCommands: session.trustedCommands,
     readOnlyPaths: session.config.readOnlyPaths,
     readRoots: session.readRoots,
     outputDir: session.outputDir,
-    requestCommandPermission: async (command) => {
+    requestCommandPermission: async (command, justification) => {
       // 项目的 beforeCommand 钩子先看一眼：退出码 2 就拦下，理由是它的输出；别的结果不影响
       const hook = await runHook(session, 'beforeCommand', { DIFFRA_COMMAND: command }, signal)
       if (hook.blocked) return { allowed: false, reason: `Blocked by the project's before-command hook${hook.output ? `: ${hook.output}` : '.'} Do not retry it unchanged.` }
-      return askCommandPermission(session, call.toolCallId, command, io)
+      return askCommandPermission(session, call.toolCallId, command, io, justification)
     },
     requestExternalPermission: async (path, access) => {
       const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
@@ -997,7 +988,6 @@ export async function runToolCall(
   // 步骤清单和提问只给主智能体：子智能体的进度看它的卡片，它也不能替主智能体去问用户
   if (name === TODO_TOOL && !scope) return runTodoWrite(session, call, io)
   if (name === ASK_USER_TOOL && !scope) return runAskUser(call, signal, io)
-  if (name === WAIT_COMMAND_TOOL && !scope) return runWaitCommand(session, call, signal, io)
   if (isTaskTool(name) && !scope && !call.invalid) return runTaskTool(session, { ...call, toolName: name }, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
@@ -1012,23 +1002,12 @@ export async function runToolCall(
 
   try {
     if (call.invalid) throw new ToolError(`Invalid call to ${name}: ${call.invalid}`)
-    if (!isToolName(name) || name === 'finish') throw new ToolError(`Unknown tool: ${name}`)
+    if (!isToolName(name)) throw new ToolError(`Unknown tool: ${name}`)
     const context = toolContext(session, call, signal, io, scope)
-    if (name === 'edit_file' || name === 'run_command') session.verifiedSnapshot = null
-    if (name === 'task_progress') {
-      session.taskState = updateTask(session.taskState, call.input)
-      await publishTaskState(session, io)
-      const text = JSON.stringify(session.taskState)
-      await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text } }] })
-      return { result: textResult(call, text), edited: false }
-    }
     const output = await executeTool(name, call.input, context)
-    if (output.edited && output.diff) scope?.onEdited(output.diff.path)
-    if (output.edited && output.diff && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, output.diff.path, output.diff.newText, signal)
-    if (name === 'run_command' && output.commandSucceeded && typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string') {
-      session.taskState = recordTaskReceipt(session.taskState, call.toolCallId, call.input.command, output.text)
-      output.text += `\nEvidence receipt id: ${call.toolCallId}`
-      await publishTaskState(session, io)
+    for (const diff of output.edited ? (output.diffs ?? []) : []) {
+      scope?.onEdited(diff.path)
+      if (!diff.deleted && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, diff.path, diff.newText, signal)
     }
     await io.update({
       sessionUpdate: 'tool_call_update',
@@ -1039,8 +1018,9 @@ export async function runToolCall(
       // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
       ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
     })
-    // 项目外的文件（用户授权的临时脚本之类）不算本轮改动：不进完成检查，也不要求 finish
-    return { result: textResult(call, output.text), edited: (output.edited ?? false) && (!output.diff || insideProject(session, output.diff.path)) }
+    // 项目外的文件（用户授权的临时脚本之类）不算本轮改动：不进结束门禁
+    const edited = (output.edited ?? false) && (!output.diffs || output.diffs.some((diff) => insideProject(session, diff.path)))
+    return { result: textResult(call, output.text), edited, ...(output.image ? { images: [output.image] } : {}) }
   } catch (error) {
     const message = error instanceof ToolError ? error.message : `Tool failed: ${error instanceof Error ? error.message : String(error)}`
     if (!(error instanceof ToolError)) console.error(`[session] 工具 ${name} 出错`, error)
@@ -1120,7 +1100,7 @@ async function runBrowserToolCall(
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: output.image ? `${output.text}\n（截图已发给模型）` : output.text } }],
     })
-    const text = output.image ? `${output.text}\nThe screenshot is attached in the next message.` : output.text
+    const text = truncateForModel(output.image ? `${output.text}\nThe screenshot is attached in the next message.` : output.text).text
     return { result: textResult(call, text), edited: false, images: output.image ? [output.image] : [] }
   } catch (error) {
     if (signal.aborted) return fail('Cancelled by the user.')
@@ -1185,7 +1165,7 @@ async function runDevServerToolCall(
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: output.text } }],
     })
-    return { result: textResult(call, output.text), edited: false }
+    return { result: textResult(call, truncateForModel(output.text).text), edited: false }
   } catch (error) {
     if (signal.aborted) return fail('Cancelled by the user.')
     return fail(`Dev server failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -1240,19 +1220,25 @@ async function runMcpToolCall(
   }
 }
 
-async function askCommandPermission(
-  session: Session,
-  toolCallId: string,
-  command: string,
-  io: TurnIO,
-): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-  const decision = classifyCommand(command, {
+function commandPolicy(session: Session): CommandPolicy {
+  return {
     cwd: session.cwd,
     trusted: session.trustedCommands,
     alwaysAllowed: session.alwaysAllowed,
     readOnlyPaths: session.config.readOnlyPaths,
     mode: session.permissionMode,
-  })
+  }
+}
+
+// justification：模型写的「为什么要跑」，显示在确认卡上
+async function askCommandPermission(
+  session: Session,
+  toolCallId: string,
+  command: string,
+  io: TurnIO,
+  justification?: string,
+): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  const decision = classifyCommand(command, commandPolicy(session))
   if (decision.level === 'allow') return { allowed: true }
   if (decision.level === 'deny') {
     return { allowed: false, reason: `This command is blocked by Diffra (${decision.reason}). Do not retry it.` }
@@ -1266,7 +1252,8 @@ async function askCommandPermission(
       title: `执行 ${command}`,
       kind: 'execute',
       status: 'pending',
-      rawInput: { command },
+      rawInput: { command, ...(justification ? { justification } : {}) },
+      ...(justification ? { content: [{ type: 'content', content: { type: 'text', text: justification } }] } : {}),
       ...(projectWide ? { _meta: { diffra: { [PROJECT_COMMANDS_META_KEY]: { cwd: session.cwd, keys } satisfies ProjectCommandsMeta } } } : {}),
     },
     projectWide ? [...PERMISSION_CHOICES.slice(0, 2), { optionId: PERMISSION_OPTIONS.allowProject, name: '这个项目里始终允许同类命令', kind: 'allow_always' }, ...PERMISSION_CHOICES.slice(2)] : PERMISSION_CHOICES,
@@ -1279,46 +1266,26 @@ async function askCommandPermission(
   return { allowed: false, reason: 'The user rejected this command. Do not retry it; try another approach or ask the user.' }
 }
 
-async function runFinishGate(
+// 结束门禁（第 504 步）：模型停下时，这一轮改了文件就同时跑检查命令、安全检查、规范审查和架构检查，问题一次全部交回去。
+// summary 是模型最后说的话，审查拿它做参考。没改文件直接通过，不出卡片
+async function runEndGate(
   session: Session,
-  call: StepToolCall,
   turnId: string,
   changes: TurnChanges,
+  summary: string,
   checks: CheckTracker,
   signal: AbortSignal,
   io: TurnIO,
-  verificationOnly = false,
-): Promise<{ result: ToolResultPart; passed: boolean; summary: string; goalMet: boolean; verification: FinishVerification; failedCheck?: string }> {
-  let summary = ''
-  let goalMet = false
-  try {
-    const input = parseFinishInput(call.input)
-    summary = input.summary
-    goalMet = input.goal_met ?? false
-  } catch (error) {
-    return { result: errorResult(call, error instanceof Error ? error.message : String(error)), passed: false, summary, goalMet, verification: 'failed' }
-  }
-  // 先跑完成检查，检查有了结果再显示「完成」卡片，界面上的先后顺序和实际一致
-  const showFinish = (verification: FinishVerification, text: string) => showFinishCard(io, call, verification, text, verificationOnly)
-  const cancelled = () => ({ result: errorResult(call, 'Cancelled by the user.'), passed: false, summary, goalMet, verification: 'failed' as const })
-
-  if (changes === 'none') {
-    await showFinish('no-edits', summary)
-    return { result: textResult(call, 'Done.'), passed: true, summary, goalMet, verification: 'no-edits' }
-  }
+): Promise<{ passed: true; verification: FinishVerification | null } | { passed: false; feedback: string; failedCheck?: string }> {
+  if (changes === 'none') return { passed: true, verification: null }
+  const cardId = `finish-${randomUUID()}`
   if (changes === 'unknown') {
     // 检查命令可能配了，不带「没配检查命令」的 unverified 标记
-    await showFinishCard(io, call, 'unverified', summary, false, false)
-    return { result: textResult(call, 'Done. Commands or MCP tools ran in this turn and there are no checkpoints to tell whether they changed files, so nothing was verified.'), passed: true, summary, goalMet, verification: 'unverified' }
-  }
-  if (signal.aborted) return cancelled()
-  const snapshot = session.checkpoints ? await session.checkpoints.fingerprint() : null
-  if (snapshot && session.verifiedSnapshot === snapshot) {
-    await showFinish('reused', verificationOnly ? '当前工作区已验证；继续剩余任务。' : summary)
-    return { result: textResult(call, 'Workspace validation reused. Only finish ends the task.'), passed: true, summary, goalMet, verification: 'reused' }
+    await showFinishCard(io, cardId, 'unverified', '', false)
+    return { passed: true, verification: 'unverified' }
   }
   const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
-  // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回：以前检查命令过了才审查，每打回一类问题都要重跑一遍检查命令。
+  // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回。
   // 代价是检查命令不过时审查照样调模型，可能对还要改的代码提意见。本轮改动在检查命令开跑前取，审查看不到检查命令自己生成的文件
   const architecture = await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
     console.error('[session] 读取目标架构失败，这一轮不做架构检查', error)
@@ -1339,7 +1306,7 @@ async function runFinishGate(
   const failedParts: string[] = []
   const settled = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
     if (result.status === 'fulfilled') return result.value
-    console.error(`[session] 完成门禁的${label}出错`, result.reason)
+    console.error(`[session] 结束门禁的${label}出错`, result.reason)
     failedParts.push(label)
     return fallback
   }
@@ -1347,7 +1314,7 @@ async function runFinishGate(
   const security = settled(securityResult, '安全检查', [])
   const findings = settled(reviewResult, '规范审查', [])
   const violations = settled(architectureResult, '架构检查', [])
-  if (signal.aborted) return cancelled()
+  if (signal.aborted) return { passed: false, feedback: 'Cancelled by the user.' }
   const skipped = failedParts.filter((label) => label !== '完成检查')
   if (skipped.length > 0) await notice(io, 'warning', `${skipped.join('、')}出错，这一次跳过`)
   // 每类问题一张卡片上的说明和一段给模型的说明
@@ -1357,7 +1324,7 @@ async function runFinishGate(
     const reason = checkResult.reason instanceof Error ? checkResult.reason.message : String(checkResult.reason)
     rejected.push({
       card: `完成检查没有跑完：${command}`,
-      text: `The check \`${command}\` did not complete (${reason}), so the task is not finished. Call finish again to rerun it.`,
+      text: `The check \`${command}\` did not complete (${reason}). Fix what stopped it if you can; it runs again when you end your turn.`,
     })
   } else if (command && check && !check.passed) {
     const parsed = parseCheckErrors(check.full, session.cwd)
@@ -1365,7 +1332,7 @@ async function runFinishGate(
     failedCheck = command
     rejected.push({
       card: `完成检查没有通过：${command}`,
-      text: `The check \`${command}\` failed, so the task is not finished.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}\nFix the problems and call finish again.`,
+      text: `The check \`${command}\` failed.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}`,
     })
   } else if (check) recordCheckPass(checks)
   const blockers = blocking(security)
@@ -1374,10 +1341,10 @@ async function runFinishGate(
     rejected.push({
       card: `安全检查发现 ${blockers.length} 处高危问题`,
       text:
-        `Security checks found high-risk problems in the code you changed, so the task is not finished:\n${list}\n` +
-        'Fix them and call finish again. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
+        `Security checks found high-risk problems in the code you changed:\n${list}\n` +
+        'Fix them. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
         'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
-        'for any other finding, explain in the finish summary why it is safe.',
+        'for any other finding, explain in your final message why it is safe.',
     })
   }
   if (findings.length > 0) {
@@ -1385,8 +1352,8 @@ async function runFinishGate(
     rejected.push({
       card: `规范审查发现 ${findings.length} 处问题`,
       text:
-        `The rule review found violations in the code you changed, so the task is not finished:\n${list}\n` +
-        'Fix them and call finish again. If you are sure a finding is wrong, keep the code and explain why in the finish summary.',
+        `The rule review found violations in the code you changed:\n${list}\n` +
+        'Fix them. If you are sure a finding is wrong, keep the code and explain why in your final message.',
     })
   }
   if (violations.length > 0) {
@@ -1394,43 +1361,40 @@ async function runFinishGate(
     rejected.push({
       card: `架构检查发现 ${violations.length} 处新增的依赖违反目标架构`,
       text:
-        `The imports you added break the project's target architecture (set by the user in Diffra's 架构 page), so the task is not finished:\n${list}\n` +
-        'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it), then call finish again. ' +
-        'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in the finish summary; the user can change the target architecture.',
+        `The imports you added break the project's target architecture (set by the user in Diffra's 架构 page):\n${list}\n` +
+        'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it). ' +
+        'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in your final message; the user can change the target architecture.',
     })
   }
   if (rejected.length > 0) {
-    await showFinish('failed', rejected.map((item) => item.card).join('；'))
+    await showFinishCard(io, cardId, 'failed', rejected.map((item) => item.card).join('；'))
     return {
-      result: errorResult(call, rejected.map((item) => item.text).join('\n\n')),
       passed: false,
-      summary,
-      goalMet,
-      verification: 'failed',
+      feedback:
+        '[Diffra] Before ending the turn Diffra ran the project checks on your changes, and the task is not finished yet. ' +
+        `Fix the problems below and continue; the checks run again the next time you end your turn.\n\n${rejected.map((item) => item.text).join('\n\n')}`,
       ...(failedCheck ? { failedCheck } : {}),
     }
   }
-  if (command && snapshot && session.checkpoints && await session.checkpoints.fingerprint() === snapshot) session.verifiedSnapshot = snapshot
   if (!command) {
-    // 界面还没按 verification 画 verify_changes 卡片，文本里照旧说明未经验证
-    await showFinish('unverified', verificationOnly ? `${summary}\n\n未配置检查命令，改动未经自动验证。` : summary)
-    return { result: textResult(call, verificationOnly ? 'No project checks configured. Review completed, but changes remain unverified. Continue the remaining task; do not claim validation passed.' : 'Done. No project checks are configured, so the changes were not verified.'), passed: true, summary, goalMet, verification: 'unverified' }
+    await showFinishCard(io, cardId, 'unverified', '')
+    return { passed: true, verification: 'unverified' }
   }
-  await showFinish('verified', verificationOnly ? `${summary}\n验证通过，不代表任务完成；继续执行提交、推送或发布等剩余步骤。` : summary)
-  return { result: textResult(call, verificationOnly ? `Verification passed: ${command}. Continue working; this is NOT task completion.` : `Done. The check \`${command}\` passed.`), passed: true, summary, goalMet, verification: 'verified' }
+  await showFinishCard(io, cardId, 'verified', `检查通过：${command}`)
+  return { passed: true, verification: 'verified' }
 }
 
-function showFinishCard(io: TurnIO, call: StepToolCall, verification: FinishVerification, text: string, verificationOnly = false, noChecks = verification === 'unverified') {
+// 结束门禁的结论卡片，标题照旧是「完成」（界面按它和 verification 画结论；没配检查、判断不了改动的提醒由界面写，text 留空）
+function showFinishCard(io: TurnIO, toolCallId: string, verification: FinishVerification, text: string, noChecks = verification === 'unverified') {
   return io.update({
     sessionUpdate: 'tool_call',
-    toolCallId: call.toolCallId,
-    title: verificationOnly ? '验证改动（不结束任务）' : '完成',
+    toolCallId,
+    title: '完成',
     kind: 'other',
     status: verification === 'failed' ? 'failed' : 'completed',
-    rawInput: call.input,
-    content: [{ type: 'content', content: { type: 'text', text } }],
-    // 界面按 verification 画结论，不往模型写的总结里拼话；unverified 是旧的完成卡字段，表示没配检查命令，照旧只写在完成卡上
-    _meta: { diffra: { verification, ...(noChecks && !verificationOnly ? { unverified: true } : {}) } },
+    content: text ? [{ type: 'content', content: { type: 'text', text } }] : [],
+    // unverified 是旧的完成卡字段，表示没配检查命令
+    _meta: { diffra: { verification, ...(noChecks ? { unverified: true } : {}) } },
   })
 }
 
@@ -1507,10 +1471,16 @@ async function runArchitectureCheck(session: Session, architecture: { analysis: 
   }
 }
 
+// exec_command 要跑的命令；别的工具、参数不对时是 null
+function execCommandOf(call: StepToolCall): string | null {
+  if (call.toolName !== 'exec_command' || call.invalid) return null
+  return typeof call.input === 'object' && call.input !== null && 'cmd' in call.input && typeof call.input.cmd === 'string' ? call.input.cmd : null
+}
+
 // 带 git 的命令执行前先记下项目的 HEAD；不是 git 命令、没有检查点或项目不是 Git 仓库时返回 null，执行后也就不用比
 async function headBeforeGit(session: Session, call: StepToolCall): Promise<string | null> {
   if (!session.checkpoints) return null
-  const command = typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string' ? call.input.command : null
+  const command = execCommandOf(call)
   if (command === null || gitSubcommands(command).length === 0) return null
   return projectHead(session.cwd)
 }
@@ -1544,7 +1514,7 @@ const DEEP_SCAN_FIRST_NOTE =
 // 选「这个任务不再问」后这个会话不再问；只在内存里，重新打开任务后会再问。判断不了（没有检查点、读改动失败）时不问
 async function deepScanFirst(session: Session, call: StepToolCall, io: TurnIO): Promise<boolean> {
   if (!session.config.security.deepScan || session.deepScanDeclined || !session.checkpoints) return false
-  const command = typeof call.input === 'object' && call.input !== null && 'command' in call.input && typeof call.input.command === 'string' ? call.input.command : null
+  const command = execCommandOf(call)
   const verbs = command === null ? [] : gitSubcommands(command).filter((sub) => sub === 'commit' || sub === 'push')
   if (command === null || verbs.length === 0) return false
   try {
@@ -1569,7 +1539,7 @@ async function deepScanFirst(session: Session, call: StepToolCall, io: TurnIO): 
   await io.update({
     sessionUpdate: 'tool_call',
     toolCallId: call.toolCallId,
-    title: startTitle('run_command', call.input),
+    title: startTitle('exec_command', call.input),
     kind: 'execute',
     status: 'failed',
     rawInput: call.input,
@@ -1734,7 +1704,7 @@ async function runCheck(
       _meta: { diffra: { result: (passed ? 'passed' : 'failed') satisfies CheckResult } },
     })
     // 交给模型的输出截短；比较错误用截短前的，免得中间被省略的错误算成修好了
-    return { passed, output: truncateLines(result.summary, 120, 8000), full: result.fullSummary }
+    return { passed, output: truncateForModel(result.summary, CHECK_OUTPUT_TOKENS).text, full: result.fullSummary }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await io.update({
@@ -1749,7 +1719,7 @@ async function runCheck(
 }
 
 function toolContent(session: Session, output: ToolOutput): ToolCallContent[] {
-  if (output.diff) return [compactEdit(session.editedTexts, output.diff)]
+  if (output.diffs && output.diffs.length > 0) return output.diffs.map((diff) => compactEdit(session.editedTexts, diff))
   return [{ type: 'content', content: { type: 'text', text: output.terminalOutput ?? output.text } }]
 }
 
@@ -1761,9 +1731,10 @@ export function errorResult(call: StepToolCall, text: string): ToolResultPart {
   return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'error-text', value: text } }
 }
 
+// requirements 是以前发版契约的完成条件，第 504 步起没有了，留空给旧界面
 export function taskStateView(session: Pick<Session, 'taskState'>): TaskProgressView {
-  const { status, reason, requirements, needsVerification } = session.taskState
-  return { status, reason, requirements: requirements.map(({ id, title, receiptId }) => ({ id, title, receiptId })), needsVerification }
+  const { status, reason, needsVerification } = session.taskState
+  return { status, reason, requirements: [], needsVerification }
 }
 
 // outcome 只在一轮结束时带
@@ -1780,7 +1751,7 @@ export async function publishTaskState(session: Session, io: TurnIO, outcome?: T
 
 const FINISH_RANK = ['no-edits', 'verified', 'unverified'] as const
 
-// 目标模式一轮里会有多次被接受的 finish，前面未经验证的改动不能被后面「没有改动」的 finish 盖掉
+// 目标模式一次任务里会多次通过结束门禁，前面未经验证的改动不能被后面「没有改动」的结论盖掉
 function mergeFinish(current: TurnOutcome['finish'], verification: FinishVerification): TurnOutcome['finish'] {
   const next = verification === 'reused' ? 'verified' : verification === 'failed' ? null : verification
   const rank = (value: TurnOutcome['finish']) => (value === null ? -1 : FINISH_RANK.indexOf(value))

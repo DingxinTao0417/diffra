@@ -11,7 +11,7 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-manual-compact-'))
   const model = await startScriptedModel([
-    { text: '第一轮已记录', promptTokens: 60_000, cacheReadTokens: 30_000 },
+    { text: `第一轮已记录 ${'回复细节'.repeat(1500)}`, promptTokens: 60_000, cacheReadTokens: 30_000 },
     { text: '第二轮已记录', promptTokens: 60_000, cacheReadTokens: 30_000 },
     { text: '摘要：用户希望中文答复，保留项目约束。', delayMs: 1500 },
     { text: '按摘要继续了' },
@@ -21,7 +21,7 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     let window = await app.firstWindow()
     await configureCoderModel(window, { name: '压缩模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await startTask(window, `早期需求 ${'原始细节'.repeat(1500)}`)
+    await startTask(window, '早期需求：用中文写')
     await waitTaskDone(window)
     await taskInput(window).fill('继续，使用中文回复')
     await taskInput(window).press('Enter')
@@ -46,9 +46,10 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     await expect.poll(async () => Number((await contextUsage.textContent())?.match(/(\d+)%/)?.[1] ?? beforePercent)).toBeLessThan(beforePercent)
     await expect(window.getByTestId('cache-usage')).toContainText('缓存 50%')
     expect(model.requests()).toBe(3)
-    expect(model.bodies()[2]).toContain('Write a summary')
-    expect(model.bodies()[2]).toContain('原始细节')
-    await expect(window.getByTestId('user-message').first()).toContainText('原始细节')
+    expect(model.bodies()[2]).toContain('CONTEXT CHECKPOINT COMPACTION')
+    // 写摘要时看得到模型以前的回复原文；界面上的历史不受影响
+    expect(model.bodies()[2]).toContain('回复细节')
+    await expect(window.getByTestId('agent-message').first()).toContainText('回复细节')
     await expect(window.getByTestId('turn').last().getByRole('button', { name: '重新生成', exact: true })).toHaveCount(0)
     await expect(window.getByTestId('turn').last().getByRole('button', { name: '撤销这一轮及之后的改动', exact: true })).toHaveCount(0)
     await app.close()
@@ -60,8 +61,10 @@ test('/compact 手动压缩未达阈值的会话，保留草稿及历史，重�
     await taskInput(window).press('Enter')
     await expect(window.getByTestId('agent-message').last()).toContainText('按摘要继续了')
     await waitTaskDone(window)
+    // 压缩后发给模型的是用户每轮的原话和交接摘要，模型以前的回复不再发
     expect(model.bodies()[3]).toContain('摘要：用户希望中文答复')
-    expect(model.bodies()[3]).not.toContain('原始细节')
+    expect(model.bodies()[3]).not.toContain('回复细节')
+    expect(model.bodies()[3]).toContain('早期需求：用中文写')
     expect(model.bodies()[3]).toContain('继续，使用中文回复')
   } finally {
     await app.close()

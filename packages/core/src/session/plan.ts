@@ -3,12 +3,12 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, taskStateUpdate, type TurnIO } from './loop.js'
-import { runReadOnlyLoop } from './read-only.js'
+import { READ_ONLY_TOOL_NAMES, READ_ONLY_TOOLS, runReadOnlyLoop } from './read-only.js'
+import { pendingWorldState } from './world-state.js'
 import type { Session } from './session.js'
-import { TOOLS } from './tools.js'
 
 const MAX_STEPS = 30
-const READ_TOOLS = new Set(['read_file', 'list_files', 'search', 'outline'])
+const READ_TOOLS = READ_ONLY_TOOL_NAMES
 
 const planInput = z.object({
   understanding: z.string().describe("What the user wants, in your own words, in the user's language"),
@@ -27,11 +27,9 @@ const planInput = z.object({
 
 type Plan = z.infer<typeof planInput>
 
+// 只读：用 exec_command 跑只读命令（rg、sed -n、cat、ls、git log 这类）看代码、搜索，不能改文件
 const PLAN_TOOLS = {
-  read_file: TOOLS.read_file,
-  list_files: TOOLS.list_files,
-  search: TOOLS.search,
-  outline: TOOLS.outline,
+  ...READ_ONLY_TOOLS,
   submit_plan: tool({ description: 'Submit the plan. Call it exactly once, at the end.', inputSchema: planInput }),
 }
 
@@ -39,9 +37,9 @@ const PLAN_TOOLS = {
 const PLANNING_MODE = [
   '',
   'PLANNING MODE: this turn only plans the task; nothing gets changed yet.',
-  '- You can only use read_file, list_files, search and outline. You cannot edit files or run commands, and you do not call finish.',
+  '- You can only read: run read-only commands with exec_command (rg, rg --files, sed -n, cat, ls, git log). You cannot change files.',
   '- Explore enough to make the plan concrete: which files and functions change and how, in what order, and how to verify each step.',
-  '- Keep the steps small and ordered. Follow the project rules and coding rules above.',
+  '- Keep the steps small and ordered. Follow the AGENTS.md instructions and the coding rules.',
   '- When the plan is ready, call submit_plan exactly once. Write it in the language the user writes in.',
 ].join('\n')
 
@@ -62,7 +60,7 @@ export async function runPlan(session: Session, turn: { id: string; text: string
         model: session.planModel,
         system: `${session.systemPrompt}\n${PLANNING_MODE}`,
         // 看得到之前的对话，接着已有任务出计划不会脱节
-        messages: [...session.contextMessages(), { role: 'user', content: turn.text }],
+        messages: [...session.contextMessages(), ...(await pendingWorldState(session)), { role: 'user', content: turn.text }],
         tools: PLAN_TOOLS,
         readTools: READ_TOOLS,
         finalTool: 'submit_plan',
@@ -70,7 +68,7 @@ export async function runPlan(session: Session, turn: { id: string; text: string
         window: planner.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         usage: { role: 'planner', provider: planner.provider, modelId: planner.modelId },
         nudge: 'Keep exploring with the read tools, or call submit_plan when the plan is ready.',
-        readOnlyError: 'This is planning mode: you can only read. Use read_file, list_files, search, outline, or submit_plan.',
+        readOnlyError: 'This is planning mode: you can only read. Use exec_command with read-only commands, or submit_plan.',
         onFinal: (toolCallId, input) => showPlan(toolCallId, planInput.parse(input), io),
       },
       signal,

@@ -5,7 +5,7 @@ import { expect, type Page, test } from '@playwright/test'
 import { cards, chooseProject, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, exec, read, replaceLines, startScriptedModel } from './scripted-model'
 
 // 对话的滚动容器在每一轮外面两层；SCROLLER 给在页面里求值的脚本用
 const SCROLLER = `document.querySelector('[data-testid="turn"]').parentElement.parentElement`
@@ -19,14 +19,15 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-flow-'))
   writeFileSync(join(project, 'hello.txt'), 'hello world\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'list_files', input: { path: '.' } }] },
-    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
+    { toolCalls: [exec('ls')] },
+    { toolCalls: [read('hello.txt')] },
     {
       text: '开始改：\n\n- 把 **hello world** 改成 `hello diffra`',
-      toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }],
+      toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')],
     },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'greet.js', old_string: '', new_string: 'export const greet = () => "hi"\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改好了，新增 **greet**。' } }] },
+    { toolCalls: [addFile('greet.js', 'export const greet = () => "hi"\n')] },
+    // 只回文字就是想结束这一轮：结束门禁跑完成检查，出完成卡
+    { text: '改好了，新增 **greet**。' },
     // 第二轮慢一点，期间发的消息排队
     { text: '第二轮的回答', delayMs: 2500 },
     { text: '排队消息的回答' },
@@ -46,7 +47,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     // 对话流：读文件收成一组，Markdown 渲染；改的过程中不跑检查，两次改动连着收成一个改动组，完成时跑一次检查；监控开着时完成卡片点开计数列出改动的文件
     // 回复前后各一个过程组，都收着：前一个是列文件和读文件，后一个是两次改动
     await expect(window.getByRole('button', { name: '执行工具 2 次', exact: true })).toHaveAttribute('aria-expanded', 'false')
-    await expect(window.getByTestId('agent-message').locator('strong')).toHaveText('hello world')
+    await expect(window.getByTestId('agent-message').first().locator('strong')).toHaveText('hello world')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     const editGroup = window.getByRole('button', { name: /执行工具 2 次\s*· 修改 2 个文件/ })
     await expect(editGroup).toHaveAttribute('aria-expanded', 'false')
@@ -135,7 +136,7 @@ test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底�
     { text: Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 段说明`).join('\n\n') },
     // 第二轮每隔几十毫秒来一批更新。每步读不同的文件，不算原地打转；加上最后一步共 91 步，在默认的 100 步上限以内。
     // 每步先说一句，读文件就不收成一组：组只在有工具在跑时展开，两步之间会收起，对话高度会来回跳
-    ...Array.from({ length: 90 }, (_, index) => ({ text: `读第 ${index} 个文件`, toolCalls: [{ name: 'read_file', input: { path: `f-${index}.txt` } }], delayMs: 20 })),
+    ...Array.from({ length: 90 }, (_, index) => ({ text: `读第 ${index} 个文件`, toolCalls: [read(`f-${index}.txt`)], delayMs: 20 })),
     { text: '都读完了' },
   ])
   const app = await launchApp(userDataDir)
@@ -174,7 +175,7 @@ test('不跟随时下面长出新内容、没有滚动事件，也会出「回�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-grow-'))
   writeFileSync(join(project, 'notes.txt'), 'hello\n')
   const model = await startScriptedModel([
-    { text: paragraphs(1, 40), toolCalls: [{ name: 'read_file', input: { path: 'notes.txt' } }] },
+    { text: paragraphs(1, 40), toolCalls: [read('notes.txt')] },
     // 慢一点回来，期间先往上翻一点；留足时间，机器慢时也要在它回来之前翻好
     { text: paragraphs(41, 40), delayMs: 8000 },
   ])
@@ -229,9 +230,9 @@ test('开了减少动态效果：跳到某一轮、回到底部、定位失败�
     // false 在只读命令名单里，直接执行，退出码 1；后面一大段回复把它挤出视口
     {
       toolCalls: [
-        { name: 'list_files', input: { path: '.' } },
-        { name: 'run_command', input: { command: 'false' } },
-        { name: 'read_file', input: { path: 'notes.txt' } },
+        exec('ls'),
+        exec('false'),
+        read('notes.txt'),
       ],
     },
     { text: paragraphs(81, 80) },

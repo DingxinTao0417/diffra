@@ -14,6 +14,8 @@ const EXTERNAL_ACCESS_NOTE = '授权仅适用于上方确切路径和读/写操�
 
 export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   const command = commandOf(request.toolCall.rawInput)
+  // 智能体写的「为什么要跑这条命令」
+  const justification = justificationOf(request.toolCall.rawInput)
   const external = isExternalAccess(request.toolCall.rawInput)
   const deepScanAsk = scopeOf(request.toolCall.rawInput) === DEEP_SCAN_ASK_SCOPE
   const question = questionOf(request.toolCall.rawInput)
@@ -82,6 +84,7 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
           {command ?? request.toolCall.title}
         </pre>
       )}
+      {justification && <p className="break-words text-xs text-muted-foreground" data-testid="permission-justification">{justification}</p>}
       {external && (
         <p className="truncate text-xs text-muted-foreground" title={EXTERNAL_ACCESS_NOTE}>
           仅限上方路径和这类操作；项目外的修改无法用检查点撤销
@@ -140,6 +143,12 @@ function questionOf(rawInput: unknown): AskUserInput | null {
 
 function scopeOf(rawInput: unknown): unknown {
   return typeof rawInput === 'object' && rawInput !== null && 'scope' in rawInput ? rawInput.scope : null
+}
+
+function justificationOf(rawInput: unknown): string | null {
+  return typeof rawInput === 'object' && rawInput !== null && 'justification' in rawInput && typeof rawInput.justification === 'string' && rawInput.justification.trim()
+    ? rawInput.justification.trim()
+    : null
 }
 
 function commandOf(rawInput: unknown): string | null {

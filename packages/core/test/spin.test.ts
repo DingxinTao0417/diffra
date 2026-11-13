@@ -1,34 +1,46 @@
 import { describe, expect, test } from 'vitest'
 import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from '../src/session/spin.js'
 
+const exec = (cmd: string) => ({ cmd })
+
 describe('补充的打转检测', () => {
   test('同一个调用（不管结果）第 6 次提醒一次；成功编辑后重新算', () => {
     const spin = newSpinTracker()
-    for (let i = 0; i < 5; i++) noteCall(spin, 'run_command', { command: 'date' })
+    for (let i = 0; i < 5; i++) noteCall(spin, 'exec_command', exec('date'))
     expect(takeSpinReminders(spin)).toEqual([])
-    noteCall(spin, 'run_command', { command: 'date' })
+    noteCall(spin, 'exec_command', exec('date'))
     expect(takeSpinReminders(spin)).toEqual([expect.stringContaining('same call 6 times')])
     // 同一种只提醒一次
-    noteCall(spin, 'run_command', { command: 'date' })
+    noteCall(spin, 'exec_command', exec('date'))
     expect(takeSpinReminders(spin)).toEqual([])
     noteEdit(spin)
-    for (let i = 0; i < 6; i++) noteCall(spin, 'run_command', { command: 'date' })
+    for (let i = 0; i < 6; i++) noteCall(spin, 'exec_command', exec('date'))
     expect(takeSpinReminders(spin)).toHaveLength(1)
   })
 
-  test('做过事之后连续 12 次只读才提醒；一开始摸代码不算，中间跑了命令重新数', () => {
+  test('做过事之后连续 12 次只读命令才提醒；一开始摸代码不算，中间跑了别的命令重新数', () => {
     const exploring = newSpinTracker()
-    for (let i = 0; i < 30; i++) noteCall(exploring, 'read_file', { path: `f${i}.ts` })
+    for (let i = 0; i < 30; i++) noteCall(exploring, 'exec_command', exec(`sed -n '1,80p' f${i}.ts`))
     expect(takeSpinReminders(exploring)).toEqual([])
 
     const spin = newSpinTracker()
     noteEdit(spin)
-    for (let i = 0; i < 11; i++) noteCall(spin, 'search', { pattern: `p${i}` })
-    noteCall(spin, 'run_command', { command: 'ls' })
-    for (let i = 0; i < 11; i++) noteCall(spin, 'read_file', { path: `g${i}.ts` })
+    for (let i = 0; i < 11; i++) noteCall(spin, 'exec_command', exec(`rg -n p${i} src`))
+    noteCall(spin, 'exec_command', exec('npm test'))
+    for (let i = 0; i < 11; i++) noteCall(spin, 'exec_command', exec(`cat g${i}.ts`))
     expect(takeSpinReminders(spin)).toEqual([])
-    noteCall(spin, 'read_file', { path: 'g11.ts' })
+    noteCall(spin, 'view_image', { path: 'shot.png' })
     expect(takeSpinReminders(spin)).toEqual([expect.stringContaining('only read or searched')])
+  })
+
+  test('轮询后台命令不算只读：等构建跑完时不提醒', () => {
+    const spin = newSpinTracker()
+    noteEdit(spin)
+    for (let i = 0; i < 20; i++) {
+      noteCall(spin, 'exec_command', exec(`cat log${i}.txt`))
+      noteCall(spin, 'write_stdin', { session_id: 1234, yield_time_ms: 5000 + i })
+    }
+    expect(takeSpinReminders(spin)).toEqual([])
   })
 
   test('同一段话说了 3 次提醒；很短的话不算，只差空白的算同一段', () => {

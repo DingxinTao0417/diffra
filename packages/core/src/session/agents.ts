@@ -31,11 +31,14 @@ import {
   type TurnIO,
 } from './loop.js'
 import type { Session } from './session.js'
-import { newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
+import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
+import { isReadOnlyCommand } from '../permissions.js'
+import { READ_ONLY_TOOLS, readOnlyCommandProblem } from './read-only.js'
+import { freshWorldState } from './world-state.js'
 import { toolDefinitionChars, TOOLS } from './tools.js'
 
 // 子智能体（工人）：主智能体用 delegate 把一块独立的活交出去，几个工人并行做，做完交回结果，主智能体再整合、检查、收尾。
-// 工人有自己的对话和读文件记录，只能改自己认领的文件（同一目录、按文件认领，不用 worktree）；不能调 finish，也不能再派工人。
+// 工人有自己的对话，只能改自己认领的文件（同一目录、按文件认领，不用 worktree）；交回结果就停，不过结束门禁，也不能再派工人。
 // 工人的工具调用照常发给界面，带上所属卡片（parentToolCallId）和自己的名字、颜色，界面收进那张卡片里
 export const DELEGATE_TOOL = 'delegate'
 export const MAX_PARALLEL_WORKERS = 4
@@ -54,7 +57,7 @@ export const DESIGN_AGENT_DONE = '__agent_done'
 const CLAIM_TOOL = 'claim_files'
 // 区分度高、深浅色下都看得清的几种颜色，按派出顺序轮流用
 export const AGENT_COLORS = ['#2563EB', '#D97706', '#16A34A', '#DB2777', '#7C3AED', '#0891B2', '#DC2626', '#65A30D']
-const WORKER_TOOL_NAMES = ['read_file', 'list_files', 'search', 'outline', 'edit_file', 'run_command'] as const
+const WORKER_TOOL_NAMES = ['exec_command', 'write_stdin', 'apply_patch'] as const
 
 const delegateInput = z.object({
   name: z.string().trim().min(1).max(16).describe('Short name for this worker, shown to the user, e.g. "API" or "Settings page"'),
@@ -103,11 +106,11 @@ export function delegateTool(design = false, types: AgentType[] = []) {
         : [
             `Use it when: (1) answering a question or preparing a change needs a broad look through code you do not know yet (several modules, many files) and you only need the conclusion${explore ? `: send an ${EXPLORE_AGENT} worker and keep your own context for the work itself` : ''}; ` +
               '(2) a larger change splits into independent parts that touch different files: one worker per part, each owning a different set of files (workers can read everything but only change what they own).',
-            'Do not use it when: a few tool calls would do; you already know which file or symbol to look at (read or search it yourself); the task is small or a single-file change; the parts depend on each other or touch the same files. When unsure, do the work yourself.',
+            'Do not use it when: a few tool calls would do; you have not looked at the project yourself yet (list the files first: a small project does not need a worker); you already know which file or symbol to look at (read or search it yourself); the task is small or a single-file change; the parts depend on each other or touch the same files. When unsure, do the work yourself.',
           ]),
       'Call delegate several times in one step to run up to 4 workers in parallel (at most 8 per turn); the step waits until all of them report back.',
       'In task, write: the goal and what it is for, what you already know or have ruled out, where to start (files, functions), what must not change, and what to report back.',
-      'Workers cannot call finish: after they report, read their results, check the claims you are going to rely on, make the parts fit together, and verify before calling finish.',
+      'Workers only report back: after they report, read their results, check the claims you are going to rely on, make the parts fit together, and verify before you end your turn.',
     ].join(' '),
     inputSchema: delegateInput,
   })
@@ -124,8 +127,6 @@ const WORKER_TOOLS: ToolSet = {
   [REPORT_TOOL]: tool({ description: 'Finish your part and report back to the coordinator. Call it exactly once, at the end.', inputSchema: reportInput }),
 }
 
-// 只读类型的工人不给这几个工具
-const READ_ONLY_WORKER_EXCLUDED = new Set<string>(['edit_file', 'run_command', CLAIM_TOOL])
 
 // 一轮里的认领表和工人记录：认领在工人交回结果时释放，同一轮后面派的工人可以接着认领
 export interface Team {
@@ -133,7 +134,7 @@ export interface Team {
   claims: Map<string, AgentTag>
   // 这一轮派过的工人数，用来分颜色和限数
   count: number
-  // 工人用 edit_file 改的文件，按时间顺序；判断命令改了哪些文件时排除同一时段别的工人自己改的
+  // 工人用 apply_patch 改的文件，按时间顺序；判断命令改了哪些文件时排除同一时段别的工人自己改的
   edits: Array<{ agentId: string; path: string }>
   // 所有工人的权限确认排成一队：界面上一个任务同一时间只显示一张确认卡，同时发出的第二个请求会把第一个顶掉，被顶掉的那个工人就一直等着
   permissions: { chain: Promise<unknown> }
@@ -183,8 +184,7 @@ interface Worker {
   nodes: string[]
   // 界面卡片的 id（那次 delegate 调用）
   cardId: string
-  readHashes: Map<string, string>
-  // 改过的文件（项目相对路径），edit_file 和命令改的都算
+  // 改过的文件（项目相对路径），apply_patch 和命令改的都算
   edited: Set<string>
   // 命令改到别人认领的文件
   boundary: string[]
@@ -248,7 +248,7 @@ function workerRules(worker: Worker, owned: string[]): string {
     `You are "${worker.tag.name}", a worker agent. A coordinating agent gave you one part of a larger task; other workers may be handling other parts at the same time. You do not see the coordinator's conversation or the user's messages: the task below is everything you were told.`,
     `- When your part is done, call ${REPORT_TOOL} exactly once. The report is the only thing the coordinator receives, so put everything it needs in it.`,
     ...(worker.type?.readOnly
-      ? ['- You are read-only: you cannot change files or run commands. Investigate and report.']
+      ? ['- You are read-only: you can only run read-only commands with exec_command (rg, rg --files, sed -n, cat, ls, git log, git diff) and cannot change files. Investigate and report.']
       : [
           `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`,
           '- Do not start long-running commands (dev servers, watchers). Diffra runs the project checks after all workers finish; run only quick, targeted commands when they help.',
@@ -264,7 +264,6 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
   const owned = claimsOf(team, worker.tag.id)
   const wio = workerIO(io, worker, team.permissions)
   const scope: AgentScope = {
-    readHashes: worker.readHashes,
     beforeWrite: (target) => {
       const path = projectPath(session, target.absolute)
       // 项目外的写入照常走外部路径的授权，不在认领范围里
@@ -290,9 +289,11 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
     .join(NEWLINE)
   // 设计任务的工人还能用设计工具（除了 eval：它能绕过节点锁）
   const designSet = Object.fromEntries(Object.entries(designTools(session)).filter(([name]) => name !== DESIGN_EVAL_TOOL))
-  const baseTools = worker.type?.readOnly ? Object.fromEntries(Object.entries(WORKER_TOOLS).filter(([name]) => !READ_ONLY_WORKER_EXCLUDED.has(name))) : WORKER_TOOLS
+  // 只读类型的工人：exec_command 只许跑只读命令，没有 apply_patch 和认领。用到时再拼：read-only.ts 和这里互相引用，模块加载时它可能还没准备好
+  const baseTools: ToolSet = worker.type?.readOnly ? { ...READ_ONLY_TOOLS, [REPORT_TOOL]: WORKER_TOOLS[REPORT_TOOL]! } : WORKER_TOOLS
   const tools: ToolSet = { ...baseTools, ...(worker.type?.readOnly ? {} : designSet) }
-  const messages: ModelMessage[] = [{ role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
+  // 工人自己从头开对话：环境和项目说明文件全量给一份
+  const messages: ModelMessage[] = [await freshWorldState(session), { role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
   const window = active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let nearLimit = false
   // 和主循环一样的防打转（第 452 步）：同一个调用、同样的结果连着 3 次先提醒，提醒后还犯就停下这个工人；另有只提醒不停的几种（spin.ts）
@@ -345,13 +346,19 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
         results.push(await claimFiles(session, team, worker, call, wio, io))
         continue
       }
-      // 按这个工人实际拿到的工具判断：只读类型没有 edit_file、run_command，模型硬调也不执行
+      // 按这个工人实际拿到的工具判断：只读类型没有 apply_patch，命令也只能是只读的，模型硬调也不执行
       if (!Object.hasOwn(tools, call.toolName)) {
         results.push(errorResult(call, `You cannot use ${call.toolName}. Your tools: ${Object.keys(tools).join(', ')}.`))
         continue
       }
+      const readOnlyProblem = worker.type?.readOnly ? readOnlyCommandProblem(call.toolName, call.input) : null
+      if (readOnlyProblem) {
+        results.push(errorResult(call, readOnlyProblem))
+        continue
+      }
       let outcome: Awaited<ReturnType<typeof runToolCall>>
-      if (call.toolName === 'run_command' && !call.invalid) {
+      const command = call.toolName === 'exec_command' && !call.invalid && typeof call.input === 'object' && call.input !== null && 'cmd' in call.input && typeof call.input.cmd === 'string' ? call.input.cmd : null
+      if (command !== null && !isReadOnlyCommand(command)) {
         outcome = { result: await runWorkerCommand(session, team, worker, call, signal, wio, scope), edited: false }
       } else {
         prefetchReads(session, toolCalls, index, answered, prefetched, signal, wio, scope)
@@ -364,10 +371,12 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
         noteEdit(spin)
       } else {
         noteCall(spin, call.toolName, call.input)
-        const key = callSignature(call, outcome.result)
-        const count = (repeats.get(key) ?? 0) + 1
-        repeats.set(key, count)
-        if (count >= STUCK_REPEATS) repeated = call
+        if (!isPolling(call.toolName, call.input) || outcome.result.output.type === 'error-text') {
+          const key = callSignature(call, outcome.result)
+          const count = (repeats.get(key) ?? 0) + 1
+          repeats.set(key, count)
+          if (count >= STUCK_REPEATS) repeated = call
+        }
       }
     }
     if (results.length > 0) messages.push({ role: 'tool', content: results })
@@ -423,7 +432,7 @@ async function claimFiles(session: Session, team: Team, worker: Worker, call: St
 }
 
 // 命令可能改任何文件，认领拦不住：跑完对比工作区，把改到别人认领的文件记下来报告给主智能体。
-// 同一时段别的工人用 edit_file 改的文件不算在这条命令头上；两个工人的命令同时改了同一批文件时分不清是谁改的
+// 同一时段别的工人用 apply_patch 改的文件不算在这条命令头上；两个工人的命令同时改了同一批文件时分不清是谁改的
 async function runWorkerCommand(session: Session, team: Team, worker: Worker, call: StepToolCall, signal: AbortSignal, wio: TurnIO, scope: AgentScope): Promise<ToolResultPart> {
   const before = session.checkpoints ? await session.checkpoints.fingerprint().catch(() => null) : null
   const editsBefore = team.edits.length
@@ -538,7 +547,7 @@ export async function runDelegates(
     team.count++
     // 只读的工人不认领文件和节点：它不改东西，认领了反而挡住别的工人
     const nodes = session.design && !type?.readOnly ? [...new Set(input.data.nodes ?? [])] : []
-    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, readHashes: new Map(), edited: new Set(), boundary: [], steps: 0, type, notes: [] }
+    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, edited: new Set(), boundary: [], steps: 0, type, notes: [] }
     // 先把要认领的都认领下来；和正在跑的工人冲突就不派这个工人
     const refused: string[] = []
     for (const raw of type?.readOnly ? [] : (input.data.files ?? [])) {

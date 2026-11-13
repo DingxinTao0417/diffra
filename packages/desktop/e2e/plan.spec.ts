@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { cards, chooseProject, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { type ScriptStep, startScriptedModel } from './scripted-model'
+import { addFile, exec, replaceLines, type ScriptStep, startScriptedModel } from './scripted-model'
 
 test('计划通过斜杠菜单启用，改了计划再执行，编码模型按改过的计划做', async () => {
   test.setTimeout(60_000)
@@ -13,7 +13,7 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-plan-'))
   const model = await startScriptedModel([
     // 出计划：没配规划模型，用编码模型
-    { toolCalls: [{ name: 'list_files', input: {} }] },
+    { toolCalls: [exec('ls')] },
     {
       toolCalls: [
         {
@@ -23,8 +23,8 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
       ],
     },
     // 按计划执行
-    { toolCalls: [{ name: 'edit_file', input: { path: 'README.md', old_string: '', new_string: '# demo\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '加了 README' } }] },
+    { toolCalls: [addFile('README.md', '# demo\n')] },
+    { text: '加了 README' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -78,7 +78,8 @@ test('兜底模型：编码模型卡住时换兜底模型接着做，对话里�
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-fallback-'))
-  const same: ScriptStep = { toolCalls: [{ name: 'search', input: { pattern: 'TODO' } }] }
+  // 每次结果都一样的失败调用：改一个不存在的文件
+  const same: ScriptStep = { toolCalls: [replaceLines('missing.txt', 'TODO', 'DONE')] }
   const coder = await startScriptedModel([same, same, same, same, same, same, { text: '不会走到这里' }])
   const fallback = await startScriptedModel([{ text: '兜底模型接手做完了' }])
   const app = await launchApp(userDataDir)

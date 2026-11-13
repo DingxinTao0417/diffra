@@ -6,9 +6,9 @@ import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { annotateDiff } from '../rules/review.js'
 import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, taskStateUpdate, type TurnIO } from '../session/loop.js'
-import { runReadOnlyLoop } from '../session/read-only.js'
+import { READ_ONLY_TOOL_NAMES, READ_ONLY_TOOLS, runReadOnlyLoop } from '../session/read-only.js'
+import { freshWorldState } from '../session/world-state.js'
 import type { Session } from '../session/session.js'
-import { TOOLS } from '../session/tools.js'
 import { SECURITY_CATEGORIES } from './light.js'
 
 export type DeepScanScope = 'task' | 'project'
@@ -18,7 +18,7 @@ export { DEEP_SCAN_TITLES } from '../protocol.js'
 const MAX_STEPS = 40
 // 模型可能报出比这更多的确认问题；上限只用来防止报告无限长，不因为多报一条就整份丢掉
 const MAX_FINDINGS = 60
-const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search'])
+const READ_TOOL_NAMES = READ_ONLY_TOOL_NAMES
 const CATEGORY_IDS = new Set(SECURITY_CATEGORIES.map(([id]) => id))
 
 // 报告字段尽量宽松：模型偶尔把 severity 写成 critical、line 写成 0、path 带上项目前缀，
@@ -47,17 +47,15 @@ const reportInput = z.object({
     .max(MAX_FINDINGS),
 })
 
-// 只读：能看代码、搜索，不能改文件、不能执行命令
+// 只读：用 exec_command 跑只读命令（rg、sed -n、cat、ls、git log 这类）看代码、搜索，不能改文件
 const DEEP_TOOLS = {
-  read_file: TOOLS.read_file,
-  list_files: TOOLS.list_files,
-  search: TOOLS.search,
+  ...READ_ONLY_TOOLS,
   report: tool({ description: 'Finish the audit and report the problems you confirmed. Call it exactly once, at the end.', inputSchema: reportInput }),
 }
 
 const AUDITOR_PROMPT = [
-  'You are a security auditor working inside a code repository. You can only read: use list_files, search and read_file. ' +
-    'You cannot change files or run commands.',
+  'You are a security auditor working inside a code repository. You can only read: run read-only commands with exec_command ' +
+    '(rg, rg --files, sed -n, cat). You cannot change files.',
   'Method: find where untrusted data enters (HTTP parameters, body, headers, cookies, uploaded files, CLI arguments, environment, ' +
     'messages, database rows written by users), then follow it across files and functions to dangerous operations: SQL, shell commands, ' +
     'eval, file paths, outgoing URLs and redirects, HTML output, deserialization. Also check that endpoints and user-owned data have ' +
@@ -109,15 +107,15 @@ export async function runDeepScan(session: Session, turn: { id: string }, scope:
       {
         model: session.reviewModel,
         system: AUDITOR_PROMPT,
-        messages: [{ role: 'user', content: await scanBrief(session, scope) }],
+        messages: [await freshWorldState(session), { role: 'user', content: await scanBrief(session, scope) }],
         tools: DEEP_TOOLS,
-        readTools: READ_ONLY_TOOLS,
+        readTools: READ_TOOL_NAMES,
         finalTool: 'report',
         maxSteps: MAX_STEPS,
         window: contextWindow,
         usage: { role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId },
         nudge: 'Keep auditing with the tools, or call report when you are done.',
-        readOnlyError: 'This audit is read-only. Use read_file, list_files, search or report.',
+        readOnlyError: 'This audit is read-only. Use exec_command with read-only commands, or report.',
         onFinal: (toolCallId, input) => showReport(session, toolCallId, parseReport(input), io),
       },
       signal,

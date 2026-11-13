@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { cards, chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, exec, read, replaceLines, startScriptedModel } from './scripted-model'
 
 const FILES_TS = [
   'export const read = (name: string) => fs.readFileSync(path.join(UPLOAD, name))',
@@ -19,15 +19,24 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-security-'))
   const model = await startScriptedModel(
     [
-      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: '', new_string: FILES_TS } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '加了读文件和计算' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '去掉了 eval' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: 'path.join(UPLOAD, name)', new_string: 'path.join(UPLOAD, path.basename(name))' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '文件名限制在上传目录内' } }] },
-      // 深度扫描
-      { toolCalls: [{ name: 'search', input: { pattern: 'readFileSync' } }] },
-      { toolCalls: [{ name: 'read_file', input: { path: 'files.ts' } }] },
+      { toolCalls: [addFile('files.ts', FILES_TS)] },
+      // 每次想结束这一轮都过结束门禁，打回后接着调模型
+      { text: '加了读文件和计算' },
+      { toolCalls: [replaceLines('files.ts', 'export const calc = (input: string) => eval(input)', 'export const calc = (input: string) => Number(input)')] },
+      { text: '去掉了 eval' },
+      {
+        toolCalls: [
+          replaceLines(
+            'files.ts',
+            'export const read = (name: string) => fs.readFileSync(path.join(UPLOAD, name))',
+            'export const read = (name: string) => fs.readFileSync(path.join(UPLOAD, path.basename(name)))',
+          ),
+        ],
+      },
+      { text: '文件名限制在上传目录内' },
+      // 深度扫描：只读的命令
+      { toolCalls: [exec('grep -n readFileSync files.ts')] },
+      { toolCalls: [read('files.ts')] },
       {
         toolCalls: [
           {
@@ -125,14 +134,14 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
   const evalLine = (name: string) => `export const ${name} = (input: string) => eval(input)\n`
   const model = await startScriptedModel([
     // 第一轮：都开着，写了 eval 又改掉，完成前的检查都通过
-    { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: evalLine('calc') } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '加了计算' } }] },
+    { toolCalls: [addFile('calc.ts', evalLine('calc'))] },
+    { toolCalls: [replaceLines('calc.ts', 'export const calc = (input: string) => eval(input)', 'export const calc = (input: string) => Number(input)')] },
+    { text: '加了计算' },
     // 第二轮：静态检查、轻量扫描、规范审查关了，写了 eval 也不查
-    { toolCalls: [{ name: 'edit_file', input: { path: 'other.ts', old_string: '', new_string: evalLine('other') } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '加了另一个计算' } }] },
+    { toolCalls: [addFile('other.ts', evalLine('other'))] },
+    { text: '加了另一个计算' },
     // 第三轮：要提交时先问深度扫描
-    { toolCalls: [{ name: 'run_command', input: { command: 'git commit -m 加计算' } }] },
+    { toolCalls: [exec('git commit -m 加计算')] },
     // 接着跑的深度扫描
     {
       toolCalls: [

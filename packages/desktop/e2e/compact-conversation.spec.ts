@@ -5,17 +5,17 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, waitTaskDone, cards } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { read, replaceLines, startScriptedModel } from './scripted-model'
 
 test('连续编辑折叠分组，重复修改按首次到最终内容统计；展开收起和交付入口可用', async () => {
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-compact-'))
   writeFileSync(join(project, 'note.txt'), 'original\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'note.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: 'original', new_string: 'intermediate' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: 'intermediate', new_string: 'final' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '已完成文本修改' } }] },
+    { toolCalls: [read('note.txt')] },
+    { toolCalls: [replaceLines('note.txt', 'original', 'intermediate')] },
+    { toolCalls: [replaceLines('note.txt', 'intermediate', 'final')] },
+    { text: '已完成文本修改' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -66,10 +66,10 @@ test('每次调用前都先思考的模型：思考、读文件、改动收在�
   const project = mkdtempSync(join(tmpdir(), 'diffra-process-group-'))
   writeFileSync(join(project, 'note.txt'), 'original\n')
   const model = await startScriptedModel([
-    { thinking: '先看看文件里现在写的是什么\n第二行是细节', toolCalls: [{ name: 'read_file', input: { path: 'note.txt' } }] },
-    { thinking: '把 original 换掉', toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: 'original', new_string: 'final' } }] },
+    { thinking: '先看看文件里现在写的是什么\n第二行是细节', toolCalls: [read('note.txt')] },
+    { thinking: '把 original 换掉', toolCalls: [replaceLines('note.txt', 'original', 'final')] },
     // 慢一点：趁这一步还没回来，看运行中的样子
-    { delayMs: 2500, toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    { delayMs: 2500, text: '改好了' },
   ])
   const app = await launchApp(userDataDir)
   try {

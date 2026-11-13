@@ -1,11 +1,11 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
 import { chooseProject, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { patch, read, replaceLines, startScriptedModel } from './scripted-model'
 
 const lines = Array.from({ length: 200 }, (_, index) => `行 ${index + 1}`).join('\n')
 
@@ -28,16 +28,48 @@ async function expectEdits(window: Page): Promise<void> {
   await expect(counts).toContainText('−2')
 }
 
+test('一个补丁里新建、删除、修改几个文件：改动卡片每个文件一行，分别写新建、删除、编辑', async () => {
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-edit-diff-'))
+  writeFileSync(join(project, 'old.txt'), '旧的\n')
+  writeFileSync(join(project, 'keep.txt'), '一\n二\n')
+  const model = await startScriptedModel([
+    { toolCalls: [patch('*** Add File: new.txt', '+新的', '*** Delete File: old.txt', '*** Update File: keep.txt', ' 一', '-二', '+三')] },
+    { text: '改好了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '新建、删除、修改')
+    await waitTaskDone(window)
+    // 过程只有这一次调用时不套过程组，改动行直接显示
+    await expect(window.getByTestId('tool-group')).toHaveCount(0)
+    await expect(window.getByRole('button', { name: '查看改动 new.txt', exact: true })).toContainText('新建')
+    await expect(window.getByRole('button', { name: '查看改动 old.txt', exact: true })).toContainText('删除')
+    await expect(window.getByRole('button', { name: '查看改动 keep.txt', exact: true })).toContainText('编辑')
+    expect(existsSync(join(project, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(project, 'new.txt'), 'utf8')).toBe('新的\n')
+    expect(readFileSync(join(project, 'keep.txt'), 'utf8')).toBe('一\n三\n')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
 test('改动卡片只带变化的那段：大文件改两处，行号是文件里的行号，本轮交付按净改动算；记录里只存一份整份文件；重启后载入照样显示', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-edit-diff-'))
   writeFileSync(join(project, 'big.txt'), `${lines}\n`)
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'big.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'big.txt', old_string: '行 100\n', new_string: '行 100（改）\n' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'big.txt', old_string: '行 150\n', new_string: '' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改了两处' } }] },
+    { toolCalls: [read('big.txt')] },
+    { toolCalls: [replaceLines('big.txt', '行 100', '行 100（改）')] },
+    { toolCalls: [patch('*** Update File: big.txt', '-行 150')] },
+    { text: '改了两处' },
   ])
   let app = await launchApp(userDataDir)
   try {

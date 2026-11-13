@@ -15,11 +15,12 @@ import type { Compaction, SessionRecord } from './store.js'
 import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
 import { INTERACT_TOOL_CHARS, INTERACT_TOOLS } from './interact.js'
-import { WAIT_COMMAND_TOOL, WAIT_TOOL_CHARS, waitCommandTool } from './wait.js'
 import { TASK_TOOL_CHARS, TASK_TOOLS } from './tasks.js'
 import { browserTools } from './browser.js'
 import { designChars, designTools } from './design.js'
-import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS } from './tools.js'
+import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS, VIEW_IMAGE_TOOL } from './tools.js'
+import { ExecSessions } from '../tools/exec.js'
+import { knownWorldState, type WorldStateEntry } from './world-state.js'
 
 // 会话标题默认取第一条提问的开头
 const TITLE_CHARS = 40
@@ -120,7 +121,10 @@ export class Session {
   // 没有配置兜底模型时为 null，卡住了就停下
   readonly fallbackModel: LanguageModel | null
   readonly messages: ModelMessage[] = []
-  readonly readHashes = new Map<string, string>()
+  // exec_command 到点还没结束、在后台接着跑的进程；删除任务、内核退出时结束
+  readonly execSessions = new ExecSessions()
+  // 发给模型的环境和项目说明文件（见 world-state.ts）：每条记着它在 messages 里的位置；只在内存里，重新打开任务后发全量
+  worldStateLog: WorldStateEntry[] = []
   // 「本会话内允许同类命令」记下的命令键，见 permissions.commandKey
   readonly alwaysAllowed: Set<string>
   // turnId → 这一轮开始前的快照
@@ -133,12 +137,10 @@ export class Session {
   compaction: Compaction | null = null
   // 上一次模型调用的输入 token 数、当时发出去的字数和缓存用量，用来估算下一次调用有多大
   lastContext: { inputTokens: number; chars: number; cacheRead: number | null; cacheWrite: number | null } | null = null
-  // 验证缓存仅存于内存，恢复后重新验证；Git 快照覆盖未跟踪文件。
-  verifiedSnapshot: string | null = null
   // 提交前问深度扫描：上次深度扫描跑完时的工作区指纹（代码没再变就不问），和用户选了「这个任务不再问」。只在内存里，重新打开任务后会再问
   deepScannedFingerprint: string | null = null
   deepScanDeclined = false
-  // 这一轮最新的步骤清单（卡片 id 带轮次），finish 通过时用来收尾；只在内存里
+  // 这一轮最新的步骤清单（卡片 id 带轮次），过了结束门禁时用来收尾；只在内存里
   stepList: { id: string; steps: StepItem[] } | null = null
   // 最近一次因检查卡住停下时还没修好的错误，下一个执行轮开始时交给模型一次；只在内存里，撤销后作废
   unresolvedCheck: UnresolvedCheck | null = null
@@ -307,21 +309,24 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, [WAIT_COMMAND_TOOL]: waitCommandTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, ...(this.config.model.supportsImages ? VIEW_IMAGE_TOOL : {}), [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...browserTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + VISUAL_TOOL_CHARS + WAIT_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + (this.config.model.supportsImages ? toolDefinitionChars(VIEW_IMAGE_TOOL) : 0) + VISUAL_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数
   usageBreakdown(used: number): UsageBreakdown {
     const prompt = promptSections(this.systemPrompt)
+    // 项目说明文件在对话里，算进规则一项
+    const agentsMd = knownWorldState(this).agentsMd?.length ?? 0
+    const messages = messagesChars(this.contextMessages())
     const chars = {
       system: prompt.base,
-      rules: prompt.rules,
+      rules: prompt.rules + Math.min(agentsMd, messages),
       tools: this.toolChars(),
-      messages: messagesChars(this.contextMessages()),
+      messages: Math.max(0, messages - agentsMd),
     }
     const total = chars.system + chars.rules + chars.tools + chars.messages
     const share = (value: number) => (total > 0 ? Math.round((value / total) * used) : 0)
@@ -377,8 +382,6 @@ export class Session {
     // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
     const before = taskStateBefore(this.turns, index)
     const needsVerification = filesRestored ? before.needsVerification : this.taskState.needsVerification
-    // 完成条件定下后改不了，这一轮里才定的随对话一起撤掉，否则写错的条件再也摆脱不了；之前定的保留，证据作废
-    const keptRequirements = new Set(before.requirementIds)
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
@@ -389,15 +392,7 @@ export class Session {
       this.messageStarts.delete(turn.id)
       this.consumedChecks.delete(turn.id)
     }
-    this.readHashes.clear()
-    this.verifiedSnapshot = null
-    this.taskState = {
-      ...newTaskState(),
-      needsVerification,
-      contractRequired: this.taskState.contractRequired,
-      releaseVersion: this.taskState.releaseVersion,
-      requirements: this.taskState.requirements.filter((item) => keptRequirements.has(item.id)).map((item) => ({ ...item, receiptId: null })),
-    }
+    this.taskState = { ...newTaskState(), needsVerification }
     return { filesRestored }
   }
 
@@ -414,15 +409,13 @@ export class Session {
     if (!this.checkpoints || !base) throw new Error('这一轮没有检查点，无法撤销')
     const changes = await this.checkpoints.changesSince(base)
     await this.checkpoints.restore(base, changes)
-    // 文件已经变了，之前读过的内容和验证证据都作废，并告诉模型
-    this.readHashes.clear()
-    this.verifiedSnapshot = null
+    // 文件已经变了，之前的检查结论作废，并告诉模型
     this.unresolvedCheck = null
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
     const needsVerification = target ? needsVerificationBefore(this.turns, index) : false
-    const reason = this.taskState.requirements.length > 0 || this.taskState.contractRequired ?'文件已撤销，需要重新验证完成条件。' : needsVerification ? '文件已撤销，之前轮次的改动还没验证。' : '文件已撤销，原来的结论不再算数。'
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason, receipts: [], requirements: this.taskState.requirements.map((item) => ({ ...item, receiptId: null })) }
+    const reason = needsVerification ? '文件已撤销，之前轮次的改动还没验证。' : '文件已撤销，原来的结论不再算数。'
+    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason }
     this.messages.push({
       role: 'user',
       content:
@@ -448,7 +441,7 @@ export function restoredTaskState(record: SessionRecord): TaskState {
 
 // 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
 // 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
-function taskStateBefore(turns: StoredTurn[], index: number): { needsVerification: boolean; requirementIds: string[] } {
+function taskStateBefore(turns: StoredTurn[], index: number): { needsVerification: boolean } {
   for (const update of turns[index]!.updates) {
     const recorded = recordedTaskState(update._meta)
     if (recorded) return recorded
@@ -460,7 +453,7 @@ function taskStateBefore(turns: StoredTurn[], index: number): { needsVerificatio
       if (recorded) return recorded
     }
   }
-  return { needsVerification: false, requirementIds: [] }
+  return { needsVerification: false }
 }
 
 function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {

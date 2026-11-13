@@ -94,7 +94,7 @@ test('内置浏览器：智能体打开本地页面、读页面、输入、点�
 
     const bodies = model.bodies()
     // 前端项目、不看图的模型：提示词让它在浏览器里检查，不让它截图
-    expect(bodies[0]).toContain('Front-end work (this project has UI code):')
+    expect(bodies[0]).toContain('## Front-end work (this project has UI code)')
     expect(bodies[0]).toContain('run browser_check_layout')
     expect(bodies[0]).not.toContain('browser_screenshot with width')
     expect(bodies[2]).toContain('textbox \\"名字\\" [ref=e1]')

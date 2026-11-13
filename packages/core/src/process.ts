@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
 // 超过这个大小只保留开头和结尾，防止输出巨大的命令撑爆内存
 const MAX_CAPTURE_BYTES = 1024 * 1024
@@ -86,7 +86,21 @@ export function runProcess(file: string, args: string[], options: ProcessOptions
   })
 }
 
-function killTree(pid: number | undefined): void {
+// 进程退出前用：等 taskkill 跑完再返回
+export function killTreeSync(pid: number | undefined): void {
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
+    return
+  }
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    // 进程组已经没了
+  }
+}
+
+export function killTree(pid: number | undefined): void {
   if (pid === undefined) return
   if (process.platform === 'win32') {
     spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }).on('error', (error) =>
@@ -99,6 +113,25 @@ function killTree(pid: number | undefined): void {
   } catch (error) {
     console.error('[process] 结束进程组失败', error)
   }
+}
+
+// 给模型看的工具输出上限（token，按 4 字节一个估算），和 Codex 的默认一样
+export const DEFAULT_MAX_OUTPUT_TOKENS = 10_000
+const BYTES_PER_TOKEN = 4
+
+// 按 token 头尾各留一半，中间换成「…N tokens truncated…」；截了就在前面说明原来有多长（第 511 步，Codex 的格式）。
+// 命令、MCP、浏览器、检查命令的输出都用它
+export function truncateForModel(text: string, maxTokens = DEFAULT_MAX_OUTPUT_TOKENS): { text: string; truncated: boolean; originalTokens: number } {
+  const originalTokens = Math.ceil(Buffer.byteLength(text) / BYTES_PER_TOKEN)
+  if (originalTokens <= maxTokens) return { text, truncated: false, originalTokens }
+  const keepChars = Math.floor((maxTokens * BYTES_PER_TOKEN) / 2)
+  // 按字符近似：中文一个字三个字节，宁可少留不多留
+  const ratio = text.length / Buffer.byteLength(text)
+  const keep = Math.max(1, Math.floor(keepChars * ratio))
+  const omitted = originalTokens - maxTokens
+  const lines = text.split(/\r?\n/).length
+  const body = `${text.slice(0, keep)}…${omitted} tokens truncated…${text.slice(-keep)}`
+  return { text: `Warning: truncated output (original token count: ${originalTokens})\nTotal output lines: ${lines}\n${body}`, truncated: true, originalTokens }
 }
 
 // 按行截断：保留开头和结尾，给模型看的输出不超过这个规模

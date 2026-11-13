@@ -29,7 +29,7 @@ const BUILTIN_AGENT_TYPES: AgentType[] = [
     readOnly: true,
     instructions: [
       'Answer the question you were given by reading the code.',
-      '- Start broad (search, outline, list_files), then read only the parts that matter. When several lookups are independent, call them in the same response: they run in parallel.',
+      '- Start broad (rg --files, rg -n for names and symbols), then read only the parts that matter (sed -n with line ranges). When several lookups are independent, call them in the same response: they run in parallel.',
       '- Stop as soon as you can answer. Do not keep reading to be thorough.',
       '- Report conclusions, not file dumps: what you found, each claim with its file path and line number, and what you could not determine. Quote only the few lines the coordinator needs to see.',
     ].join(String.fromCharCode(10)),

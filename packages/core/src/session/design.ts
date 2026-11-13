@@ -44,7 +44,7 @@ export function designInstructions(session: Session): string {
     'Design canvas:',
     `- The user opened the design panel: a vector design editor (OpenPencil, Figma-like) shown beside the conversation. Tools prefixed with ${PREFIX} work on its document; their descriptions name each other without the prefix.`,
     '- Draw designs on this canvas with those tools instead of writing HTML files, unless the user asks for code.',
-    `- To implement a design in the project, read it with ${PREFIX}get_jsx (Tailwind output if the project uses Tailwind), then write code with edit_file following the project's existing components and styles.`,
+    `- To implement a design in the project, read it with ${PREFIX}get_jsx (Tailwind output if the project uses Tailwind), then write code with apply_patch following the project's existing components and styles.`,
     session.config.model.supportsImages
       ? `- After a visible change, look at the result with ${PREFIX}export_image on the affected nodes and fix what looks wrong.`
       : `- You cannot see images; check the result with ${PREFIX}describe and ${PREFIX}get_node instead.`,

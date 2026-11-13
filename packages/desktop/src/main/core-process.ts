@@ -1,4 +1,4 @@
-import { type ChildProcessByStdio, spawn } from 'node:child_process'
+import { type ChildProcessByStdio, spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
@@ -70,7 +70,10 @@ export function coreConnection(): Promise<CoreConnection> {
 
 export function stopCore(): void {
   stopping = true
-  child?.kill()
+  // Windows 上 kill() 只结束 core 自己，它在后台跑着的命令（exec_command 到点没结束的）会留下来：连子进程一起结束
+  if (process.platform === 'win32' && child?.pid !== undefined && child.exitCode === null) {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+  } else child?.kill()
 }
 
 // core 打进 out/main/core.js 后，@vscode/ripgrep 找不到自己的平台包，由这里算好路径传进去：

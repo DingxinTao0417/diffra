@@ -5,32 +5,31 @@ import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.
 import type { Session } from './session.js'
 import { toolDefinitionChars } from './tools.js'
 
-// 两个让智能体和用户对上进度的工具（第 441、442 步，参照 qwen-code 的 todo_write 和 ask_user_question）：
-// 步骤清单让用户看到它打算做哪几步、做到哪了；提问让它在岔路口先问，不用结束这一轮等回复
+// 两个让智能体和用户对上进度的工具：
+// 计划（第 510 步起照 Codex 的 update_plan，以前是 todo_write）让用户看到它打算做哪几步、做到哪了；提问（ask_user）让它在岔路口先问，不用结束这一轮等回复
 
-export const TODO_TOOL = 'todo_write'
+export const TODO_TOOL = 'update_plan'
 export const ASK_USER_TOOL = 'ask_user'
 
 const todoInput = z.object({
-  todos: z
+  explanation: z.string().max(500).optional().describe('Optional short note on why the plan changed'),
+  plan: z
     .array(
       z.object({
-        content: z.string().trim().min(1).max(200).describe('One concrete step, in the language the user writes in'),
+        step: z.string().trim().min(1).max(200).describe('One concrete step, in the language the user writes in'),
         status: z.enum(['pending', 'in_progress', 'completed']),
       }),
     )
     .min(1)
     .max(30)
-    .describe('The whole list every time, in order'),
+    .describe('The whole plan every time, in order'),
 })
 
 export const todoTool = tool({
   description: [
-    'Show the user your step list for the current task and keep it up to date. Send the whole list each time.',
-    'Use it only when the task spans several modules or the user asked for several things at once. Do not use it for a question or an ordinary read-change-test task, even though you could split that into steps.',
-    'Send each update in the same response as your next tool call, never on its own. Mark a step in_progress when you start it and completed when it is done; keep at most one step in_progress. Add or reword steps when the plan changes.',
-    'No update is needed just before finish: a successful finish marks the step in progress as completed.',
-    'Do not repeat the list in your reply: the user sees it as a card.',
+    'Updates the task plan shown to the user. Provide an optional explanation and the whole list of steps, each with a status. At most one step can be in_progress at a time.',
+    'Use a plan for non-trivial work with several distinct phases, or when the user asked for several things; skip it for a question or a simple change you can do in a few actions.',
+    'Mark a step completed as soon as it is done and the next one in_progress, in the same response as your next tool call. Do not repeat the plan in your reply: the user sees it as a card.',
   ].join('\n'),
   inputSchema: todoInput,
 })
@@ -58,12 +57,12 @@ async function showSteps(session: Session, steps: StepItem[], io: TurnIO): Promi
 export async function runTodoWrite(session: Session, call: StepToolCall, io: TurnIO): Promise<{ result: ToolResultPart; edited: boolean }> {
   const parsed = todoInput.safeParse(call.input)
   if (!parsed.success) return { result: errorResult(call, invalid(parsed.error.issues)), edited: false }
-  const steps = parsed.data.todos
+  const steps = parsed.data.plan.map((item) => ({ content: item.step, status: item.status }))
   const done = await showSteps(session, steps, io)
-  return { result: textResult(call, `Step list updated: ${done} of ${steps.length} done. Keep it current as you work.`), edited: false }
+  return { result: textResult(call, `Plan updated: ${done} of ${steps.length} done.`), edited: false }
 }
 
-// finish 通过时替模型收尾（第 466 步）：进行中的那一步标成做完，没开始的照旧，免得它为了打勾单独再调一次。
+// 这一轮完成（过了结束门禁）时替模型收尾（第 466 步）：进行中的那一步标成做完，没开始的照旧，免得它为了打勾单独再调一次。
 // 只认这一轮的清单
 export async function settleSteps(session: Session, io: TurnIO): Promise<void> {
   const list = session.stepList

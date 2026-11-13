@@ -14,12 +14,12 @@ import {
   type TurnOutcome,
 } from '../protocol.js'
 import { DEFAULT_CONTEXT_WINDOW, notice, type TurnIO } from './loop.js'
-import { runReadOnlyLoop } from './read-only.js'
+import { READ_ONLY_TOOL_NAMES, READ_ONLY_TOOLS, runReadOnlyLoop } from './read-only.js'
+import { pendingWorldState } from './world-state.js'
 import type { Session } from './session.js'
-import { TOOLS } from './tools.js'
 
 const MAX_STEPS = 8
-const READ_TOOLS = new Set(['read_file', 'list_files', 'search', 'outline'])
+const READ_TOOLS = READ_ONLY_TOOL_NAMES
 // 记录里最多列最后这么多步，每步的结果截到这么长；改动截到这么长
 const MAX_LISTED_STEPS = 60
 const MAX_STEP_RESULT = 400
@@ -55,11 +55,9 @@ const diagnosisInput = z.object({
 
 type DiagnosisInput = z.infer<typeof diagnosisInput>
 
+// 只读：用 exec_command 跑只读命令（rg、sed -n、cat、ls、git log 这类）看代码、搜索，不能改文件
 const DIAGNOSIS_TOOLS = {
-  read_file: TOOLS.read_file,
-  list_files: TOOLS.list_files,
-  search: TOOLS.search,
-  outline: TOOLS.outline,
+  ...READ_ONLY_TOOLS,
   submit_diagnosis: tool({ description: 'Submit the diagnosis. Call it exactly once, at the end.', inputSchema: diagnosisInput }),
 }
 
@@ -67,7 +65,7 @@ const DIAGNOSIS_TOOLS = {
 const DIAGNOSIS_MODE = [
   '',
   'DIAGNOSIS MODE: the user wants to know why a turn stopped (or why a worker did not finish) and how to continue. Nothing gets changed now.',
-  '- You can only use read_file, list_files, search and outline, and only a few calls. Check the real state of files when the cause depends on it (for example a half-finished edit).',
+  '- You can only read, with a few read-only commands through exec_command (rg, sed -n, cat, git diff). Check the real state of files when the cause depends on it (for example a half-finished edit).',
   '- The facts in the last message list the steps of that turn as s1, s2, ... Cite them as evidence.',
   '- If the cause is outside the task (the model service stalled or failed, rate limits, a wrong API key), say so plainly; the prompt can then be short.',
   '- When you know enough, call submit_diagnosis exactly once. Write it in the language the user writes in.',
@@ -281,7 +279,7 @@ export async function runDiagnose(session: Session, target: { turnId: string; ca
         {
           model: session.model,
           system: `${session.systemPrompt}\n${DIAGNOSIS_MODE}`,
-          messages: [...session.contextMessages(), { role: 'user', content: facts.text }],
+          messages: [...session.contextMessages(), ...(await pendingWorldState(session)), { role: 'user', content: facts.text }],
           tools: DIAGNOSIS_TOOLS,
           readTools: READ_TOOLS,
           finalTool: 'submit_diagnosis',
@@ -289,7 +287,7 @@ export async function runDiagnose(session: Session, target: { turnId: string; ca
           window: model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
           usage: { role: 'coder', provider: model.provider, modelId: model.modelId },
           nudge: 'Check what you need with the read tools, or call submit_diagnosis now.',
-          readOnlyError: 'This is diagnosis mode: you can only read. Use read_file, list_files, search, outline, or submit_diagnosis.',
+          readOnlyError: 'This is diagnosis mode: you can only read. Use exec_command with read-only commands, or submit_diagnosis.',
           onFinal: (toolCallId, input) => showDiagnosis(toolCallId, toDiagnosis(diagnosisInput.parse(input), facts.steps, facts.fallback.target), io),
         },
         signal,

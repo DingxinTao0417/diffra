@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, startDesignTask, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { lastToolResult, type ScriptMessages, startScriptedModel } from './scripted-model'
+import { exec, lastToolResult, read, replaceLines, type ScriptMessages, startScriptedModel } from './scripted-model'
 
 test('子智能体：两个工人并行改各自认领的文件，改别人的被拒；卡片显示进度和结果，任务监控列出工人和改动归属；权限确认写明是哪个工人；重启后卡片还在', async () => {
   test.setTimeout(120_000)
@@ -20,16 +20,16 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
         { name: 'delegate', input: { name: '乙', task: 'WORKER-B：把 b.txt 改成大写', files: ['b.txt'] } },
       ],
     },
-    { toolCalls: [{ name: 'finish', input: { summary: '两个文件都改好了' } }] },
+    { text: '两个文件都改好了' },
     // 甲第一步慢一点：乙的确认弹出来时甲还在跑
-    { match: 'WORKER-A', toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }], delayMs: 2500 },
-    { match: 'WORKER-A', toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'alpha', new_string: 'ALPHA' } }] },
+    { match: 'WORKER-A', toolCalls: [read('a.txt')], delayMs: 2500 },
+    { match: 'WORKER-A', toolCalls: [replaceLines('a.txt', 'alpha', 'ALPHA')] },
     { match: 'WORKER-A', toolCalls: [{ name: 'report', input: { summary: 'a.txt 改成大写了' } }] },
-    { match: 'WORKER-B', toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
-    { match: 'WORKER-B', toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: 'alpha', new_string: 'hacked' } }] },
-    { match: 'WORKER-B', toolCalls: [{ name: 'run_command', input: { command: 'echo note > b-note.txt' } }] },
-    { match: 'WORKER-B', toolCalls: [{ name: 'read_file', input: { path: 'b.txt' } }] },
-    { match: 'WORKER-B', toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: 'beta', new_string: 'BETA' } }] },
+    { match: 'WORKER-B', toolCalls: [read('a.txt')] },
+    { match: 'WORKER-B', toolCalls: [replaceLines('a.txt', 'alpha', 'hacked')] },
+    { match: 'WORKER-B', toolCalls: [exec('echo note > b-note.txt')] },
+    { match: 'WORKER-B', toolCalls: [read('b.txt')] },
+    { match: 'WORKER-B', toolCalls: [replaceLines('b.txt', 'beta', 'BETA')] },
     { match: 'WORKER-B', toolCalls: [{ name: 'report', input: { summary: 'b.txt 改成大写了', issues: 'a.txt 归甲，没动' } }] },
   ])
   let app = await launchApp(userDataDir)

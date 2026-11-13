@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 // 一次模型调用的回复：文字、工具调用，或者先说一段话再调工具；delayMs 用来模拟慢的回复；
 // promptTokens 是这次报给 Diffra 的输入 token 数，默认 1200，用来模拟上下文快满。
 // 工具参数可以是函数：拿这次请求的对话（messages）算出来，比如用前一个工具返回的节点 id。
-// match：只回答第一条用户消息里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求。
+// match：只回答第一条用户消息（不算环境上下文）里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求。
 // thinking：回复前先出一段思考（reasoning_content，DeepSeek 的写法）
 export type ScriptMessages = Array<{ role: string; content: unknown; tool_calls?: unknown }>
 type ScriptInput = unknown | ((messages: ScriptMessages) => unknown)
@@ -13,16 +13,38 @@ export type ScriptStep =
   | ({ toolCalls: Array<{ name: string; input: ScriptInput }>; text?: string } & StepTiming)
   | ({ text: string } & StepTiming)
 
+// 剧本里的工具调用，和 core 测试的 loop-helpers 一样。exec：跑命令；read：用 cat 读文件（没有 read_file 了）
+export const exec = (cmd: string, extra: Record<string, unknown> = {}) => ({ name: 'exec_command', input: { cmd, ...extra } })
+export const read = (path: string) => exec(`cat ${path}`)
+// apply_patch：lines 是 *** Begin Patch 和 *** End Patch 之间的各行
+export const patch = (...lines: string[]) => ({ name: 'apply_patch', input: { input: ['*** Begin Patch', ...lines, '*** End Patch'].join('\n') } })
+// 新建文件：每行前面加 +
+export const addFile = (path: string, content: string) => patch(`*** Add File: ${path}`, ...content.replace(/\n$/, '').split('\n').map((line) => `+${line}`))
+// 按整行替换（不是子串）：from 的每一行都要和文件里的整行一样
+export const replaceLines = (path: string, from: string, to: string) =>
+  patch(`*** Update File: ${path}`, ...from.split('\n').map((line) => `-${line}`), ...to.split('\n').map((line) => `+${line}`))
+
 // 对话里最后一个工具结果（字符串）
 export function lastToolResult(messages: ScriptMessages): string {
   const content = messages.filter((message) => message.role === 'tool').at(-1)?.content
   return typeof content === 'string' ? content : JSON.stringify(content)
 }
 
-function firstUserText(messages: ScriptMessages): string {
-  const content = messages.find((message) => message.role === 'user')?.content
+function textOf(content: unknown): string {
   if (typeof content === 'string') return content
   return Array.isArray(content) ? content.map((part) => (typeof part === 'object' && part !== null && 'text' in part ? String(part.text) : '')).join('') : ''
+}
+
+// Diffra 在提问前面、每步调模型前追加的环境上下文（[Diffra] Context 开头），不算用户的提问
+const CONTEXT_MARKER = '[Diffra] Context'
+
+function firstUserText(messages: ScriptMessages): string {
+  return textOf(messages.find((message) => message.role === 'user' && !textOf(message.content).startsWith(CONTEXT_MARKER))?.content)
+}
+
+// 对话里最后一条用户消息（不算环境上下文）：结束门禁打回时追加的是用户消息，不是工具结果
+export function lastUserText(messages: ScriptMessages): string {
+  return textOf(messages.findLast((message) => message.role === 'user' && !textOf(message.content).startsWith(CONTEXT_MARKER))?.content)
 }
 
 export interface ScriptedModel {

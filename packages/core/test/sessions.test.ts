@@ -36,6 +36,7 @@ import {
 } from '../src/client.js'
 import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY } from '../src/protocol.js'
 import { type SessionRecord, SessionStore } from '../src/session/store.js'
+import { addFile, exec, read, replaceLines } from './loop-helpers.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
 import { type ScriptedServer, startScriptedServer } from './scripted-server.js'
 
@@ -86,6 +87,25 @@ function lastTaskState(sessionId: string): unknown {
   return metas.filter((meta) => 'taskState' in meta).at(-1)?.taskState
 }
 
+// 这个会话每轮结束时的 turnOutcome，按出现顺序
+function turnOutcomes(sessionId: string): unknown[] {
+  return notifications.flatMap(({ sessionId: id, update }) => {
+    const outcome = id === sessionId && update.sessionUpdate === 'session_info_update' ? (update._meta?.diffra as Record<string, unknown> | undefined)?.turnOutcome : undefined
+    return outcome ? [outcome] : []
+  })
+}
+
+// 结束门禁的完成卡（标题「完成」）的结论，按出现顺序
+function finishVerifications(sessionId: string): unknown[] {
+  return notifications.flatMap(({ sessionId: id, update }) =>
+    id === sessionId && update.sessionUpdate === 'tool_call' && update.title === '完成' ? [(update._meta?.diffra as Record<string, unknown> | undefined)?.verification] : [],
+  )
+}
+
+// 结束门禁的检查命令：b.txt 不在就失败，输出每次一样（连续 3 次没进展就停下，改动留着待验证）。
+// 用它的用例要经 bash 跑好几次检查，Windows 上默认 5 秒不够，给 20 秒
+const CHECK_B = { afterEdit: null, beforeFinish: 'test -f b.txt' }
+
 function config(baseUrl: string): SessionConfig {
   return {
     model: { endpoint: { protocol: 'openai-compatible', baseUrl, apiKey: 'secret-key-should-not-be-saved' }, modelId: 'scripted', contextWindow: 100_000, provider: { id: 'p1', name: '脚本供应商' } },
@@ -104,38 +124,42 @@ function config(baseUrl: string): SessionConfig {
 }
 
 describe('会话持久化', () => {
-  test('手动 compact 扩展请求记录和摘要持久化，重启后继续使用摘要，历史仍可加载', async () => {
+  test('手动压缩：交接摘要和用户说过的原话存进记录，重启后接着用摘要，模型以前的回复不再发；历史仍可加载', async () => {
     server = await startScriptedServer([{ text: '早期回复' }, { text: '最新回复' }, { text: '用户要求保留项目偏好，下一步继续。' }, { text: '已按摘要继续' }])
     const core = await startCore()
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
     await sendPrompt(core, sessionId, 'early', `偏好：保持中文。${'早期细节'.repeat(3000)}`)
     await sendPrompt(core, sessionId, 'recent', '继续之前的任务')
     expect(await compactSession(core, sessionId, 'manual')).toEqual({ stopReason: 'end_turn' })
+    // 写摘要的请求带着整段对话，末尾是交接摘要的要求
+    expect(server.bodies[2]).toContain('早期细节')
+    expect(server.bodies[2]).toContain('早期回复')
+    expect(server.bodies[2]).toContain('CONTEXT CHECKPOINT COMPACTION')
     const store = new SessionStore(join(dataDir, 'sessions'))
     const saved = await store.load(sessionId)
     expect(saved.compaction?.summary).toContain('保留项目偏好')
+    expect(saved.compaction?.summary).toContain('<user_message>\n继续之前的任务\n</user_message>')
     expect(saved.turns.at(-1)).toMatchObject({ kind: 'compact', prompt: '/compact' })
-    expect(server.bodies[2]).toContain('早期细节')
     const restarted = await startCore()
     const loaded = await loadSession(restarted, sessionId, project, config(server.baseUrl))
     expect(loaded.turns).toHaveLength(3)
     expect(loaded.turns[0]?.prompt).toContain('早期细节')
     await sendPrompt(restarted, sessionId, 'continued', '继续')
+    // 压缩后发给模型的是摘要（用户说过的话原样保留）和压缩点之后的消息
     expect(server.bodies[3]).toContain('保留项目偏好')
-    expect(server.bodies[3]).not.toContain('早期细节')
+    expect(server.bodies[3]).toContain('偏好：保持中文。早期细节')
     expect(server.bodies[3]).toContain('继续之前的任务')
+    expect(server.bodies[3]).not.toContain('早期回复')
+    expect(server.bodies[3]).not.toContain('最新回复')
   })
 
   test('重启后能列出、加载并接着聊，撤销还能用；改名、归档、搜索、删除', async () => {
-    server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
-      { text: '接着上次的 a.txt 继续' },
-    ])
+    server = await startScriptedServer([{ toolCalls: [addFile('a.txt', 'hello')] }, { text: '写好了 a.txt' }, { text: '接着上次的 a.txt 继续' }])
     const first = await startCore()
     const { sessionId } = await createSession(first, project, config(server.baseUrl))
     expect(await listSessions(first)).toEqual([])
     await sendPrompt(first, sessionId, 'turn-1', '写一个 a.txt，内容是 hello')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hello\n')
 
     const saved = readFileSync(join(dataDir, 'sessions', `${sessionId}.json`), 'utf8')
     expect(saved).not.toContain('secret-key-should-not-be-saved')
@@ -150,6 +174,7 @@ describe('会话持久化', () => {
     expect(loaded.info.checkpoints).toBe(true)
     expect(loaded.turns).toHaveLength(1)
     expect(loaded.turns[0]).toMatchObject({ id: 'turn-1', prompt: '写一个 a.txt，内容是 hello', stopReason: 'end_turn' })
+    // 改了文件后停下，结束门禁出的完成卡也存下来了
     const titles = loaded.turns[0]?.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
     expect(titles).toContain('完成')
     expect(await previewCheckpoint(second, sessionId, 'turn-1')).toEqual([{ path: 'a.txt', change: 'added' }])
@@ -205,12 +230,8 @@ describe('会话持久化', () => {
     expect(snapshot.turns.map((turn) => turn.remote)).toEqual([remote, undefined])
   })
 
-  test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值，下一轮只提问不被拉回', async () => {
-    server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
-      { text: '刚才写了 a.txt，已经撤销了' },
-    ])
+  test('加载带上 core 当前的任务状态；撤销之后发出受阻状态并存盘，待验证回到这一轮开始时的值；下一轮只提问时一次请求就完成，不出完成卡', async () => {
+    server = await startScriptedServer([{ toolCalls: [addFile('a.txt', 'hello')] }, { text: '写好了 a.txt' }, { text: '刚才写了 a.txt，已经撤销了' }])
     const first = await startCore()
     const { sessionId } = await createSession(first, project, config(server.baseUrl))
     await sendPrompt(first, sessionId, 'turn-1', '写一个 a.txt')
@@ -227,24 +248,30 @@ describe('会话持久化', () => {
     const third = await startCore()
     expect((await loadSession(third, sessionId, project, config(server.baseUrl))).taskState).toEqual(restored)
 
+    // 撤销后没有待验证的改动：只回文字就是结束，不跑门禁
+    notifications = []
     const requests = server.bodies.length
     await sendPrompt(third, sessionId, 'turn-2', '刚才改了什么')
     expect(server.bodies.length - requests).toBe(1)
+    expect(finishVerifications(sessionId)).toEqual([])
+    expect(turnOutcomes(sessionId)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(sessionId)).toEqual({ status: 'completed', reason: null, requirements: [], needsVerification: false })
   })
 
   test('撤销到的这一轮开始时就有没验证的改动：撤销后仍要验证', async () => {
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { toolCalls: [addFile('a.txt', 'a')] },
       { text: '写好了' },
       { text: '写好了' },
       { text: '写好了' },
-      { text: '写好了' },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+      { toolCalls: [addFile('b.txt', 'b')] },
+      { text: '写好了 a.txt 和 b.txt' },
     ])
     const core = await startCore()
-    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), checks: CHECK_B })
     await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    // 检查连续 3 次没有进展：这一轮停下，改动留着待验证
+    expect(turnOutcomes(sessionId).at(-1)).toEqual({ finish: null, stop: 'gate-exhausted' })
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
     await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
@@ -254,22 +281,16 @@ describe('会话持久化', () => {
     await loadSession(second, sessionId, project, config(server.baseUrl))
     expect(await restoreCheckpoint(second, sessionId, 'turn-2')).toEqual([{ path: 'b.txt', change: 'added' }])
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true, reason: '文件已撤销，之前轮次的改动还没验证。' })
-  })
+  }, 20_000)
 
   test('撤销到计划轮：取计划轮开始时的待验证，不取更早轮次的', async () => {
     const submit = { toolCalls: [{ name: 'submit_plan', input: { understanding: '再看看', steps: [{ title: '看 a.txt', detail: '读一遍', files: ['a.txt'] }], risks: [] } }] }
-    server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
-      { text: '写好了' },
-      { text: '写好了' },
-      { text: '写好了' },
-      { text: '写好了' },
-      submit,
-      submit,
-    ])
+    server = await startScriptedServer([{ toolCalls: [addFile('a.txt', 'a')] }, { text: '写好了' }, { text: '写好了' }, { text: '写好了' }, submit, submit])
     const core = await startCore()
-    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), checks: CHECK_B })
+    // 检查一直不过，第一轮停下时改动还没验证
     await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
     await plan(core, sessionId, 'plan-2', '接下来怎么做')
     await restoreCheckpoint(core, sessionId, 'plan-2')
     expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: true })
@@ -280,14 +301,14 @@ describe('会话持久化', () => {
     await plan(core, sessionId, 'plan-3', '接下来怎么做')
     await restoreCheckpoint(core, sessionId, 'plan-3')
     expect(lastTaskState(sessionId)).toMatchObject({ needsVerification: false })
-  })
+  }, 20_000)
 
   test('撤销给这一轮及之后的轮次记下撤销时刻，撤销了哪些文件记在这一轮末尾，重启后还在', async () => {
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 b.txt' } }] },
+      { toolCalls: [addFile('a.txt', 'a')] },
+      { text: '写好了 a.txt' },
+      { toolCalls: [addFile('b.txt', 'b')] },
+      { text: '写好了 b.txt' },
       { text: '好' },
     ])
     const first = await startCore()
@@ -568,10 +589,10 @@ describe('会话存储', () => {
 describe('重新生成、切换模型、整段 diff', () => {
   test('重新生成撤掉这一轮的文件改动和对话；切换模型从下一轮生效', async () => {
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'first\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '第一轮' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'c.txt', old_string: '', new_string: 'second\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '第二轮' } }] },
+      { toolCalls: [addFile('b.txt', 'first')] },
+      { text: '第一轮' },
+      { toolCalls: [addFile('c.txt', 'second')] },
+      { text: '第二轮' },
       { text: '重新生成的回答' },
     ])
     const core = await startCore()
@@ -606,23 +627,23 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(summary?.turnCount).toBe(2)
   })
 
-  test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字会被拉回', async () => {
+  test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字也会在停下时跑门禁', async () => {
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'a\n' } }] },
+      { toolCalls: [addFile('a.txt', 'a')] },
       { text: '写好了' },
       { text: '写好了' },
       { text: '写好了' },
-      { text: '写好了' },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'b.txt', old_string: '', new_string: 'b\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt 和 b.txt' } }] },
+      { toolCalls: [addFile('b.txt', 'b')] },
+      { text: '写好了 a.txt 和 b.txt' },
+      // 重新生成的这一轮：先只回文字，检查不过被打回，补上 b.txt 再停下
       { text: '重新生成的回答' },
-      { text: '重新生成的回答' },
-      { text: '重新生成的回答' },
-      { text: '重新生成的回答' },
+      { toolCalls: [addFile('b.txt', 'b')] },
+      { text: '补上了 b.txt' },
     ])
     const core = await startCore()
-    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    const { sessionId } = await createSession(core, project, { ...config(server.baseUrl), checks: CHECK_B })
     await sendPrompt(core, sessionId, 'turn-1', '写 a.txt')
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
     await sendPrompt(core, sessionId, 'turn-2', '再写 b.txt')
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
 
@@ -631,36 +652,16 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', needsVerification: true })
     expect(existsSync(join(project, 'b.txt'))).toBe(false)
 
+    notifications = []
     const requests = server.bodies.length
     await sendPrompt(core, sessionId, 'turn-2b', '再写 b.txt')
-    expect(server.bodies.length - requests).toBe(4)
-    expect(server.bodies.at(-1)).toContain('File changes from earlier turns have not been verified yet')
-  })
-
-  test('重新生成：这一轮开始前定下的完成条件保留、证据作废；这一轮里才定下的随对话一起丢掉', async () => {
-    const requirement = { id: 'test', title: '测试通过', commandIncludes: 'echo passed', outputIncludes: 'passed' }
-    server = await startScriptedServer([
-      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [requirement] } }] },
-      { text: '定好了' },
-      { text: '定好了' },
-      { text: '定好了' },
-      { text: '定好了' },
-      { text: '还没跑' },
-      { text: '还没跑' },
-      { text: '还没跑' },
-      { text: '还没跑' },
-    ])
-    const core = await startCore()
-    const { sessionId } = await createSession(core, project, config(server.baseUrl))
-    await sendPrompt(core, sessionId, 'turn-1', '先定完成条件')
-    await sendPrompt(core, sessionId, 'turn-2', '继续')
-    expect(lastTaskState(sessionId)).toMatchObject({ requirements: [{ id: 'test' }] })
-
-    await rewindSession(core, sessionId, 'turn-2')
-    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [{ id: 'test', receiptId: null }] })
-    await rewindSession(core, sessionId, 'turn-1')
-    expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', requirements: [] })
-  })
+    expect(server.bodies.length - requests).toBe(3)
+    // 问题作为一条用户消息交回去，模型接着改
+    expect(server.bodies[requests + 1]).toContain('[Diffra] Before ending the turn Diffra ran the project checks on your changes, and the task is not finished yet.')
+    expect(server.bodies[requests + 1]).toContain('The check `test -f b.txt` failed.')
+    expect(finishVerifications(sessionId)).toEqual(['failed', 'verified'])
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
+  }, 20_000)
 })
 
 describe('错误提示', () => {
@@ -676,15 +677,16 @@ describe('错误提示', () => {
 
 describe('深度安全扫描', () => {
   test('只读审计：改文件被拒，报告里只留有效的问题；这一轮记成深度扫描，不进编码模型的对话', async () => {
-    writeFileSync(join(project, 'files.ts'), 'export const read = (req) => fs.readFileSync(path.join(UPLOAD, req.query.name))\n')
+    const original = 'export const read = (req) => fs.readFileSync(path.join(UPLOAD, req.query.name))'
+    writeFileSync(join(project, 'files.ts'), `${original}\n`)
     server = await startScriptedServer([
       // 第一轮：普通任务
-      { toolCalls: [{ name: 'edit_file', input: { path: 'route.ts', old_string: '', new_string: 'app.get("/file", read)\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '加了路由' } }] },
-      // 深度扫描：搜索、读文件、试图改文件、交报告
-      { toolCalls: [{ name: 'search', input: { pattern: 'req.query' } }] },
-      { toolCalls: [{ name: 'read_file', input: { path: 'files.ts' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'files.ts', old_string: 'req.query.name', new_string: 'x' } }] },
+      { toolCalls: [addFile('route.ts', 'app.get("/file", read)')] },
+      { text: '加了路由' },
+      // 深度扫描：搜索、读文件，试图用 apply_patch 和会改文件的命令改文件，交报告
+      { toolCalls: [exec('grep -n req.query files.ts')] },
+      { toolCalls: [read('files.ts')] },
+      { toolCalls: [replaceLines('files.ts', original, 'export const read = () => null'), exec("sed -i 's/req.query.name/x/' files.ts")] },
       {
         toolCalls: [
           {
@@ -708,10 +710,14 @@ describe('深度安全扫描', () => {
     await sendPrompt(core, sessionId, 'turn-1', '加一个读文件的路由')
     expect(await deepScan(core, sessionId, 'scan-1', 'task')).toEqual({ stopReason: 'end_turn' })
 
-    expect(readFileSync(join(project, 'files.ts'), 'utf8')).toContain('req.query.name')
+    expect(readFileSync(join(project, 'files.ts'), 'utf8')).toBe(`${original}\n`)
     expect(server.bodies[2]).toContain('Audit the code changed in this task')
     expect(server.bodies[2]).toContain('route.ts')
-    expect(server.bodies[5]).toContain("unavailable tool 'edit_file'")
+    // 只读命令照常跑，结果交给审计模型
+    expect(server.bodies[4]).toContain('fs.readFileSync')
+    // 没有 apply_patch；会改文件的命令不执行
+    expect(server.bodies[5]).toContain("unavailable tool 'apply_patch'")
+    expect(server.bodies[5]).toContain('You can only run read-only commands here')
 
     const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
     const scan = loaded.turns[1]
@@ -730,9 +736,9 @@ describe('深度安全扫描', () => {
   })
 
   test('开着深度扫描时提交前先问，选先扫描这一轮记 deep-scan；扫完代码没再变，再提交不问', async () => {
-    const commit = { toolCalls: [{ name: 'run_command', input: { command: 'git commit -m 加路由' } }] }
+    const commit = { toolCalls: [exec('git commit -m 加路由')] }
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'route.ts', old_string: '', new_string: 'app.get("/file", read)\n' } }] },
+      { toolCalls: [addFile('route.ts', 'app.get("/file", read)')] },
       commit,
       // 深度扫描直接交报告
       { toolCalls: [{ name: 'report', input: { summary: '看过了新加的路由', findings: [] } }] },
@@ -765,16 +771,16 @@ describe('检查开关', () => {
     notifications.slice(from).filter(({ update }) => update.sessionUpdate === 'tool_call' && update.title === '静态检查')
 
   test('设置里改了检查开关，已经打开的会话下一次检查就按新值', async () => {
-    const evalLine = (name: string) => `export const ${name} = (input: string) => eval(input)\n`
+    const evalLine = (name: string) => `export const ${name} = (input: string) => eval(input)`
     server = await startScriptedServer([
-      // 打开静态检查之后：写了 eval，完成前打回，改掉后完成
-      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: '', new_string: evalLine('calc') } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '加了计算' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'calc.ts', old_string: 'eval(input)', new_string: 'Number(input)' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '改成 Number' } }] },
+      // 打开静态检查之后：写了 eval，停下时被结束门禁打回，改掉后完成
+      { toolCalls: [addFile('calc.ts', evalLine('calc'))] },
+      { text: '加了计算' },
+      { toolCalls: [replaceLines('calc.ts', evalLine('calc'), 'export const calc = (input: string) => Number(input)')] },
+      { text: '改成 Number' },
       // 关掉之后：写了 eval 也不查
-      { toolCalls: [{ name: 'edit_file', input: { path: 'other.ts', old_string: '', new_string: evalLine('other') } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '加了另一个计算' } }] },
+      { toolCalls: [addFile('other.ts', evalLine('other'))] },
+      { text: '加了另一个计算' },
     ])
     const core = await startCore()
     // 建会话时静态检查是关的
@@ -782,6 +788,8 @@ describe('检查开关', () => {
     await configureSecurity(core, { staticCheck: true, lightScan: false, deepScan: false, review: false })
     await sendPrompt(core, sessionId, 'turn-1', '加一个计算函数')
     expect(staticCards(0)).toHaveLength(2)
+    expect(finishVerifications(sessionId)).toEqual(['failed', 'unverified'])
+    expect(readFileSync(join(project, 'calc.ts'), 'utf8')).toContain('Number(input)')
 
     const mark = notifications.length
     await configureSecurity(core, { staticCheck: false, lightScan: false, deepScan: false, review: false })
@@ -795,7 +803,7 @@ describe('先出计划', () => {
   test('出计划记成一轮，存下计划卡片；编码模型的下一轮看不到规划过程', async () => {
     writeFileSync(join(project, 'a.txt'), 'value = broken\n')
     server = await startScriptedServer([
-      { toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+      { toolCalls: [read('a.txt')] },
       { toolCalls: [{ name: 'submit_plan', input: { understanding: '修复 a.txt', steps: [{ title: '改 a.txt', detail: 'broken 改成 fixed', files: ['a.txt'] }], risks: [] } }] },
       { text: '好' },
     ])
@@ -803,6 +811,8 @@ describe('先出计划', () => {
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
     expect(await plan(core, sessionId, 'plan-1', '修复 a.txt')).toEqual({ stopReason: 'end_turn' })
     expect(server.bodies[0]).toContain('PLANNING MODE')
+    // 规划时用只读命令读到了文件
+    expect(server.bodies[1]).toContain('value = broken')
 
     const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
     expect(loaded.turns[0]).toMatchObject({ id: 'plan-1', kind: 'plan', prompt: '修复 a.txt', stopReason: 'end_turn' })
@@ -819,7 +829,7 @@ describe('Skill 和目标模式', () => {
   test('列出项目里的 Skill；带 Skill 的提问把说明发给模型并记在这一轮；找不到的 Skill 不开始；目标模式记成目标', async () => {
     mkdirSync(join(project, '.diffra', 'skills', 'diffra-test-skill'), { recursive: true })
     writeFileSync(join(project, '.diffra', 'skills', 'diffra-test-skill', 'SKILL.md'), '---\nname: diffra-test-skill\ndescription: 测试用\n---\n回答前先说 OK')
-    server = await startScriptedServer([{ text: 'OK，好的' }, { toolCalls: [{ name: 'finish', input: { summary: '完成', goal_met: true } }] }])
+    server = await startScriptedServer([{ text: 'OK，好的' }, { toolCalls: [{ name: 'update_goal', input: { status: 'complete' } }] }, { text: '目标完成了' }])
     const core = await startCore()
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
 
@@ -835,7 +845,9 @@ describe('Skill 和目标模式', () => {
     expect(server.bodies[0]).toContain('回答前先说 OK')
     await expect(sendPrompt(core, sessionId, 'turn-2', '你好', { skills: ['no-such-skill'] })).rejects.toThrow('找不到 Skill：no-such-skill')
     await sendPrompt(core, sessionId, 'turn-3', '把事做完', { goal: true })
-    expect(server.bodies[1]).toContain('Goal mode')
+    expect(server.bodies[1]).toContain('[Diffra] Goal mode.')
+    // 模型标了完成、停下时门禁通过：第一轮就结束，不再续跑
+    expect(server.bodies).toHaveLength(3)
 
     const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
     expect(loaded.turns.map(({ id, kind, prompt, skills }) => ({ id, kind, prompt, skills }))).toEqual([
@@ -1003,11 +1015,7 @@ describe('设备连接：会话快照和更新序号', () => {
   const upTo = (count: number) => Array.from({ length: count }, (_, index) => index + 1)
 
   test('推出的更新按会话从 1 连续编号，存进记录的不带；快照的序号是读的那一刻推到的；重启后读文件、不载入会话', async () => {
-    server = await startScriptedServer([
-      { toolCalls: [{ name: 'edit_file', input: { path: 'a.txt', old_string: '', new_string: 'hello\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '写好了 a.txt' } }] },
-      { text: '第二轮' },
-    ])
+    server = await startScriptedServer([{ toolCalls: [addFile('a.txt', 'hello')] }, { text: '写好了 a.txt' }, { text: '第二轮' }])
     const core = await startCore()
     const { sessionId } = await createSession(core, project, config(server.baseUrl))
     await sendPrompt(core, sessionId, 'turn-1', '写一个 a.txt')

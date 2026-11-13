@@ -27,7 +27,7 @@ export interface SessionHooks {
 export interface SessionChecks {
   // 旧的「快速检查」：第 431 步起不再每步跑，只在 beforeFinish 没填时当完成检查用；界面不再单独编辑它
   afterEdit: string | null
-  // 模型调用 finish 时跑的检查，比如 pnpm typecheck && pnpm test；改的过程中不跑
+  // 结束门禁跑的检查（模型改过文件、停下时），比如 pnpm typecheck && pnpm test；改的过程中不跑
   beforeFinish: string | null
 }
 
@@ -103,11 +103,11 @@ export interface TaskProgressView {
 // 检查命令、静态检查、轻量扫描、规范审查卡片结束时的 tool_call_update._meta.diffra.result。ACP 的 status 照旧：
 // warned 只有提醒或附注；partial 只看了一部分（改动被截断、依赖审计没跑完）；error 工具或评审模型出错，这次不拦截
 export type CheckResult = 'passed' | 'warned' | 'partial' | 'error' | 'failed'
-// 完成卡和 verify_changes 卡的 _meta.diffra.verification；reused 是复用了这份工作区已经通过的验证
+// 完成卡（结束门禁的结论）的 _meta.diffra.verification；reused 是复用了这份工作区已经通过的验证
 export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edits' | 'failed'
 // 一轮结束时的 session_info_update._meta.diffra.turnOutcome，和 taskState 在同一条更新里，每轮只发一次。
-// finish 是本轮所有被接受的 finish 合并后的值（unverified > verified > no-edits，reused 算 verified），没有被接受的 finish 为 null；
-// stop 是没走到「finish 被接受」就停下的原因，正常结束为 null
+// finish 是本轮所有通过的结束门禁合并后的值（unverified > verified > no-edits，reused 算 verified），没改文件、没过门禁时为 null；
+// stop 是没过结束门禁就停下的原因，正常结束为 null。no-finish 只有旧记录里有（以前改了文件没调 finish）
 export const TURN_OUTCOME_META_KEY = 'turnOutcome'
 // check-exhausted 只有旧记录里有：快速检查不再每步跑，不会再因它停下。deep-scan 是用户在提交前选了先做深度扫描，客户端接着发起一轮深度扫描
 export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted' | 'deep-scan'
@@ -150,6 +150,8 @@ export interface EditDiffMeta {
   oldLines: number
   newLines: number
   base?: string
+  // apply_patch 删掉了这个文件
+  deleted?: boolean
 }
 // 任务之间互通（task_send、task_create）：消息是哪个任务发来的
 export interface TaskSource {
@@ -290,7 +292,7 @@ export interface CheckpointChange {
 
 const RESTORE_NOTICE_PATHS = 50
 
-// 智能体自己列的步骤清单（第 441 步，工具 todo_write）：core 发一张标题是它的卡片，每次更新用同一个 id 整张替换，
+// 智能体自己列的步骤清单（第 441 步，工具 update_plan，以前叫 todo_write）：core 发一张标题是它的卡片，每次更新用同一个 id 整张替换，
 // 内容一行一步（formatSteps），界面按行解析（parseSteps）。叫「步骤」不叫「待办」：侧栏的待办是用户自己记的事
 export const STEPS_CARD_TITLE = '步骤'
 export type StepStatus = 'pending' | 'in_progress' | 'completed'

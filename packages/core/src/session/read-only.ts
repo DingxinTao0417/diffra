@@ -1,7 +1,22 @@
 import type { LanguageModel, ModelMessage, ToolChoice, ToolResultPart, ToolSet } from 'ai'
+import { isReadOnlyCommand } from '../permissions.js'
 import type { ModelCallUsage } from '../usage/log.js'
 import { CONTEXT_STOP_RATIO, errorResult, MAIN_AGENT_KEY, reportInvalidCall, runToolCall, streamModelStep, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
+import { TOOLS } from './tools.js'
+
+// 只读循环和探索工人的工具（第 508 步起没有 read_file、search 这些专用工具）：exec_command 只许跑只读命令
+export const READ_ONLY_TOOLS = { exec_command: TOOLS.exec_command, write_stdin: TOOLS.write_stdin }
+export const READ_ONLY_TOOL_NAMES = new Set(Object.keys(READ_ONLY_TOOLS))
+export const READ_ONLY_COMMAND_ERROR =
+  'You can only run read-only commands here (for example rg, rg --files, sed -n, cat, head, ls, git log, git diff, git show), without redirects or command substitution.'
+
+// 只读的智能体调 exec_command 时先看命令是不是只读的；不是就返回说明，不执行
+export function readOnlyCommandProblem(toolName: string, input: unknown): string | null {
+  if (toolName !== 'exec_command') return null
+  const command = typeof input === 'object' && input !== null && 'cmd' in input && typeof input.cmd === 'string' ? input.cmd : ''
+  return isReadOnlyCommand(command) ? null : READ_ONLY_COMMAND_ERROR
+}
 
 // 只读的一轮：深度扫描和出计划共用。模型只能用 readTools 里的工具，最后调一次 finalTool 交结果
 export interface ReadOnlyLoop {
@@ -52,6 +67,11 @@ export async function runReadOnlyLoop(session: Session, loop: ReadOnlyLoop, sign
       }
       if (!loop.readTools.has(call.toolName)) {
         results.push(errorResult(call, loop.readOnlyError))
+        continue
+      }
+      const problem = readOnlyCommandProblem(call.toolName, call.input)
+      if (problem) {
+        results.push(errorResult(call, problem))
         continue
       }
       results.push((await runToolCall(session, call, signal, io)).result)

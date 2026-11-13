@@ -7,7 +7,7 @@ import { createRelay, type Relay } from '../../relay/src/relay.ts'
 import { chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { exec, read, replaceLines, startScriptedModel } from './scripted-model'
 import { IPC_CHANNELS } from '../src/shared/ipc'
 
 // 设备连接：两个开发版实例（各自的临时数据目录）经测试进程里起的本机中转配对。不连真实的 relay.diffra.dev
@@ -313,7 +313,7 @@ test('设备连接：连接端在侧栏看到授权项目里的会话（别的�
     ...Array.from({ length: 11 }, (_, index) => ({ text: `第 ${index + 2} 轮回答` })),
     { text: '实时回答到了', delayMs: 4000 },
     // 断线的这一轮：先说一段话、读个文件（断线前就同步过去），隔一会儿再出最后的回答（重连之后才到）
-    { text: '断线前先说的话', toolCalls: [{ name: 'read_file', input: { path: 'note.txt' } }] },
+    { text: '断线前先说的话', toolCalls: [read('note.txt')] },
     { text: '断线后才回来的回答', delayMs: 6000 },
   ])
   const host = await launchDevice(port)
@@ -504,17 +504,18 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     { text: '第一轮回答' },
     { text: '只能看的回答' },
     { text: '远程发的回答到了' },
-    { toolCalls: [{ name: 'run_command', input: { command: 'hostname' } }] },
+    { toolCalls: [exec('hostname')] },
     { text: '命令跑完了' },
-    { toolCalls: [{ name: 'run_command', input: { command: 'hostname' } }] },
+    { toolCalls: [exec('hostname')] },
     { text: '第二个命令跑完了' },
-    { toolCalls: [{ name: 'read_file', input: { path: join(outside, 'secret.txt') } }] },
-    { text: '没读到' },
+    // 项目外的确认（这里是写入）只在本机弹
+    { toolCalls: [replaceLines(join(outside, 'secret.txt'), '项目外的文件', '改掉了')] },
+    { text: '没改成' },
     { text: '慢的回答', delayMs: 3000 },
     { text: '排队的回答' },
     { text: '不该出现的回答', delayMs: 15_000 },
     { text: '新任务的回答' },
-    { toolCalls: [{ name: 'run_command', input: { command: 'hostname' } }] },
+    { toolCalls: [exec('hostname')] },
     { text: '结束' },
   ])
   const host = await launchDevice(port)
@@ -613,10 +614,11 @@ test('设备连接：远程操作——发消息、新建、停止经被连接�
     await waitTaskDone(host.window)
 
     // 项目外的文件访问只在本机确认，连接端收不到
-    await sendRemote('读项目外的文件')
-    await expect(permission).toContainText('项目外读取')
+    await sendRemote('改项目外的文件')
+    await expect(permission).toContainText('项目外写入')
     await permission.getByRole('button', { name: '拒绝', exact: true }).click()
     await waitTaskDone(host.window)
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('项目外的文件')
     expect(await requestIds()).toHaveLength(2)
     await expect(remotePermission).toHaveCount(0)
 
@@ -821,7 +823,7 @@ test('设备连接：快照一页按压缩后的大小装（每页不超过 500 
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-pages-'))
   writeFileSync(join(project, 'long.txt'), `${Array.from({ length: 300 }, (_, index) => `第 ${index + 1} 行：${'内容'.repeat(10)}`).join('\n')}\n文件最后一行\n`)
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'long.txt' } }] },
+    { toolCalls: [read('long.txt')] },
     { text: '读完了' },
     ...[2, 3, 4, 5, 6, 7].map((turn) => ({ text: `第 ${turn} 轮开始${randomHan(turn, 60_000)}第 ${turn} 轮结束` })),
   ])
@@ -868,11 +870,11 @@ test('设备连接：快照一页按压缩后的大小装（每页不超过 500 
     await guest.window.screenshot({ path: 'test-results/devices-pull-earlier.png' })
 
     // 第一轮读的长文件：只同步了开头，展开后取全文
-    const read = turns.first().getByTestId('tool-call').filter({ hasText: '读取' })
-    await read.getByRole('button').first().click()
-    await expect(read.locator('pre')).toBeVisible()
-    await expect(read.locator('pre')).toContainText('文件最后一行', { timeout: 10_000 })
-    await expect(read.getByTestId('tool-output-note')).toHaveCount(0)
+    const readCard = turns.first().getByTestId('tool-call').filter({ hasText: /执行\s*cat long\.txt/ })
+    await readCard.getByRole('button').first().click()
+    await expect(readCard.locator('pre')).toBeVisible()
+    await expect(readCard.locator('pre')).toContainText('文件最后一行', { timeout: 10_000 })
+    await expect(readCard.getByTestId('tool-output-note')).toHaveCount(0)
   } finally {
     await close([host, guest])
     await relay.close()
@@ -926,11 +928,10 @@ test('设备连接：远程任务页借用本机任务页——任务监控（�
   const { relay, port } = await startRelay()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-monitor-'))
   writeFileSync(join(project, 'hello.txt'), 'hello world\n')
-  // 编辑之前要先读过这个文件
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    { toolCalls: [read('hello.txt')] },
+    { toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')] },
+    { text: '改好了' },
   ])
   const host = await launchDevice(port)
   const guest = await launchDevice(port)
@@ -983,9 +984,9 @@ test('设备连接：可操作的远程任务页用本机的输入框——切�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-ops-'))
   writeFileSync(join(project, 'hello.txt'), 'hello world\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    { toolCalls: [read('hello.txt')] },
+    { toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')] },
+    { text: '改好了' },
   ])
   const host = await launchDevice(port)
   const guest = await launchDevice(port)

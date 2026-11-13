@@ -62,7 +62,7 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
   const agents = (agentTurn?.items ?? []).flatMap((item) =>
     item.kind === 'tool' && item.agentCard ? [{ item, card: item.agentCard, steps: agentTurn!.items.flatMap((step) => (step.kind === 'tool' && step.parentId === item.id ? [step] : [])) }] : [],
   )
-  // 改动文件是哪个子智能体改的（工人用 edit_file 改的；命令改的看不出是谁）
+  // 改动文件是哪个子智能体改的（工人用 apply_patch 改的；命令改的看不出是谁）
   const owners = new Map<string, AgentTag[]>()
   for (const turn of task.turns) {
     for (const item of turn.items) {

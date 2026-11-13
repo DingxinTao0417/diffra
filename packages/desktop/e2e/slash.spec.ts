@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, settingsNav, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, patch, startScriptedModel } from './scripted-model'
 
 test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；目标模式没达成自动跑下一轮；任务页能从菜单发起深度扫描', async () => {
   test.setTimeout(90_000)
@@ -14,12 +14,13 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
   mkdirSync(join(project, '.diffra', 'skills', 'diffra-e2e-style'), { recursive: true })
   writeFileSync(join(project, '.diffra', 'skills', 'diffra-e2e-style', 'SKILL.md'), '---\nname: diffra-e2e-style\ndescription: 测试用的写作风格\n---\n回答时先说 STYLE-OK\n')
   const model = await startScriptedModel([
-    // 第一轮：写了文件，说还没达成
-    { toolCalls: [{ name: 'edit_file', input: { path: 'notes.txt', old_string: '', new_string: 'one\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '还差第二行', goal_met: false } }] },
-    // 第二轮：补完，达成
-    { toolCalls: [{ name: 'edit_file', input: { path: 'notes.txt', old_string: 'one\n', new_string: 'one\ntwo\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '两行都写好了', goal_met: true } }] },
+    // 第一轮：写了文件，没标目标完成就停下
+    { toolCalls: [addFile('notes.txt', 'one\n')] },
+    { text: '还差第二行' },
+    // 第二轮：补完，用 update_goal 标完成再停下
+    { toolCalls: [patch('*** Update File: notes.txt', ' one', '+two')] },
+    { toolCalls: [{ name: 'update_goal', input: { status: 'complete' } }] },
+    { text: '两行都写好了' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -104,7 +105,7 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     await expect(window.getByTestId('notice').filter({ hasText: '目标模式第 2 轮' })).toBeVisible()
     await expect(window.getByTestId('notice').filter({ hasText: '目标已完成（用了 2 轮）' })).toBeVisible()
     expect(readFileSync(join(project, 'notes.txt'), 'utf8')).toBe('one\ntwo\n')
-    expect(model.requests()).toBe(4)
+    expect(model.requests()).toBe(5)
     const first = model.bodies()[0] ?? ''
     expect(first).toContain('回答时先说 STYLE-OK')
     expect(first).toContain('up to 3 rounds')
@@ -124,7 +125,7 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     await expect(window.getByRole('dialog')).toContainText('深度扫描本任务改动？')
     await window.getByRole('button', { name: '取消' }).click()
     await expect(window.getByRole('dialog')).toBeHidden()
-    expect(model.requests()).toBe(4)
+    expect(model.requests()).toBe(5)
 
     // 重新打开任务，提问气泡上的标签还在
     await window.reload()

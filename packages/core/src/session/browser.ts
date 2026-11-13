@@ -382,8 +382,8 @@ export function isReadOnlyBrowserAction(action: BrowserAction): boolean {
   return ['snapshot', 'find', 'text', 'console', 'network', 'layout', 'screenshot', 'images'].includes(action.action)
 }
 
-// 截图不放在工具结果里（OpenAI 兼容接口的工具结果只能是文字，图片会被当成一长串字），由调用方跟在工具结果后面作为一条带图片的消息
-export const SCREENSHOT_MARKER = '[Diffra] Screenshot(s) from browser_screenshot, in call order:'
+// 截图和 view_image 的图片不放在工具结果里（OpenAI 兼容接口的工具结果只能是文字，图片会被当成一长串字），由调用方跟在工具结果后面作为一条带图片的消息
+export const SCREENSHOT_MARKER = '[Diffra] Images from this step\'s tool calls (browser_screenshot, view_image), in call order:'
 
 export function screenshotMessage(images: PromptImage[]) {
   return {

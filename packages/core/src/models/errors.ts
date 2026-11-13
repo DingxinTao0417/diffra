@@ -56,10 +56,27 @@ export function retryableModelError(error: unknown): boolean {
   return kind === 'rate-limit' || kind === 'server' || kind === 'network'
 }
 
+// 回复流中途出的错：除了上面几种，服务在流里发来的、没有 HTTP 状态码的错误（比如网关的「输出中断，请重试」）也和连接中途断开一样重发（参照 Codex：流错误默认重试）。
+// 带状态码的照旧按状态码判断，鉴权、参数这类 4xx 重发也没用
+export function retryableStreamError(error: unknown): boolean {
+  if (retryableModelError(error)) return true
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  if (APICallError.isInstance(cause)) return false
+  return !(cause instanceof Error && (cause.name === 'AbortError' || cause.name === 'TimeoutError'))
+}
+
 // 限流或服务过载（429、503、529）：自动重试用完了还是这样，配了备用模型就换它接着做
 export function overloadedModelError(error: unknown): boolean {
   const cause = RetryError.isInstance(error) ? error.lastError : error
   return APICallError.isInstance(cause) && [429, 503, 529].includes(cause.statusCode ?? 0)
+}
+
+// 请求超过模型的上下文窗口（各家说法不一样，按状态码和常见措辞认）
+export function contextOverflowError(error: unknown): boolean {
+  const cause = RetryError.isInstance(error) ? error.lastError : error
+  if (!APICallError.isInstance(cause) || ![400, 413, 422].includes(cause.statusCode ?? 0)) return false
+  const text = `${cause.message} ${cause.responseBody ?? ''}`
+  return /context[ _-]?(length|window)|too many tokens|prompt is too long|maximum (context|input)|token limit|input is too long|exceeds? the (maximum|context)/i.test(text)
 }
 
 export function toModelError(error: unknown, apiKey: string, timeoutMs: number): ModelError {

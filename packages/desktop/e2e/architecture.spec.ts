@@ -5,7 +5,7 @@ import { expect, type Page, test } from '@playwright/test'
 import { answerOpenDialog, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { patch, read, startScriptedModel } from './scripted-model'
 
 // 一个小后端：界面 → 服务 → 数据，服务里两个文件互相依赖
 const FILES: Record<string, string> = {
@@ -69,11 +69,11 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     // 用户把「应用界面」改名后重画：模型还是叫它「应用界面」，认领的代码一样，让位给改了名的
     { toolCalls: [{ name: 'submit_diagram', input: APPLICATION }] },
     // 任务：数据层反过来依赖业务层，违反分层，被打回后改掉
-    { toolCalls: [{ name: 'read_file', input: { path: 'src/db/client.ts' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'src/db/client.ts', old_string: "import express from 'express'\n", new_string: "import express from 'express'\nimport { listOrders } from '../services/orders'\n" } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '数据层用上了订单列表' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'src/db/client.ts', old_string: "import { listOrders } from '../services/orders'\n", new_string: '' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '去掉了反向依赖' } }] },
+    { toolCalls: [read('src/db/client.ts')] },
+    { toolCalls: [patch('*** Update File: src/db/client.ts', " import express from 'express'", "+import { listOrders } from '../services/orders'")] },
+    { text: '数据层用上了订单列表' },
+    { toolCalls: [patch('*** Update File: src/db/client.ts', "-import { listOrders } from '../services/orders'")] },
+    { text: '去掉了反向依赖' },
     // 模型提目标架构：数据层加一个计划中的「缓存」，去掉右边的「日志」和 MySQL，加一条禁止的依赖
     {
       toolCalls: [

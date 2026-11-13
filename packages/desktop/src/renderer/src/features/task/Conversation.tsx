@@ -166,8 +166,12 @@ function textOf(item: ToolItem): string {
   return item.content.flatMap((content) => (content.type === 'content' && content.content.type === 'text' ? [content.content.text] : [])).join('\n')
 }
 
-// 工具还没跑完时标题是工具名，跑完才换成「读取 a.txt」这样的说明
+// 工具还没跑完时标题是工具名，跑完才换成「执行 pnpm test」这样的说明；read_file 这些旧工具只在旧记录里有
 const TOOL_ACTIONS: Record<string, string> = {
+  exec_command: '执行',
+  write_stdin: '查看命令输出',
+  apply_patch: '修改文件',
+  view_image: '查看图片',
   read_file: '读取',
   list_files: '列出',
   search: '搜索',
@@ -1264,7 +1268,7 @@ function EditBlock({ item, projectPath, expanded = false, toggle }: { item: Tool
               <button type="button" aria-expanded={open} aria-label={`查看改动 ${path}`} className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 text-left text-sm focus-visible:-outline-offset-2', open ? 'py-1.5' : 'py-0.5')} onClick={() => setOpen(!open)}>
                 {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
                 <StatusIcon status={item.status} />
-                <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : '编辑'}</span>
+                <span className="shrink-0 text-muted-foreground">{content.oldText === null ? '新建' : editMeta(content)?.deleted ? '删除' : '编辑'}</span>
                 <span title={path} className="min-w-0 flex-1 truncate font-mono text-xs">{path}</span>
                 <DiffCounts {...editCounts(content)} />
               </button>

@@ -5,11 +5,11 @@ import { expect, test } from '@playwright/test'
 import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { exec, read, replaceLines, startScriptedModel } from './scripted-model'
 
 const SECRET = 'sk-live-should-never-show'
 
-test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 → 请求执行命令 → 完成，然后撤销这一轮', async () => {
+test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录；读文件 → 改文件 → 请求执行命令 → 完成，然后撤销这一轮', async () => {
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-project-'))
@@ -18,12 +18,12 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
   mkdirSync(join(project, 'data'))
   writeFileSync(join(project, 'data', 'db.json'), '{"users":[]}\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'read_file', input: { path: '.env' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'data/db.json', old_string: '[]', new_string: '[1]' } }] },
-    { toolCalls: [{ name: 'read_file', input: { path: 'hello.txt' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'hello.txt', old_string: 'hello world', new_string: 'hello diffra' } }] },
-    { toolCalls: [{ name: 'run_command', input: { command: 'echo done > done.txt' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '改好了' } }] },
+    { toolCalls: [read('.env')] },
+    { toolCalls: [replaceLines('data/db.json', '{"users":[]}', '{"users":[1]}')] },
+    { toolCalls: [read('hello.txt')] },
+    { toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')] },
+    { toolCalls: [exec('echo done > done.txt', { justification: '按要求写一个 done.txt' })] },
+    { text: '改好了' },
   ])
   const app = await launchApp(userDataDir)
   try {
@@ -37,9 +37,15 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
 
     await startTask(window, '把 hello world 改成 hello diffra，再写一个 done.txt')
 
-    // 带重定向的命令需要确认
+    // 读 .env 的命令要用户确认，拒绝后智能体读不到
     const permission = window.getByTestId('permission-card')
+    await expect(permission).toContainText('cat .env', { timeout: 20_000 })
+    await expect(permission.getByTestId('permission-justification')).toHaveCount(0)
+    await permission.getByRole('button', { name: '拒绝' }).click()
+
+    // 带重定向的命令需要确认
     await expect(permission).toContainText('echo done > done.txt', { timeout: 20_000 })
+    await expect(permission.getByTestId('permission-justification')).toHaveText('按要求写一个 done.txt')
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
     // 过程组默认收着，运行中也是：先点开再看改动
     await window.getByRole('button', { name: /执行工具 4 次 · 2 次失败/ }).click()
@@ -57,13 +63,13 @@ test('agent 读不到 .env、改不了禁写目录；读文件 → 改文件 →
     await expect(window.getByTestId('monitor-panel')).toContainText('禁止修改的目录')
     await expect(window.getByTestId('monitor-panel')).toContainText('data')
 
-    // 读 .env、改禁写目录的两次调用都失败了：和别的调用收在同一个过程组里（上面已经点开），标题上写着失败次数
+    // 读 .env（用户拒绝）、改禁写目录的两次调用都失败了：和别的调用收在同一个过程组里（上面已经点开），标题上写着失败次数
     await expect(window.getByRole('button', { name: /执行工具 5 次 · 2 次失败/ })).toHaveAttribute('aria-expanded', 'true')
     const failed = window.locator('[data-testid="tool-call"][data-status="failed"]')
     await expect(failed).toHaveCount(2)
     await failed.nth(0).getByRole('button').click()
     await failed.nth(1).getByRole('button').click()
-    await expect(failed.nth(0)).toContainText('protected')
+    await expect(failed.nth(0)).toContainText('rejected')
     await expect(failed.nth(1)).toContainText('read-only')
     expect(await window.locator('body').innerText()).not.toContain(SECRET)
     expect(readFileSync(join(project, 'data', 'db.json'), 'utf8')).toBe('{"users":[]}\n')

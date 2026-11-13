@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { exec, read, startScriptedModel } from './scripted-model'
 
 const DIAGNOSIS = {
   cause: '用户在等列文件的结果时停下了，任务本身没出错',
@@ -77,7 +77,7 @@ test('停下后定位问题：定位是单独一轮，结果卡写原因和证�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-diagnose-'))
   writeFileSync(join(project, 'a.txt'), 'alpha\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'list_files', input: { path: '.' } }] },
+    { toolCalls: [exec('ls')] },
     { text: '不会到这里', delayMs: 20_000 },
     { toolCalls: [{ name: 'submit_diagnosis', input: DIAGNOSIS }] },
   ])
@@ -138,7 +138,7 @@ test('子智能体被停下：卡片上能定位它，定位请求带着它的�
   writeFileSync(join(project, 'a.txt'), 'alpha\n')
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'delegate', input: { name: '慢', task: 'WORKER-SLOW：把 a.txt 改成大写', files: ['a.txt'] } }] },
-    { match: 'WORKER-SLOW', toolCalls: [{ name: 'read_file', input: { path: 'a.txt' } }] },
+    { match: 'WORKER-SLOW', toolCalls: [read('a.txt')] },
     { match: 'WORKER-SLOW', toolCalls: [{ name: 'report', input: { summary: '不会到这里' } }], delayMs: 20_000 },
     { toolCalls: [{ name: 'submit_diagnosis', input: { ...DIAGNOSIS, cause: '工人读完文件后被停下，还没改' } }] },
   ])

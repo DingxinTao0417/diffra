@@ -5,7 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { CallToolResult, Prompt, Tool } from '@modelcontextprotocol/sdk/types.js'
 import { jsonSchema, type JSONSchema7, tool, type ToolSet } from 'ai'
-import { truncateLines } from './process.js'
+import { truncateForModel } from './process.js'
 import type { McpServerStatus } from './protocol.js'
 import { CORE_VERSION } from './version.js'
 
@@ -199,7 +199,7 @@ export class McpPool {
       undefined,
       { signal, timeout: CALL_TIMEOUT_MS, resetTimeoutOnProgress: true, maxTotalTimeout: CALL_MAX_TOTAL_MS },
     )) as CallToolResult
-    return { text: truncateLines(resultText(result)), isError: result.isError === true }
+    return { text: truncateForModel(resultText(result)).text, isError: result.isError === true }
   }
 
   // 设置页、监控和斜杠菜单用：各服务器连上没有、有哪些工具和 prompt

@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { cards, chooseProject, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, lastUserText, patch, read, type ScriptMessages, startScriptedModel } from './scripted-model'
 
 test('完成前规范审查（默认开着）：违规被打回，改好后审查通过再完成', async () => {
   test.setTimeout(60_000)
@@ -15,11 +15,12 @@ test('完成前规范审查（默认开着）：违规被打回，改好后审�
   // 没分配评审角色时审查用编码模型；审查请求按系统提示词认出来，按 reviewReplies 回复
   const model = await startScriptedModel(
     [
-      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: '', new_string: 'try {\n  run()\n} catch {}\n' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '加了 run 调用' } }] },
-      { toolCalls: [{ name: 'read_file', input: { path: 'app.ts' } }] },
-      { toolCalls: [{ name: 'edit_file', input: { path: 'app.ts', old_string: '} catch {}', new_string: '} catch (error) {\n  throw error\n}' } }] },
-      { toolCalls: [{ name: 'finish', input: { summary: '异常继续抛出' } }] },
+      { toolCalls: [addFile('app.ts', 'try {\n  run()\n} catch {}\n')] },
+      // 想结束这一轮：结束门禁跑规范审查，打回时追加一条用户消息，接着调模型
+      { text: '加了 run 调用' },
+      { toolCalls: [read('app.ts')] },
+      { toolCalls: [patch('*** Update File: app.ts', '   run()', '-} catch {}', '+} catch (error) {', '+  throw error', '+}')] },
+      { text: '异常继续抛出' },
     ],
     { reviewReplies: ['GEN-ERR-1 | app.ts:3 | catch 块是空的，吞掉了异常', 'NO_VIOLATIONS'] },
   )
@@ -49,6 +50,10 @@ test('完成前规范审查（默认开着）：违规被打回，改好后审�
     expect(readFileSync(join(project, 'app.ts'), 'utf8')).toBe('try {\n  run()\n} catch (error) {\n  throw error\n}\n')
     expect(model.requests()).toBe(5)
     expect(model.ruleReviews()).toBe(2)
+    // 打回是对话末尾追加的一条用户消息，不是工具结果
+    const rejected = lastUserText((JSON.parse(model.bodies()[2]!) as { messages: ScriptMessages }).messages)
+    expect(rejected).toContain('[Diffra] Before ending the turn Diffra ran the project checks')
+    expect(rejected).toContain('GEN-ERR-1')
     await window.screenshot({ path: 'test-results/review.png' })
   } finally {
     await app.close()

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { runProcess, truncateLines } from '../process.js'
 import { similarCommands } from './suggest.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
@@ -13,8 +13,15 @@ const FULL_MAX_CHARS = 2 * 1024 * 1024
 const MAX_SAVED_OUTPUTS = 30
 
 // 命令统一在 Git Bash 里执行；关掉分页器和颜色，避免卡在交互界面或输出控制字符
-export function commandEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1', TERM: 'dumb' }
+// rgPath：内置 ripgrep 的位置，它的目录接在 PATH 最后（用户自己装了 rg 时用用户的）
+export function commandEnv(rgPath?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1', TERM: 'dumb' }
+  if (rgPath) {
+    // Windows 上环境变量名不分大小写，可能是 Path
+    const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATH') ?? 'PATH'
+    env[key] = [env[key], dirname(rgPath)].filter(Boolean).join(delimiter)
+  }
+  return env
 }
 
 export async function runShell(
@@ -57,7 +64,7 @@ export async function runCommandTool(
 
 // 输出被截短时把完整的存成文件，告诉模型去哪看被省略的部分（第 439 步）。一个文件最多是 runProcess 收集的上限（约 1 MB），
 // 每个会话只留最近 MAX_SAVED_OUTPUTS 个，会话删除时整个目录一起删。存不了只记日志，命令结果照常返回
-async function saveFullOutput(dir: string | null | undefined, raw: string): Promise<string> {
+export async function saveFullOutput(dir: string | null | undefined, raw: string): Promise<string> {
   if (!dir) return ''
   try {
     await mkdir(dir, { recursive: true })
@@ -66,7 +73,7 @@ async function saveFullOutput(dir: string | null | undefined, raw: string): Prom
     const old = (await readdir(dir)).filter((name) => name.startsWith('command-')).sort().slice(0, -MAX_SAVED_OUTPUTS)
     for (const name of old) await rm(join(dir, name), { force: true })
     const lines = raw.split(/\r?\n/).length
-    return `\n[The output above was shortened. The full output (${lines} lines) is saved at ${path.replace(/\\/g, '/')} — read the omitted part with read_file (offset and limit) or search it; do not rerun the command just to see it.]`
+    return `\n[The output above was shortened. The full output (${lines} lines) is saved at ${path.replace(/\\/g, '/')} — read the omitted part with sed -n or rg; do not rerun the command just to see it.]`
   } catch (error) {
     console.error('[tools] 保存完整的命令输出失败', error)
     return ''
@@ -74,7 +81,7 @@ async function saveFullOutput(dir: string | null | undefined, raw: string): Prom
 }
 
 // 退出码 127 是命令不存在：给几个 bash 里能找到、名字接近的命令；都不像就提示去项目里找它平时怎么跑
-async function missingCommandHint(context: ToolContext, output: string): Promise<string> {
+export async function missingCommandHint(context: ToolContext, output: string): Promise<string> {
   const name = /([^\s:]+): command not found/.exec(output)?.[1]
   if (!name || !context.bashPath) return ''
   const similar = await similarCommands(context, context.bashPath, commandEnv(), name)

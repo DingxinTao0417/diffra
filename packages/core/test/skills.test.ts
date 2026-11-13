@@ -1,11 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { findRipgrep } from '../src/environment.js'
 import { loadSkills, parseFrontmatter, skillRoots, withSkills } from '../src/skills.js'
-import { editFileTool, readFileTool } from '../src/tools/files.js'
+import { applyPatchTool } from '../src/tools/apply-patch.js'
 import type { ToolContext } from '../src/tools/types.js'
+import { viewImageTool } from '../src/tools/view-image.js'
 
 let root: string
 
@@ -64,36 +65,43 @@ describe('Skill', () => {
     expect(skills.find((skill) => skill.name === 'frontend-design')?.source).toBe('project')
   })
 
-  test('选了 Skill 的提问：说明放在前面，带着目录，后面是原话', () => {
+  test('选了 Skill 的提问：说明放在前面，带着目录，告诉模型用 exec_command 读附带文件，后面是原话', () => {
     const text = withSkills('改一下文案', [{ name: 'humanizer', description: '', source: 'codex', dir: 'C:\\Users\\me\\.codex\\skills\\humanizer', body: '去掉 AI 腔' }])
     expect(text).toContain('<skill name="humanizer" dir="C:/Users/me/.codex/skills/humanizer">\n去掉 AI 腔\n</skill>')
+    // 第 508 步起没有 read_file：附带文件用 exec_command 跑 cat、sed -n 读
+    expect(text).toContain('read them with exec_command (cat, sed -n) using absolute paths')
+    expect(text).not.toContain('read_file')
     expect(text.endsWith('User request:\n改一下文案')).toBe(true)
     expect(withSkills('原话', [])).toBe('原话')
   })
 
-  test('Skill 目录可以用绝对路径只读访问，不能改；其他项目外的路径照样不行', async () => {
+  test('Skill 目录可以用绝对路径只读访问（看里面的图片），apply_patch 不能改；其他项目外的路径照样不行', async () => {
+    // 1x1 的 PNG
+    const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
     const project = join(root, 'project')
     const skills = join(root, 'skills')
     mkdirSync(project)
     writeSkill(skills, 'demo', '---\nname: demo\n---\n说明')
     writeFileSync(join(skills, 'demo', 'template.txt'), '模板内容\n')
-    writeFileSync(join(root, 'secret.txt'), 'no\n')
+    writeFileSync(join(skills, 'demo', 'diagram.png'), pixel)
+    writeFileSync(join(root, 'secret.png'), pixel)
+    // 没有 requestExternalPermission：项目外的路径没人能批准
     const context: ToolContext = {
       cwd: project,
       rgPath: await findRipgrep(),
       bashPath: null,
       signal: new AbortController().signal,
-      readHashes: new Map(),
       trustedCommands: [],
       readOnlyPaths: [],
       readRoots: [skills],
       requestCommandPermission: async () => ({ allowed: true }),
     }
-    const read = await readFileTool(context, { path: join(skills, 'demo', 'template.txt') })
-    expect(read.text).toContain('模板内容')
-    await expect(readFileTool(context, { path: join(root, 'secret.txt') })).rejects.toThrow('outside the project')
-    await expect(editFileTool(context, { path: join(skills, 'demo', 'template.txt'), old_string: '模板', new_string: '改' })).rejects.toThrow(
-      'outside the project',
-    )
+    const image = await viewImageTool(context, { path: join(skills, 'demo', 'diagram.png') })
+    expect(image.image).toEqual({ mimeType: 'image/png', data: pixel.toString('base64') })
+    await expect(viewImageTool(context, { path: join(root, 'secret.png') })).rejects.toThrow('outside the project')
+    await expect(
+      applyPatchTool(context, { input: ['*** Begin Patch', `*** Update File: ${join(skills, 'demo', 'template.txt')}`, '-模板内容', '+改', '*** End Patch'].join('\n') }),
+    ).rejects.toThrow('outside the project')
+    expect(readFileSync(join(skills, 'demo', 'template.txt'), 'utf8')).toBe('模板内容\n')
   })
 })

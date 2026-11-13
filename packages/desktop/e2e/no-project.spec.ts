@@ -5,7 +5,7 @@ import { type ElectronApplication, expect, type Page, test } from '@playwright/t
 import { answerOpenDialog, cards, chooseProject, clickMenuItem, startDesignTask, startTask, TERMINAL_ECHO, waitTaskDone } from './flows'
 import { desktopDir, isPackagedRun, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { addFile, startScriptedModel } from './scripted-model'
 
 // core 单测也用的 stdio 测试服务器
 const MCP_SERVER = resolve(desktopDir, '../core/test/fixtures/mcp-server.mjs')
@@ -58,10 +58,10 @@ test('无项目任务：直接发送建在默认位置、侧栏归入「无项�
   const userDataDir = makeUserDataDir()
   const root = workspaceRootFor(userDataDir)
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: '', new_string: 'A\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '记好了' } }] },
-    { toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: '', new_string: 'B\n' } }] },
-    { toolCalls: [{ name: 'finish', input: { summary: '记好了' } }] },
+    { toolCalls: [addFile('note.txt', 'A\n')] },
+    { text: '记好了' },
+    { toolCalls: [addFile('note.txt', 'B\n')] },
+    { text: '记好了' },
   ])
   let app = await launchApp(userDataDir)
   try {
@@ -159,8 +159,8 @@ test('删除无项目任务：终端开在文件夹里也能移到回收站；�
   test.setTimeout(150_000)
   const userDataDir = makeUserDataDir()
   const root = workspaceRootFor(userDataDir)
-  const note = (text: string) => ({ toolCalls: [{ name: 'edit_file', input: { path: 'note.txt', old_string: '', new_string: text } }] })
-  const finish = { toolCalls: [{ name: 'finish', input: { summary: '记好了' } }] }
+  const note = (text: string) => ({ toolCalls: [addFile('note.txt', text)] })
+  const finish = { text: '记好了' }
   const model = await startScriptedModel([note('1\n'), finish, note('2\n'), finish, note('3\n'), finish, { text: '好的' }, note('4\n'), finish, { text: '好的' }])
   const app = await launchApp(userDataDir)
   try {
