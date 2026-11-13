@@ -377,3 +377,32 @@ describe('命令替换只看 shell 真会展开的地方（第 634 步）', () =
     expect(isReadOnlyCommand('cat $(echo a)')).toBe(false)
   })
 })
+
+describe('自动审批少问：npx --no-install、清 Python 缓存目录（第 635 步）', () => {
+  const policy = (mode: CommandPolicy['mode']): CommandPolicy => ({ cwd: process.cwd(), trusted: [], alwaysAllowed: new Set(), readOnlyPaths: [], mode })
+
+  test('npx --no-install / --no 不下载，放行；带 -p、--yes 或没写的照旧问', () => {
+    for (const command of ['npx --no-install tsc --noEmit', 'npx --no some-tool-not-installed --version']) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'allow' })
+    }
+    for (const command of ['npx some-tool-not-installed', 'npx --yes some-tool-not-installed', 'npx --no-install -p left-pad some-tool-not-installed']) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'ask' })
+    }
+  })
+
+  test('rm -rf 只删项目里的 __pycache__ 这类缓存目录时放行；别的递归删除照旧问', () => {
+    for (const command of ['rm -rf stockhub/__pycache__ tests/__pycache__ && git status --short', 'rm -r .pytest_cache']) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'allow' })
+    }
+    for (const command of [
+      'rm -rf /tmp/__pycache__',
+      'rm -rf ../other/__pycache__',
+      'rm -rf src/__pycache__ src',
+      'rm -rf */__pycache__',
+      'rm -rf /tmp/blogkit-after',
+    ]) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'ask' })
+    }
+    expect(classifyCommand('rm -rf stockhub/__pycache__', policy('ask'))).toEqual({ level: 'ask' })
+  })
+})

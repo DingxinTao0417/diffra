@@ -129,11 +129,13 @@ function killsByName(argv: string[]): boolean {
 // npx 要跑的命令在当前目录或上级目录的 node_modules/.bin 里有、又没让它另装包（-p、--package、-c）时不会下载，和 npm test 一样放行
 const NPX_PACKAGE_OPTIONS = /^(-p|--package|-c|--call)(=|$)/
 function npxRunsLocalBin(argv: string[], dir: string | null): boolean {
-  if (dir === null) return false
   // 只看命令名前面的参数：后面的是那个命令自己的（npx tsc -p tsconfig.json 的 -p 不是 npx 的）
   const args = argv.slice(1)
   const binIndex = args.findIndex((arg) => !arg.startsWith('-'))
   if (binIndex < 0 || args.slice(0, binIndex).some((arg) => NPX_PACKAGE_OPTIONS.test(arg))) return false
+  // npx --no-install / --no 明说不下载：本地、全局都没有就直接报错（第 635 步，评测里 npx --no-install tsc 每次都被问）
+  if (programName(argv[0] ?? '') === 'npx' && args.slice(0, binIndex).some((arg) => arg === '--no-install' || arg === '--no')) return true
+  if (dir === null) return false
   const bin = args[binIndex]!
   if (!/^[\w.@-]+$/.test(bin) || bin.includes('@', 1)) return false
   for (let current = dir; ; current = dirname(current)) {
@@ -141,6 +143,20 @@ function npxRunsLocalBin(argv: string[], dir: string | null): boolean {
     if (['', '.cmd', '.ps1'].some((extension) => statSync(resolve(binDir, `${bin}${extension}`), { throwIfNoEntry: false })?.isFile())) return true
     if (dirname(current) === current) return false
   }
+}
+
+// rm -rf 只删项目里工具自己生成的缓存目录（第 635 步，评测里清 __pycache__ 每次都被问）：
+// 只认相对路径、不带 ..、不带通配符，最后一段是这几个名字
+const CACHE_DIRS = new Set(['__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'])
+function removesOnlyCaches(argv: string[]): boolean {
+  const targets = argv.slice(1).filter((arg) => !arg.startsWith('-'))
+  return (
+    targets.length > 0 &&
+    targets.every((target) => {
+      const parts = fromMsysPath(target).replace(/\\/g, '/').replace(/\/+$/, '').split('/')
+      return !isAbsolute(target) && !/^[A-Za-z]:/.test(target) && !/[*?[\]{}~$]/.test(target) && !parts.includes('..') && CACHE_DIRS.has(parts.at(-1) ?? '')
+    })
+  )
 }
 
 // 整条命令里有没有要询问的段；跟着 cd 走，npx 跑本地命令时按所在目录找
@@ -154,6 +170,7 @@ function hasRiskySegment(segments: string[][], cwd: string): boolean {
       continue
     }
     if ((program === 'npx' || program === 'bunx') && npxRunsLocalBin(argv, dir)) continue
+    if (program === 'rm' && removesOnlyCaches(argv)) continue
     if (isRisky(argv)) return true
   }
   return false
