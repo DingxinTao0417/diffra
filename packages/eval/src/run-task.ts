@@ -113,6 +113,7 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
       turns,
       permission: task.permission,
       answers: task.answers,
+      replies: task.replies.map((reply) => fillPlaceholders(reply, values)),
       timeoutMs: task.timeoutMinutes * 60_000,
     })
     const durationMs = Date.now() - started

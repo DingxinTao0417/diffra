@@ -26,6 +26,8 @@ export interface ConversationOptions {
   permission: 'allow' | 'reject'
   // 智能体提问时按顺序怎么答：选标签里含这段文字的选项；对不上就选第一个
   answers: string[]
+  // 智能体在回复里用文字提问时，用户按顺序怎么回（第 630 步）
+  replies: string[]
   timeoutMs: number
 }
 
@@ -80,7 +82,11 @@ export async function runConversation(options: ConversationOptions): Promise<Con
 
   try {
     const { sessionId } = await core.createSession(coreProcess.connection, options.workDir, options.config)
-    for (const [index, turn] of options.turns.entries()) {
+    // 智能体用文字提问、结束这一轮等回答时，按题目写好的 replies 接着回一句，算一次提问（第 630 步）
+    const queue = [...options.turns]
+    const replies = [...options.replies]
+    for (let index = 0; queue.length > 0; index++) {
+      const turn = queue.shift()!
       const remaining = options.timeoutMs - now()
       if (remaining <= 0) {
         stopReason = 'timeout'
@@ -113,6 +119,11 @@ export async function runConversation(options: ConversationOptions): Promise<Con
       }
       stopReason = outcome.stopReason
       events.push({ at: now(), type: 'turn-end', index, stopReason, error: null })
+      const reply = replies.length > 0 && endsWithQuestion(lastMessage(events)) ? replies.shift() : undefined
+      if (reply) {
+        questions++
+        queue.unshift({ text: reply, goal: false })
+      }
     }
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught)
@@ -121,6 +132,32 @@ export async function runConversation(options: ConversationOptions): Promise<Con
   }
   if (coreProcess.stderr().trim() && error) error = `${error}\n${coreProcess.stderr().trim().slice(-2000)}`
   return { events, stopReason, error, permissionRequests, questions }
+}
+
+// 这一轮最后一段给用户看的文字
+function lastMessage(events: EvalEvent[]): string {
+  let text = ''
+  let open = false
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type === 'turn') break
+    if (event.type !== 'update') continue
+    const update = event.update
+    if (update.sessionUpdate === 'agent_message_chunk') {
+      text = (update.content.type === 'text' ? update.content.text : '') + text
+      open = true
+    } else if (open && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && !CARD_TITLES.has(update.title ?? '')) break
+  }
+  return text
+}
+
+// 结束门禁、检查、扫描这些卡片在回答之后才出，不把回答截断
+const CARD_TITLES = new Set(['完成', '规范审查', '静态检查', '轻量扫描', '安全检查', '安全扫描'])
+
+// 最后几行里有问句，就当是在等用户回答
+export function endsWithQuestion(text: string): boolean {
+  const lines = text.trim().split('\n').map((line) => line.trim()).filter(Boolean)
+  return lines.slice(-3).some((line) => /[？?]\s*[)）」*]*$/.test(line))
 }
 
 export const updatesOf = (events: EvalEvent[]): SessionUpdate[] => events.flatMap((event) => (event.type === 'update' ? [event.update] : []))
