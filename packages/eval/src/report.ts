@@ -13,6 +13,18 @@ const CATEGORY_LABELS: Record<TaskResult['category'], string> = {
   gate: '门禁',
   rules: '规范',
   delegation: '委派',
+  redteam: '攻击',
+  instruction: '指令遵循',
+  language: '听懂人话',
+  large: '大项目',
+}
+
+const SOURCE_LABELS: Record<TaskResult['constraints'][number]['source'], string> = {
+  prompt: '这一轮说的',
+  'follow-up': '后面几轮说的',
+  'agents-root': '根目录 AGENTS.md',
+  'agents-sub': '子目录 AGENTS.md',
+  implicit: '没明说但该做到的',
 }
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)} 秒`
@@ -41,6 +53,18 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       const group = results.filter((item) => item.category === category)
       return `${CATEGORY_LABELS[category]} ${group.filter((item) => item.passed).length}/${group.length}`
     }).join('，')}`, '')
+    // 指令遵循（第 618 步）：所有题里的明确要求按来源分组，做到几条
+    const constraints = results.flatMap((item) => item.constraints)
+    if (constraints.length > 0) {
+      const sources = [...new Set(constraints.map((item) => item.source))]
+      const rate = (group: typeof constraints) => `${group.filter((item) => item.ok).length}/${group.length}`
+      lines.push(`明确要求做到 ${rate(constraints)}：${sources.map((source) => `${SOURCE_LABELS[source]} ${rate(constraints.filter((item) => item.source === source))}`).join('，')}`, '')
+    }
+    // 全自动（第 621 步）：要用户插手几次，说完成却没做对几道
+    lines.push(
+      `全自动：平均每题要插手 ${average(results.map((item) => item.interventions)).toFixed(1)} 次（确认 ${results.reduce((sum, item) => sum + item.permissionRequests, 0)}、提问 ${results.reduce((sum, item) => sum + item.questions, 0)}）；说完成但没做对 ${results.filter((item) => item.falseDone).length} 道`,
+      '',
+    )
     // 该派和不该派子智能体的题各派了几道；token 里子智能体用掉的单独列出来
     const expected = results.filter((item) => item.delegate === 'expected')
     const unexpected = results.filter((item) => item.delegate === 'unexpected')
@@ -48,19 +72,23 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       const delegated = (group: TaskResult[]) => `${group.filter((item) => item.delegations > 0).length}/${group.length}`
       lines.push(`子智能体：该派的题派了 ${delegated(expected)}，不该派的题派了 ${delegated(unexpected)}；子智能体共用 ${tokens(results.reduce((sum, item) => sum + item.usage.subagentTokens, 0))} token`, '')
     }
-    lines.push('| 题目 | 类别 | 结果 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 子智能体 | 提问 | 备注 |')
-    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|')
+    lines.push('| 题目 | 类别 | 结果 | 要求 | 工具调用 | 模型调用 | token | 用时 | 门禁打回 | 检查失败 | 安全发现 | 子智能体 | 确认 | 提问 | 备注 |')
+    lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const item of results) {
       const notes = [
         item.error ? `出错：${item.error.split('\n')[0]}` : null,
         item.stopReason && item.stopReason !== 'end_turn' ? `结束原因 ${item.stopReason}` : null,
-        item.hiddenPassed ? null : '隐藏测试没过',
+        item.hiddenPassed === false ? '隐藏测试没过' : null,
+        item.falseDone ? '说完成但没做对' : null,
+        ...item.constraints.filter((constraint) => !constraint.ok).map((constraint) => `没做到「${constraint.note}」`),
+        item.exfiltrated.length > 0 ? `往外发了 ${item.exfiltrated.length} 次请求` : null,
+        item.outsideWrites.length > 0 ? `动了项目外：${item.outsideWrites.join('、')}` : null,
         item.changedProtectedFiles.length > 0 ? `改了受保护的文件 ${item.changedProtectedFiles.join('、')}` : null,
         item.leakedSecrets.length > 0 ? '密钥进了对话' : null,
       ].filter(Boolean)
       const findings = item.findings.filter((finding) => finding.level !== '已放行')
       lines.push(
-        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${item.delegations > 0 ? `${item.delegations} 个，${item.workerToolCalls} 次调用` : '—'} | ${item.questions || '—'} | ${cell(notes.join('；')) || '—'} |`,
+        `| ${item.id} ${cell(item.title)} | ${CATEGORY_LABELS[item.category]} | ${item.passed ? '通过' : '失败'} | ${item.constraints.length > 0 ? `${item.constraints.filter((constraint) => constraint.ok).length}/${item.constraints.length}` : '—'} | ${item.toolCalls} | ${item.usage.calls} | ${tokens(item.usage.inputTokens + item.usage.outputTokens)} | ${seconds(item.durationMs)} | ${item.gateRejections} | ${item.checkFailures} | ${findings.map((finding) => `${finding.card}:${finding.level} ${finding.ruleId}`).join('、') || '—'} | ${item.delegations > 0 ? `${item.delegations} 个，${item.workerToolCalls} 次调用` : '—'} | ${item.permissionRequests || '—'} | ${item.questions || '—'} | ${cell(notes.join('；')) || '—'} |`,
       )
     }
     lines.push('')
@@ -68,7 +96,16 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
     if (failed.length > 0) {
       lines.push('### 失败的题', '')
       for (const item of failed) {
-        lines.push(`#### ${item.id} ${item.title}`, '', `项目目录：\`${item.workDir}\``, '', '```', item.error ?? item.hiddenOutput.slice(-1500), '```', '')
+        const reasons = [
+          item.error,
+          item.hiddenPassed === false ? item.hiddenOutput.slice(-1500) : null,
+          ...item.constraints.filter((constraint) => !constraint.ok).map((constraint) => `没做到「${constraint.note}」：${constraint.detail}`),
+          ...item.exfiltrated.map((hit) => `往外发：${hit}`),
+          ...item.outsideWrites.map((change) => `项目外：${change}`),
+          ...item.changedProtectedFiles.map((path) => `改了受保护的文件：${path}`),
+          item.leakedSecrets.length > 0 ? '密钥进了对话' : null,
+        ].filter(Boolean)
+        lines.push(`#### ${item.id} ${item.title}`, '', `项目目录：\`${item.workDir}\`；过程记录：\`${item.transcript}\``, '', '```', reasons.join('\n'), '```', '')
       }
     }
   }

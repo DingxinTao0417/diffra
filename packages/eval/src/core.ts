@@ -9,6 +9,8 @@ import { CORE_DIST, EVAL_ENV } from './proc.ts'
 
 // 用 core 构建好的 dist，和 node packages/core/dist/index.js 跑的是同一份代码；类型来自源码
 export const core = (await import(pathToFileURL(join(CORE_DIST, 'client.js')).href)) as typeof Core
+// 结束 core 时连它起的命令、服务一起结束：Windows 上 child.kill() 只结束 core 本身，core 的退出钩子不会跑
+const { killTreeSync } = (await import(pathToFileURL(join(CORE_DIST, 'process.js')).href)) as { killTreeSync(pid: number | undefined): void }
 
 const MAX_STDERR_CHARS = 20_000
 const BUILTIN_PACKS_DIR = resolve(CORE_DIST, '../rules/packs')
@@ -37,7 +39,13 @@ export async function startCore(dataDir: string, handlers: Core.CoreClientHandle
     child.kill()
     throw new Error(`core 没有启动起来：${error instanceof Error ? error.message : String(error)}\n${stderr}`)
   }
-  return { connection, stderr: () => stderr, stop: () => child.kill() }
+  return {
+    connection,
+    stderr: () => stderr,
+    stop: () => {
+      if (child.exitCode === null) killTreeSync(child.pid)
+    },
+  }
 }
 
 function endpointOf(model: EvalModel): ModelEndpoint {
@@ -56,10 +64,22 @@ export function builtinRulePacks(): RulePack[] {
 export function sessionConfig(
   model: EvalModel,
   reviewer: EvalModel | null,
-  options: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'security'> & { review: boolean; checkpointDir: string },
+  options: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'security'> & {
+    review: boolean
+    checkpointDir: string
+    permissionMode?: SessionConfig['permissionMode']
+    // 题目要逼出上下文压缩时改小窗口
+    contextWindow?: number
+  },
 ): SessionConfig {
   return {
-    model: { endpoint: endpointOf(model), modelId: model.modelId, contextWindow: model.contextWindow, provider: { id: model.name, name: model.name } },
+    model: {
+      endpoint: endpointOf(model),
+      modelId: model.modelId,
+      contextWindow: options.contextWindow ?? model.contextWindow,
+      provider: { id: model.name, name: model.name },
+      ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+    },
     reviewModel: reviewer ? { endpoint: endpointOf(reviewer), modelId: reviewer.modelId, provider: { id: reviewer.name, name: reviewer.name } } : null,
     // 评测只量编码模型本身：不出计划，也不换兜底模型
     planModel: null,
@@ -67,8 +87,8 @@ export function sessionConfig(
     checks: options.checks,
     readOnlyPaths: options.readOnlyPaths,
     rules: { packs: builtinRulePacks(), review: options.review },
-    // 评测里没人点确认：普通命令自动执行，剩下要确认的按题目的权限策略答
-    permissionMode: 'auto',
+    // 评测里没人点确认：默认普通命令自动执行，剩下要确认的按题目的权限策略答
+    permissionMode: options.permissionMode ?? 'auto',
     security: options.security,
     // 和应用设置的默认值一致
     limits: { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },

@@ -9,6 +9,8 @@ const modelSchema = z.object({
   modelId: z.string().min(1),
   contextWindow: z.number().int().positive().nullable().default(null),
   apiKeyEnv: z.string().min(1),
+  // 思考强度，和模型设置里的一样；不写就是模型默认
+  reasoningEffort: z.enum(['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
 })
 
 const configSchema = z.object({

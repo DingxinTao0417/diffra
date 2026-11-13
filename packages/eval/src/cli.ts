@@ -1,18 +1,22 @@
 import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { apiKeyOf, loadConfig } from './config.ts'
+import { apiKeyOf, type EvalConfig, loadConfig } from './config.ts'
 import { type DeepScanResult, runDeepScanSample } from './deep-scan.ts'
 import { writeReport } from './report.ts'
+import { copyProject, probeTask } from './probe.ts'
 import { runTask, type TaskResult } from './run-task.ts'
 import { selfCheck } from './selfcheck.ts'
-import { EVAL_DIR, loadDeepScanSamples, loadTasks } from './tasks.ts'
+import { EVAL_DIR, type EvalTask, loadDeepScanSamples, loadTasks } from './tasks.ts'
 
 const USAGE = `用法：
   pnpm eval selfcheck [--tasks t01,t02]
       不调用模型，检查题目本身：没改时隐藏测试失败，套上参考答案后全部通过
-  pnpm eval run --config eval.config.json [--models a,b] [--tasks t01,t02] [--repeat 1] [--concurrency 2] [--deep-scan] [--out 目录]
-      用配置里的模型跑题目，写出 results.json 和 report.md；--deep-scan 同时跑深度扫描准确率样例
+  pnpm eval run --config eval.config.json [--models a,b] [--tasks t01,t02] [--category redteam,instruction] [--repeat 1] [--concurrency 2] [--deep-scan] [--out 目录]
+      用配置里的模型跑题目，写出 results.json 和 report.md，每道题的过程记录在 runs/ 下的 transcript.md；--deep-scan 同时跑深度扫描准确率样例
+  pnpm eval probe --project 目录 (--prompt 需求 | --script 脚本.json) [--goal] [--models a] [--out 目录]
+      拿任意项目（复制一份，原目录不动）、任意需求跑一次，写出过程记录；脚本和 task.json 一样的写法，可以写多轮、提问怎么答、明确要求
+  通用：--permission-mode ask|auto|full 覆盖题目的权限档；--effort low|medium|high|xhigh 覆盖模型的思考强度
   pnpm eval deep-scan --config eval.config.json [--models a] [--samples s01]
       只跑深度扫描准确率样例`
 
@@ -41,6 +45,13 @@ async function main(): Promise<void> {
       config: { type: 'string', default: join(EVAL_DIR, 'eval.config.json') },
       models: { type: 'string' },
       tasks: { type: 'string' },
+      category: { type: 'string' },
+      project: { type: 'string' },
+      prompt: { type: 'string' },
+      script: { type: 'string' },
+      goal: { type: 'boolean', default: false },
+      'permission-mode': { type: 'string' },
+      effort: { type: 'string' },
       samples: { type: 'string' },
       repeat: { type: 'string', default: '1' },
       concurrency: { type: 'string', default: '2' },
@@ -60,7 +71,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (command !== 'run' && command !== 'deep-scan') {
+  if (command !== 'run' && command !== 'deep-scan' && command !== 'probe') {
     console.log(USAGE)
     process.exitCode = command ? 1 : 0
     return
@@ -68,7 +79,11 @@ async function main(): Promise<void> {
 
   const config = loadConfig(values.config)
   const wanted = list(values.models)
-  const models = wanted ? config.models.filter((model) => wanted.includes(model.name)) : config.models
+  const effort = values.effort as EvalConfig['models'][number]['reasoningEffort'] | undefined
+  const models = (wanted ? config.models.filter((model) => wanted.includes(model.name)) : config.models).map((model) => (effort ? { ...model, reasoningEffort: effort } : model))
+  const permissionMode = values['permission-mode'] as EvalTask['permissionMode'] | undefined
+  if (permissionMode && !['ask', 'auto', 'full'].includes(permissionMode)) throw new Error(`--permission-mode 只能是 ask、auto、full`)
+  const withMode = (task: EvalTask): EvalTask => (permissionMode ? { ...task, permissionMode } : task)
   if (models.length === 0) throw new Error(`配置里没有这些模型：${wanted?.join('、')}`)
   const reviewer = config.reviewer ? (config.models.find((model) => model.name === config.reviewer) ?? null) : null
   if (config.reviewer && !reviewer) throw new Error(`评审模型 ${config.reviewer} 不在 models 里`)
@@ -77,12 +92,32 @@ async function main(): Promise<void> {
 
   const now = new Date()
   const startedAt = now.toLocaleString('zh-CN', { hour12: false, timeZoneName: 'short' })
-  const outDir = values.out ?? join(EVAL_DIR, 'results', `${stamp(now)}-${models.map((model) => model.name).join('+')}`)
+  // 一律转成绝对路径：core 拿检查点目录在项目目录里跑 git，相对路径会解析到项目里面去
+  const outDir = values.out ? resolve(values.out) : join(EVAL_DIR, 'results', `${stamp(now)}-${models.map((model) => model.name).join('+')}`)
   mkdirSync(outDir, { recursive: true })
 
   const taskResults: TaskResult[] = []
+  if (command === 'probe') {
+    if (!values.project || (!values.prompt && !values.script)) throw new Error('probe 要写 --project，以及 --prompt 或 --script')
+    const project = resolve(values.project)
+    const base = probeTask(project, values.prompt, values.script)
+    const task = withMode(values.goal ? { ...base, goal: true } : base)
+    for (const model of models) {
+      const runDir = join(outDir, 'runs', model.name)
+      const workDir = join(runDir, task.id, 'project')
+      const copied = await copyProject(project, workDir)
+      console.log(`复制了 ${copied >= 0 ? `${copied} 个文件` : '整个目录'}到 ${workDir}`)
+      const result = await runTask(task, model, reviewer, runDir, { workDir })
+      console.log(`${model.name}：${result.stopReason ?? '没有结束原因'}，${result.usage.calls} 次模型调用，${Math.round(result.durationMs / 1000)} 秒，改了 ${result.changedFiles.length} 个文件`)
+      for (const item of result.constraints) console.log(`  ${item.ok ? '做到' : '没做到'}  ${item.note}${item.detail ? `：${item.detail}` : ''}`)
+      if (result.error) console.log(`  出错：${result.error}`)
+      console.log(`  过程记录：${result.transcript}`)
+      taskResults.push(result)
+    }
+  }
+
   if (command === 'run') {
-    const tasks = loadTasks(list(values.tasks))
+    const tasks = loadTasks(list(values.tasks)).filter((task) => !values.category || list(values.category)?.includes(task.category)).map(withMode)
     const jobs = models.flatMap((model) => Array.from({ length: Number(values.repeat) }, (_, round) => tasks.map((task) => ({ task, model, round }))).flat())
     let done = 0
     taskResults.push(

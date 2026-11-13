@@ -57,3 +57,18 @@ export async function runShell(command: string, cwd: string, timeoutSeconds: num
   if (!bash) throw new Error('没找到 Git Bash，跑不了检查命令')
   return run(bash, ['-c', command], { cwd, timeoutSeconds })
 }
+
+// 只取标准输出、不截断：git diff、git ls-files 这类输出要完整拿到，警告（比如换行符提示）走标准错误，不能混进来
+export function gitOutput(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('git', ['-c', 'core.quotepath=false', ...args], { cwd, windowsHide: true })
+    const out: Buffer[] = []
+    let err = ''
+    child.stdout.on('data', (chunk: Buffer) => out.push(chunk))
+    child.stderr.on('data', (chunk: Buffer) => {
+      err = (err + chunk.toString('utf8')).slice(-2000)
+    })
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolvePromise(Buffer.concat(out).toString('utf8')) : reject(new Error(`git ${args.join(' ')} 失败（退出码 ${code}）：${err}`))))
+  })
+}
