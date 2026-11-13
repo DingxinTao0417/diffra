@@ -36,6 +36,54 @@ describe('classifyCommand', () => {
     expect(classifyCommand('find . -name "*.ts"', policy())).toEqual({ level: 'allow' })
   })
 
+  // 第 549 步：换内核后读文件靠命令，项目外的文件不再走读文件的授权；每次询问模式下只读命令读到项目外也要问
+  test('每次询问模式下只读命令读项目外要问；项目里、Skill 和命令输出目录照常放行；完全访问和自动模式不问', () => {
+    const root = mkdtempSync(join(tmpdir(), 'diffra-outside-'))
+    // 智能体在 Git Bash 里跑命令，路径写成正斜杠（D:/x）或 /d/x；反斜杠在 bash 里是转义
+    const slash = (path: string) => path.split(String.fromCharCode(92)).join('/')
+    const msys = (path: string) => slash(path).replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)
+    const project = join(root, 'project')
+    const skills = join(root, 'skills')
+    const outputs = join(root, 'outputs')
+    mkdirSync(join(project, 'src'), { recursive: true })
+    try {
+      const ask = policy({ cwd: project, readRoots: [skills, outputs] })
+      for (const command of [
+        'cat ../other/notes.txt',
+        `cat ${slash(join(root, 'diary.txt'))}`,
+        `cat ${msys(join(root, 'diary.txt'))}`,
+        'head -20 ~/notes.md',
+        'ls ..',
+        'rg -n TODO ../other',
+        "sed -n '1,20p' ../other/a.ts",
+        'find .. -name "*.md"',
+        'cat src/a.ts && cat ../b.ts',
+      ]) {
+        expect(classifyCommand(command, ask), command).toEqual({ level: 'ask' })
+      }
+      for (const command of [
+        'cat src/a.ts',
+        'ls',
+        'rg -n "\\.\\./" src',
+        "grep -n '/etc' src/a.ts",
+        `cat ${slash(join(skills, 'frontend-design', 'SKILL.md'))}`,
+        `sed -n '1,80p' ${msys(join(outputs, 'output-1.txt'))}`,
+        'cat ../project/src/a.ts',
+        'echo ../x',
+        'pwd',
+      ]) {
+        expect(classifyCommand(command, ask), command).toEqual({ level: 'allow' })
+      }
+      // 命令在项目外的目录跑（exec_command 的 workdir）：不写路径的 ls 也读到了项目外；在项目的子目录跑时 ../ 还在项目里
+      expect(classifyCommand('ls', { ...ask, workdir: root })).toEqual({ level: 'ask' })
+      expect(classifyCommand('cat ../package.json', { ...ask, workdir: join(project, 'src') })).toEqual({ level: 'allow' })
+      expect(classifyCommand('cat ../other/notes.txt', policy({ cwd: project, mode: 'full' }))).toEqual({ level: 'allow' })
+      expect(classifyCommand('cat ../other/notes.txt', policy({ cwd: project, mode: 'auto' }))).toEqual({ level: 'allow' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('会改东西的命令要问', () => {
     for (const command of ['pnpm install', 'git commit -m x', 'rm a.txt', 'find . -delete', 'node script.js']) {
       expect(classifyCommand(command, policy())).toEqual({ level: 'ask' })

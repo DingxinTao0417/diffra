@@ -209,6 +209,8 @@ describe('同一步里的只读调用', () => {
     const outsideIO = recordingIO()
     await runTurn(await makeSession(outside), { id: 't', text: '看看' }, outsideIO)
     expect(toolEvents(outsideIO).slice(0, 4)).toEqual(['开始 call-0-0', '结束 call-0-0', '开始 call-0-1', '结束 call-0-1'])
+    // 在项目外的目录读文件，每次询问模式下每条都要确认（第 549 步）
+    expect(outsideIO.permissionRequests).toBe(2)
   }, 30_000)
 
   test('轮询后台命令、看项目里的图片也和只读命令一起开跑；看项目外的图片照旧一个一个来', async () => {

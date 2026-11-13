@@ -280,7 +280,7 @@ export async function execCommandTool(context: ToolContext, input: ExecCommandIn
   if (!context.bashPath) throw new ToolError('No bash found. Install Git for Windows to run commands.')
   if (!context.execSessions) throw new ToolError('Commands are not available here.')
   const cwd = input.workdir ? resolve(context.cwd, input.workdir) : context.cwd
-  const permission = await context.requestCommandPermission(input.cmd, input.justification)
+  const permission = await context.requestCommandPermission(input.cmd, input.justification, cwd)
   if (!permission.allowed) throw new ToolError(permission.reason)
   const started = Date.now()
   const entry = context.execSessions.start(input.cmd, cwd, context.bashPath, context.rgPath, input.stdin === true)

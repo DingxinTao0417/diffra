@@ -1,5 +1,5 @@
 import { type Dirent, readdirSync, statSync } from 'node:fs'
-import { basename, dirname, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { parse } from 'shell-quote'
 import type { PermissionMode } from './protocol.js'
 import { isProtectedFile, isUnderReadOnly } from './tools/protected.js'
@@ -16,6 +16,10 @@ export interface CommandPolicy {
   alwaysAllowed: ReadonlySet<string>
   readOnlyPaths: string[]
   mode: PermissionMode
+  // 命令在哪个目录跑（exec_command 的 workdir），相对路径按它算；不给就是 cwd
+  workdir?: string
+  // 项目外也能直接读的目录：Skill、被截短的命令输出（和读文件工具的 readRoots 一样）
+  readRoots?: string[]
 }
 
 // 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）；完全访问模式不问（第 495 步）
@@ -91,6 +95,8 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   if (substitution) return { level: 'ask' }
   const segments = splitSegments(trimmed)
   if (segments === null) return { level: 'ask' }
+  // 每次询问模式下，只读命令读到项目外（../、绝对路径、~）也要先问（第 549 步）：换内核前读项目外的文件要授权，换成命令读文件后漏了
+  if (segments.some((argv) => isReadOnly(argv) && readsOutside(argv, policy))) return { level: 'ask' }
   const allowed = segments.every(
     (argv) =>
       isReadOnly(argv) ||
@@ -214,6 +220,41 @@ function mayReadSecret(segments: string[][], cwd: string): boolean {
     if (files.some((arg) => /[*?]/.test(arg) && couldMatchProtected(arg) && reachesProtected(dir, arg, false))) return true
   }
   return false
+}
+
+// 参数是要读的路径的只读命令；ls 这几个不写路径时读的是当前目录
+const PATH_READERS = new Set([...CONTENT_READERS, 'ls', 'tree', 'stat', 'file', 'wc', 'du', 'find'])
+const LISTS_CURRENT_DIR = new Set(['ls', 'tree', 'du', 'find', 'rg'])
+
+// 这条只读命令要读的路径：grep、rg 跳过搜索模式和选项的值，awk、sed 跳过脚本，find 只看开头的起点
+function readPaths(program: string, args: string[]): string[] {
+  if (program === 'grep' || program === 'rg') return searchPaths(program, args)
+  const positional = args.filter((arg) => !arg.startsWith('-'))
+  if (program === 'awk' || program === 'sed') return positional.slice(1)
+  if (program === 'find') {
+    const end = args.findIndex((arg) => arg.startsWith('-') || arg === '(' || arg === '!')
+    return end < 0 ? args : args.slice(0, end)
+  }
+  return positional
+}
+
+const isInsideDir = (dir: string, target: string) => {
+  const rel = relative(dir, target)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+// 读到项目外了吗：落在 readRoots（Skill、命令输出）里的不算；~、$HOME 这类看不出在哪的按项目外算
+function readsOutside(argv: string[], policy: CommandPolicy): boolean {
+  const program = programName(argv[0] ?? '')
+  if (!PATH_READERS.has(program)) return false
+  const dir = resolve(policy.cwd, policy.workdir ?? '.')
+  const paths = readPaths(program, argv.slice(1))
+  const targets = paths.length > 0 ? paths : LISTS_CURRENT_DIR.has(program) ? ['.'] : []
+  return targets.some((arg) => {
+    if (!isKnownPath(arg)) return true
+    const target = resolve(dir, fromMsysPath(arg))
+    return !isInsideDir(policy.cwd, target) && !(policy.readRoots ?? []).some((root) => isInsideDir(root, target))
+  })
 }
 
 // grep、rg 后面要跟一个值的选项：值是过滤规则、行数、文件类型，不是要读的路径（rg -g '!**/x/**' 里的 * 不是在读文件）

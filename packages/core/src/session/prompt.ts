@@ -52,6 +52,8 @@ export async function buildSystemPrompt(
     '## Progress messages',
     '- Before a group of related tool calls, say in one short sentence what you are about to do, building on what you found so far. Skip it for a single quick read.',
     '- On long tasks, give a brief update now and then: what is done and what comes next.',
+    // 第 550 步：语言那句以前只在 Final message 下，模型只照着写最后的回答，开头的进度说明顺着英文思考写成英文
+    "- Write these short notes in the language of the user's request, like your final message: they are shown to the user. Your private reasoning can be in any language.",
     ...(worker
       ? []
       : [

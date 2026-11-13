@@ -10,7 +10,8 @@ export interface ToolContext {
   bashPath: string | null
   signal: AbortSignal
   // 由会话层决定：自动放行、问用户，或直接拒绝；拒绝时 reason 会告诉模型。justification 是模型写的「为什么要跑」，问用户时显示在确认卡上
-  requestCommandPermission(command: string, justification?: string): Promise<{ allowed: true } | { allowed: false; reason: string }>
+  // workdir：命令在哪个目录跑（绝对路径），读项目外的判断按它算相对路径
+  requestCommandPermission(command: string, justification?: string, workdir?: string): Promise<{ allowed: true } | { allowed: false; reason: string }>
   // 这个会话的后台进程（exec_command 到点没结束的）；没有时不能跑命令
   execSessions?: ExecSessions
   // 用户为项目配置的检查命令，自动放行

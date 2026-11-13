@@ -663,7 +663,12 @@ function parallelSafe(session: Session, call: StepToolCall): boolean {
   const inProject = (value: unknown) => value === undefined || (typeof value === 'string' && !OUTSIDE_PATH.test(value))
   switch (call.toolName) {
     case 'exec_command':
-      return typeof input.cmd === 'string' && isReadOnlyCommand(input.cmd) && inProject(input.workdir) && classifyCommand(input.cmd, commandPolicy(session)).level === 'allow'
+      return (
+        typeof input.cmd === 'string' &&
+        isReadOnlyCommand(input.cmd) &&
+        inProject(input.workdir) &&
+        classifyCommand(input.cmd, commandPolicy(session, typeof input.workdir === 'string' ? join(session.cwd, input.workdir) : undefined)).level === 'allow'
+      )
     case 'write_stdin':
       return input.chars === undefined || input.chars === ''
     case 'view_image':
@@ -939,11 +944,11 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
     readOnlyPaths: session.config.readOnlyPaths,
     readRoots: session.readRoots,
     outputDir: session.outputDir,
-    requestCommandPermission: async (command, justification) => {
+    requestCommandPermission: async (command, justification, workdir) => {
       // 项目的 beforeCommand 钩子先看一眼：退出码 2 就拦下，理由是它的输出；别的结果不影响
       const hook = await runHook(session, 'beforeCommand', { DIFFRA_COMMAND: command }, signal)
       if (hook.blocked) return { allowed: false, reason: `Blocked by the project's before-command hook${hook.output ? `: ${hook.output}` : '.'} Do not retry it unchanged.` }
-      return askCommandPermission(session, call.toolCallId, command, io, justification)
+      return askCommandPermission(session, call.toolCallId, command, io, justification, workdir)
     },
     requestExternalPermission: async (path, access) => {
       const allowKey = `${EXTERNAL_PERMISSION_KEY_PREFIX}${access}:${path}`
@@ -1220,13 +1225,15 @@ async function runMcpToolCall(
   }
 }
 
-function commandPolicy(session: Session): CommandPolicy {
+function commandPolicy(session: Session, workdir?: string): CommandPolicy {
   return {
     cwd: session.cwd,
     trusted: session.trustedCommands,
     alwaysAllowed: session.alwaysAllowed,
     readOnlyPaths: session.config.readOnlyPaths,
     mode: session.permissionMode,
+    readRoots: session.readRoots,
+    ...(workdir ? { workdir } : {}),
   }
 }
 
@@ -1237,8 +1244,9 @@ async function askCommandPermission(
   command: string,
   io: TurnIO,
   justification?: string,
+  workdir?: string,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-  const decision = classifyCommand(command, commandPolicy(session))
+  const decision = classifyCommand(command, commandPolicy(session, workdir))
   if (decision.level === 'allow') return { allowed: true }
   if (decision.level === 'deny') {
     return { allowed: false, reason: `This command is blocked by Diffra (${decision.reason}). Do not retry it.` }

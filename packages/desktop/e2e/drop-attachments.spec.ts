@@ -21,7 +21,7 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除；外�
   writeFileSync(external, 'external-only-content')
   writeFileSync(credential, 'API_KEY=should-not-be-attached')
   const model = await startScriptedModel([
-    // 项目外的文本文件用命令读（没有 read_file 了）；只读命令不问权限，项目外读取的确认只剩 view_image 这类按路径读的工具
+    // 项目外的文本文件用命令读（没有 read_file 了）；每次询问模式下读项目外要先问（第 549 步）
     { toolCalls: [exec(`cat '${external.replaceAll('\\', '/')}'`)] },
     { text: '已读到外部文件' },
   ])
@@ -77,6 +77,10 @@ test('通用占位与精简按钮，本地文件文件夹拖入、移除；外�
     // 仅附件也能发送，消息只含路径，不提前泄露外部内容。
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await expect(window.getByTestId('task-title')).toBeVisible()
+    const permission = window.getByTestId('permission-card')
+    await expect(permission).toContainText('outside.txt', { timeout: 20_000 })
+    expect(model.bodies()).toHaveLength(1)
+    await permission.getByRole('button', { name: '允许一次', exact: true }).click()
     await waitTaskDone(window)
     expect(model.bodies()[0]).toContain('outside.txt')
     expect(model.bodies()[0]).not.toContain('external-only-content')
