@@ -127,7 +127,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
 })
 
 test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底部', async () => {
-  test.setTimeout(60_000)
+  test.setTimeout(120_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-timeline-'))
   for (let index = 0; index < 90; index++) writeFileSync(join(project, `f-${index}.txt`), `${index}\n`)
@@ -160,7 +160,8 @@ test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底�
     await expect.poll(() => model.requests()).toBeGreaterThan(jumpedAt + 5)
     await expect(firstPrompt).toBeInViewport()
     await expect(window.getByRole('button', { name: '回到底部' })).toBeVisible()
-    await waitTaskDone(window)
+    // 读文件现在是起 bash 跑 cat（以前在进程里直接读）：90 步在本机十几秒，CI 的机器慢两三倍
+    await waitTaskDone(window, 60_000)
   } finally {
     await app.close()
     await model.close()
