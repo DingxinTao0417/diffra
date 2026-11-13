@@ -67,10 +67,13 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   for (const { pattern, reason } of PIPELINE_DENY) {
     if (pattern.test(trimmed)) return { level: 'deny', reason }
   }
-  const loose = splitSegments(trimmed, true) ?? []
+  const parsed = splitSegments(trimmed, true)
   if (SYSTEM_DANGEROUS.test(trimmed)) {
     return { level: 'deny', reason: '系统级危险命令' }
   }
+  // 换了变量写法还拆不开的命令：看不清要做什么，下面的检查都做不了，哪种模式都先问
+  if (parsed === null) return { level: 'ask' }
+  const loose = parsed
   if (loose.some(isRecursiveDeleteOfRoot)) {
     return { level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' }
   }
@@ -228,10 +231,25 @@ function isRecursiveDeleteOfRoot(argv: string[]): boolean {
   return recursive && args.some((arg) => DANGEROUS_RM_TARGETS.has(arg))
 }
 
+// shell-quote 遇到 ${}、${h.endedAt} 这种写法直接抛 Bad substitution（第 632 步）：以前这个异常把整轮当成模型出错停掉了。
+// bash 也只在跑到那一段时才报错，前面几段照样执行，所以把这些换成普通变量再拆一次，危险命令检查照做
+function parseShell(command: string): ReturnType<typeof parse> | null {
+  try {
+    return parse(command, (key) => `$${key}`)
+  } catch {
+    try {
+      return parse(command.replace(/\$\{[^}]*\}?/g, '$__'), (key) => `$${key}`)
+    } catch {
+      return null
+    }
+  }
+}
+
 // 返回 null 表示含有重定向、后台执行、子 shell 等需要人工确认的写法；
-// loose 为 true 时把这些写法也当分隔符，只用来做危险命令检查
+// loose 为 true 时把这些写法也当分隔符，只用来做危险命令检查；两种都在拆不开时返回 null
 function splitSegments(command: string, loose = false): string[][] | null {
-  const tokens = parse(command, (key) => `$${key}`)
+  const tokens = parseShell(command)
+  if (tokens === null) return null
   const segments: string[][] = [[]]
   for (const token of tokens) {
     if (typeof token === 'string') {

@@ -61,7 +61,8 @@ export function retryableModelError(error: unknown): boolean {
 export function retryableStreamError(error: unknown): boolean {
   if (retryableModelError(error)) return true
   const cause = RetryError.isInstance(error) ? error.lastError : error
-  if (APICallError.isInstance(cause)) return false
+  // 2xx 的 APICallError 是「Failed to process successful response」：连上了、读或解析回复时断了（第 632 步，评测里一批跑了 171 次出现 5 次，每次都整轮停掉）
+  if (APICallError.isInstance(cause)) return (cause.statusCode ?? 0) >= 200 && (cause.statusCode ?? 0) < 300
   return !(cause instanceof Error && (cause.name === 'AbortError' || cause.name === 'TimeoutError'))
 }
 

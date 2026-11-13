@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { PermissionOption, SessionUpdate, ToolCallUpdate } from '@agentclientprotocol/sdk'
-import type { ToolResultPart } from 'ai'
+import { APICallError, type ToolResultPart } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { McpPool } from '../src/mcp.js'
@@ -381,6 +381,15 @@ describe('模型服务出错时', () => {
     expect(turnOutcomes(invalidIO)).toMatchObject([{ stop: 'model-error' }])
   }, 30_000)
 
+  test('回了 200 却没能读完回复（Failed to process successful response）：整步重发，这一轮照常做完（第 632 步）', async () => {
+    const unreadable = new APICallError({ message: 'Failed to process successful response', url: 'http://127.0.0.1:1/chat/completions', requestBodyValues: {}, statusCode: 200, isRetryable: false })
+    const model = new MockLanguageModelV4({ doStream: [failingStream(null, unreadable), stepStream({ text: '好了' }, 1)] })
+    const io = recordingIO()
+    await expect(runTurn(await makeSession(model), { id: 't', text: '说句话' }, io)).resolves.toBe('end_turn')
+    expect(model.doStreamCalls).toHaveLength(2)
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+  }, 30_000)
+
   test('一直限流：自动重试 5 次，每次等的时间从 200 毫秒起翻倍；用完了没配备用模型就停下', async () => {
     const calledAt: number[] = []
     const coder = new MockLanguageModelV4({
@@ -748,6 +757,32 @@ describe('git 历史里的密钥文件（第 629 步）', () => {
     const result = resultText(toolResults(session)[0])
     expect(result).toContain('WEATHER_API_KEY=[hidden by Diffra: value of WEATHER_API_KEY in the protected file this command reads]')
     expect(result).toContain('CITY=Shanghai')
+    expect(JSON.stringify(model.doStreamCalls)).not.toContain('wk_live_0a1b2c3d4e5f')
+  }, 30_000)
+
+  test('命令没写文件名（git show 某次提交、git log -p、git grep 历史），输出里受保护文件那段的值也换掉（第 631 步）', async () => {
+    const run = (args: string[]) => execFileSync('git', args, { cwd: project, stdio: 'ignore' })
+    const identity = ['-c', 'user.name=t', '-c', 'user.email=t@t']
+    run(['init', '-q'])
+    writeFileSync(join(project, 'app.py'), 'RETRIES = 2\n')
+    writeFileSync(join(project, '.env'), 'WEATHER_API_KEY=wk_live_0a1b2c3d4e5f\nCITY=Shanghai\n')
+    run(['add', '.'])
+    run([...identity, 'commit', '-q', '-m', 'add env'])
+    run(['rm', '-q', '.env'])
+    run([...identity, 'commit', '-q', '-m', 'remove env'])
+    const model = scriptedModel([
+      { toolCalls: [exec('git show HEAD~1'), exec('git log -p'), exec('git grep -n WEATHER HEAD~1')] },
+      { text: '看过了' },
+    ])
+    const session = await makeSession(model)
+    session.permissionMode = 'full'
+    await runTurn(session, { id: 't', text: '翻翻历史' }, recordingIO())
+    const results = toolResults(session).map(resultText)
+    expect(results).toHaveLength(3)
+    for (const result of results) expect(result).toContain('WEATHER_API_KEY=[hidden by Diffra: value of WEATHER_API_KEY in .env]')
+    expect(results[0]).toContain('+CITY=Shanghai')
+    expect(results[0]).toContain('+RETRIES = 2')
+    expect(results[1]).toContain('-CITY=Shanghai')
     expect(JSON.stringify(model.doStreamCalls)).not.toContain('wk_live_0a1b2c3d4e5f')
   }, 30_000)
 })

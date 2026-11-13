@@ -95,9 +95,55 @@ export async function projectSecretValues(cwd: string, now = Date.now()): Promis
   return unique
 }
 
+// 命令输出里受保护文件的历史内容（第 631 步）：git show、git log -p、git diff 里那个文件的 diff 段，git grep 的「提交:路径:内容」行。
+// 评测里智能体用 git show <提交> 翻出早就删掉的 .env：命令没写文件名、工作区也没有这个文件，前两条路都认不出来
+const ANSI = /\x1b\[[0-9;]*m/g
+const DIFF_HEADER = /^diff --(git|cc|combined) (.*)$/
+const FILE_HEADER = /^(?:---|\+\+\+) (?:[ab]\/)?(.+?)\t?$/
+const GREP_LINE = /^(?:[^\s:]+:)?([^\s:][^:]*?)(?::\d+)?[:-](.*)$/
+
+export function historySecretValues(text: string): SecretValue[] {
+  const values: SecretValue[] = []
+  let file: string | null = null
+  let prefix = 1
+  let lines: string[] = []
+  const flush = () => {
+    if (file && lines.length > 0) values.push(...secretValuesOf(file, lines.join('\n')))
+    lines = []
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(ANSI, '')
+    const diff = DIFF_HEADER.exec(line)
+    if (diff) {
+      flush()
+      file = (diff[2] ?? '').split(' ').map((part) => part.replace(/^"?[ab]\//, '').replace(/"$/, '')).find(isProtectedFile) ?? null
+      prefix = diff[1] === 'git' ? 1 : 2
+      continue
+    }
+    const header = FILE_HEADER.exec(line)
+    if (header && isProtectedFile(header[1] ?? '')) {
+      flush()
+      file = header[1] ?? null
+      continue
+    }
+    if (file && /^[+\- ]/.test(line)) {
+      lines.push(line.slice(prefix))
+      continue
+    }
+    if (file && (line.startsWith('@@') || line.startsWith('\\') || header)) continue
+    flush()
+    file = null
+    const grep = GREP_LINE.exec(line)
+    if (grep?.[1] && isProtectedFile(grep[1])) values.push(...secretValuesOf(grep[1], grep[2] ?? ''))
+  }
+  flush()
+  return values
+}
+
 export function redactSecretValues(text: string, values: SecretValue[]): string {
   let result = text
-  for (const { value, label } of values) {
+  // 长的先换：一个值是另一个值的一部分时，先换短的会把长的拆坏
+  for (const { value, label } of [...values].sort((a, b) => b.value.length - a.value.length)) {
     if (result.includes(value)) result = result.split(value).join(`[hidden by Diffra: ${label}]`)
   }
   return result

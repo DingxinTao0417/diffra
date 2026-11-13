@@ -71,6 +71,8 @@ export async function buildSystemPrompt(
           '- Keep going until the request is completely resolved before you end your turn. End your turn when the work is done, or when you genuinely need the user. Do not guess or make up answers: look at the code and run things.',
           ...checkLines(checks),
           '- When a choice changes what you build and neither the code nor the conversation settles it, ask with ask_user instead of guessing.',
+          // 第 630 步：评测多轮题里用户说「先别改代码，说说你打算怎么做」，智能体问了个细节，拿到回答就动手改了
+          '- When the user asks you only to explain, plan or answer for now (for example "先别改", "don\'t change anything yet"), do not change files in that turn. Their answers to your questions in the meantime are not a go-ahead: wait for a message that tells you to make the change.',
           '- Start by looking at the project yourself: list the files (rg --files) and read the ones that matter. Hand exploration to an explore worker with delegate only when that first look shows the question or change reaches through many modules you do not know yet; for a small project or a change in a few files, do it yourself.',
         ]),
     '- Fix problems at the root cause, not with surface patches. Keep changes minimal, focused and consistent with the style of the surrounding code.',

@@ -60,7 +60,7 @@ import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinRemind
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
-import { projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
+import { historySecretValues, projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
 import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
@@ -1050,6 +1050,7 @@ export async function runToolCall(
       // 就从这条命令的输出里按同样的规则认出像密钥的赋值再换掉（第 629 步，评测里从 git 历史读出了删掉的 .env）
       const command = name === 'exec_command' ? execCommandOf(call) : null
       if (command && MENTIONS_SECRET.test(command)) secrets.push(...secretValuesOf('the protected file this command reads', output.text))
+      secrets.push(...historySecretValues(output.text))
       if (secrets.length > 0) {
         output.text = redactSecretValues(output.text, secrets)
         if (output.terminalOutput) output.terminalOutput = redactSecretValues(output.terminalOutput, secrets)
@@ -1398,7 +1399,10 @@ async function runEndGate(
         `Security checks found high-risk problems in the code you changed:\n${list}\n` +
         'Fix them. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
         'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
-        'for any other finding, explain in your final message why it is safe.',
+        'for any other finding, explain in your final message why it is safe. ' +
+        // 第 632 步：评测里用户写明了 soft_delete(conn, note_id, now_ms)，轻量扫描说少了 owner_id，智能体照着改了签名，用户的调用方全坏了
+        'If the fix would change something the user explicitly asked for (a function signature, an interface, a behavior they specified), ' +
+        'do not change it on your own: keep what they asked for, and in your final message name the risk and the change you suggest, so they can decide.',
     })
   }
   if (findings.length > 0) {

@@ -45,16 +45,23 @@ function exclusive<T>(gitDir: string, task: () => Promise<T>): Promise<T> {
 // 受保护文件和禁写目录不进快照：密钥不会被复制到快照仓库，撤销时也不会还原用户在这些地方的改动。
 export class Checkpoints {
   private readonly excludes: string[]
+  private readonly readOnlyPaths: string[]
 
   private constructor(
     private readonly gitDir: string,
     private readonly workTree: string,
     readOnlyPaths: string[],
   ) {
-    this.excludes = [
-      ...PROTECTED_GLOBS.map((glob) => `:(exclude,glob)**/${glob}`),
-      ...readOnlyPaths.map(cleanReadOnlyPath).filter(Boolean).map((path) => `:(exclude,literal)${path}`),
-    ]
+    this.excludes = PROTECTED_GLOBS.map((glob) => `:(exclude,glob)**/${glob}`)
+    this.readOnlyPaths = readOnlyPaths.map(cleanReadOnlyPath).filter(Boolean)
+  }
+
+  // 禁写目录里已经被忽略的（node_modules 本来就在快照仓库的排除规则里，项目 .gitignore 里的 data/ 这类）不能再写进排除：
+  // git add 碰到点名的被忽略路径会退出 1，整个检查点就建不起来，撤销和安全检查都没了（第 632 步，回放题禁写 node_modules 时每次都这样）
+  private async readOnlyExcludes(): Promise<string[]> {
+    if (this.readOnlyPaths.length === 0) return []
+    const ignored = new Set((await this.git(['check-ignore', '--stdin', '-z'], `${this.readOnlyPaths.join('\0')}\0`, undefined, [0, 1])).split('\0'))
+    return this.readOnlyPaths.filter((path) => !ignored.has(path)).map((path) => `:(exclude,literal)${path}`)
   }
 
   static async open(gitDir: string, workTree: string, readOnlyPaths: string[] = []): Promise<Checkpoints> {
@@ -160,17 +167,17 @@ export class Checkpoints {
   }
 
   private async writeTree(): Promise<string> {
-    await this.git(['add', '--all', '--', '.', ...this.excludes])
+    await this.git(['add', '--all', '--', '.', ...this.excludes, ...(await this.readOnlyExcludes())])
     return (await this.git(['write-tree'])).trim()
   }
 
-  private git(args: string[], input?: string, env?: NodeJS.ProcessEnv): Promise<string> {
-    return runGit(['--git-dir', this.gitDir, '--work-tree', this.workTree, ...args], this.workTree, input, env)
+  private git(args: string[], input?: string, env?: NodeJS.ProcessEnv, okCodes?: number[]): Promise<string> {
+    return runGit(['--git-dir', this.gitDir, '--work-tree', this.workTree, ...args], this.workTree, input, env, okCodes)
   }
 }
 
-// 跑一条 git 命令，返回完整的标准输出（不截断），退出码非 0 时报错带上标准错误
-export function runGit(args: string[], cwd: string, input?: string, env?: NodeJS.ProcessEnv): Promise<string> {
+// 跑一条 git 命令，返回完整的标准输出（不截断），退出码不在 okCodes 里时报错带上标准错误
+export function runGit(args: string[], cwd: string, input?: string, env?: NodeJS.ProcessEnv, okCodes: number[] = [0]): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', args, { cwd, env: { ...process.env, ...GIT_ENV, ...env }, windowsHide: true })
     const stdout: Buffer[] = []
@@ -184,7 +191,7 @@ export function runGit(args: string[], cwd: string, input?: string, env?: NodeJS
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      if (code === 0) resolvePromise(Buffer.concat(stdout).toString('utf8'))
+      if (code !== null && okCodes.includes(code)) resolvePromise(Buffer.concat(stdout).toString('utf8'))
       else reject(new Error(`git ${args.join(' ')} 失败（${code}）：${Buffer.concat(stderr).toString('utf8').trim()}`))
     })
     child.stdin.end(input ?? '')

@@ -386,4 +386,24 @@ describe('受保护文件和禁写目录', () => {
       rmSync(gitDir, { recursive: true, force: true })
     }
   })
+
+  test('禁写目录本来就被忽略（node_modules、.gitignore 里的 data/）：检查点照样建得起来（第 632 步）', async () => {
+    const gitDir = mkdtempSync(join(tmpdir(), 'diffra-cp-'))
+    try {
+      for (const dir of ['node_modules', 'data', 'fixtures']) mkdirSync(join(project, dir))
+      writeFileSync(join(project, '.gitignore'), 'data/\n')
+      writeFileSync(join(project, 'node_modules', 'a.js'), 'x\n')
+      writeFileSync(join(project, 'data', 'db.json'), 'v1\n')
+      writeFileSync(join(project, 'fixtures', 'f.json'), 'v1\n')
+      writeFileSync(join(project, 'app.ts'), 'a\n')
+      const checkpoints = await Checkpoints.open(gitDir, project, ['node_modules', 'data', 'fixtures'])
+      const commit = await checkpoints.snapshot()
+
+      writeFileSync(join(project, 'fixtures', 'f.json'), 'v2\n')
+      writeFileSync(join(project, 'app.ts'), 'b\n')
+      expect(await checkpoints.changesSince(commit)).toEqual([{ path: 'app.ts', change: 'modified' }])
+    } finally {
+      rmSync(gitDir, { recursive: true, force: true })
+    }
+  })
 })

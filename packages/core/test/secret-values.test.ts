@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { projectSecretValues, redactSecretValues, secretValuesOf } from '../src/security/secret-values.js'
+import { historySecretValues, projectSecretValues, redactSecretValues, secretValuesOf } from '../src/security/secret-values.js'
 
 let root: string
 
@@ -32,6 +32,36 @@ describe('命令输出里的密钥值（第 625 步）', () => {
       { value: 'hunter2-very-secret', label: 'value of DB_PASSWORD in .env' },
       { value: 'sk_live_51Habc', label: 'value of STRIPE_KEY in .env' },
       { value: 'https://hooks.example.com/abc123def456ghi789', label: 'value of WEBHOOK_URL in .env' },
+    ])
+  })
+
+  test('从 diff 和 git grep 输出里只取受保护文件那几段的值（第 631 步）', () => {
+    const output = [
+      'commit 1234abcd',
+      '    API_KEY: rotated in commit message',
+      'diff --git a/config.py b/config.py',
+      '--- a/config.py',
+      '+++ b/config.py',
+      '@@ -1 +1 @@',
+      '+SESSION_SECRET = "not-from-a-protected-file"',
+      'diff --git a/.env.production b/.env.production',
+      'deleted file mode 100644',
+      '--- a/.env.production',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      '-DB_PASSWORD=pw-from-history',
+      '-PORT=8080',
+      'diff --cc .env',
+      '+++ b/.env',
+      '@@@ -1 -1 +1 @@@',
+      '++TOKEN=merged-token-1',
+      'HEAD~2:.env:3:STRIPE_KEY=sk_test_from_grep',
+      'src/app.ts:10:const TOKEN_NAME = "x"',
+    ].join('\n')
+    expect(historySecretValues(output)).toEqual([
+      { value: 'pw-from-history', label: 'value of DB_PASSWORD in .env.production' },
+      { value: 'merged-token-1', label: 'value of TOKEN in .env' },
+      { value: 'sk_test_from_grep', label: 'value of STRIPE_KEY in .env' },
     ])
   })
 

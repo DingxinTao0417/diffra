@@ -330,3 +330,21 @@ describe('自动审批少问几次（第 628 步）', () => {
     }
   })
 })
+
+describe('shell-quote 拆不开的写法（第 632 步）', () => {
+  const policy = (mode: CommandPolicy['mode']): CommandPolicy => ({ cwd: process.cwd(), trusted: [], alwaysAllowed: new Set(), readOnlyPaths: [], mode })
+
+  test('${} 和 ${a.b} 不再抛异常，按普通变量判断', () => {
+    for (const mode of ['ask', 'auto', 'full'] as const) {
+      expect(() => classifyCommand('echo "${h.endedAt}" && echo ${}', policy(mode)), mode).not.toThrow()
+    }
+    expect(classifyCommand('echo ${h.endedAt}', policy('full'))).toEqual({ level: 'allow' })
+    expect(classifyCommand('echo ${h.endedAt}', policy('auto'))).toEqual({ level: 'allow' })
+    expect(isReadOnlyCommand('echo ${}')).toBe(true)
+    expect(() => commandKeys('touch ${}')).not.toThrow()
+  })
+
+  test('前面几段的危险命令照样拦', () => {
+    expect(classifyCommand('rm -rf ~ ; echo ${}', policy('full'))).toEqual({ level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' })
+  })
+})
