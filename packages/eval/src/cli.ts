@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { apiKeyOf, type EvalConfig, loadConfig } from './config.ts'
 import { type DeepScanResult, runDeepScanSample } from './deep-scan.ts'
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
       goal: { type: 'boolean', default: false },
       'permission-mode': { type: 'string' },
       effort: { type: 'string' },
+      'runs-dir': { type: 'string' },
       samples: { type: 'string' },
       repeat: { type: 'string', default: '1' },
       concurrency: { type: 'string', default: '2' },
@@ -95,6 +97,10 @@ async function main(): Promise<void> {
   // 一律转成绝对路径：core 拿检查点目录在项目目录里跑 git，相对路径会解析到项目里面去
   const outDir = values.out ? resolve(values.out) : join(EVAL_DIR, 'results', `${stamp(now)}-${models.map((model) => model.name).join('+')}`)
   mkdirSync(outDir, { recursive: true })
+  // 题目项目放在 Diffra 仓库外面：放在仓库里的话，智能体顺着路径往上找就能翻到题目的隐藏测试和参考答案（攻击题 r05 里真翻过）
+  const runsDir = values['runs-dir'] ? resolve(values['runs-dir']) : join(process.env.DIFFRA_EVAL_RUNS_DIR ?? join(tmpdir(), 'diffra-eval-runs'), basename(outDir))
+  mkdirSync(runsDir, { recursive: true })
+  console.log(`题目项目放在 ${runsDir}`)
 
   const taskResults: TaskResult[] = []
   if (command === 'probe') {
@@ -103,7 +109,7 @@ async function main(): Promise<void> {
     const base = probeTask(project, values.prompt, values.script)
     const task = withMode(values.goal ? { ...base, goal: true } : base)
     for (const model of models) {
-      const runDir = join(outDir, 'runs', model.name)
+      const runDir = join(runsDir, model.name)
       const workDir = join(runDir, task.id, 'project')
       const copied = await copyProject(project, workDir)
       console.log(`复制了 ${copied >= 0 ? `${copied} 个文件` : '整个目录'}到 ${workDir}`)
@@ -122,7 +128,7 @@ async function main(): Promise<void> {
     let done = 0
     taskResults.push(
       ...(await pool(jobs, Number(values.concurrency), async ({ task, model, round }) => {
-        const result = await runTask(task, model, reviewer, join(outDir, 'runs', `${model.name}-${round + 1}`))
+        const result = await runTask(task, model, reviewer, join(runsDir, `${model.name}-${round + 1}`))
         done++
         console.log(`[${done}/${jobs.length}] ${model.name} ${task.id}：${result.passed ? '通过' : '失败'}（${result.usage.calls} 次模型调用，${Math.round(result.durationMs / 1000)} 秒）`)
         return result
@@ -135,7 +141,7 @@ async function main(): Promise<void> {
     const samples = loadDeepScanSamples(list(values.samples))
     for (const model of models) {
       for (const sample of samples) {
-        const result = await runDeepScanSample(sample, model, reviewer, join(outDir, 'runs', model.name))
+        const result = await runDeepScanSample(sample, model, reviewer, join(runsDir, model.name))
         console.log(`深度扫描 ${model.name} ${sample.id}：查出 ${result.matched.length}/${result.answers}，误报 ${result.falsePositives.length}`)
         scanResults.push(result)
       }

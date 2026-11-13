@@ -38,7 +38,7 @@ pnpm --filter @diffra/eval eval run --tasks t01,t05 --repeat 3 --deep-scan
 | `--deep-scan` | 同时跑深度扫描准确率样例 |
 | `--out` | 结果目录，默认 `packages/eval/results/<时间>-<模型>` |
 
-结果目录里有 `report.md`（给人看）和 `results.json`（给程序读），`runs/` 下是每道题跑完的项目和会话记录。每道题还有：
+结果目录里有 `report.md`（给人看）和 `results.json`（给程序读）。每道题跑完的项目和会话记录放在 Diffra 仓库外面（默认是系统临时目录下的 `diffra-eval-runs/<结果目录名>/`，可以用环境变量 `DIFFRA_EVAL_RUNS_DIR` 或 `--runs-dir` 改），免得智能体顺着路径翻到题目的隐藏测试和参考答案。每道题还有：
 
 - `events.jsonl`：这次运行发生的所有事（用户说的话、会话更新、确认和提问怎么答的、中途停止），按时间排。
 - `transcript.md`：从上面生成的过程记录，能看到智能体每一步做了什么、说了什么、想了什么。
