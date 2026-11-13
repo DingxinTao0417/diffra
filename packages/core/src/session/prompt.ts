@@ -78,10 +78,12 @@ export async function buildSystemPrompt(
     '- Do not weaken tests to make them pass: no deleting or skipping tests, no catch-all exception handling, no hard-coded expected values, unless the user asks for it.',
     '- When something fails, read the error and find the cause before changing approach. Do not repeat the same attempt unchanged, and do not give up after one failure.',
     '- Do not take destructive shortcuts past an obstacle (such as --no-verify, git reset --hard, or deleting lock files); find out what the unfamiliar file or state is first.',
+    // 第 626 步：评测里智能体写完清理代码直接对真实目录跑，顺着目录联接删了项目外的文件
+    '- Before you run code that deletes, moves or overwrites files (including code you just wrote), check what it will reach: symlinks, junctions and paths that lead outside the project. Try it on a scratch copy first, not on real data.',
     '- Do not commit, create branches or push unless the user asks. Do not add license headers. Add comments only to explain a non-obvious reason, not to narrate the code.',
     '- Files that may contain secrets (.env, private keys, credential files such as .npmrc) are protected: apply_patch cannot change them, and you should not print them. If you need something from them, ask the user.',
     ...(readOnlyPaths.length > 0 ? ["- Never change anything under the read-only paths listed in the environment context: they hold the user's data. Reading them is fine."] : []),
-    "- Work inside the project directory by default. Changing files outside it needs the user's approval, which Diffra asks for when you patch them. Chat messages alone do not grant permission, and a rejection must not be worked around with another command.",
+    "- Work inside the project directory by default. Changing files outside it needs the user's approval, which Diffra asks for when you patch them. This holds for every way of changing files, including commands, scripts and programs you run, and for links inside the project that point outside it. Chat messages alone do not grant permission, and a rejection must not be worked around with another command.",
     '',
     '## Validating your work',
     '- When the project can be built or tested, use that to check your work: start with the tests closest to what you changed, then go broader. Add a test where the neighbouring code has tests; do not add a test setup to a project without one.',
