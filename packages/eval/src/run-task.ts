@@ -45,6 +45,16 @@ const isQuestion = (rawInput: unknown) => {
   return scope !== undefined && scope === core.ASK_USER_SCOPE
 }
 
+// 题目目录自成一个 Git 仓库，题目原样作为第一次提交（第 520 步）：结果目录在 Diffra 仓库里，不这样做的话，
+// 智能体往上找项目根会读到 Diffra 自己的 AGENTS.md，git status、git diff 看到的也是 Diffra 仓库
+async function initRepo(dir: string): Promise<void> {
+  const identity = ['-c', 'user.name=Diffra Eval', '-c', 'user.email=eval@diffra.invalid']
+  for (const args of [['init', '-q'], ['add', '-A'], [...identity, 'commit', '-q', '-m', '题目初始状态']]) {
+    const result = await run('git', args, { cwd: dir, timeoutSeconds: 60 })
+    if (result.exitCode !== 0) throw new Error(`准备题目的 Git 仓库失败（git ${args.join(' ')}）：${result.output}`)
+  }
+}
+
 const hashOf = (path: string) => (existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null)
 
 // 把题目复制到临时目录，起一个 core 跑这道题，跑完放入隐藏测试判分
@@ -54,6 +64,7 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
   const dataDir = join(base, 'data')
   mkdirSync(dataDir, { recursive: true })
   cpSync(join(task.dir, 'repo'), workDir, { recursive: true })
+  await initRepo(workDir)
 
   const updates: SessionUpdate[] = []
   let permissionRequests = 0
