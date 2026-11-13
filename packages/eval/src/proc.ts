@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { join, resolve } from 'node:path'
 import { EVAL_DIR } from './tasks.ts'
@@ -9,7 +10,8 @@ const MAX_OUTPUT_CHARS = 8000
 
 // 题目里的 Python 会打印中文：Windows 英文系统（比如 CI）往管道输出默认用 cp1252，打印中文直接报错。
 // 评测跑的所有命令（检查、隐藏测试、智能体所在的 core 进程）统一用 UTF-8，结果不随机器的语言变
-export const EVAL_ENV: NodeJS.ProcessEnv = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+// Go 的编译缓存默认在用户目录（C 盘），跟着临时目录走，评测时临时目录设在 D 盘
+export const EVAL_ENV: NodeJS.ProcessEnv = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', GOCACHE: process.env.GOCACHE ?? join(tmpdir(), 'diffra-eval-gocache') }
 
 export interface RunResult {
   exitCode: number | null
