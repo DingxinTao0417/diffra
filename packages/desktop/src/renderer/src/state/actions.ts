@@ -26,8 +26,23 @@ const MAX_HISTORY = 50
 
 const sameRoute = (a: Route | undefined, b: Route) => JSON.stringify(a) === JSON.stringify(b)
 
-// record 为 false 时不记进后退历史（后退、前进本身）。连着换同一种首页的项目只改当前这一条，不算新的一页
+// 当前页面有没保存的改动时（模型与角色页展开的面板），离开前问它：返回 true 直接走；
+// 返回 false 表示它先拦下来问用户，用户确认放弃后调 proceed，照原来要去的地方继续
+type LeaveGuard = (proceed: () => void) => boolean
+let leaveGuard: LeaveGuard | null = null
+
+export function setLeaveGuard(guard: LeaveGuard | null): void {
+  leaveGuard = guard
+}
+
+// 所有页面切换都走这里：返回、换设置分区、后退前进、快捷键、菜单、搜索结果、通知
 export function navigate(route: Route, record = true): void {
+  if (leaveGuard && !sameRoute(store.get().route, route) && !leaveGuard(() => go(route, record))) return
+  go(route, record)
+}
+
+// record 为 false 时不记进后退历史（后退、前进本身）。连着换同一种首页的项目只改当前这一条，不算新的一页
+function go(route: Route, record: boolean): void {
   // 离开设置页时重新读设置：模型、角色可能改过，输入框要用新的
   if (store.get().route.name === 'settings' && route.name !== 'settings') {
     refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))

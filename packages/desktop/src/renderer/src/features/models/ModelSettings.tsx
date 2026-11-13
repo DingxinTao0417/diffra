@@ -6,6 +6,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { errorMessage } from '@/lib/errors'
+import { setLeaveGuard } from '@/state/actions'
 import { SavedHint, SettingsHeader, useSavedFlash } from '../settings/SettingsLayout'
 import { ProviderCard } from './ProviderCard'
 import { ProviderForm } from './ProviderForm'
@@ -13,18 +14,29 @@ import { RolesCard } from './RolesCard'
 
 // 同一时间只展开一个面板：添加服务，或者编辑某个服务
 type OpenPanel = { kind: 'add' } | { kind: 'edit'; id: string } | null
+// 有没保存的改动时被拦下来、等用户确认的那一步：切到别的面板，或者离开这一页
+type Pending = { kind: 'panel'; next: OpenPanel } | { kind: 'leave'; proceed(): void }
 
 export function ModelSettings() {
   const [view, setView] = useState<SettingsView | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
   const [open, setOpen] = useState<OpenPanel>(null)
-  // 切换面板前要问的那一步；undefined 表示没在问
-  const [pending, setPending] = useState<OpenPanel | undefined>(undefined)
+  const [pending, setPending] = useState<Pending | null>(null)
   const dirty = useRef(false)
   const [saved, flashSaved] = useSavedFlash()
 
   useEffect(() => {
     window.diffra.getSettings().then(setView, (error: unknown) => setReadError(errorMessage(error)))
+  }, [])
+
+  // 返回、换设置分区、后退、快捷键等离开这一页时，面板里有没保存的改动先问
+  useEffect(() => {
+    setLeaveGuard((proceed) => {
+      if (!dirty.current) return true
+      setPending({ kind: 'leave', proceed })
+      return false
+    })
+    return () => setLeaveGuard(null)
   }, [])
 
   // 展开的服务被删掉了，面板跟着收起
@@ -61,7 +73,7 @@ export function ModelSettings() {
   }
   // 有没保存的改动时先问；保存成功、点了取消都直接走 show
   const request = (next: OpenPanel) => {
-    if (dirty.current) setPending(next)
+    if (dirty.current) setPending({ kind: 'panel', next })
     else show(next)
   }
   const adding = open?.kind === 'add'
@@ -139,7 +151,7 @@ export function ModelSettings() {
         )}
       </div>
 
-      <AlertDialog open={pending !== undefined} onOpenChange={(next) => !next && setPending(undefined)}>
+      <AlertDialog open={pending !== null} onOpenChange={(next) => !next && setPending(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>放弃没保存的改动？</AlertDialogTitle>
@@ -149,8 +161,12 @@ export function ModelSettings() {
             <AlertDialogCancel>继续编辑</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (pending !== undefined) show(pending)
-                setPending(undefined)
+                setPending(null)
+                if (pending?.kind === 'panel') show(pending.next)
+                if (pending?.kind === 'leave') {
+                  dirty.current = false
+                  pending.proceed()
+                }
               }}
             >
               放弃

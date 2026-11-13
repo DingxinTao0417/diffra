@@ -201,6 +201,17 @@ test('添加模型时工具调用探测：默认先思考的模型能加上；�
     await window.getByRole('alertdialog').getByRole('button', { name: '放弃', exact: true }).click()
     await expect(window.getByTestId('provider-panel')).toHaveCount(1)
     await expect(card.getByTestId('provider-panel')).toBeVisible()
+
+    // 离开这一页也一样：面板里改过东西，换设置分区或点「返回」先问
+    const nameInput = card.getByTestId('provider-panel').getByLabel('名称', { exact: true })
+    await nameInput.fill('改过的名字')
+    await window.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '常规', exact: true }).click()
+    await expect(window.getByRole('alertdialog')).toContainText('放弃没保存的改动？')
+    await window.getByRole('alertdialog').getByRole('button', { name: '继续编辑', exact: true }).click()
+    await expect(nameInput).toHaveValue('改过的名字')
+    await window.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '返回', exact: true }).click()
+    await window.getByRole('alertdialog').getByRole('button', { name: '放弃', exact: true }).click()
+    await expect(window.getByRole('navigation', { name: '设置分区' })).toBeHidden()
   } finally {
     await app.close()
     await mock.close()
