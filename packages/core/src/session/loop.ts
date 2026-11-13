@@ -60,6 +60,7 @@ import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinRemind
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
+import { projectSecretValues, redactSecretValues } from '../security/secret-values.js'
 import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
@@ -1042,6 +1043,14 @@ export async function runToolCall(
     if (blocked) throw new ToolError(blocked)
     const context = toolContext(session, call, signal, io, scope)
     const output = await executeTool(name, call.input, context)
+    // 命令输出里项目密钥文件的值换成占位，不进模型上下文也不显示（第 625 步）
+    if (name === 'exec_command' || name === 'write_stdin') {
+      const secrets = await projectSecretValues(session.cwd)
+      if (secrets.length > 0) {
+        output.text = redactSecretValues(output.text, secrets)
+        if (output.terminalOutput) output.terminalOutput = redactSecretValues(output.terminalOutput, secrets)
+      }
+    }
     for (const diff of output.edited ? (output.diffs ?? []) : []) {
       scope?.onEdited(diff.path)
       if (!diff.deleted && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, diff.path, diff.newText, signal)

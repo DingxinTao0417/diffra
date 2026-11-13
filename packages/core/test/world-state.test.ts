@@ -103,8 +103,8 @@ describe('用户的语言（第 624 步）', () => {
 
   test('认出来了就写进环境上下文，要求进度说明也用这个语言；没认出来不写', () => {
     const base = { cwd: 'D:/p', environment: { bashPath: 'bash' }, permissionMode: 'auto' as const, config: { readOnlyPaths: [] } }
-    const zh = environmentContext({ ...base, userLanguage: 'Chinese' } as Parameters<typeof environmentContext>[0])
+    const zh = environmentContext({ ...base, userLanguage: 'Chinese' } as unknown as Parameters<typeof environmentContext>[0])
     expect(zh).toContain('<user_language>Chinese: write everything the user sees in Chinese, including the one-sentence progress notes')
-    expect(environmentContext({ ...base, userLanguage: null } as Parameters<typeof environmentContext>[0])).not.toContain('user_language')
+    expect(environmentContext({ ...base, userLanguage: null } as unknown as Parameters<typeof environmentContext>[0])).not.toContain('user_language')
   })
 })

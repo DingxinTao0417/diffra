@@ -713,3 +713,19 @@ describe('等外面的事做完', () => {
     expect(session.execSessions.size).toBe(0)
   }, 40_000)
 })
+
+describe('命令输出里的密钥值（第 625 步）', () => {
+  test('完全访问模式下 cat .env 不问，但密钥的值不进模型上下文、界面上也看不到', async () => {
+    writeFileSync(join(project, '.env'), 'API_TOKEN=tok_live_9f8e7d6c5b4a\nDEBUG=true\n')
+    const model = scriptedModel([{ toolCalls: [exec('echo ---ENV--- && cat .env')] }, { text: '看过了' }])
+    const session = await makeSession(model)
+    session.permissionMode = 'full'
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '看看配置' }, io)
+    const result = resultText(toolResults(session)[0])
+    expect(result).toContain('API_TOKEN=[hidden by Diffra: value of API_TOKEN in .env]')
+    expect(result).toContain('DEBUG=true')
+    expect(JSON.stringify(model.doStreamCalls)).not.toContain('tok_live_9f8e7d6c5b4a')
+    expect(JSON.stringify(io.updates)).not.toContain('tok_live_9f8e7d6c5b4a')
+  }, 30_000)
+})
