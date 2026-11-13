@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { BrowserWindow, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { type Todo, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT } from '../shared/todos'
@@ -49,6 +49,14 @@ export function registerTodosIpc(userDataDir: string): void {
   const queue = new WriteQueue()
   let cache: Todo[] | null = null
   const shown = new Set<Notification>()
+  // 还没写完的保存次数。退出时有没写完的就先等写完再退（第 498 步）：主进程不等异步写盘，
+  // Ctrl+J 记完马上退出应用，最后几条会丢（界面上的条数是内存里的，看着已经记上了）
+  let pending = 0
+  app.on('before-quit', (event) => {
+    if (pending === 0) return
+    event.preventDefault()
+    void queue.run(async () => {}).finally(() => app.quit())
+  })
 
   const load = async (): Promise<Todo[]> => {
     if (cache) return cache
@@ -80,10 +88,11 @@ export function registerTodosIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.todosList, () => load())
   ipcMain.handle(IPC_CHANNELS.todosSave, (_event, raw: unknown) => {
     const todos = parse(z.array(todoSchema).max(TODO_MAX_ITEMS, `待办最多 ${TODO_MAX_ITEMS} 条，先删掉一些已完成的`), raw)
+    pending++
     return queue.run(async () => {
       await writeJsonFileAtomic(path, { version: 1, todos })
       cache = todos
       return todos
-    })
+    }).finally(() => pending--)
   })
 }
