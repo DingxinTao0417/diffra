@@ -93,7 +93,7 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   if (mentionsSecret(trimmed, splitSegments(trimmed, true))) return { level: 'ask' }
   if (loose.some(touchesReadOnly)) return { level: 'ask' }
   // 命令替换、反引号里可以藏任何命令
-  const substitution = /\$\(|`|<\(|>\(/.test(trimmed)
+  const substitution = hasSubstitution(trimmed)
 
   if (policy.mode === 'auto') return substitution || hasRiskySegment(loose, runDir) ? { level: 'ask' } : { level: 'allow' }
 
@@ -229,6 +229,32 @@ function isRecursiveDeleteOfRoot(argv: string[]): boolean {
   const args = argv.slice(1)
   const recursive = args.some((arg) => arg === '--recursive' || /^-[a-zA-Z]*[rR]/.test(arg))
   return recursive && args.some((arg) => DANGEROUS_RM_TARGETS.has(arg))
+}
+
+// 命令替换（$(...)、反引号、<(...)、>(...)）：单引号里和引号定界的 heredoc（<<'EOF'）正文里 shell 不展开，不算（第 634 步）。
+// 评测里自动审批下的确认大半是 node -e '...`${x}`...'、node - <<'EOF' 里 JS 模板字符串的反引号被当成了命令替换
+const QUOTED_HEREDOC = /<<-?[ \t]*(['"])([A-Za-z_][\w-]*)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
+function hasSubstitution(command: string): boolean {
+  // 只去掉正文，同一行定界符后面的内容（<<'EOF' && echo $(x)）照样看
+  const text = command.replace(QUOTED_HEREDOC, (_match, _quote, _tag, rest: string) => rest)
+  let unquoted = ''
+  let quote: "'" | '"' | null = null
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (quote === "'") {
+      if (char === "'") quote = null
+      continue
+    }
+    // 转义的 $ 和反引号是普通字符
+    if (char === '\\') {
+      index++
+      continue
+    }
+    if (char === "'" && quote === null) quote = "'"
+    else if (char === '"') quote = quote === '"' ? null : '"'
+    else unquoted += char
+  }
+  return /\$\(|`|<\(|>\(/.test(unquoted)
 }
 
 // shell-quote 遇到 ${}、${h.endedAt} 这种写法直接抛 Bad substitution（第 632 步）：以前这个异常把整轮当成模型出错停掉了。
@@ -434,7 +460,7 @@ function globMatches(pattern: string, name: string): boolean {
 // 整条命令都是只读的（每一段都是只读命令，没有重定向、命令替换、后台执行）：只读的智能体只能跑这种（第 508 步）
 export function isReadOnlyCommand(command: string): boolean {
   const trimmed = command.trim()
-  if (/\$\(|`|<\(|>\(/.test(trimmed)) return false
+  if (hasSubstitution(trimmed)) return false
   const segments = splitSegments(trimmed)
   return segments !== null && segments.length > 0 && segments.every(isReadOnly)
 }

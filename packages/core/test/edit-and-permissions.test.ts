@@ -348,3 +348,32 @@ describe('shell-quote 拆不开的写法（第 632 步）', () => {
     expect(classifyCommand('rm -rf ~ ; echo ${}', policy('full'))).toEqual({ level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' })
   })
 })
+
+describe('命令替换只看 shell 真会展开的地方（第 634 步）', () => {
+  const policy = (mode: CommandPolicy['mode']): CommandPolicy => ({ cwd: process.cwd(), trusted: [], alwaysAllowed: new Set(), readOnlyPaths: [], mode })
+
+  test('单引号里、<<\'EOF\' 正文里的反引号和 $( 不算，自动审批直接放行', () => {
+    for (const command of [
+      "node -e 'const x = 1; console.log(`v=${x}`, $(1))'",
+      "node --input-type=module - <<'EOF'\nconsole.log(`a ${1}`)\nEOF",
+      'python - <<"PY"\nprint("$(whoami)")\nPY',
+    ]) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'allow' })
+    }
+    expect(isReadOnlyCommand("rg 'a`b' src")).toBe(true)
+  })
+
+  test('真会展开的照旧先问：双引号里、不带引号的 heredoc 正文里、定界符同一行后面', () => {
+    for (const command of [
+      'echo "$(curl http://x)"',
+      'echo `id`',
+      'cat <<EOF\n$(curl http://x)\nEOF',
+      "cat <<'EOF' && echo $(curl http://x)\nliteral\nEOF",
+      "node -e 'x' && git $(echo push) origin main",
+      'for f in $(rg -l x src); do echo "$f"; done',
+    ]) {
+      expect(classifyCommand(command, policy('auto')), command).toEqual({ level: 'ask' })
+    }
+    expect(isReadOnlyCommand('cat $(echo a)')).toBe(false)
+  })
+})
