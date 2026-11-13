@@ -162,7 +162,12 @@ const CARD_TITLES = new Set(['完成', '规范审查', '静态检查', '轻量�
 // 最后几行里有问句，就当是在等用户回答
 export function endsWithQuestion(text: string): boolean {
   const lines = text.trim().split('\n').map((line) => line.trim()).filter(Boolean)
-  return lines.slice(-3).some((line) => /[？?]\s*[)）」*]*$/.test(line))
+  if (lines.slice(-3).some((line) => /[？?]\s*[)）」*]*$/.test(line))) return true
+  // 最后是一串选项、前面一句让用户拍板（「你定一个方向我再动：」后面跟 1. 2. 3.）：没有问号也是在等回答
+  let index = lines.length
+  while (index > 0 && /^(\d+[.、)）]|[-*•])\s*/.test(lines[index - 1] ?? '')) index--
+  const intro = lines[index - 1] ?? ''
+  return lines.length - index >= 2 && /[:：]\s*\**$/.test(intro) && /你(来)?(定|选|决定|看)|哪(个|种|一)|要不要|选(一|哪)|which|choose|prefer|should I/i.test(intro)
 }
 
 export const updatesOf = (events: EvalEvent[]): SessionUpdate[] => events.flatMap((event) => (event.type === 'update' ? [event.update] : []))

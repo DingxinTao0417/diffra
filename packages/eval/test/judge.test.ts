@@ -24,4 +24,7 @@ test('文字提问：最后几行里有问句就算在等用户回答（第 630 
   expect(endsWithQuestion('改好了。要我顺便补测试吗?\n\n- 改了 a.ts')).toBe(true)
   expect(endsWithQuestion('改好了，测试都过了。')).toBe(false)
   expect(endsWithQuestion('为什么会这样？因为缓存键少了数量。已经修好，测试全过。\n- a.ts\n- b.ts\n- c.ts')).toBe(false)
+  // 没有问号，最后列出几个方向让用户定
+  expect(endsWithQuestion('文案和校验对不上。\n\n要怎么对齐，你定一个方向我再动：\n1. 以文案为准\n2. 以规则为准\n3. 先保持现状')).toBe(true)
+  expect(endsWithQuestion('改了这些：\n1. a.ts\n2. b.ts')).toBe(false)
 })
