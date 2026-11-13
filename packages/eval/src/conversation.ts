@@ -38,6 +38,8 @@ export interface ConversationResult {
   error: string | null
   permissionRequests: number
   questions: number
+  // 题目写好的答案一个选项都没对上、只好选了第一个的提问：判题可能不准
+  unmatchedAnswers: string[]
 }
 
 // 提问也走确认请求，按 rawInput 里的 scope 认出来。比较 v0.3.3 这类旧版本时 core 里没有这个常量，也不会有提问
@@ -55,6 +57,7 @@ export async function runConversation(options: ConversationOptions): Promise<Con
   const now = () => Date.now() - started
   let permissionRequests = 0
   let questions = 0
+  const unmatchedAnswers: string[] = []
   let stopReason: string | null = null
   let error: string | null = null
 
@@ -68,7 +71,9 @@ export async function runConversation(options: ConversationOptions): Promise<Con
         questions++
         // 答案按正则匹配选项标签，智能体同一个意思可能有不同说法（「支付|付款」）；「都不选」那个不算
         const pattern = wanted ? new RegExp(wanted) : null
-        const picked = (pattern ? request.options.find((option) => option.kind !== 'reject_once' && pattern.test(option.name)) : undefined) ?? request.options[0]
+        const matched = pattern ? request.options.find((option) => option.kind !== 'reject_once' && pattern.test(option.name)) : undefined
+        if (pattern && !matched) unmatchedAnswers.push(names.join(' / '))
+        const picked = matched ?? request.options[0]
         events.push({ at: now(), type: 'permission', title, options: names, answer: picked?.name ?? '（没有选项）', question: true })
         return picked ? { outcome: { outcome: 'selected', optionId: picked.optionId } } : { outcome: { outcome: 'cancelled' } }
       }
@@ -131,7 +136,7 @@ export async function runConversation(options: ConversationOptions): Promise<Con
     coreProcess.stop()
   }
   if (coreProcess.stderr().trim() && error) error = `${error}\n${coreProcess.stderr().trim().slice(-2000)}`
-  return { events, stopReason, error, permissionRequests, questions }
+  return { events, stopReason, error, permissionRequests, questions, unmatchedAnswers }
 }
 
 // 这一轮最后一段给用户看的文字

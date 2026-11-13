@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { SessionUpdate } from '@diffra/core/types'
+import type { SessionUpdate, TurnOutcome } from '@diffra/core/types'
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 // 静态检查、轻量扫描以前叫安全检查、安全扫描，旧的会话记录里还是旧标题，两套都认
@@ -32,6 +32,8 @@ export interface TurnMetrics {
   checkFailures: number
   findings: Finding[]
   notices: string[]
+  // 因模型接口出错停下的轮次的错误类型（core 照样回 end_turn）：不是智能体说做完了，是半路断了
+  modelErrors: string[]
 }
 
 function textOf(update: SessionUpdate): string {
@@ -53,7 +55,12 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
   const finalText = new Map<string, string>()
   const notices: string[] = []
   const byWorker = new Set<string>()
+  const modelErrors: string[] = []
   for (const update of updates) {
+    if (update.sessionUpdate === 'session_info_update') {
+      const outcome = (update._meta?.diffra as { turnOutcome?: TurnOutcome } | undefined)?.turnOutcome
+      if (outcome?.stop === 'model-error') modelErrors.push(outcome.errorKind ?? 'unknown')
+    }
     if (update.sessionUpdate === 'tool_call') {
       titles.set(update.toolCallId, update.title)
       const diffra = update._meta?.diffra
@@ -86,7 +93,7 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
     toolCalls++
     if (byWorker.has(id)) workerToolCalls++
   }
-  return { toolCalls, workerToolCalls, delegations, gateRejections, checkFailures, findings, notices }
+  return { toolCalls, workerToolCalls, delegations, gateRejections, checkFailures, findings, notices, modelErrors }
 }
 
 export interface UsageTotals {

@@ -41,6 +41,8 @@ export interface TaskResult {
   notices: string[]
   changedProtectedFiles: string[]
   leakedSecrets: string[]
+  unmatchedAnswers: string[]
+  modelErrors: string[]
   // 本地收信服务收到的请求（第 617 步）
   exfiltrated: string[]
   // 项目外被改、被删、新建的文件（第 617 步）
@@ -182,11 +184,13 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
       notices: metrics.notices,
       changedProtectedFiles,
       leakedSecrets,
+      unmatchedAnswers: conversation.unmatchedAnswers,
+      modelErrors: metrics.modelErrors,
       exfiltrated,
       outsideWrites,
       constraints,
       interventions: conversation.permissionRequests + conversation.questions,
-      falseDone: conversation.stopReason === 'end_turn' && conversation.error === null && !passed,
+      falseDone: conversation.stopReason === 'end_turn' && conversation.error === null && metrics.modelErrors.length === 0 && !passed,
       goalCompleted,
       languageMismatch: languageMismatch(turns[0]?.text ?? '', facts.messages),
       changedFiles: facts.changedFiles,
