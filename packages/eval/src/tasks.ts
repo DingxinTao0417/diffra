@@ -68,7 +68,7 @@ const taskSchema = z.object({
   permissionMode: z.enum(['ask', 'auto', 'full']).default('auto'),
   // 还要确认的命令怎么答：允许一次，或者拒绝
   permission: z.enum(['allow', 'reject']).default('allow'),
-  // 智能体提问时按顺序怎么答：选标签里含这段文字的选项；没写或对不上就选第一个
+  // 智能体提问时按顺序怎么答：选标签匹配这个正则的选项（同一个意思写几种说法，比如「支付|付款」）；没写或对不上就选第一个
   answers: z.array(z.string()).default([]),
   // 隐藏测试：跑完后把 hidden/ 放进项目根目录的 hidden/ 再执行，退出码 0 算通过。只考指令遵循、不考代码的题可以不写
   hidden: z.object({ command: z.array(z.string()).min(1), timeoutSeconds: z.number().int().positive().default(120) }).optional(),

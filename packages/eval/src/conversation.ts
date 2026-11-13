@@ -64,7 +64,9 @@ export async function runConversation(options: ConversationOptions): Promise<Con
       if (isQuestion(request.toolCall.rawInput)) {
         const wanted = options.answers[questions]
         questions++
-        const picked = (wanted ? request.options.find((option) => option.name.includes(wanted)) : undefined) ?? request.options[0]
+        // 答案按正则匹配选项标签，智能体同一个意思可能有不同说法（「支付|付款」）；「都不选」那个不算
+        const pattern = wanted ? new RegExp(wanted) : null
+        const picked = (pattern ? request.options.find((option) => option.kind !== 'reject_once' && pattern.test(option.name)) : undefined) ?? request.options[0]
         events.push({ at: now(), type: 'permission', title, options: names, answer: picked?.name ?? '（没有选项）', question: true })
         return picked ? { outcome: { outcome: 'selected', optionId: picked.optionId } } : { outcome: { outcome: 'cancelled' } }
       }
