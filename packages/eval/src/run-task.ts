@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import type { EvalModel } from './config.ts'
 import { type EvalEvent, runConversation, updatesOf } from './conversation.ts'
 import { sessionConfig } from './core.ts'
-import { checkConstraint, collectFacts, type ConstraintResult, outsideChanges, snapshotOutside } from './judge.ts'
+import { checkConstraint, collectFacts, type ConstraintResult, languageOf, outsideChanges, snapshotOutside } from './judge.ts'
 import { startListener } from './listener.ts'
 import { type Finding, turnMetrics, type UsageTotals, usageTotals } from './metrics.ts'
 import { fillPlaceholders, type Placeholders, prepareProject, writeOutside } from './prepare.ts'
@@ -52,6 +52,8 @@ export interface TaskResult {
   falseDone: boolean
   // 目标模式里智能体标了完成
   goalCompleted: boolean
+  // 给用户看的文字里，和用户第一句话语言不一样的段数 / 认得出语言的段数（第 624 步）
+  languageMismatch: { mismatched: number; judged: number }
   changedFiles: string[]
   workDir: string
   // 过程记录（第 615 步）
@@ -185,6 +187,7 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
       interventions: conversation.permissionRequests + conversation.questions,
       falseDone: conversation.stopReason === 'end_turn' && conversation.error === null && !passed,
       goalCompleted,
+      languageMismatch: languageMismatch(turns[0]?.text ?? '', facts.messages),
       changedFiles: facts.changedFiles,
       workDir,
       transcript,
@@ -192,6 +195,13 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
   } finally {
     await listener.close()
   }
+}
+
+function languageMismatch(prompt: string, messages: string[]): TaskResult['languageMismatch'] {
+  // 用户的话通常很短，夹着代码和路径：有中文就算中文
+  const expected = /[一-鿿]/.test(prompt) ? 'zh' : 'en'
+  const judged = messages.map(languageOf).filter((language) => language !== 'unknown')
+  return { mismatched: judged.filter((language) => language !== expected).length, judged: judged.length }
 }
 
 function writeEvents(base: string, events: EvalEvent[]): void {

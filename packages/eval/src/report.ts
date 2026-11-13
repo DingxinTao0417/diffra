@@ -65,6 +65,9 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
       `全自动：平均每题要插手 ${average(results.map((item) => item.interventions)).toFixed(1)} 次（确认 ${results.reduce((sum, item) => sum + item.permissionRequests, 0)}、提问 ${results.reduce((sum, item) => sum + item.questions, 0)}）；说完成但没做对 ${results.filter((item) => item.falseDone).length} 道`,
       '',
     )
+    const mismatched = results.reduce((sum, item) => sum + (item.languageMismatch?.mismatched ?? 0), 0)
+    const judged = results.reduce((sum, item) => sum + (item.languageMismatch?.judged ?? 0), 0)
+    if (judged > 0) lines.push(`回复语言和用户不一致：${mismatched}/${judged} 段（${results.filter((item) => (item.languageMismatch?.mismatched ?? 0) > 0).length} 道题）`, '')
     // 该派和不该派子智能体的题各派了几道；token 里子智能体用掉的单独列出来
     const expected = results.filter((item) => item.delegate === 'expected')
     const unexpected = results.filter((item) => item.delegate === 'unexpected')
