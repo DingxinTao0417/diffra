@@ -26,6 +26,17 @@ describe('文字脱敏', () => {
     expect(redacted.split('\n')).toHaveLength(text.split('\n').length)
   })
 
+  test('几块私钥各自换掉；配不上结尾、结尾离开头太远的不算一块，只换开头那一行（按格式那条规则）', () => {
+    const lonely = fakeKey('-----BEGIN ', 'PRIVATE KEY-----')
+    const end = fakeKey('-----END ', 'PRIVATE KEY-----')
+    expect(redactText(`${PEM}\n中间\n${PEM}`)).toBe('[已脱敏：私钥]\n\n\n\n中间\n[已脱敏：私钥]\n\n\n')
+    // 前面一个没有结尾的开头，跟后面完整的一块连在一起算：最近的结尾在 16000 字以内
+    expect(redactText(`${lonely}\n${PEM}`)).toBe('[已脱敏：私钥]\n\n\n\n')
+    expect(redactText(`${lonely}\n只有开头`)).toBe('[已脱敏：私钥]\n只有开头')
+    const body = 'x'.repeat(17_000)
+    expect(redactText(`${lonely}\n${body}\n${end}`, false)).toBe(`[已脱敏：私钥]\n${body}\n${end}`)
+  })
+
   test('带引号的赋值、环境变量、Authorization 头、地址里的账号密码只换值', () => {
     expect(redactText(`const apiKey = "abcd1234efgh5678"`)).toBe(`const apiKey = "[已脱敏]"`)
     expect(redactText(`{"client_secret": "s3cr3t-value-123"}`)).toBe(`{"client_secret": "[已脱敏]"}`)
