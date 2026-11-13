@@ -11,6 +11,7 @@ import { recordVersion, registerChangelogIpc } from './changelog'
 import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { registerPluginsIpc } from './plugins-ipc'
+import { registerExtensionsIpc } from './extensions-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
@@ -138,6 +139,7 @@ app
     registerRemoteIpc(userDataDir)
     registerArchitectureIpc(architectureModel)
     registerPluginsIpc(settings, userDataDir)
+    registerExtensionsIpc(settings, secrets)
     registerBrowserIpc()
     // 浏览器扩展的宿主登记和管道：失败了只影响用户自己的浏览器，内置浏览器照常
     browserHost.start(settings, userDataDir).catch((error: unknown) => console.error('[browser] 启动浏览器扩展通道失败', error))

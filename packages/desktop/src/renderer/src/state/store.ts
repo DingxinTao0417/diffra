@@ -8,7 +8,10 @@ import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'mcp' | 'plugins' | 'devices' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'devices' | 'storage' | 'usage' | 'about'
+
+// 扩展页的分栏：推荐、MCP 目录、插件目录、已安装（第 595 步）
+export type ExtensionsTab = 'recommended' | 'mcp' | 'plugins' | 'installed'
 
 export type Route =
   | { name: 'home'; project: string | null }
@@ -17,6 +20,7 @@ export type Route =
   // 别的设备授权给本机看的会话（设备连接，只读）
   | { name: 'remote-task'; deviceId: string; sessionId: string }
   | { name: 'todos' }
+  | { name: 'extensions'; tab: ExtensionsTab }
   // 架构：projectId 为 null 是项目卡片页；diagram 是看哪张架构图，section 是依赖页的哪一块，
   // scope 是依赖图看到哪一层（见 features/architecture/graph.ts），focus 是选中的方块、节点或依赖线
   | { name: 'architecture'; projectId: string | null; tab: ArchitectureTab; diagram: DiagramKind; section: DependencySection; scope: string; focus: string | null }

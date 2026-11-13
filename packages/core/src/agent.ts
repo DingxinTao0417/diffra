@@ -39,7 +39,8 @@ import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
 import { loadAgentTypes } from './subagents.js'
 import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
-import { inspectPlugin, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { inspectPlugin, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { sessionStartContext } from './session/plugin-hooks.js'
 import {
   checkSwitchesSchema,
   endpointSchema,
@@ -259,17 +260,24 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     const skills = (await loadSkills(roots)).map(({ body: _body, ...info }) => info)
     const frontend = hasFrontend(files) ? { browser: config.browser, screenshots: config.browser && config.model.supportsImages } : null
     const promptContext = { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)) }
+    // 插件的 SessionStart 钩子在这里跑，输出放进主智能体的系统提示词；子智能体不带
+    const hooks = await pluginHooks(config.plugins)
+    const id = record?.id ?? randomUUID()
+    const startContext = await sessionStartContext(hooks, { cwd, bashPath: environment.bashPath, sessionId: id })
+    const systemPrompt = await buildSystemPrompt(environment.bashPath, config, rulePacks, promptContext)
     const session = new Session({
+      id,
       cwd,
       config,
       environment,
       checkpoints,
       rulePacks,
-      systemPrompt: await buildSystemPrompt(environment.bashPath, config, rulePacks, promptContext),
+      systemPrompt: startContext ? `${systemPrompt}\n\n# Context from plugins\n\n${startContext}` : systemPrompt,
       workerPrompt: await buildSystemPrompt(environment.bashPath, config, rulePacks, { ...promptContext, worker: true }),
       readRoots: roots.map((root) => root.dir),
       outputRoot: options.sessionsDir ?? null,
-      agentTypes: await loadAgentTypes(cwd),
+      agentTypes: await loadAgentTypes(cwd, config.plugins),
+      pluginHooks: hooks,
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
       record,

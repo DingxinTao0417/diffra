@@ -368,12 +368,27 @@ export interface SkillInfo {
   dir: string
 }
 
+// hooks：用户允许这个插件的钩子时记下的钩子指纹（PluginInfo.hooksFingerprint）；没允许不传。
+// 插件的钩子和允许时不一样了（更新、手改）就不跑，要用户重新允许
 export interface PluginRef {
   name: string
   dir: string
+  hooks?: string
 }
 
-// 插件里有什么；unsupported 是读到了但 Diffra 不支持的部分（agents、hooks 等）
+// 插件钩子兼容 Claude Code hooks/hooks.json 的这几个时机（见 session/plugin-hooks.ts）
+export const PLUGIN_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'] as const
+export type PluginHookEvent = (typeof PLUGIN_HOOK_EVENTS)[number]
+
+// matcher：工具类时机按工具名匹配（Bash 是执行命令，Edit、Write 是改文件），SessionStart 按启动方式匹配，空是全部；timeout 是秒
+export interface PluginHookInfo {
+  event: PluginHookEvent
+  matcher: string
+  command: string
+  timeout: number | null
+}
+
+// 插件里有什么；unsupported 是读到了但 Diffra 不支持的部分（output-styles、不支持的钩子时机等）
 export interface PluginInfo {
   name: string
   version: string
@@ -381,6 +396,11 @@ export interface PluginInfo {
   commands: string[]
   skills: string[]
   mcpServers: string[]
+  // 子智能体类型，名字带插件名（插件名:类型名）
+  agents: string[]
+  hooks: PluginHookInfo[]
+  // 钩子的指纹，允许钩子时记下；没有钩子时为 null
+  hooksFingerprint: string | null
   unsupported: string[]
 }
 

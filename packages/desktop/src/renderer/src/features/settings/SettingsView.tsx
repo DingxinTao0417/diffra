@@ -16,8 +16,6 @@ import {
   MonitorSmartphone,
   Moon,
   Palette,
-  Plug,
-  Puzzle,
   Search,
   Settings2,
   Shield,
@@ -50,9 +48,7 @@ import { Segmented } from '@/components/ui/segmented'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/models/ModelSettings'
-import { PluginSettings } from '@/features/plugins/PluginSettings'
 import { BrandMark } from '@/features/shell/BrandMark'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
@@ -85,8 +81,6 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 规范审查 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
       { id: 'browser', label: '浏览器', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 网站 允许 禁止 登录' },
-      { id: 'mcp', label: 'MCP 服务器', icon: Plug, keywords: 'MCP 工具 提示词模板 prompt 外部工具' },
-      { id: 'plugins', label: '插件', icon: Puzzle, keywords: '插件 自定义命令 斜杠 Skill MCP 安装 Git' },
     ],
   },
   {
@@ -173,10 +167,6 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <ExecutionSection />
     case 'browser':
       return <BrowserSection />
-    case 'mcp':
-      return <McpSettings />
-    case 'plugins':
-      return <PluginSettings />
     case 'devices':
       return <DevicesSection />
     case 'storage':

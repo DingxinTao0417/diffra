@@ -187,7 +187,7 @@ export class McpPool {
         result.chars += name.length + description.length + JSON.stringify(item.inputSchema).length
       }
     }
-    if (skipped > 0) result.failures.push({ title: `MCP 工具超过 ${MAX_MCP_TOOLS} 个，有 ${skipped} 个没有给模型`, detail: '可以在设置里关掉用不到的 MCP 服务器' })
+    if (skipped > 0) result.failures.push({ title: `MCP 工具超过 ${MAX_MCP_TOOLS} 个，有 ${skipped} 个没有给模型`, detail: '可以在「扩展 → 已安装」里关掉用不到的 MCP 服务器' })
     return result
   }
 

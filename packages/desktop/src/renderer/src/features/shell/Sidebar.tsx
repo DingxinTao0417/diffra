@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
+import { Blocks, ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,7 @@ import { remPx } from '@/lib/shell'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { isDue } from '@/lib/todo-time'
 import { useNow } from '@/lib/use-now'
-import { loadTodos, navigate, openArchitecture, openDesign, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
+import { loadTodos, navigate, openArchitecture, openDesign, openExtensions, openHome, openSettings, openTask, openTodos, pickProject, saveLayout, setLayout } from '@/state/actions'
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { type RemoteProjectGroup, useRemoteProjects } from '@/features/devices/remote-projects'
 import { RemoteNewTaskDialog } from '@/features/devices/RemoteNewTaskDialog'
@@ -149,6 +149,10 @@ export function Sidebar() {
           <span className="flex-1">待办</span>
           {dueTodoCount > 0 && <span className="size-1.5 rounded-full bg-warning" role="img" aria-label={`${dueTodoCount} 条到期`} title={`${dueTodoCount} 条到期`} data-testid="sidebar-todo-due" />}
           {openTodoCount > 0 && <span className="text-xs text-muted-foreground tabular-nums" data-testid="sidebar-todo-count">{openTodoCount}</span>}
+        </SidebarButton>
+        <SidebarButton active={route.name === 'extensions'} onClick={() => openExtensions()}>
+          <Blocks className="size-4" />
+          扩展
         </SidebarButton>
       </div>
 

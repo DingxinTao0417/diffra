@@ -10,6 +10,7 @@ import type {
   ReasoningEffort,
   PermissionMode,
   PermissionOption,
+  PluginInfo,
   RequestPermissionRequest,
   SessionChecks,
   SessionSearchResult,
@@ -47,6 +48,7 @@ import type { FileReference } from './attachments'
 import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteTaskCall, RemoteTaskCallResult, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
+import type { PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
 
@@ -147,10 +149,14 @@ export const IPC_CHANNELS = {
   mcpPrompt: 'mcp:prompt',
   commandsList: 'commands:list',
   pluginsList: 'plugins:list',
-  pluginInstallFolder: 'plugins:install-folder',
-  pluginInstallGit: 'plugins:install-git',
+  pluginPrepare: 'plugins:prepare',
+  pluginCommit: 'plugins:commit',
+  pluginDiscard: 'plugins:discard',
   pluginSetEnabled: 'plugins:set-enabled',
+  pluginSetHooks: 'plugins:set-hooks',
   pluginDelete: 'plugins:delete',
+  extensionInstallMcp: 'extensions:install-mcp',
+  extensionPrerequisites: 'extensions:prerequisites',
   windowChrome: 'window:chrome',
   menuPopup: 'menu:popup',
   menuCommand: 'menu:command',
@@ -359,6 +365,17 @@ export function decodeStartTaskError(message: string): { code: StartTaskErrorCod
 // 查哪些 MCP 服务器：某个任务用的，或者设置里开着的（projectPath 为 null 时在最近的项目或用户目录里启动，
 // noProject 时在默认保存位置里启动）；也决定斜杠菜单列哪些 Skill 和命令
 export type McpStatusTarget = { sessionId: string } | { projectPath: string | null } | { noProject: true }
+
+// 插件从哪里装：选一个文件夹、Git 地址（可以带仓库里的子目录）、内置目录里的一项
+export type PluginSource = { kind: 'folder' } | { kind: 'git'; url: string; subdir: string } | { kind: 'catalog'; id: string }
+
+// 取回、读过还没装的插件，给用户看过再装；token 用来确认或放弃。location 是文件夹路径，或 Git 地址和子目录
+export interface PluginPrepared {
+  token: string
+  info: PluginInfo
+  source: 'folder' | 'git'
+  location: string
+}
 
 // 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
 export interface PromptOptions {
@@ -572,11 +589,17 @@ export interface DiffraApi {
   designSaveFile(sessionId: string, projectPath: string): Promise<string | null>
   // 智能体在用某个任务的设计面板，界面把面板打开
   onDesignActivity(listener: (event: { sessionId: string }) => void): () => void
-  // 弹出文件夹选择框；取消时返回 null
-  installPluginFromFolder(): Promise<PluginView[] | null>
-  installPluginFromGit(url: string): Promise<PluginView[]>
+  // 装插件第一步：取回并读出内容（从文件夹装时弹出选择框，取消时返回 null）；第二步用户看过后确认，allowHooks 是允许它的钩子；不装了就放弃
+  preparePlugin(source: PluginSource): Promise<PluginPrepared | null>
+  commitPlugin(token: string, allowHooks: boolean): Promise<PluginView[]>
+  discardPlugin(token: string): Promise<void>
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginView[]>
+  setPluginHooks(pluginId: string, allowed: boolean): Promise<PluginView[]>
   deletePlugin(pluginId: string): Promise<PluginView[]>
+  // 扩展目录里的 MCP 服务一键装：先连一次，连上了才保存；key 是用户填的 Token，没有就是 null
+  installCatalogMcp(catalogId: string, key: string | null): Promise<SettingsView>
+  // 本机有没有 npx、uvx、docker、railway 这些命令
+  extensionPrerequisites(): Promise<PrerequisiteState>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void

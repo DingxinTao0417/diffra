@@ -172,14 +172,18 @@ export interface McpServerInput {
   headers: Array<{ name: string; value: string | null }>
 }
 
-// 装好的插件。从文件夹装的就地使用那个文件夹；从 Git 装的克隆到应用数据目录的 plugins 下
+// 装好的插件。从文件夹装的就地使用那个文件夹；从 Git 装的克隆到应用数据目录的 plugins/<id> 下，
+// subdir 是插件在仓库里的子目录（没有就是仓库根目录），dir 是插件本身所在的目录
 export interface InstalledPlugin {
   id: string
   name: string
   dir: string
   source: 'folder' | 'git'
   url: string | null
+  subdir: string | null
   enabled: boolean
+  // 用户允许钩子时插件钩子的指纹（PluginInfo.hooksFingerprint）；null 是没允许。钩子变了指纹对不上就不跑
+  hooksApproved: string | null
 }
 
 // 设置页看到的插件：多了读出来的内容；读不了时 info 为 null，error 说明原因

@@ -73,7 +73,7 @@ export const sessionConfigSchema = z.object({
     maxSteps: z.number().int().positive().nullable(),
     goalMaxRounds: z.number().int().min(1).max(50),
   }),
-  plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1) })).default([]),
+  plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1), hooks: z.string().min(1).optional() })).default([]),
   browser: z.boolean().default(false),
   design: z.boolean().default(false),
   designStyle: z.string().min(1).nullable().default(null),
@@ -134,7 +134,7 @@ export const designActionParamsSchema = z.object({
   agent: z.object({ id: z.string().min(1), name: z.string().min(1), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }).nullable().optional(),
 })
 
-export const pluginRefSchema = z.object({ name: z.string().min(1), dir: z.string().min(1) })
+export const pluginRefSchema = z.object({ name: z.string().min(1), dir: z.string().min(1), hooks: z.string().min(1).optional() })
 
 const nameValueSchema = z.object({ name: z.string().min(1), value: z.string() })
 

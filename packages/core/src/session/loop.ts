@@ -55,6 +55,7 @@ import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
 import { gitBroughtPaths, projectHead } from './git-moves.js'
 import { runHook } from './hooks.js'
+import { type PluginHookContext, postToolHooks, preToolHooks, promptSubmitHooks, stopHooks } from './plugin-hooks.js'
 import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
@@ -188,6 +189,13 @@ export interface TurnOptions {
   goalMaxRounds?: number
 }
 
+// 插件的 Stop 钩子最多让智能体接着做这么多次，免得钩子写得不好时停不下来
+const MAX_STOP_HOOK_CONTINUES = 3
+
+function hookContext(session: Session, signal: AbortSignal): PluginHookContext {
+  return { cwd: session.cwd, bashPath: session.environment.bashPath, sessionId: session.id, signal }
+}
+
 // 提问的文字和图片；没有图片时就是一段文字
 function userContent(text: string, images: PromptImage[]): ModelMessage['content'] {
   if (images.length === 0) return text
@@ -243,6 +251,8 @@ export async function runTurn(
   // 本轮结束门禁合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
   let turnFinish: TurnOutcome['finish'] = null
   let stop: TurnStop | null = null
+  // 插件的 Stop 钩子让智能体接着做的次数
+  let stopContinues = 0
   let errorKind: TurnOutcome['errorKind']
   // 结束门禁的检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
   const checkStuck = async (command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
@@ -279,12 +289,22 @@ export async function runTurn(
     await prepareMcpTools(session, io)
     // MCP 服务器启动时可能写文件，指纹在它之后取
     let turnStartFingerprint = await workspaceFingerprint(session)
+    // 插件的 UserPromptSubmit 钩子：拦下就不发给模型，告诉用户为什么
+    const submitted = session.pluginHooks.length > 0 ? await promptSubmitHooks(session.pluginHooks, turn.text, hookContext(session, signal)) : null
+    if (signal.aborted) return 'cancelled'
+    if (submitted?.blocked) {
+      await notice(io, 'warning', '插件钩子拦下了这条消息', submitted.blocked)
+      session.taskState = { ...session.taskState, status: 'blocked', reason: '插件钩子拦下了这条消息，没有发给智能体。' }
+      stop = 'paused'
+      return 'end_turn'
+    }
     // 环境、项目说明文件放在这一轮的提问前面（第一次是全量，之后只有变化）
     await injectWorldState(session)
     session.messages.push({
       role: 'user',
       content: userContent(goalMaxRounds === null ? turn.text : goalRequest(turn.text, goalMaxRounds), turn.images ?? []),
     } as ModelMessage)
+    if (submitted?.context) session.messages.push({ role: 'user', content: `[Diffra] Context from plugin hooks for this message:\n${submitted.context}` })
     await publishTaskState(session, io)
     if (session.unresolvedCheck) {
       session.messages.push({
@@ -397,6 +417,14 @@ export async function runTurn(
         if (gate.verification) turnFinish = mergeFinish(turnFinish, gate.verification)
         session.taskState.needsVerification = false
         if (goal === null || goal === 'complete') {
+          // 插件的 Stop 钩子拦下：把理由交回去接着做，结束门禁下次停下时再过
+          const held = session.pluginHooks.length > 0 && stopContinues < MAX_STOP_HOOK_CONTINUES ? await stopHooks(session.pluginHooks, stopContinues > 0, hookContext(session, signal)) : null
+          if (signal.aborted) return 'cancelled'
+          if (held) {
+            stopContinues++
+            session.messages.push({ role: 'user', content: `[Diffra] A plugin hook asked you to keep going before ending the turn: ${held}` })
+            continue
+          }
           session.taskState = { ...session.taskState, status: 'completed', reason: null }
           await settleSteps(session, io)
           if (goal === 'complete') await notice(io, 'info', `目标已完成（用了 ${round} 轮）`)
@@ -1008,12 +1036,16 @@ export async function runToolCall(
   try {
     if (call.invalid) throw new ToolError(`Invalid call to ${name}: ${call.invalid}`)
     if (!isToolName(name)) throw new ToolError(`Unknown tool: ${name}`)
+    // 插件的 PreToolUse 钩子拦下就不执行，理由给模型看
+    const blocked = await preToolHooks(session.pluginHooks, name, call.input, hookContext(session, signal))
+    if (blocked) throw new ToolError(blocked)
     const context = toolContext(session, call, signal, io, scope)
     const output = await executeTool(name, call.input, context)
     for (const diff of output.edited ? (output.diffs ?? []) : []) {
       scope?.onEdited(diff.path)
       if (!diff.deleted && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, diff.path, diff.newText, signal)
     }
+    output.text += await postToolHooks(session.pluginHooks, name, call.input, output, hookContext(session, signal))
     await io.update({
       sessionUpdate: 'tool_call_update',
       toolCallId: call.toolCallId,

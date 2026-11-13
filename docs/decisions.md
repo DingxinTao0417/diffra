@@ -20,6 +20,7 @@ v1：
 v2：
 - 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。
 - 多候选方案（每个候选一个 git worktree）、Java 适配器。
+- 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。
 
 ## 技术栈
 
@@ -373,7 +374,7 @@ v2：
 ## MCP（第 18 步）
 
 - 用 MCP 官方 SDK（`@modelcontextprotocol/sdk`，core 的依赖，打包时随 core.js 一起打进去）。支持本地命令（stdio）和远程 HTTP（Streamable HTTP），不支持旧的 SSE 方式。
-- 配置在「设置 → MCP 服务器」，所有项目共用：名称（只用字母、数字、- 和 _）、启动命令和参数或地址、环境变量或请求头、开关。
+- 配置在侧栏「扩展 → 已安装」（第 601 步从「设置 → MCP 服务器」搬过来），所有项目共用：名称（只用字母、数字、- 和 _）、启动命令和参数或地址、环境变量或请求头、开关。扩展目录里的服务一键装，见「扩展页」一节。
   - 环境变量和请求头的值可能是密钥，和 API Key 一样用系统加密存在 `secrets.json`（键是 `mcp:服务器 id:env|header:名字`），设置文件里只记名字；编辑时不回显，留空表示不改。
   - 新建或重新打开任务时，桌面端把开着的服务器连同解密后的值放进 ACP 的 `mcpServers` 交给 core（core 声明 `mcpCapabilities.http`）。改了配置，已经打开的任务不变。
 - 连接（`packages/core/src/mcp.ts`）：同一个项目、同样配置的服务器在各个任务间共用一个连接；stdio 服务器在项目目录里启动，只继承 SDK 默认的安全环境变量加上配置的变量。
@@ -385,8 +386,9 @@ v2：
   - 结果转成文字给模型：图片、音频、二进制资源只留一句说明；工具报错（`isError`）原样告诉模型。不算编辑：不重置卡死检测。
   - 工具定义计入上下文估算和「工具定义」分项；上下文压缩写摘要时带同样的工具，能用上提示词缓存。规划和深度扫描不给 MCP 工具（可能有副作用）。
 - Prompt：斜杠菜单里列出各服务器的 prompt（「服务器:prompt」）。有参数的先弹框填参数，然后展开成文字放进输入框，看过、改过再发送。
-- 状态：设置页每个服务器显示连上没有、几个工具和 prompt、失败原因；任务监控里显示这个任务用到的服务器。
-- 不做（以后再说）：OAuth 登录的远程服务器、MCP 的资源（resources）和采样（sampling）、从 JSON 配置粘贴导入、按项目单独开关服务器、项目目录里的 MCP 配置文件、规划时用只读的 MCP 工具。
+- 状态：「扩展 → 已安装」里每个服务器显示连上没有、几个工具和 prompt、失败原因；任务监控里显示这个任务用到的服务器。
+- v2 再做：OAuth 登录的远程服务器（扩展目录里的 Vercel 和 Railway 远程版靠它，现在标「下一版支持」）。
+- 不做（以后再说）：MCP 的资源（resources）和采样（sampling）、从 JSON 配置粘贴导入、按项目单独开关服务器、项目目录里的 MCP 配置文件、规划时用只读的 MCP 工具。
 
 ## 外观与模型配置界面
 
@@ -466,17 +468,42 @@ v2：
   - 读取顺序：项目 `.diffra/commands`、用户 `~/.diffra/commands`、开着的插件的 `commands/`，兼容 `~/.claude/commands`、`~/.codex/prompts`。同名的只认排在前面的。子目录是命名空间（`git/sync.md` 叫 `git:sync`，最多两层），插件的命令前面加插件名（`kit:greet`）。最多 300 个，单个文件超过 100KB 跳过。
   - 在斜杠菜单的「自定义命令」组里，选了以后把正文放进输入框，看过、改过再发；正文里有 `$ARGUMENTS` 或 `$1`～`$9` 时先弹框填参数。
   - 不执行正文里的 `` !`命令` ``（Claude Code 会先跑这些命令把输出拼进去）：选命令不应该就在本机执行命令，模型需要时会自己调 run_command，照常过权限。
-- 插件：一个文件夹，兼容 Claude Code 插件的一部分。清单是 `.diffra-plugin/plugin.json` 或 `.claude-plugin/plugin.json`（name、version、description，没有清单时用文件夹名），内容是 `commands/`、`skills/`、`.mcp.json`。
-  - `.mcp.json` 认 `{ "mcpServers": {…} }` 和直接写服务器两种写法；`${CLAUDE_PLUGIN_ROOT}`、`${DIFFRA_PLUGIN_ROOT}` 换成插件目录，其他 `${名字}` 取环境变量（没有就是空）。服务器名前面加插件名，免得和用户自己配的重名。
-  - agents、hooks、output-styles 不支持，设置页里列出「已忽略」。
-- 安装和管理在「设置 → 插件」，插件列表存在设置文件里：
+- 插件：一个文件夹，兼容 Claude Code 插件的一部分。清单是 `.diffra-plugin/plugin.json` 或 `.claude-plugin/plugin.json`（name、version、description，没有清单时用文件夹名），内容是 `commands/`、`skills/`、`agents/`、`hooks/hooks.json`、`.mcp.json`（子智能体和钩子是第 599–600 步加的，见「扩展页」一节）。
+  - `.mcp.json` 认 `{ "mcpServers": {…} }` 和直接写服务器两种写法；`${CLAUDE_PLUGIN_ROOT}`、`${DIFFRA_PLUGIN_ROOT}` 换成插件目录，其他 `${名字}` 取环境变量（没有就是空）。服务器名前面加插件名，免得和用户自己配的重名。只认插件根目录的 `.mcp.json`，清单里另写的 `mcpServers` 路径不读。
+  - output-styles、monitors、清单里另写的 hooks、不支持的钩子时机和类型，在「已安装」里列出「已忽略」。
+- 安装和管理在侧栏「扩展」（第 601 步从「设置 → 插件」搬过来），插件列表存在设置文件里：
   - 从文件夹装：就地使用那个文件夹，不复制，改了插件文件下次读到的就是新的；删除插件只是不再使用，文件夹不动。
-  - 从 Git 装：用本机的 git `clone --depth 1` 到数据目录的 `plugins/<id>`（地址只接受 https://、ssh://、git@、file://，等 2 分钟），克隆下来不是插件或重名时删掉克隆；删除插件时连克隆一起删（只删 `plugins/` 下面的目录）。
+  - 从 Git 装：用本机的 git `clone --depth 1` 到数据目录的 `plugins/<id>`（地址只接受 https://、ssh://、git@、file://，等 2 分钟），克隆下来不是插件或重名时删掉克隆；删除插件时连克隆一起删（只删 `plugins/` 下面的目录）。可以填仓库里的子目录（第 598 步），这时先 `--filter=blob:none --sparse` 再稀疏检出那个目录，插件目录是克隆下的子目录。
+  - 安装分两步（第 600 步）：先取回、读出内容（从 Git 来的先克隆到 `plugins/.staging/<id>`），带钩子的给用户看过命令、选了要不要允许再装，没有钩子的直接装；确认后挪到 `plugins/<id>`，取消时删掉暂存的克隆。
   - 安装时读清单拿名字，插件名不能重复。装好默认开着，可以单独关。
-  - 插件里的 MCP 服务器会在本机运行命令，安装说明里提醒只装信任的来源。不做签名校验和市场。
-- 开着的插件由桌面端放进会话配置（`plugins: [{ name, dir }]`）：core 据此读插件的 Skill（排在用户自己的 Skill 后面、兼容目录前面，也加进只读目录）、命令和 MCP 服务器（和用户配置的服务器一起连）。首页、设置页查 MCP 状态时也带上插件的服务器。新建或重新打开的任务生效。
+  - 插件里的 MCP 服务器和钩子会在本机运行命令，安装说明里提醒只装信任的来源。不做签名校验；目录是随版本带的内置目录，不从网上拉。
+- 开着的插件由桌面端放进会话配置（`plugins: [{ name, dir, hooks? }]`，`hooks` 是允许时记下的钩子指纹）：core 据此读插件的 Skill（排在用户自己的 Skill 后面、兼容目录前面，也加进只读目录）、命令、子智能体、钩子和 MCP 服务器（和用户配置的服务器一起连）。首页、扩展页查 MCP 状态时也带上插件的服务器。新建或重新打开的任务生效。
   - 已打开的任务里，斜杠菜单的 Skill 和命令也按这个任务建立时开着的插件列（`_diffra/skills/list`、`_diffra/commands/list` 只传 `sessionId`，core 取会话配置里的 `plugins`），和 core 选 Skill、连 MCP 用同一份；首页还没有任务，仍按设置里开着的插件列。以前菜单按设置里当前开着的插件列，任务里新开的插件能列出、选了却报「找不到 Skill」，停用的插件菜单里没了、core 照样能用。
-- 不做（以后再说）：插件市场和更新、从 Claude Code 已装的插件导入、agents 和 hooks、命令里的 `!` 命令执行、按项目开关插件。
+- v2 再做：插件更新（现在要重新装一遍）、LSP 插件。
+- 不做（以后再说）：从 Claude Code 已装的插件导入、命令里的 `!` 命令执行、按项目开关插件。
+
+## 扩展页：内置目录、插件的子智能体和钩子（第 594–604 步）
+
+- 侧栏「待办」下面加「扩展」，页面分「推荐 / MCP / 插件 / 已安装」，带搜索（按名称、说明、来源）。换分栏不新增后退记录。设置里的「MCP 服务器」「插件」两页删掉，管理都在「已安装」。不叫「插件」：MCP 连接和插件都在里面，插件只是其中一类。
+- 目录（`shared/extensions.ts`）随版本更新，不从网上拉，离线也能用、装的都是审过的。每项写清连接方式（远程地址、本地命令和要先装的命令，或只支持浏览器登录）、要填什么 Key、拼成什么请求头、去哪拿、要注意什么。地址和请求头写法按各家官方文档核对过（2026-11-13）。
+  - MCP：GitHub、Linear、Supabase、Neon、Railway、Sentry、Vercel、Context7、Tavily、Exa、Firecrawl、Chrome DevTools、Playwright。Sentry 的请求头是 `Sentry-Bearer`（`Bearer` 留给 OAuth）；Railway 是本机的 `railway mcp`，用 CLI 的登录状态；Context7、Exa、Firecrawl 不填 Key 也能用；Vercel 只支持浏览器登录，标「下一版支持」不能装。
+  - 插件：Superpowers、Anthropic 官方市场的 Feature Dev、PR Review Toolkit、Frontend Design、Commit Commands、Skill Creator（仓库子目录），Supabase、Tavily 的官方 Skill 插件。Railway、Vercel 的官方插件带着只支持浏览器登录的 MCP 服务器，装上每轮都会提示连不上，标「下一版支持」。
+  - 装没装：MCP 按目录给的服务器名、同样的地址或同样的命令认（自己手动加的也算），插件按清单里的名字认。没改 `McpServerConfig` 的结构，所以不记「从目录装的」这件事。
+- MCP 一键装（第 596 步）：点「安装」在原地展开，只填一个 Key（有的可选），「安装并测试」。主进程只收目录 id 和 Key，地址、命令按目录来，界面不能借这个口子塞任意命令；先用 core 连一次，连上了才走和手动添加同一个保存（Key 加密进 `secrets.json`），连不上不保存，401/403 说成 Key 不对或权限不够。服务器名用目录 id，被手动加的占了就加数字。
+- 前置命令（第 597 步）：只在 PATH 里找 npx、uvx、docker、railway（Windows 按 PATHEXT），不运行、不替用户装。缺了在目录里和「已安装」里说缺什么、给安装说明链接，有「重新检测」；目录里缺命令的项不能装。
+- 插件的子智能体（第 599 步，`subagents.ts`）：开着的插件的 `agents/*.md` 也是工人类型，名字是「插件名:类型名」。frontmatter 的 `tools` 写了、又没有 Bash、Write、Edit、MultiEdit、NotebookEdit 的是只读工人；没写 `tools` 的什么都能用；`model` 不管，用任务的模型。正文前面加一句「这是给 Claude Code 写的，提到的工具用你自己的」。和项目、用户的类型各自最多 20 个。
+- 插件的钩子（第 600 步，`session/plugin-hooks.ts`）：兼容 Claude Code `hooks/hooks.json` 的五个时机，`type: command` 的钩子。
+  - 怎么跑：和 Claude Code 一样用 bash -c（Windows 上是 Git Bash，没有 Git Bash 就不跑），环境变量 `CLAUDE_PLUGIN_ROOT`、`DIFFRA_PLUGIN_ROOT`（插件目录，/ 分隔）、`CLAUDE_PROJECT_DIR`，标准输入是一段 JSON（`session_id`、`cwd`、`hook_event_name` 和各时机的字段）。每个最多 60 秒（钩子自己写的 `timeout` 更短就按它的）。同一时机的钩子按顺序跑。
+  - 结果：退出码 2 表示拦下，理由在标准错误；也认 JSON 输出（`decision: "block"` 和 `reason`，`hookSpecificOutput.additionalContext`，PreToolUse 的 `permissionDecision: "deny"`）。别的退出码、超时、没跑起来只记日志，不拦事情。
+  - SessionStart：建会话（新建或重新打开任务）时跑，输出放进主智能体的系统提示词；系统提示词每次打开都重新拼，所以每次都按 `startup` 匹配。子智能体不带。
+  - UserPromptSubmit：拦下就不发给模型，告诉用户理由，这一轮停下；标准输出接在这条消息后面给模型。
+  - PreToolUse、PostToolUse：只对 Diffra 自己的工具。执行命令叫 `Bash`（`tool_input.command`），补丁按文件拆成 `Write`（新建）和 `Edit`（`tool_input.file_path` 是绝对路径），其他工具用自己的名字；`matcher` 是正则。PreToolUse 拦下就不执行，理由给模型；PostToolUse 只在工具跑完后跑，拦下的理由和 additionalContext 接在工具结果后面（和 Claude Code 一样，普通标准输出不给模型）。MCP 工具不触发。
+  - Stop：智能体过了结束门禁要停下时跑，拦下就把理由交回去接着做，下次 `stop_hook_active` 是 true；一轮最多接着做 3 次，免得钩子写得不好停不下来。
+  - 同意：装的时候列出每个钩子在什么时候跑什么命令，勾了「允许」才跑；不勾也能装。允许时记下钩子的指纹（hooks.json 里支持的那些钩子的哈希），core 建会话时再算一遍，对不上就不跑，「已安装」里显示「钩子变了」要重新允许。指纹只管 hooks.json 里的命令，不管命令调用的脚本内容。「已安装」里能随时撤销。
+  - 项目钩子（第 447 步）不变，两套各跑各的。
+- 验证（第 604 步）：core 单测覆盖插件子智能体和钩子的读取、指纹、五个时机；e2e `extensions.spec.ts` 用本机的假 MCP 服务、假的 railway 命令和本地 Git 仓库，走一键装（Key 不对不保存）、前置命令检测、子目录安装、钩子确认和取消、钩子在任务里运行和撤销、插件子智能体出现在 delegate 里；`mcp.spec.ts`、`plugins.spec.ts` 改成在扩展页操作。没有连真的服务、没有装真的插件：真的 Superpowers 钩子是 cmd/bash 双解释脚本，Git Bash 会把它交给 cmd.exe 去找 bash，没在真插件上跑过。
+- v2 再做：MCP 的浏览器登录（OAuth，Vercel、Railway 远程版）、目录联网更新、插件更新、LSP。
+- 不做（以后再说）：钩子的 `prompt` 类型和其他时机（Notification、SubagentStop、PreCompact、SessionEnd）、PreToolUse 的 `allow` 跳过确认（Diffra 照常按权限模式问）。
 
 ## 图片输入
 
@@ -1074,7 +1101,7 @@ v2：
   - 执行命令前（`DIFFRA_COMMAND`）：退出码 2 拦下这条命令，输出给模型看；其他退出码不拦。
   - 一轮结束时（`DIFFRA_STOP`、`DIFFRA_FINISH`）：不等它跑完，比如发通知。
   - 钩子自己坏了不拦事情，免得一个写错的钩子让任务没法做。
-- 自定义子智能体类型（第 448 步，`subagents.ts`）：项目的 `.diffra/agents/*.md` 或用户目录的 `~/.diffra/agents/*.md`，开头的 frontmatter 写 `name`、`description`，可选 `mode: read-only`，正文是给这类工人的说明；同名认项目里的，最多 20 个。`delegate` 多一个可选参数 `agent`：工人的提示词后面接上这段说明，`read-only` 的不给改文件、跑命令、认领文件和设计工具。没写类型的工人和以前一样。
+- 自定义子智能体类型（第 448 步，`subagents.ts`）：项目的 `.diffra/agents/*.md` 或用户目录的 `~/.diffra/agents/*.md`，开头的 frontmatter 写 `name`、`description`，可选 `mode: read-only`，正文是给这类工人的说明；同名认项目里的，最多 20 个；开着的插件的 `agents/` 也读（第 599 步，见「扩展页」一节）。`delegate` 多一个可选参数 `agent`：工人的提示词后面接上这段说明，`read-only` 的不给改文件、跑命令、认领文件和设计工具。没写类型的工人和以前一样。
 - 不做（以后再说）：qwen-code 的 JSONL 追加式记录（按轮分文件已经解决了保存慢）、编辑的模糊匹配（逐字一致是压缩后不改错的前提）、记忆的界面管理、更多钩子时机、子智能体用单独的模型。
 - 验证：core 单测覆盖以上各项。界面上的新东西（步骤卡、提问卡、项目设置的两栏、自动记忆开关、「这个项目里始终允许」的保存）还没有 e2e，也没在界面里实际点过；`e2e/edit-diff.spec.ts` 按新的会话文件格式改了读法，没跑过。
 

@@ -6,6 +6,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
+import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
 import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
@@ -79,6 +80,10 @@ export interface SessionOptions {
   architecture?: ArchitectureService | null
   // 项目里自定义的子智能体类型（.diffra/agents）
   agentTypes?: AgentType[]
+  // 用户允许了的插件钩子（见 plugin-hooks.ts）
+  pluginHooks?: LoadedPluginHook[]
+  // 新会话的 id；不传就新生成。插件的 SessionStart 钩子在建会话之前跑，要先知道 id
+  id?: string
 }
 
 export class Session {
@@ -104,6 +109,7 @@ export class Session {
   // 被截短的命令输出的完整版存在这里（见 tools/command.ts），也在 readRoots 里
   readonly outputDir: string | null
   readonly agentTypes: AgentType[]
+  readonly pluginHooks: LoadedPluginHook[]
   readonly mcpServers: McpServer[]
   readonly mcpPool: McpPool | null
   readonly architecture: ArchitectureService | null
@@ -159,7 +165,7 @@ export class Session {
   constructor(options: SessionOptions) {
     const record = options.record
     this.architecture = options.architecture ?? null
-    this.id = record?.id ?? randomUUID()
+    this.id = record?.id ?? options.id ?? randomUUID()
     this.createdAt = record?.createdAt ?? new Date().toISOString()
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
@@ -186,6 +192,7 @@ export class Session {
     this.rulePacks = options.rulePacks
     this.outputDir = options.outputRoot ? join(options.outputRoot, this.id, 'outputs') : null
     this.agentTypes = options.agentTypes ?? []
+    this.pluginHooks = options.pluginHooks ?? []
     this.readRoots = [...(options.readRoots ?? []), ...(this.outputDir ? [this.outputDir] : [])]
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null

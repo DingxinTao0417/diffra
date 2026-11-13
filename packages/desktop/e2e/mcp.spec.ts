@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { chooseProject, settingsNav, startTask, taskInput, waitTaskDone } from './flows'
+import { BACK_KEY, chooseProject, openExtensions, startTask, taskInput, waitTaskDone } from './flows'
 import { desktopDir, launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startHttpMcpServer } from '../../core/test/fixtures/mcp-http-server.ts'
@@ -13,7 +13,7 @@ const MCP_SERVER = resolve(desktopDir, '../core/test/fixtures/mcp-server.mjs')
 // 运行时拼出来，仓库里不出现完整的值
 const TOKEN = ['e2e', 'mcp', 'token', '42'].join('-')
 
-test('MCP：设置里添加服务器看到连接状态；任务里模型调它的工具，只读的不问、其他的问；斜杠菜单展开 prompt；停用后新任务不带它的工具', async () => {
+test('MCP：扩展页手动添加服务器看到连接状态；任务里模型调它的工具，只读的不问、其他的问；斜杠菜单展开 prompt；停用后新任务不带它的工具', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-mcp-'))
@@ -28,10 +28,9 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
-    // 添加服务器：用跑测试的这个 Node 启动，环境变量的值加密保存
-    await window.keyboard.press('ControlOrMeta+,')
-    await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
-    await window.getByRole('button', { name: '添加服务器' }).click()
+    // 手动添加服务器：用跑测试的这个 Node 启动，环境变量的值加密保存
+    await openExtensions(window, '已安装')
+    await window.getByRole('button', { name: '手动添加' }).click()
     const dialog = window.getByRole('dialog')
     await dialog.getByLabel('名称').fill('demo')
     await dialog.getByLabel('命令').fill(process.execPath)
@@ -60,7 +59,7 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     await dialog.getByRole('button', { name: '保存' }).click()
     await expect(dialog).toBeHidden()
     await expect(card.getByTestId('mcp-status')).toContainText('已连接', { timeout: 30_000 })
-    await window.getByRole('button', { name: '返回' }).click()
+    await window.keyboard.press(BACK_KEY)
 
     await chooseProject(app, window, project)
     await startTask(window, '用 MCP 记一下')
@@ -93,11 +92,10 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     await input.fill('')
 
     // 停用后新任务不带它的工具
-    await window.keyboard.press('ControlOrMeta+,')
-    await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
+    await openExtensions(window, '已安装')
     await window.getByRole('switch', { name: '启用 demo' }).click()
     await expect(card.getByTestId('mcp-status')).toHaveText('已停用')
-    await window.getByRole('button', { name: '返回' }).click()
+    await window.keyboard.press(BACK_KEY)
     await window.getByTestId('sidebar').getByRole('button', { name: '新任务' }).click()
     await startTask(window, '再问一下')
     await waitTaskDone(window)
@@ -123,9 +121,8 @@ test('MCP 远程 HTTP：请求头的值加密保存；密钥不对时显示原�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
     // 先填错密钥：卡片上说明是 401
-    await window.keyboard.press('ControlOrMeta+,')
-    await settingsNav(window).getByRole('button', { name: 'MCP 服务器' }).click()
-    await window.getByRole('button', { name: '添加服务器' }).click()
+    await openExtensions(window, '已安装')
+    await window.getByRole('button', { name: '手动添加' }).click()
     const dialog = window.getByRole('dialog')
     await dialog.getByLabel('名称').fill('remote')
     await dialog.getByRole('radio', { name: '远程 HTTP' }).click()
@@ -156,7 +153,7 @@ test('MCP 远程 HTTP：请求头的值加密保存；密钥不对时显示原�
     await expect(card).toContainText('请求头：Authorization')
     expect(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).not.toContain(httpToken)
     expect(readFileSync(join(userDataDir, 'secrets.json'), 'utf8')).not.toContain(httpToken)
-    await window.getByRole('button', { name: '返回' }).click()
+    await window.keyboard.press(BACK_KEY)
 
     // 声明只读的远程工具直接调
     await chooseProject(app, window, project)

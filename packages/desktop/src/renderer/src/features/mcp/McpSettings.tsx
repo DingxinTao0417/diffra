@@ -1,120 +1,80 @@
-import { useEffect, useState } from 'react'
-import { CircleAlert, Ellipsis, Loader2, Pencil, Plug, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { CircleAlert, Ellipsis, ExternalLink, Loader2, Pencil, Plug, Trash2, TriangleAlert } from 'lucide-react'
 import type { McpServerStatus } from '@diffra/core/types'
+import { catalogEntryOf, PREREQUISITES, type PrerequisiteState } from '../../../../shared/extensions'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
-import { SavedHint, SettingsHeader, useSavedFlash } from '@/features/settings/SettingsLayout'
+import { openLink } from '@/features/extensions/CatalogMcpRow'
+import { ExtensionRow, initialOf, SectionTitle } from '@/features/extensions/parts'
 import { errorMessage } from '@/lib/errors'
 import { McpServerDialog } from './McpServerDialog'
-import { useMcpStatus } from './useMcpStatus'
+import type { useMcpStatus } from './useMcpStatus'
 
-export function McpSettings() {
-  const [view, setView] = useState<SettingsView | null>(null)
-  const [readError, setReadError] = useState<string | null>(null)
+// 扩展页「已安装」里的 MCP 服务器（第 601 步从设置搬过来）：目录装的和手动加的都在这里，能停用、编辑、删除，看连接状态
+export function McpInstalled({
+  view,
+  status,
+  prerequisites,
+  onChange,
+  onRecheck,
+  onBrowse,
+}: {
+  view: SettingsView
+  status: ReturnType<typeof useMcpStatus>
+  prerequisites: PrerequisiteState | null
+  onChange(view: SettingsView): void
+  onRecheck(): void
+  onBrowse(): void
+}) {
   const [dialog, setDialog] = useState<{ open: boolean; server: McpServerConfig | null }>({ open: false, server: null })
-  // 配置改了重新查状态
-  const [version, setVersion] = useState(0)
-  const status = useMcpStatus(view ? { projectPath: null } : null, version)
-  const [saved, flashSaved] = useSavedFlash()
-
-  useEffect(() => {
-    window.diffra.getSettings().then(setView, (error: unknown) => setReadError(errorMessage(error)))
-  }, [])
-
-  if (readError) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>读取设置失败</AlertTitle>
-        <AlertDescription>{readError}</AlertDescription>
-      </Alert>
-    )
-  }
-  if (!view) return <p className="text-sm text-muted-foreground">正在读取设置…</p>
-
-  const changed = (next: SettingsView) => {
-    setView(next)
-    setVersion((value) => value + 1)
-    flashSaved(true)
-  }
   const empty = view.mcpServers.length === 0
-  // 列表为空时添加按钮只放在空状态里，页头不重复
   const addButton = (
-    <Button onClick={() => setDialog({ open: true, server: null })} disabled={view.loadError !== null}>
-      添加服务器
+    <Button size="sm" variant="ghost" onClick={() => setDialog({ open: true, server: null })} disabled={view.loadError !== null}>
+      手动添加
     </Button>
   )
 
   return (
-    <>
-      <SettingsHeader
-        title="MCP 服务器"
-        description="给智能体接上外部工具和提示词模板。"
-        actions={
-          <>
-            <SavedHint saved={saved} note="新任务生效" />
-            {!empty && addButton}
-          </>
-        }
-      />
-
-      <div className="space-y-3">
-        {view.loadError && (
-          <Alert variant="destructive">
-            <AlertTitle>设置暂时无法保存</AlertTitle>
-            <AlertDescription>{view.loadError}</AlertDescription>
-          </Alert>
-        )}
-        {status.error && (
-          <Alert variant="destructive">
-            <AlertTitle>读取 MCP 状态失败</AlertTitle>
-            <AlertDescription>{status.error}</AlertDescription>
-          </Alert>
-        )}
-
-        {empty ? (
-          <EmptyState icon={Plug} title="还没有 MCP 服务器" description="接上外部工具后，智能体可以在任务里直接调用它们。" variant="card">
-            {addButton}
-          </EmptyState>
-        ) : (
-          view.mcpServers.map((server) => (
-            <McpServerCard
-              key={server.id}
-              server={server}
-              status={status.statuses?.find((item) => item.name === server.name) ?? null}
-              loading={status.loading}
-              onChange={changed}
-              onEdit={() => setDialog({ open: true, server })}
-              onRetry={status.retry}
-            />
-          ))
-        )}
-      </div>
-
-      <McpServerDialog
-        open={dialog.open}
-        server={dialog.server}
-        onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}
-        onSaved={changed}
-      />
-    </>
+    <section>
+      <SectionTitle actions={!empty && addButton}>MCP 服务器</SectionTitle>
+      {status.error && (
+        <Alert variant="destructive" className="mb-3">
+          <AlertTitle>读取 MCP 状态失败</AlertTitle>
+          <AlertDescription>{status.error}</AlertDescription>
+        </Alert>
+      )}
+      {empty ? (
+        <EmptyState icon={Plug} title="还没有 MCP 服务器" description="接上外部工具后，智能体可以在任务里直接调用它们。" variant="card">
+          <Button variant="outline" onClick={onBrowse}>
+            去目录看看
+          </Button>
+          {addButton}
+        </EmptyState>
+      ) : (
+        view.mcpServers.map((server) => (
+          <McpServerRow
+            key={server.id}
+            server={server}
+            status={status.statuses?.find((item) => item.name === server.name) ?? null}
+            loading={status.loading}
+            prerequisites={prerequisites}
+            onChange={onChange}
+            onEdit={() => setDialog({ open: true, server })}
+            onRetry={status.retry}
+            onRecheck={onRecheck}
+          />
+        ))
+      )}
+      <McpServerDialog open={dialog.open} server={dialog.server} onOpenChange={(open) => setDialog((current) => ({ ...current, open }))} onSaved={onChange} />
+    </section>
   )
-}
-
-interface McpServerCardProps {
-  server: McpServerConfig
-  status: McpServerStatus | null
-  loading: boolean
-  onChange(view: SettingsView): void
-  onEdit(): void
-  onRetry(): void
 }
 
 type ConnectionState = 'disabled' | 'connected' | 'failed' | 'connecting' | 'idle'
@@ -127,7 +87,18 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
   idle: '未连接',
 }
 
-function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: McpServerCardProps) {
+interface McpServerRowProps {
+  server: McpServerConfig
+  status: McpServerStatus | null
+  loading: boolean
+  prerequisites: PrerequisiteState | null
+  onChange(view: SettingsView): void
+  onEdit(): void
+  onRetry(): void
+  onRecheck(): void
+}
+
+function McpServerRow({ server, status, loading, prerequisites, onChange, onEdit, onRetry, onRecheck }: McpServerRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [showTools, setShowTools] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -159,37 +130,39 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
   const stdio = server.transport === 'stdio'
   const names = stdio ? server.envNames : server.headerNames
   const state: ConnectionState = !server.enabled ? 'disabled' : status ? status.state : loading ? 'connecting' : 'idle'
+  // 目录里要先装命令的服务：本机没有那个命令时直接说缺什么，不给一大段启动失败的日志
+  const entry = catalogEntryOf(server)
+  const requires = entry?.connection.transport === 'stdio' ? entry.connection.requires : null
+  const missing = requires && prerequisites && !prerequisites[requires] && state !== 'connected' ? PREREQUISITES[requires] : null
   // 失败原因的第一行是摘要，后面是 stdio 服务器的 stderr
   const [reason, ...log] = (status?.state === 'failed' ? (status.error ?? '') : '').split(/\r?\n/)
   const fullLog = log.join('\n').trim()
   return (
-    <Card data-testid="mcp-server-card">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          <span className="truncate">{server.name}</span>
+    <ExtensionRow
+      testId="mcp-server-card"
+      initial={initialOf(entry?.name ?? server.name)}
+      dark
+      name={server.name}
+      detail={
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2">
           <span
             data-testid="mcp-status"
-            className={cn(
-              'inline-flex shrink-0 items-center gap-1.5 text-xs font-normal',
-              state === 'failed' ? 'text-destructive' : 'text-muted-foreground',
-            )}
+            className={cn('inline-flex shrink-0 items-center gap-1.5', state === 'failed' && !missing ? 'text-destructive' : 'text-muted-foreground')}
           >
             {state === 'connecting' ? (
               <Loader2 aria-hidden className="size-3 animate-spin" />
             ) : (
-              <span
-                aria-hidden
-                className={cn('size-2 rounded-full', state === 'connected' ? 'bg-muted-foreground' : state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground/50')}
-              />
+              <span aria-hidden className={cn('size-2 rounded-full', state === 'connected' ? 'bg-muted-foreground' : state === 'failed' ? 'bg-destructive' : 'bg-muted-foreground/50')} />
             )}
             {CONNECTION_LABELS[state]}
           </span>
-        </CardTitle>
-        <CardDescription className="flex min-w-0 gap-1.5 text-xs">
-          <span className="shrink-0">{stdio ? '本地命令' : '远程 HTTP'}</span>
-          <span className="min-w-0 font-mono break-all">{stdio ? [server.command, ...server.args].join(' ') : server.url}</span>
-        </CardDescription>
-        <CardAction className="flex items-center gap-2">
+          <span className="min-w-0 truncate font-mono" title={stdio ? [server.command, ...server.args].join(' ') : server.url}>
+            {stdio ? `本地命令 ${[server.command, ...server.args].join(' ')}` : `远程 HTTP ${server.url}`}
+          </span>
+        </span>
+      }
+      actions={
+        <>
           <Switch label={`启用 ${server.name}`} checked={server.enabled} onChange={(enabled) => void setEnabled(enabled)} />
           {/* 非模态：菜单关闭和对话框打开同时发生时，模态菜单会把页面留在不可点击的状态 */}
           <DropdownMenu modal={false}>
@@ -210,17 +183,18 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm">
+        </>
+      }
+    >
+      <div className="mt-2 ml-13 space-y-2 text-sm empty:hidden">
         {names.length > 0 && (
-          <div className="text-muted-foreground">
+          <div className="text-xs text-muted-foreground">
             {stdio ? '环境变量' : '请求头'}：<span className="font-mono">{names.join('、')}</span>
           </div>
         )}
         {state === 'connected' && status && (
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-muted-foreground">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span data-testid="mcp-tools">
                 {status.tools.length} 个工具 · {status.prompts.length} 个提示词模板
               </span>
@@ -241,27 +215,50 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
             )}
           </div>
         )}
-        {state === 'failed' && (
-          <Alert variant="destructive" data-testid="mcp-error" className="border-transparent bg-destructive-soft">
-            <CircleAlert />
-            <AlertTitle className="font-normal break-words">{reason || '连接失败'}</AlertTitle>
-            {fullLog && (
-              <AlertDescription>
-                <details>
-                  <summary className="cursor-pointer text-xs">完整日志</summary>
-                  <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">{fullLog}</pre>
-                </details>
-              </AlertDescription>
-            )}
-            <AlertAction>
-              <Button size="xs" variant="outline" disabled={loading} onClick={onRetry}>
-                重试
-              </Button>
-            </AlertAction>
-          </Alert>
+        {missing ? (
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-warning" data-testid="mcp-missing">
+            <span className="flex items-center gap-1">
+              <TriangleAlert aria-hidden className="size-3.5 shrink-0" />
+              没启动：没检测到 {missing.command} 命令
+            </span>
+            <button type="button" className="inline-flex items-center gap-0.5 underline-offset-2 hover:underline" onClick={() => openLink(missing.guideUrl)}>
+              安装说明
+              <ExternalLink aria-hidden className="size-3" />
+            </button>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                onRecheck()
+                onRetry()
+              }}
+            >
+              重新检测
+            </Button>
+          </p>
+        ) : (
+          state === 'failed' && (
+            <Alert variant="destructive" data-testid="mcp-error" className="border-transparent bg-destructive-soft">
+              <CircleAlert />
+              <AlertTitle className="font-normal break-words">{reason || '连接失败'}</AlertTitle>
+              {fullLog && (
+                <AlertDescription>
+                  <details>
+                    <summary className="cursor-pointer text-xs">完整日志</summary>
+                    <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs whitespace-pre-wrap">{fullLog}</pre>
+                  </details>
+                </AlertDescription>
+              )}
+              <AlertAction>
+                <Button size="xs" variant="outline" disabled={loading} onClick={onRetry}>
+                  重试
+                </Button>
+              </AlertAction>
+            </Alert>
+          )
         )}
         {error && <p className="text-destructive">{error}</p>}
-      </CardContent>
+      </div>
 
       <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
         <AlertDialogContent>
@@ -277,6 +274,6 @@ function McpServerCard({ server, status, loading, onChange, onEdit, onRetry }: M
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Card>
+    </ExtensionRow>
   )
 }

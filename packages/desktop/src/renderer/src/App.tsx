@@ -3,6 +3,7 @@ import { cn } from 'cn'
 import type { MenuCommand } from '../../shared/ipc'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ArchitectureView } from '@/features/architecture/ArchitectureView'
+import { ExtensionsView } from '@/features/extensions/ExtensionsView'
 import { HomeView } from '@/features/home/HomeView'
 import { UpdateNoticeDialog } from '@/features/settings/Changelog'
 import { PairRequestDialog } from '@/features/devices/PairRequestDialog'
@@ -169,6 +170,7 @@ export function App() {
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}
                 {route.name === 'remote-task' && <RemoteTaskView key={`${route.deviceId}/${route.sessionId}`} deviceId={route.deviceId} sessionId={route.sessionId} />}
                 {route.name === 'todos' && <TodosView />}
+                {route.name === 'extensions' && <ExtensionsView tab={route.tab} />}
                 {route.name === 'architecture' && <ArchitectureView route={route} />}
               </main>
             </>

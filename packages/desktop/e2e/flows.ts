@@ -54,6 +54,12 @@ export function cards(window: Page, kind: 'tool' | 'edit' | 'check' | 'review' |
   return window.locator(`[data-testid="tool-call"][data-kind="${kind}"]`)
 }
 
+// 侧栏「扩展」的某一栏；分栏名带数字（已安装 3），按开头认
+export async function openExtensions(window: Page, tab: '推荐' | 'MCP' | '插件' | '已安装'): Promise<void> {
+  await window.getByTestId('sidebar').getByRole('button', { name: '扩展', exact: true }).click()
+  await window.getByRole('radiogroup', { name: '扩展分类' }).getByRole('radio', { name: new RegExp(`^${tab}`) }).click()
+}
+
 export function settingsNav(window: Page) {
   return window.getByRole('navigation', { name: '设置分区' })
 }

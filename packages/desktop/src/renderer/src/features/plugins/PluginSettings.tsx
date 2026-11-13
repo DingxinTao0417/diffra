@@ -1,180 +1,120 @@
-import { type FormEvent, useEffect, useState } from 'react'
-import { Ellipsis, Folder, GitBranch, Info, Puzzle, Trash2, TriangleAlert } from 'lucide-react'
+import { type FormEvent, useState } from 'react'
+import { Ellipsis, Folder, GitBranch, Puzzle, Trash2, TriangleAlert } from 'lucide-react'
+import type { PluginPrepared } from '../../../../shared/ipc'
 import type { PluginView } from '../../../../shared/settings'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Field } from '@/components/ui/field'
-import { SavedHint, SettingsHeader, useSavedFlash } from '@/features/settings/SettingsLayout'
+import { contentsSummary, ExtensionRow, HookList, initialOf, RowPanel, SectionTitle } from '@/features/extensions/parts'
+import { PluginReview } from '@/features/extensions/PluginReview'
 import { errorMessage } from '@/lib/errors'
 
-export function PluginSettings() {
-  const [plugins, setPlugins] = useState<PluginView[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [installing, setInstalling] = useState(false)
-  const [gitOpen, setGitOpen] = useState(false)
-  const [saved, flashSaved] = useSavedFlash()
+// 钩子现在的状态：允许时记的指纹和现在的一样才算允许；不一样是钩子变了，不会运行
+function hooksState(plugin: PluginView): 'none' | 'allowed' | 'off' | 'changed' {
+  if (!plugin.info || plugin.info.hooks.length === 0) return 'none'
+  if (!plugin.hooksApproved) return 'off'
+  return plugin.hooksApproved === plugin.info.hooksFingerprint ? 'allowed' : 'changed'
+}
 
-  // 安装按钮一开始就能点：装完的结果比最初的列表先回来时，不能被晚到的旧列表盖掉
-  useEffect(() => {
-    window.diffra.listPlugins().then(
-      (list) => setPlugins((current) => current ?? list),
-      (caught: unknown) => setError(errorMessage(caught)),
-    )
-  }, [])
+const HOOK_NOTES = { allowed: '钩子已允许', off: '钩子没允许，不会运行', changed: '钩子变了，没重新允许前不会运行' } as const
 
-  const run = async (action: () => Promise<PluginView[] | null>) => {
-    setError(null)
+// 扩展页「已安装」里的插件（第 601 步从设置搬过来）：开关、钩子允许与否、内容、删除；也能从文件夹或 Git 地址装目录里没有的
+export function PluginInstalled({ plugins, error, onChange, onError, onBrowse }: { plugins: PluginView[] | null; error: string | null; onChange(plugins: PluginView[]): void; onError(error: string | null): void; onBrowse(): void }) {
+  const run = async (action: () => Promise<PluginView[]>) => {
+    onError(null)
     try {
-      const next = await action()
-      // 从文件夹安装时取消选择会返回 null，不算保存
-      if (next) {
-        setPlugins(next)
-        flashSaved(true)
-      }
+      onChange(await action())
     } catch (caught) {
-      setError(errorMessage(caught))
+      onError(errorMessage(caught))
     }
   }
-
-  const installFolder = async () => {
-    setInstalling(true)
-    await run(() => window.diffra.installPluginFromFolder())
-    setInstalling(false)
-  }
-
   const empty = plugins !== null && plugins.length === 0
-  // 列表为空时安装按钮只放在空状态里，页头不重复
-  const installButtons = (
-    <>
-      <Button variant="outline" disabled={installing} onClick={() => void installFolder()}>
-        从文件夹安装
-      </Button>
-      <Button disabled={installing} onClick={() => setGitOpen(true)}>
-        从 Git 安装
-      </Button>
-    </>
-  )
+  const manual = <ManualPluginInstall onInstalled={onChange} onError={onError} />
 
   return (
-    <>
-      <SettingsHeader
-        title="插件"
-        description="插件能带来命令、Skill 和 MCP 服务器，只装信任的来源。"
-        actions={
-          <>
-            <SavedHint saved={saved} note="新任务生效" />
-            {!empty && installButtons}
-          </>
-        }
-      />
-
-      <div className="space-y-3">
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle>操作失败</AlertTitle>
-            <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {plugins === null ? (
-          <p className="text-sm text-muted-foreground">正在读取插件…</p>
-        ) : empty ? (
-          <EmptyState
-            icon={Puzzle}
-            variant="card"
-            title="还没有插件"
-            description={
-              <span>
-                装上插件，就能在斜杠菜单里用它带来的命令和 Skill。
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label="不装插件的自定义命令"
-                      className="ml-1 inline-flex rounded-sm align-middle text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-                    >
-                      <Info className="size-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>项目的 .diffra/commands 和 ~/.diffra/commands 里的 markdown 文件不用装插件，也会出现在斜杠菜单里。</TooltipContent>
-                </Tooltip>
-              </span>
-            }
-          >
-            {installButtons}
-          </EmptyState>
-        ) : (
-          plugins.map((plugin) => (
-            <PluginCard
-              key={plugin.id}
-              plugin={plugin}
-              onToggle={(enabled) => void run(() => window.diffra.setPluginEnabled(plugin.id, enabled))}
-              onDelete={() => void run(() => window.diffra.deletePlugin(plugin.id))}
-            />
-          ))
-        )}
-      </div>
-      <p className="mt-4 text-sm text-muted-foreground">兼容 Claude Code 插件的格式。插件里的 MCP 服务器会在本机运行命令。</p>
-
-      <GitInstallDialog
-        open={gitOpen}
-        onOpenChange={setGitOpen}
-        onInstalled={(next) => {
-          setPlugins(next)
-          setError(null)
-          flashSaved(true)
-        }}
-      />
-    </>
+    <section>
+      <SectionTitle actions={!empty && manual}>插件</SectionTitle>
+      {error && (
+        <Alert variant="destructive" className="mb-3">
+          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+        </Alert>
+      )}
+      {plugins === null ? (
+        <p className="text-sm text-muted-foreground">正在读取插件…</p>
+      ) : empty ? (
+        <EmptyState icon={Puzzle} variant="card" title="还没有插件" description="装上插件，就能用它带来的命令、Skill、子智能体和钩子。">
+          <Button variant="outline" onClick={onBrowse}>
+            去目录看看
+          </Button>
+          {manual}
+        </EmptyState>
+      ) : (
+        plugins.map((plugin) => (
+          <PluginRow
+            key={plugin.id}
+            plugin={plugin}
+            onToggle={(enabled) => void run(() => window.diffra.setPluginEnabled(plugin.id, enabled))}
+            onHooks={(allowed) => void run(() => window.diffra.setPluginHooks(plugin.id, allowed))}
+            onDelete={() => void run(() => window.diffra.deletePlugin(plugin.id))}
+          />
+        ))
+      )}
+    </section>
   )
 }
 
-function PluginCard({ plugin, onToggle, onDelete }: { plugin: PluginView; onToggle(enabled: boolean): void; onDelete(): void }) {
+function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView; onToggle(enabled: boolean): void; onHooks(allowed: boolean): void; onDelete(): void }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const info = plugin.info
-  // 空的类别不显示
-  const groups = info
-    ? (
-        [
-          ['个命令', info.commands.map((name) => `/${name}`)],
-          ['个 Skill', info.skills],
-          ['个 MCP 服务器', info.mcpServers],
-        ] as const
-      ).filter(([, names]) => names.length > 0)
-    : []
   const git = plugin.source === 'git'
   const SourceIcon = git ? GitBranch : Folder
+  const hooks = hooksState(plugin)
+  const source = git ? [plugin.url, plugin.subdir].filter(Boolean).join(' · ') : plugin.dir
   return (
-    <Card data-testid="plugin-card">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          <span className="truncate">{plugin.name}</span>
-          {info?.version && <span className="shrink-0 text-xs font-normal text-muted-foreground">v{info.version.replace(/^v/i, '')}</span>}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                tabIndex={0}
-                className="inline-flex shrink-0 items-center gap-1 rounded-sm text-xs font-normal text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                <SourceIcon aria-hidden className="size-3.5" />
-                {git ? 'Git' : '本地文件夹'}
+    <ExtensionRow
+      testId="plugin-card"
+      initial={initialOf(plugin.name)}
+      name={
+        <>
+          {plugin.name}
+          {info?.version && <span className="ml-2 text-xs font-normal text-muted-foreground">v{info.version.replace(/^v/i, '')}</span>}
+        </>
+      }
+      wide
+      detail={
+        <span data-testid="plugin-contents" className="flex min-w-0 flex-wrap items-center gap-x-2">
+          <span className="inline-flex shrink-0 items-center gap-1" title={source}>
+            <SourceIcon aria-hidden className="size-3.5" />
+            {git ? 'Git' : '本地文件夹'}
+          </span>
+          {plugin.error ? (
+            <span className="text-destructive">读不了这个插件：{plugin.error}</span>
+          ) : (
+            info && (
+              <span>
+                {contentsSummary(info)}
+                {hooks !== 'none' && <span className={hooks === 'changed' ? 'text-warning' : undefined}>，{HOOK_NOTES[hooks]}</span>}
               </span>
-            </TooltipTrigger>
-            <TooltipContent className="break-all">{plugin.url ?? plugin.dir}</TooltipContent>
-          </Tooltip>
-        </CardTitle>
-        {info?.description && <CardDescription>{info.description}</CardDescription>}
-        <CardAction className="flex items-center gap-2">
+            )
+          )}
+        </span>
+      }
+      actions={
+        <>
+          {info && (
+            <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+              {expanded ? '收起' : '查看'}
+            </Button>
+          )}
           <Switch label={`启用 ${plugin.name}`} checked={plugin.enabled} onChange={onToggle} />
           {/* 非模态：菜单关闭和对话框打开同时发生时，模态菜单会把页面留在不可点击的状态 */}
           <DropdownMenu modal={false}>
@@ -190,38 +130,50 @@ function PluginCard({ plugin, onToggle, onDelete }: { plugin: PluginView; onTogg
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm" data-testid="plugin-contents">
-        {plugin.error && <p className="text-destructive">读不了这个插件：{plugin.error}</p>}
-        {info && (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span>{groups.length > 0 ? groups.map(([unit, names]) => `${names.length} ${unit}`).join(' · ') : '没有可用的命令、Skill 或 MCP 服务器'}</span>
-            {groups.length > 0 && (
-              <Button size="xs" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-                {expanded ? '收起' : '查看'}
-              </Button>
-            )}
-          </div>
-        )}
-        {expanded && (
+        </>
+      }
+    >
+      {expanded && info && (
+        <RowPanel className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-4 gap-y-3 space-y-0 text-sm" data-testid="plugin-detail">
+          <span className="text-xs text-muted-foreground">来源</span>
+          <span className="font-mono text-xs break-all">{source}</span>
+          {hooks !== 'none' && (
+            <>
+              <span className="text-xs text-muted-foreground">钩子</span>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={hooks === 'allowed'} onCheckedChange={(value) => onHooks(value === true)} />
+                  允许钩子在本机自动运行
+                </label>
+                {hooks === 'changed' && (
+                  <p className="flex items-start gap-1.5 text-xs">
+                    <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                    <span>钩子和你允许时不一样了，现在不会运行。看过下面的命令后再勾上。</span>
+                  </p>
+                )}
+                <HookList hooks={info.hooks} />
+              </div>
+            </>
+          )}
+          <span className="text-xs text-muted-foreground">内容</span>
           <div className="flex flex-wrap gap-1">
-            {groups.flatMap(([unit, names]) =>
-              names.map((name) => (
-                <Badge key={`${unit}:${name}`} variant="secondary" className="font-mono">
-                  {name}
-                </Badge>
-              )),
-            )}
+            {[...info.commands.map((name) => `/${name}`), ...info.skills, ...info.agents, ...info.mcpServers].map((name) => (
+              <Badge key={name} variant="secondary" className="font-mono">
+                {name}
+              </Badge>
+            ))}
           </div>
-        )}
-        {info && info.unsupported.length > 0 && (
-          <p className="flex items-start gap-1.5 text-xs">
-            <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
-            <span>Diffra 暂不支持、已忽略：{info.unsupported.join('、')}</span>
-          </p>
-        )}
-      </CardContent>
+          {info.unsupported.length > 0 && (
+            <>
+              <span className="text-xs text-muted-foreground">不支持</span>
+              <span className="flex items-start gap-1.5 text-xs">
+                <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span>Diffra 暂不支持、已忽略：{info.unsupported.join('、')}</span>
+              </span>
+            </>
+          )}
+        </RowPanel>
+      )}
 
       <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
         <AlertDialogContent>
@@ -237,50 +189,125 @@ function PluginCard({ plugin, onToggle, onDelete }: { plugin: PluginView; onTogg
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Card>
+    </ExtensionRow>
   )
 }
 
-function GitInstallDialog({ open, onOpenChange, onInstalled }: { open: boolean; onOpenChange(open: boolean): void; onInstalled(plugins: PluginView[]): void }) {
+// 目录里没有的插件：从文件夹或 Git 地址装。取回后带钩子的先在对话框里给用户看，没有钩子的直接装
+export function ManualPluginInstall({ onInstalled, onError }: { onInstalled(plugins: PluginView[]): void; onError(error: string | null): void }) {
+  const [dialog, setDialog] = useState<{ open: false } | { open: true; prepared: PluginPrepared | null }>({ open: false })
+  const [busy, setBusy] = useState(false)
+
+  const commit = async (prepared: PluginPrepared, allowHooks: boolean) => {
+    onInstalled(await window.diffra.commitPlugin(prepared.token, allowHooks))
+    setDialog({ open: false })
+  }
+
+  const fromFolder = async () => {
+    onError(null)
+    setBusy(true)
+    try {
+      const prepared = await window.diffra.preparePlugin({ kind: 'folder' })
+      if (prepared && prepared.info.hooks.length === 0) await commit(prepared, false)
+      else if (prepared) setDialog({ open: true, prepared })
+    } catch (caught) {
+      onError(errorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const close = () => {
+    if (dialog.open && dialog.prepared) window.diffra.discardPlugin(dialog.prepared.token).catch((caught: unknown) => console.error('放弃安装插件失败', caught))
+    setDialog({ open: false })
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>从 Git 安装插件</DialogTitle>
-          <DialogDescription>用本机的 git 克隆到 Diffra 的数据目录。插件里的 MCP 服务器会在本机运行命令，只装信任的仓库。</DialogDescription>
-        </DialogHeader>
-        <GitInstallForm
-          onCancel={() => onOpenChange(false)}
-          onInstalled={(plugins) => {
-            onInstalled(plugins)
-            onOpenChange(false)
-          }}
-        />
-      </DialogContent>
-    </Dialog>
+    <>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void fromFolder()}>
+        从文件夹安装
+      </Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => setDialog({ open: true, prepared: null })}>
+        从 Git 安装
+      </Button>
+      <Dialog open={dialog.open} onOpenChange={(open) => !open && close()}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{dialog.open && dialog.prepared ? '安装插件' : '从 Git 安装插件'}</DialogTitle>
+            <DialogDescription>插件里的 MCP 服务器和钩子会在本机运行命令，只装信任的来源。</DialogDescription>
+          </DialogHeader>
+          {dialog.open && dialog.prepared ? (
+            <ReviewStep prepared={dialog.prepared} onCommit={commit} onCancel={close} />
+          ) : (
+            <GitInstallForm
+              onCancel={close}
+              onPrepared={async (prepared) => {
+                if (prepared.info.hooks.length === 0) await commit(prepared, false)
+                else setDialog({ open: true, prepared })
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
-function GitInstallForm({ onCancel, onInstalled }: { onCancel(): void; onInstalled(plugins: PluginView[]): void }) {
+function ReviewStep({ prepared, onCommit, onCancel }: { prepared: PluginPrepared; onCommit(prepared: PluginPrepared, allowHooks: boolean): Promise<void>; onCancel(): void }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <div className="space-y-4">
+      <PluginReview
+        prepared={prepared}
+        busy={busy}
+        onCancel={onCancel}
+        onInstall={async (allowHooks) => {
+          setBusy(true)
+          setError(null)
+          try {
+            await onCommit(prepared, allowHooks)
+          } catch (caught) {
+            setError(errorMessage(caught))
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+        </Alert>
+      )}
+    </div>
+  )
+}
+
+function GitInstallForm({ onCancel, onPrepared }: { onCancel(): void; onPrepared(prepared: PluginPrepared): Promise<void> }) {
   const [url, setUrl] = useState('')
-  const [installing, setInstalling] = useState(false)
+  const [subdir, setSubdir] = useState('')
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    setInstalling(true)
+    setBusy(true)
     setError(null)
     try {
-      onInstalled(await window.diffra.installPluginFromGit(url.trim()))
+      const prepared = await window.diffra.preparePlugin({ kind: 'git', url: url.trim(), subdir: subdir.trim() })
+      if (prepared) await onPrepared(prepared)
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
-      setInstalling(false)
+      setBusy(false)
     }
   }
   return (
     <form onSubmit={submit} className="space-y-4">
       <Field id="plugin-git-url" label="仓库地址">
         <Input id="plugin-git-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/plugin.git" required />
+      </Field>
+      <Field id="plugin-git-subdir" label="子目录（可选）" hint="插件放在仓库的某个子目录里时填，比如 plugins/feature-dev；只取这个目录。">
+        <Input id="plugin-git-subdir" value={subdir} onChange={(event) => setSubdir(event.target.value)} placeholder="plugins/feature-dev" />
       </Field>
       {error && (
         <Alert variant="destructive">
@@ -291,8 +318,8 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel(): void; onInstall
         <Button type="button" variant="ghost" onClick={onCancel}>
           取消
         </Button>
-        <Button type="submit" disabled={installing}>
-          {installing ? '正在克隆…' : '安装'}
+        <Button type="submit" disabled={busy}>
+          {busy ? '正在克隆…' : '安装'}
         </Button>
       </DialogFooter>
     </form>

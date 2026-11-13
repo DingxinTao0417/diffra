@@ -8,7 +8,7 @@ import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { shrinkImage } from '../lib/images'
 import { errorMessage } from '../lib/errors'
-import { hasWidePanel, isSidebarShown, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { hasWidePanel, isSidebarShown, type ExtensionsTab, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
 const TITLE_CHARS = 40
 
@@ -95,6 +95,12 @@ export function replaceRoute(route: Route): void {
 
 export function openArchitecture(projectId: string | null = null): void {
   navigate({ name: 'architecture', projectId, tab: projectId ? 'diagram' : 'overview', diagram: 'application', section: 'graph', scope: 'project', focus: null })
+}
+
+// 换分栏不新增后退记录
+export function openExtensions(tab: ExtensionsTab = 'recommended'): void {
+  if (store.get().route.name === 'extensions') replaceRoute({ name: 'extensions', tab })
+  else navigate({ name: 'extensions', tab })
 }
 
 export function openSettings(section: SettingsSection = 'general'): void {

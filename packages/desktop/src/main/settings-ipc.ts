@@ -86,26 +86,64 @@ function rememberReasoning(current: Settings, choice: { providerId: string; mode
   return keys.has(key) ? { ...kept, [key]: choice.effort } : kept
 }
 
-export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
-  const view = async (): Promise<SettingsView> => {
-    const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices } = settings.get()
-    return {
-      providers: await Promise.all(
-        providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
-      ),
-      roles,
-      appearance,
-      layout,
-      browser,
-      defaultPermissionMode,
-      security,
-      execution,
-      mcpServers,
-      reasoningChoices,
-      defaultWorkspace: workspaceRoot(settings),
-      loadError: settings.loadError ?? secrets.loadError,
-    }
+export async function settingsView(settings: SettingsStore, secrets: SecretStore): Promise<SettingsView> {
+  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices } = settings.get()
+  return {
+    providers: await Promise.all(
+      providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
+    ),
+    roles,
+    appearance,
+    layout,
+    browser,
+    defaultPermissionMode,
+    security,
+    execution,
+    mcpServers,
+    reasoningChoices,
+    defaultWorkspace: workspaceRoot(settings),
+    loadError: settings.loadError ?? secrets.loadError,
   }
+}
+
+// 保存一个 MCP 服务器（手动添加、编辑和扩展目录一键装共用）。只保存当前类型用到的那组名字和值，另一组连同密钥一起删掉
+export async function saveMcpServer(settings: SettingsStore, secrets: SecretStore, raw: unknown): Promise<void> {
+  const input = parse(mcpInputSchema, raw)
+  const servers = settings.get().mcpServers
+  const previous = input.id ? servers.find((server) => server.id === input.id) : undefined
+  if (input.id && !previous) throw new Error('MCP 服务器不存在')
+  if (servers.some((server) => server.id !== input.id && server.name.toLowerCase() === input.name.toLowerCase())) {
+    throw new Error(`已经有名为「${input.name}」的 MCP 服务器`)
+  }
+  const id = previous?.id ?? randomUUID()
+  const kind = input.transport === 'stdio' ? 'env' : 'header'
+  const values = input.transport === 'stdio' ? input.env : input.headers
+  const savedNames = previous ? (kind === 'env' ? previous.envNames : previous.headerNames) : []
+  const missing = values.find((item) => item.value === null && !savedNames.includes(item.name))
+  if (missing) throw new Error(`「${missing.name}」还没有填值`)
+  // 先存密钥：加密失败时整个保存都不生效
+  for (const item of values) if (item.value !== null) await secrets.set(mcpSecretKey(id, kind, item.name), item.value)
+  const server: McpServerConfig = {
+    id,
+    name: input.name,
+    enabled: input.enabled,
+    transport: input.transport,
+    command: input.transport === 'stdio' ? input.command : '',
+    args: input.transport === 'stdio' ? input.args : [],
+    envNames: kind === 'env' ? values.map((item) => item.name) : [],
+    url: input.transport === 'http' ? input.url : '',
+    headerNames: kind === 'header' ? values.map((item) => item.name) : [],
+  }
+  await settings.update((current) => ({
+    ...current,
+    mcpServers: previous ? current.mcpServers.map((item) => (item.id === id ? server : item)) : [...current.mcpServers, server],
+  }))
+  const kept = new Set(mcpSecretKeys(server))
+  for (const key of previous ? mcpSecretKeys(previous) : []) if (!kept.has(key)) await secrets.delete(key)
+}
+
+export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
+  const view = () => settingsView(settings, secrets)
 
   const endpointFor = (providerId: string) => providerEndpoint(settings, secrets, providerId)
 
@@ -185,40 +223,8 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     return view()
   })
 
-  // 只保存当前类型用到的那组名字和值，另一组连同密钥一起删掉
   ipcMain.handle(IPC_CHANNELS.mcpSave, async (_event, raw: unknown) => {
-    const input = parse(mcpInputSchema, raw)
-    const servers = settings.get().mcpServers
-    const previous = input.id ? servers.find((server) => server.id === input.id) : undefined
-    if (input.id && !previous) throw new Error('MCP 服务器不存在')
-    if (servers.some((server) => server.id !== input.id && server.name.toLowerCase() === input.name.toLowerCase())) {
-      throw new Error(`已经有名为「${input.name}」的 MCP 服务器`)
-    }
-    const id = previous?.id ?? randomUUID()
-    const kind = input.transport === 'stdio' ? 'env' : 'header'
-    const values = input.transport === 'stdio' ? input.env : input.headers
-    const savedNames = previous ? (kind === 'env' ? previous.envNames : previous.headerNames) : []
-    const missing = values.find((item) => item.value === null && !savedNames.includes(item.name))
-    if (missing) throw new Error(`「${missing.name}」还没有填值`)
-    // 先存密钥：加密失败时整个保存都不生效
-    for (const item of values) if (item.value !== null) await secrets.set(mcpSecretKey(id, kind, item.name), item.value)
-    const server: McpServerConfig = {
-      id,
-      name: input.name,
-      enabled: input.enabled,
-      transport: input.transport,
-      command: input.transport === 'stdio' ? input.command : '',
-      args: input.transport === 'stdio' ? input.args : [],
-      envNames: kind === 'env' ? values.map((item) => item.name) : [],
-      url: input.transport === 'http' ? input.url : '',
-      headerNames: kind === 'header' ? values.map((item) => item.name) : [],
-    }
-    await settings.update((current) => ({
-      ...current,
-      mcpServers: previous ? current.mcpServers.map((item) => (item.id === id ? server : item)) : [...current.mcpServers, server],
-    }))
-    const kept = new Set(mcpSecretKeys(server))
-    for (const key of previous ? mcpSecretKeys(previous) : []) if (!kept.has(key)) await secrets.delete(key)
+    await saveMcpServer(settings, secrets, raw)
     return view()
   })
 

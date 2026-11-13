@@ -170,7 +170,11 @@ const settingsSchema = z.object({
         dir: z.string().min(1),
         source: z.enum(['folder', 'git']),
         url: z.string().nullable(),
+        // 第 598 步加的
+        subdir: z.string().nullable().default(null),
         enabled: z.boolean(),
+        // 第 600 步加的
+        hooksApproved: z.string().nullable().default(null),
       }),
     )
     .default([]),
