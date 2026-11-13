@@ -39,6 +39,20 @@ type Block =
   | { type: 'checks'; id: string; items: ToolItem[] }
   | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps'; item: ToolItem }
 
+const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' && item.status !== 'completed' && item.status !== 'failed'
+
+// 这几种块在跑的时候自己会转圈（StatusIcon、LoaderCircle）；步骤清单、计划、可视化、定位结果、深度扫描报告不转
+const SPINNING_BLOCKS = new Set<Block['type']>(['edit', 'agent', 'task', 'compaction', 'finish', 'verify', 'wait'])
+
+// 这一轮最后一块已经在显示进度时（过程组在跑、思考中、工具调用在跑），下面不再多一行「进行中…」，免得两个圈一起转（第 496 步）。
+// 运行中的过程组标题行一直在转；只有一项时是那一行自己：思考在转，工具调用跑完就不转了
+function showsProgress(block: Block | undefined): boolean {
+  if (!block || block.type === 'item') return false
+  if (block.type === 'process') return block.items.length > 1 || block.items[0]?.kind === 'thought' || isRunning(block.items[0])
+  if (block.type === 'checks') return block.items.some(isRunning)
+  return SPINNING_BLOCKS.has(block.type) && isRunning(block.item)
+}
+
 // 模型接口出错时怎么说；auth、not-found 要去设置里改，其余可以接着发或者换个模型
 const MODEL_ERROR_TEXT: Record<ModelErrorKind, string> = {
   auth: '模型的密钥无效或没有权限，这一轮停在这里',
@@ -542,7 +556,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
-      {active && !task.permission && (
+      {active && !task.permission && !showsProgress(blocks.at(-1)) && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
           进行中…

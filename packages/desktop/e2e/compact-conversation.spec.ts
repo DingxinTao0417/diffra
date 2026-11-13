@@ -82,7 +82,10 @@ test('每次调用前都先思考的模型：思考、读文件、改动收在�
     const group = window.getByTestId('tool-group')
     const header = group.getByRole('button', { name: /执行工具 2 次\s*· 修改 1 个文件/ })
     await expect(header).toHaveAttribute('aria-expanded', 'false')
-    await expect(window.getByText('进行中…')).toBeVisible()
+    // 只有过程组的标题行在转，下面不再多一行「进行中…」
+    await expect(header.locator('.animate-spin')).toHaveCount(1)
+    // 当场数一次，不等：等下去这一轮跑完，「进行中…」本来也会消失
+    expect(await window.getByText('进行中…').count()).toBe(0)
     await expect(group).toHaveCount(1)
     await expect(group.getByTestId('thought')).toHaveCount(2)
     await expect(group.getByTestId('thought').first()).toBeHidden()
