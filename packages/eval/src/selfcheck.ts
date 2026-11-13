@@ -1,9 +1,14 @@
 import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { checkConstraint, collectFacts } from './judge.ts'
 import { prepareProject } from './prepare.ts'
 import { run, runShell } from './proc.ts'
-import type { EvalTask } from './tasks.ts'
+import { initRepo } from './run-task.ts'
+import type { Constraint, EvalTask } from './tasks.ts'
+
+// 只看改了什么就能判定的要求；命令、回复、提问要看智能体实际怎么做
+const STATIC_KINDS = new Set<Constraint['kind']>(['only-change', 'no-change', 'file', 'added-lines'])
 
 export interface SelfCheckResult {
   id: string
@@ -35,7 +40,12 @@ export async function selfCheck(task: EvalTask): Promise<SelfCheckResult> {
 
     if (!existsSync(join(task.dir, 'solution'))) throw new Error(`题目 ${task.id} 没有参考答案（solution/）`)
     const solved = join(root, 'solved')
-    await prepareProject(task.dir, solved, values, 'solution')
+    await prepareProject(task.dir, solved, values)
+    const baseCommit = await initRepo(solved)
+    cpSync(join(task.dir, 'solution'), solved, { recursive: true })
+    // 参考答案本身要做到题目里能静态判定的明确要求，不然这道题谁也做不对
+    const facts = await collectFacts(solved, baseCommit, [], 0)
+    const unmet = task.constraints.filter((constraint) => STATIC_KINDS.has(constraint.kind)).map((constraint) => checkConstraint(constraint, facts, solved, values)).filter((result) => !result.ok)
     const command = task.checks.beforeFinish ?? task.checks.afterEdit
     const checks = command ? await runShell(command, solved, 300) : { exitCode: 0, timedOut: false, output: '' }
     const after = await hiddenTests(task, solved)
@@ -47,6 +57,7 @@ export async function selfCheck(task: EvalTask): Promise<SelfCheckResult> {
       pristineFails ? null : '原样的项目隐藏测试就通过了',
       solutionChecksPass ? null : `参考答案没通过检查命令：\n${checks.output.slice(-1500)}`,
       solutionHiddenPass ? null : `参考答案没通过隐藏测试：\n${after.output.slice(-1500)}`,
+      ...unmet.map((result) => `参考答案没做到「${result.note}」：${result.detail}`),
     ].filter(Boolean)
     return { id: task.id, ok: problems.length === 0, pristineFails, solutionChecksPass, solutionHiddenPass, detail: problems.join('\n') }
   } finally {
