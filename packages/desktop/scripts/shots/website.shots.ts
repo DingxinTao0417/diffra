@@ -10,7 +10,7 @@ import { _electron as electron, chromium, type ElectronApplication, expect, type
 import { chooseProject, startDesignTask, startTask, waitTaskDone } from '../../e2e/flows'
 import { APP_VERSION, desktopDir } from '../../e2e/launch'
 import { configureCoderModel } from '../../e2e/model-setup'
-import { startScriptedModel } from '../../e2e/scripted-model'
+import { addFile, exec, read, replaceLines, startScriptedModel } from '../../e2e/scripted-model'
 
 const ASSETS = resolve(desktopDir, '../../website/public/assets')
 const SHOTS = join(ASSETS, 'shots')
@@ -255,30 +255,21 @@ for (const theme of ['light', 'dark'] as const) {
       }),
     )
     const model = await startScriptedModel([
-      { match: '补一段安装说明', toolCalls: [{ name: 'edit_file', input: { path: 'README.md', old_string: '一个小的待办网页。\n', new_string: '一个小的待办网页。\n\n## 运行\n\n```\nnpm test\n```\n' } }] },
-      { match: '补一段安装说明', toolCalls: [{ name: 'finish', input: { summary: 'README 里加了「运行」一节。' } }] },
+      { match: '补一段安装说明', toolCalls: [replaceLines('README.md', '一个小的待办网页。', '一个小的待办网页。\n\n## 运行\n\n```\nnpm test\n```')] },
+      { match: '补一段安装说明', text: 'README 里加了「运行」一节。' },
       { match: '解释一下', text: '`todos.js` 只管数据：`createTodo` 建一条待办，`visibleTodos` 按「全部 / 进行中 / 已完成」筛选。`app.js` 负责把筛选结果画到页面上。' },
-      { match: '给待办加上优先级', text: '先看一下项目结构。', toolCalls: [{ name: 'list_files', input: { path: '.' } }] },
-      { match: '给待办加上优先级', toolCalls: [{ name: 'read_file', input: { path: 'src/todos.js' } }] },
-      { match: '给待办加上优先级', toolCalls: [{ name: 'read_file', input: { path: 'src/app.js' } }] },
+      { match: '给待办加上优先级', text: '先看一下项目结构。', toolCalls: [exec('rg --files')] },
+      { match: '给待办加上优先级', toolCalls: [read('src/todos.js'), read('src/app.js')] },
       {
         match: '给待办加上优先级',
         text: '计划：\n\n1. 先写测试，定下规则：**高 > 中 > 低**，同级保持原来的顺序\n2. 在 `todos.js` 里加 `priority` 字段和 `sortByPriority`\n3. 列表按优先级排序，每条前面显示优先级标签',
-        toolCalls: [{ name: 'edit_file', input: { path: 'test/priority.test.js', old_string: '', new_string: PRIORITY_TEST } }],
+        toolCalls: [addFile('test/priority.test.js', PRIORITY_TEST)],
       },
-      { match: '给待办加上优先级', text: '测试没过：`sortByPriority` 还没写，符合预期。现在实现它。', toolCalls: [{ name: 'edit_file', input: { path: 'src/todos.js', old_string: CREATE_TODO, new_string: CREATE_TODO_WITH_PRIORITY } }] },
-      { match: '给待办加上优先级', text: '测试通过了。最后让列表按优先级显示。', toolCalls: [{ name: 'edit_file', input: { path: 'src/app.js', old_string: APP_JS, new_string: APP_JS_WITH_PRIORITY } }] },
+      { match: '给待办加上优先级', text: '测试没过：`sortByPriority` 还没写，符合预期。现在实现它。', toolCalls: [replaceLines('src/todos.js', CREATE_TODO.replace(/\n$/, ''), CREATE_TODO_WITH_PRIORITY.replace(/\n$/, ''))] },
+      { match: '给待办加上优先级', text: '测试通过了。最后让列表按优先级显示。', toolCalls: [replaceLines('src/app.js', APP_JS.replace(/\n$/, ''), APP_JS_WITH_PRIORITY.replace(/\n$/, ''))] },
       {
         match: '给待办加上优先级',
-        toolCalls: [
-          {
-            name: 'finish',
-            input: {
-              summary:
-                '待办现在有优先级了：\n\n- `createTodo` 多了 `priority` 参数，默认是「中」\n- 新增 `sortByPriority`：高 > 中 > 低，同级保持原来的顺序\n- 列表按优先级排序，每条前面有优先级标签\n\n新加的测试和原有测试都通过了。',
-            },
-          },
-        ],
+        text: '待办现在有优先级了：\n\n- `createTodo` 多了 `priority` 参数，默认是「中」\n- 新增 `sortByPriority`：高 > 中 > 低，同级保持原来的顺序\n- 列表按优先级排序，每条前面有优先级标签\n\n新加的测试和原有测试都通过了。',
       },
       { match: '在浏览器里看看', text: '打开本地页面看一下。', toolCalls: [{ name: 'browser_navigate', input: { url: site.url } }] },
       { match: '在浏览器里看看', toolCalls: [{ name: 'browser_snapshot', input: {} }] },
