@@ -132,7 +132,7 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
     let hiddenOutput = ''
     if (task.hidden) {
       // 隐藏测试放进项目根目录的 hidden/，智能体干活时看不到
-      cpSync(join(task.dir, 'hidden'), join(workDir, 'hidden'), { recursive: true })
+      cpSync(join(task.dir, 'hidden'), task.hiddenAt === 'root' ? workDir : join(workDir, 'hidden'), { recursive: true })
       const hidden = await run(task.hidden.command[0] ?? '', task.hidden.command.slice(1), { cwd: workDir, timeoutSeconds: task.hidden.timeoutSeconds })
       hiddenPassed = hidden.exitCode === 0 && !hidden.timedOut
       hiddenOutput = hidden.output.trim().slice(-3000)

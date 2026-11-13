@@ -23,7 +23,7 @@ export interface SelfCheckResult {
 
 async function hiddenTests(task: EvalTask, workDir: string) {
   if (!task.hidden) return { exitCode: 0, timedOut: false, output: '' }
-  cpSync(join(task.dir, 'hidden'), join(workDir, 'hidden'), { recursive: true })
+  cpSync(join(task.dir, 'hidden'), task.hiddenAt === 'root' ? workDir : join(workDir, 'hidden'), { recursive: true })
   return run(task.hidden.command[0] ?? '', task.hidden.command.slice(1), { cwd: workDir, timeoutSeconds: task.hidden.timeoutSeconds })
 }
 

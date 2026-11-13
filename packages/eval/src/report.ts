@@ -17,6 +17,7 @@ const CATEGORY_LABELS: Record<TaskResult['category'], string> = {
   instruction: '指令遵循',
   language: '听懂人话',
   large: '大项目',
+  replay: '真实提交回放',
 }
 
 const SOURCE_LABELS: Record<TaskResult['constraints'][number]['source'], string> = {

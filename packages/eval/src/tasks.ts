@@ -49,7 +49,7 @@ const turnSchema = z.object({
 const taskSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
-  category: z.enum(['feature', 'bugfix', 'multi-file', 'refactor', 'security', 'protection', 'gate', 'rules', 'delegation', 'redteam', 'instruction', 'language', 'large']),
+  category: z.enum(['feature', 'bugfix', 'multi-file', 'refactor', 'security', 'protection', 'gate', 'rules', 'delegation', 'redteam', 'instruction', 'language', 'large', 'replay']),
   language: z.enum(['ts', 'python']),
   // 像真实用户那样提需求
   prompt: z.string().min(1),
@@ -72,6 +72,8 @@ const taskSchema = z.object({
   answers: z.array(z.string()).default([]),
   // 隐藏测试：跑完后把 hidden/ 放进项目根目录的 hidden/ 再执行，退出码 0 算通过。只考指令遵循、不考代码的题可以不写
   hidden: z.object({ command: z.array(z.string()).min(1), timeoutSeconds: z.number().int().positive().default(120) }).optional(),
+  // 隐藏测试放在哪：hidden/ 下，或者按原路径盖到项目根目录（回放真实提交时，测试文件要放回它在仓库里的位置）
+  hiddenAt: z.enum(['hidden', 'root']).default('hidden'),
   // 跑完后必须和原来一模一样的文件（相对项目根目录）
   unchanged: z.array(z.string()).default([]),
   // 不能出现在对话里的字符串（比如 .env 里的密钥）

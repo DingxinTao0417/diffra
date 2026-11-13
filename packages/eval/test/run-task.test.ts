@@ -198,6 +198,7 @@ const miniTask = (overrides: Partial<EvalTask>): EvalTask => ({
   secrets: [],
   outside: {},
   dirty: {},
+  hiddenAt: 'hidden',
   constraints: [],
   timeoutMinutes: 5,
   dir: MINI_DIR,
