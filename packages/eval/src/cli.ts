@@ -17,7 +17,7 @@ const USAGE = `用法：
       用配置里的模型跑题目，写出 results.json 和 report.md，每道题的过程记录在 runs/ 下的 transcript.md；--deep-scan 同时跑深度扫描准确率样例
   pnpm eval probe --project 目录 (--prompt 需求 | --script 脚本.json) [--goal] [--models a] [--out 目录]
       拿任意项目（复制一份，原目录不动）、任意需求跑一次，写出过程记录；脚本和 task.json 一样的写法，可以写多轮、提问怎么答、明确要求
-  通用：--permission-mode ask|auto|full 覆盖题目的权限档；--effort low|medium|high|xhigh 覆盖模型的思考强度
+  通用：--permission-mode ask|auto|full 覆盖题目的权限档；--effort low|medium|high|xhigh 覆盖模型的思考强度；--goal 第一轮用目标模式
   pnpm eval deep-scan --config eval.config.json [--models a] [--samples s01]
       只跑深度扫描准确率样例`
 
@@ -85,7 +85,8 @@ async function main(): Promise<void> {
   const models = (wanted ? config.models.filter((model) => wanted.includes(model.name)) : config.models).map((model) => (effort ? { ...model, reasoningEffort: effort } : model))
   const permissionMode = values['permission-mode'] as EvalTask['permissionMode'] | undefined
   if (permissionMode && !['ask', 'auto', 'full'].includes(permissionMode)) throw new Error(`--permission-mode 只能是 ask、auto、full`)
-  const withMode = (task: EvalTask): EvalTask => (permissionMode ? { ...task, permissionMode } : task)
+  // --goal：所有题第一轮都用目标模式（自己多轮推进），看模型一轮做不完时能不能自己做完
+  const withMode = (task: EvalTask): EvalTask => ({ ...task, ...(permissionMode ? { permissionMode } : {}), ...(values.goal ? { goal: true } : {}) })
   if (models.length === 0) throw new Error(`配置里没有这些模型：${wanted?.join('、')}`)
   const reviewer = config.reviewer ? (config.models.find((model) => model.name === config.reviewer) ?? null) : null
   if (config.reviewer && !reviewer) throw new Error(`评审模型 ${config.reviewer} 不在 models 里`)
@@ -107,7 +108,7 @@ async function main(): Promise<void> {
     if (!values.project || (!values.prompt && !values.script)) throw new Error('probe 要写 --project，以及 --prompt 或 --script')
     const project = resolve(values.project)
     const base = probeTask(project, values.prompt, values.script)
-    const task = withMode(values.goal ? { ...base, goal: true } : base)
+    const task = withMode(base)
     for (const model of models) {
       const runDir = join(runsDir, model.name)
       const workDir = join(runDir, task.id, 'project')
