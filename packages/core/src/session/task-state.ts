@@ -82,7 +82,11 @@ export function updateTask(state: TaskState, raw: unknown): TaskState {
   const input = taskUpdateSchema.parse(raw)
   if (input.action === 'status') return state
   if (input.action === 'define') {
-    if (state.requirements.length > 0) throw new ToolError('Completion requirements already exist. They cannot be removed or weakened; continue satisfying them.')
+    // 发版任务的完成条件不能删、不能减、不能换；其他任务写错了可以重定，旧证据一并作废（第 500 步）
+    if (state.contractRequired && state.requirements.length > 0) {
+      throw new ToolError('Release completion requirements already exist. They cannot be removed, weakened or replaced; continue satisfying them.')
+    }
+    const replacing = state.requirements.length > 0
     if (new Set(input.requirements.map((item) => item.id)).size !== input.requirements.length) throw new ToolError('Requirement ids must be unique.')
     if (state.contractRequired && !RELEASE_REQUIREMENT_IDS.every((id) => input.requirements.some((item) => item.id === id))) {
       throw new ToolError('Release contract must include commit, push, ci, publish requirements with concrete commands and expected version/SHA/output.')
@@ -94,7 +98,14 @@ export function updateTask(state: TaskState, raw: unknown): TaskState {
         if (expected && !expected.test(requirement.commandIncludes)) throw new ToolError(`Release requirement ${requirement.id} must use a real Git/CI/update-source query, not a synthetic success message.`)
       }
     }
-    return { ...state, status: 'running', reason: null, requirements: input.requirements.map((item) => ({ ...item, receiptId: null })) }
+    return {
+      ...state,
+      status: 'running',
+      reason: null,
+      requirements: input.requirements.map((item) => ({ ...item, receiptId: null })),
+      // 重新定义时旧证据作废，新条件只能用重新跑过的命令来满足；第一次定义时留着定义前跑过的命令
+      receipts: replacing ? [] : state.receipts,
+    }
   }
   const requirement = state.requirements.find((item) => item.id === input.id)
   if (!requirement) throw new ToolError('Unknown completion requirement.')

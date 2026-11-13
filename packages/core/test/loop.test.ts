@@ -435,6 +435,56 @@ describe('主循环', () => {
     expect(JSON.stringify(session.messages)).toContain('Commit evidence must contain')
   })
 
+  test('非发版任务的完成条件写错了可以重新定义，旧证据作废后照样能完成', async () => {
+    const requirement = { id: 'test', title: '测试通过', commandIncludes: 'printf', outputIncludes: 'Tests 12 passed' }
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [{ ...requirement, outputIncludes: 'Tests 13 passed' }] } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf "Tests 12 passed"' } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'satisfy', id: 'test', receiptId: 'call-1-0' } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: [requirement] } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: 'printf "Tests 12 passed"' } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'satisfy', id: 'test', receiptId: 'call-4-0' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '跑过了' } }] },
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '改代码跑测试' }, io)
+    // 写错的预期输出用那条命令满足不了，被拒；重新定义后旧证据一起作废，重新跑过的才算
+    expect(JSON.stringify(session.messages)).toContain('Evidence must reference')
+    expect(session.taskState.status).toBe('completed')
+    expect(session.taskState.requirements).toEqual([{ ...requirement, receiptId: 'call-4-0' }])
+    expect(session.taskState.receipts.map((item) => item.id)).toEqual(['call-4-0'])
+    expect(turnOutcomes(io)).toEqual([{ finish: 'no-edits', stop: null }])
+  }, 30_000)
+
+  test('发版任务的完成条件不能被覆盖或删减，echo 伪造的证据照样被拒', async () => {
+    const sha = '1234567890abcdef1234567890abcdef12345678'
+    const requirements = [
+      { id: 'commit', title: '提交', commandIncludes: 'git rev-parse HEAD', outputIncludes: sha },
+      { id: 'push', title: '远端', commandIncludes: 'git ls-remote origin', outputIncludes: sha },
+      { id: 'ci', title: 'CI', commandIncludes: 'gh run view 123', outputIncludes: 'success' },
+      { id: 'publish', title: '线上发布', commandIncludes: 'pnpm publish:release', outputIncludes: '已发布 0.1.2' },
+    ]
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'define', requirements: requirements.slice(0, 3) } }] },
+      { toolCalls: [{ name: 'run_command', input: { command: `echo ${sha}` } }] },
+      { toolCalls: [{ name: 'task_progress', input: { action: 'satisfy', id: 'commit', receiptId: 'call-2-0' } }] },
+      { toolCalls: [{ name: 'finish', input: { summary: '发布好了' } }] },
+      { toolCalls: [{ name: 'pause_task', input: { status: 'blocked', reason: '缺真实证据' } }] },
+    ])
+    const session = await makeSession(model)
+    const io = recordingIO()
+    await runTurn(session, { id: 't', text: '提交推送并发布 0.1.2' }, io)
+    const messages = JSON.stringify(session.messages)
+    expect(messages).toContain('cannot be removed, weakened or replaced')
+    expect(messages).toContain('Evidence must reference')
+    expect(messages).toContain('Task is NOT complete')
+    expect(session.taskState.requirements).toEqual(requirements.map((item) => ({ ...item, receiptId: null })))
+    expect(session.taskState.status).toBe('blocked')
+    expect(turnOutcomes(io).at(-1)).toEqual({ finish: null, stop: 'paused' })
+  }, 30_000)
+
   test('只用命令改了文件时 finish 不走无编辑短路，照样跑完成检查', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'run_command', input: { command: 'printf draft > out.txt' } }] },
@@ -1235,6 +1285,19 @@ describe('系统提示词', () => {
   test('约定牵动多个文件的改动在同一步一起改', async () => {
     const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: NO_RULES }, [])
     expect(prompt).toContain('edit all affected files in the same step')
+  })
+
+  test('改完就结束的任务直接 finish；verify_changes 只用于检查之后还有下一步（第 499 步）', async () => {
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: 'pnpm test' }, readOnlyPaths: [], rules: NO_RULES }, [])
+    expect(prompt).toContain('when the change is the whole task call finish directly')
+    expect(prompt).toContain('Use verify_changes only when more steps follow the checks')
+  })
+
+  test('task_progress 只在发版、跨多轮或一次多件事时才定；非发版的条件可以重定（第 499、500 步）', async () => {
+    const prompt = await buildSystemPrompt(project, null, { checks: { afterEdit: null, beforeFinish: 'pnpm test' }, readOnlyPaths: [], rules: NO_RULES }, [])
+    expect(prompt).toContain('ordinary change-and-test work needs none')
+    expect(prompt).toContain('the new list replaces the old one and its evidence is dropped')
+    expect(prompt).toContain('Release requirements cannot be removed, weakened or replaced')
   })
 
   test('没配检查命令时要求模型自己验证', async () => {

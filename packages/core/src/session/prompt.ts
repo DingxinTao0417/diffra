@@ -103,8 +103,9 @@ function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
 function checkLines(checks: SessionChecks): string[] {
   const finishCheck = checks.beforeFinish ?? checks.afterEdit
   const lines: string[] = [
-    '- finish is TERMINAL, never an intermediate check. Use verify_changes to validate and CONTINUE with commit, push, CI and publication. Passing checks is not task completion.',
-    '- Before multi-stage work, define immutable task_progress completion requirements covering the whole user request. Release tasks require commit, push, ci, publish ids; match real command receipts and concrete expected SHA/version/output. Never fabricate evidence or use echo/printf as proof of external actions. Use read-only queries against Git, CI and the actual update source.',
+    '- finish is TERMINAL, never an intermediate check. It runs the project checks itself, so when the change is the whole task call finish directly. Use verify_changes only when more steps follow the checks (commit, push, waiting for CI, publication), and remember that passing checks is not task completion.',
+    '- Define task_progress completion requirements only for release work, work that spans several turns, or a request with several separate parts; ordinary change-and-test work needs none and should just end with finish. Release tasks require commit, push, ci, publish ids; match real command receipts and concrete expected SHA/version/output. Never fabricate evidence or use echo/printf as proof of external actions. Use read-only queries against Git, CI and the actual update source.',
+    '- If you wrote a requirement of a non-release task wrong, call task_progress define again: the new list replaces the old one and its evidence is dropped. Release requirements cannot be removed, weakened or replaced.',
     '- Use pause_task with waiting/blocked and a reason for missing credentials, permissions or unfinished CI; do not call finish to report a blocker. Saved requirements persist across turns and restarts.',
   ]
   if (finishCheck) {

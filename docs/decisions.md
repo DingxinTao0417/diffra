@@ -196,7 +196,10 @@ v2：
   - 系统提示词用英文，回复语言跟随用户；会读入项目根目录的 `AGENTS.md`、`CLAUDE.md`（合计最多 8000 字）。
 - 基础工具：read_file、list_files、search、outline、edit_file、run_command、verify_changes、task_progress、pause_task、finish。
 - 验证与结束分离：`verify_changes` 执行完整检查、安全扫描及规范审查但不结束任务；`finish` 是终结操作。原因：曾将中间检查成功当成发布完成，提前停止。
-- 多阶段任务通过 `task_progress` 定义不可删减的完成条件，引用 core 从成功命令生成的 receipt，匹配命令和实际输出。发布请求另强制 commit/push/ci/publish 四项，交叉核对提交 SHA、远端 SHA、CI completed/success 与正式发布脚本的线上验证结果；不是操作系统沙箱或对恶意模型的证明系统。
+  - 收紧到「检查之后还有下一步」才用（第 499 步）：提交、推送、等 CI、发布这类要接着做的，先 `verify_changes` 再继续；改完就结束的任务直接 `finish`，`finish` 本身跑同一套检查，工作区没变时还会复用紧接着的 `verify_changes` 结果（verification 为 reused）。系统提示词和工具说明都按这个写。起因：评测里几乎每题都在 `finish` 前单独调一次 `verify_changes`，可它和 `finish` 走同一个完成门禁，紧接着调只拿到「已复用」，白多一轮模型调用。
+- 多阶段任务通过 `task_progress` 定义完成条件，引用 core 从成功命令生成的 receipt，匹配命令和实际输出。发布请求另强制 commit/push/ci/publish 四项，交叉核对提交 SHA、远端 SHA、CI completed/success 与正式发布脚本的线上验证结果；不是操作系统沙箱或对恶意模型的证明系统。
+  - 只在发版、要跨好几轮、或用户一次提了好几件事时才定（第 499 步）：普通的改代码加跑测试不用定，定了只多一次调用，还容易因为写错预期输出过不了 `finish`。系统提示词和工具说明写明这一点。
+  - 非发版任务的完成条件可以重新定义（第 500 步）：再调一次 `define`，新清单替换旧清单，已有的证据（receipts 和各条的 receiptId）一起作废，新条件要用重新跑过的命令来满足；第一次定义时照旧保留定义前跑过的命令。发版任务（`contractRequired`）保持原规则：已有条件不能覆盖、不能删、不能减，commit、push、ci、publish 四项和真实命令校验一条都不放松。起因：以前条件一定就改不了，评测 t08 里把预期输出写错一个字，代码改对了也永远过不了 `finish`，只能 `pause_task` 收场。
 - 状态 running/waiting/blocked/cancelled/completed 与 ACP stopReason 分离；`pause_task` 仅暂停，不冒充完成。状态、清单、证据在关键步骤落盘，重启可恢复，运行中断恢复为受阻；界面用 session_info_update 元数据展示状态，不把 end_turn 当成功。
   - `needsVerification`：有改动还没过完成门禁。只在文件真的改了之后置位（edit_file 写入成功，或 finish 时、只回文字时发现命令、MCP 工具改了文件），被拒或失败的编辑不算；非目标模式下 finish 被接受、目标模式下目标达成、进入下一目标轮或轮数用完时清掉（这几种情况 finish 都已经过了完成门禁）；撤销、重新生成时回到那一轮开始时的值。以前在 edit_file 执行前就置位，写入被拒的一轮也会显示「未完成」，下一轮还会被拉回来调 finish。
     - 只算项目里的文件（第 484 步）：用户授权写到项目外的文件（比如临时目录里的统计脚本）不算改动，不置位、不跑完成检查、只回文字也不拉回来要 finish。起因：一轮只查不改的调研，模型在临时目录写了几个脚本，收尾时跑了整个项目的 typecheck 和全量 e2e，还因为一个不相干的 e2e 失败停在受阻。

@@ -74,11 +74,13 @@ export const TOOLS = {
     inputSchema: runCommandInput,
   }),
   verify_changes: tool({
-    description: 'Run full project checks, security checks and rule review WITHOUT ending the task. Use before commit/push/build/publish. Continue working after success; validation is not task completion.',
+    description:
+      'Run full project checks, security checks and rule review WITHOUT ending the task. Use it only when more steps follow the checks (commit, push, waiting for CI, publication); when the change is the whole task, call finish instead, which runs the same checks. Continue working after success; validation is not task completion.',
     inputSchema: finishInput,
   }),
   task_progress: tool({
-    description: 'Define immutable completion requirements before multi-stage work; satisfy them using receipt ids from successful run_command calls. Each requirement matches actual command AND output. Release contracts require ids commit, push, ci, publish with concrete SHA/version evidence. status returns saved progress and receipts.',
+    description:
+      'Define completion requirements only for release work, work spanning several turns, or a request with several separate parts; ordinary change-and-test work needs none. Satisfy them using receipt ids from successful run_command calls; each requirement matches actual command AND output. Release contracts require ids commit, push, ci, publish with concrete SHA/version evidence and cannot be removed or replaced. For a non-release task, calling define again replaces the list and drops its evidence. status returns saved progress and receipts.',
     inputSchema: taskUpdateSchema,
   }),
   pause_task: tool({
@@ -87,7 +89,7 @@ export const TOOLS = {
   }),
   finish: tool({
     description:
-      'TERMINAL: call ONLY when the entire user request is completed, including commit/push/CI/publication if requested. It ends the turn. For intermediate validation use verify_changes; for blockers use pause_task. Unsatisfied completion requirements reject finish.',
+      'TERMINAL: call ONLY when the entire user request is completed, including commit/push/CI/publication if requested. It ends the turn and runs the project checks; right after a verify_changes call with no change since, it reuses that result. Use pause_task for blockers. Unsatisfied completion requirements reject finish.',
     inputSchema: finishInput,
   }),
 }
