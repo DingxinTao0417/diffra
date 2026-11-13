@@ -23,7 +23,7 @@ export interface CommandPolicy {
 }
 
 // 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）；完全访问模式不问（第 495 步）
-const MENTIONS_SECRET = /\.env|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_ed25519|id_ecdsa|\.(pem|key|p12|pfx)\b/i
+export const MENTIONS_SECRET = /\.env|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_ed25519|id_ecdsa|\.(pem|key|p12|pfx)\b/i
 
 // 和 tools/protected.ts 的判断保持一致：这些文件名可能含密钥
 const PROTECTED_NAMES = ['.env', '.npmrc', '.pypirc', '.netrc', '.git-credentials', 'id_rsa', 'id_ed25519', 'id_ecdsa']
@@ -83,14 +83,16 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
   // 完全访问只剩上面的直接拒绝和禁写目录（第 495 步）：和 Claude Code 的 bypassPermissions、Codex 的完全访问一样，
   // 不因为命令可能读到 .env 再问。apply_patch 改不了受保护文件这条另算，不受模式影响
   if (policy.mode === 'full') return loose.some(touchesReadOnly) ? { level: 'ask' } : { level: 'allow' }
+  // 命令实际在哪跑：带了 workdir 就从那里算（第 628 步，回放题里 npx tsc 带 workdir 跑在子包里，按项目根找不到本地命令）
+  const runDir = resolve(policy.cwd, policy.workdir ?? '.')
   // 通配符、递归搜索、关掉忽略规则能读到 .env 这类受保护文件：真会读到才问，要搜的地方没有就放行
-  if (mayReadSecret(loose, policy.cwd)) return { level: 'ask' }
-  if (MENTIONS_SECRET.test(trimmed)) return { level: 'ask' }
+  if (mayReadSecret(loose, runDir)) return { level: 'ask' }
+  if (mentionsSecret(trimmed, splitSegments(trimmed, true))) return { level: 'ask' }
   if (loose.some(touchesReadOnly)) return { level: 'ask' }
   // 命令替换、反引号里可以藏任何命令
   const substitution = /\$\(|`|<\(|>\(/.test(trimmed)
 
-  if (policy.mode === 'auto') return substitution || loose.some(isRisky) ? { level: 'ask' } : { level: 'allow' }
+  if (policy.mode === 'auto') return substitution || hasRiskySegment(loose, runDir) ? { level: 'ask' } : { level: 'allow' }
 
   if (substitution) return { level: 'ask' }
   const segments = splitSegments(trimmed)
@@ -118,6 +120,58 @@ function killsByName(argv: string[]): boolean {
   const program = programName(argv[0] ?? '')
   if (program === 'pkill' || program === 'killall') return true
   return program === 'taskkill' && argv.slice(1).some((arg) => /^[-/]+(im|fi)$/i.test(arg))
+}
+
+// 第 628 步：评测里回放 Diffra 自己的提交，自动审批下平均每题要点 3 次确认，大多是 npx vitest、npx tsc 这种跑项目里已装好的命令。
+// npx 要跑的命令在当前目录或上级目录的 node_modules/.bin 里有、又没让它另装包（-p、--package、-c）时不会下载，和 npm test 一样放行
+const NPX_PACKAGE_OPTIONS = /^(-p|--package|-c|--call)(=|$)/
+function npxRunsLocalBin(argv: string[], dir: string | null): boolean {
+  if (dir === null) return false
+  // 只看命令名前面的参数：后面的是那个命令自己的（npx tsc -p tsconfig.json 的 -p 不是 npx 的）
+  const args = argv.slice(1)
+  const binIndex = args.findIndex((arg) => !arg.startsWith('-'))
+  if (binIndex < 0 || args.slice(0, binIndex).some((arg) => NPX_PACKAGE_OPTIONS.test(arg))) return false
+  const bin = args[binIndex]!
+  if (!/^[\w.@-]+$/.test(bin) || bin.includes('@', 1)) return false
+  for (let current = dir; ; current = dirname(current)) {
+    const binDir = resolve(current, 'node_modules', '.bin')
+    if (['', '.cmd', '.ps1'].some((extension) => statSync(resolve(binDir, `${bin}${extension}`), { throwIfNoEntry: false })?.isFile())) return true
+    if (dirname(current) === current) return false
+  }
+}
+
+// 整条命令里有没有要询问的段；跟着 cd 走，npx 跑本地命令时按所在目录找
+function hasRiskySegment(segments: string[][], cwd: string): boolean {
+  let dir: string | null = cwd
+  for (const argv of segments) {
+    const program = programName(argv[0] ?? '')
+    if (program === 'cd') {
+      const target = argv[1]
+      dir = dir !== null && target !== undefined && isKnownPath(target) ? resolve(dir, fromMsysPath(target)) : null
+      continue
+    }
+    if ((program === 'npx' || program === 'bunx') && npxRunsLocalBin(argv, dir)) continue
+    if (isRisky(argv)) return true
+  }
+  return false
+}
+
+// grep、rg 的搜索模式里写了 .env 只是在搜这几个字，不读那个文件（第 628 步）：要读的路径和 -g、--include 这类挑文件的规则照旧算。
+// 会不会真读到受保护文件由 mayReadSecret 看；读到了，输出里的值也会被换掉（第 625 步）
+const FILE_FILTER_OPTIONS = new Set(['-g', '--glob', '--iglob', '--include', '--exclude'])
+function mentionsSecret(command: string, segments: string[][] | null): boolean {
+  if (segments === null) return MENTIONS_SECRET.test(command)
+  return segments.some((argv) => {
+    const program = programName(argv[0] ?? '')
+    if (program !== 'grep' && program !== 'rg') return MENTIONS_SECRET.test(argv.join(' '))
+    const args = argv.slice(1)
+    const filters = args.flatMap((arg, index) => {
+      if (FILE_FILTER_OPTIONS.has(arg)) return [args[index + 1] ?? '']
+      const [option, ...value] = arg.split('=')
+      return option && FILE_FILTER_OPTIONS.has(option) && value.length > 0 ? [value.join('=')] : []
+    })
+    return [...searchPaths(program, args), ...filters].some((arg) => MENTIONS_SECRET.test(arg))
+  })
 }
 
 function isRisky(argv: string[]): boolean {

@@ -9,7 +9,7 @@ import { streamParts } from '../models/stream.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, TASK_STATE_META_KEY } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import { type CommandPolicy, commandKeys, classifyCommand, gitSubcommands, isReadOnlyCommand } from '../permissions.js'
+import { type CommandPolicy, commandKeys, classifyCommand, gitSubcommands, isReadOnlyCommand, MENTIONS_SECRET } from '../permissions.js'
 import { truncateForModel } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
@@ -60,7 +60,7 @@ import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinRemind
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
-import { projectSecretValues, redactSecretValues } from '../security/secret-values.js'
+import { projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
 import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
@@ -1046,6 +1046,10 @@ export async function runToolCall(
     // 命令输出里项目密钥文件的值换成占位，不进模型上下文也不显示（第 625 步）
     if (name === 'exec_command' || name === 'write_stdin') {
       const secrets = await projectSecretValues(session.cwd)
+      // 命令写了受保护文件的名字（git show 某次提交:.env、cat .env.bak）：那份文件可能不在工作区，值事先不知道，
+      // 就从这条命令的输出里按同样的规则认出像密钥的赋值再换掉（第 629 步，评测里从 git 历史读出了删掉的 .env）
+      const command = name === 'exec_command' ? execCommandOf(call) : null
+      if (command && MENTIONS_SECRET.test(command)) secrets.push(...secretValuesOf('the protected file this command reads', output.text))
       if (secrets.length > 0) {
         output.text = redactSecretValues(output.text, secrets)
         if (output.terminalOutput) output.terminalOutput = redactSecretValues(output.terminalOutput, secrets)

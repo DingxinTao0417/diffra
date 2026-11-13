@@ -286,3 +286,47 @@ describe('权限模式', () => {
     expect(classifyCommand('kill 11572', policy('full'))).toEqual({ level: 'allow' })
   })
 })
+
+describe('自动审批少问几次（第 628 步）', () => {
+  const policy = (cwd: string, mode: CommandPolicy['mode'] = 'auto'): CommandPolicy => ({ cwd, trusted: [], alwaysAllowed: new Set(), readOnlyPaths: [], mode })
+
+  test('npx 跑项目里已装好的命令（当前目录或上级的 node_modules/.bin）放行；要另装包、本地没有、指定版本的照旧问', () => {
+    const project = mkdtempSync(join(tmpdir(), 'diffra-npx-local-'))
+    try {
+      mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true })
+      writeFileSync(join(project, 'node_modules', '.bin', 'vitest.cmd'), '')
+      writeFileSync(join(project, 'node_modules', '.bin', 'tsc'), '')
+      mkdirSync(join(project, 'packages', 'core'), { recursive: true })
+      for (const command of ['npx vitest run test/loop.test.ts', 'npx tsc --noEmit -p tsconfig.json', 'cd packages/core && npx tsc --noEmit && npx vitest run', 'npx --no-install vitest run']) {
+        expect(classifyCommand(command, policy(project)), command).toEqual({ level: 'allow' })
+      }
+      for (const command of ['npx create-thing', 'npx -p cowsay cowsay hi', 'npx --package=cowsay cowsay', 'npx vitest@1.0.0 run', 'cd $HOME && npx vitest', 'npx -c "rm -rf x"']) {
+        expect(classifyCommand(command, policy(project)), command).toEqual({ level: 'ask' })
+      }
+      // 命令只装在子包里：项目根跑会去下载要问，带 workdir 跑在子包里放行
+      mkdirSync(join(project, 'packages', 'core', 'node_modules', '.bin'), { recursive: true })
+      writeFileSync(join(project, 'packages', 'core', 'node_modules', '.bin', 'eslint.cmd'), '')
+      expect(classifyCommand('npx eslint src', policy(project))).toEqual({ level: 'ask' })
+      expect(classifyCommand('npx eslint src', { ...policy(project), workdir: 'packages/core' })).toEqual({ level: 'allow' })
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+
+  test('grep、rg 的搜索模式里写了密钥文件名不算要读它；要读的路径、-g 和 --include 的规则写了照旧问', () => {
+    const project = mkdtempSync(join(tmpdir(), 'diffra-secret-pattern-'))
+    try {
+      mkdirSync(join(project, 'src'))
+      for (const mode of ['auto', 'ask'] as const) {
+        for (const command of ['rg -n "\.env" src', 'grep -rn "id_rsa|\.npmrc" src', 'rg -n -e ".env" src', "rg -n 'cat .env' src"]) {
+          expect(classifyCommand(command, policy(project, mode)), `${mode} ${command}`).toEqual({ level: 'allow' })
+        }
+        for (const command of ['rg -n token .env', 'rg -n token -g ".env*" src', 'grep -rn token --include=*.pem src', 'node -e "read(\'.env\')"']) {
+          expect(classifyCommand(command, policy(project, mode)), `${mode} ${command}`).toEqual({ level: 'ask' })
+        }
+      }
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+})

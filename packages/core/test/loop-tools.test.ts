@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -727,5 +728,26 @@ describe('命令输出里的密钥值（第 625 步）', () => {
     expect(result).toContain('DEBUG=true')
     expect(JSON.stringify(model.doStreamCalls)).not.toContain('tok_live_9f8e7d6c5b4a')
     expect(JSON.stringify(io.updates)).not.toContain('tok_live_9f8e7d6c5b4a')
+  }, 30_000)
+})
+
+describe('git 历史里的密钥文件（第 629 步）', () => {
+  test('命令写了受保护文件的名字，输出里像密钥的赋值也换掉，即使那份文件已经不在工作区', async () => {
+    const run = (args: string[]) => execFileSync('git', args, { cwd: project, stdio: 'ignore' })
+    const identity = ['-c', 'user.name=t', '-c', 'user.email=t@t']
+    run(['init', '-q'])
+    writeFileSync(join(project, '.env'), 'WEATHER_API_KEY=wk_live_0a1b2c3d4e5f\nCITY=Shanghai\n')
+    run(['add', '.env'])
+    run([...identity, 'commit', '-q', '-m', 'add env'])
+    run(['rm', '-q', '.env'])
+    run([...identity, 'commit', '-q', '-m', 'remove env'])
+    const model = scriptedModel([{ toolCalls: [exec('git show HEAD~1:.env')] }, { text: '看过了' }])
+    const session = await makeSession(model)
+    session.permissionMode = 'full'
+    await runTurn(session, { id: 't', text: '看看以前的配置' }, recordingIO())
+    const result = resultText(toolResults(session)[0])
+    expect(result).toContain('WEATHER_API_KEY=[hidden by Diffra: value of WEATHER_API_KEY in the protected file this command reads]')
+    expect(result).toContain('CITY=Shanghai')
+    expect(JSON.stringify(model.doStreamCalls)).not.toContain('wk_live_0a1b2c3d4e5f')
   }, 30_000)
 })
