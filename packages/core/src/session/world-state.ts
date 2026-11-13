@@ -39,7 +39,32 @@ function today(timeZone: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 }
 
-export function environmentContext(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config'>): string {
+// 用户写的是什么语言（第 624 步）：只认得出文字系统明显的几种；认不出就不写这一项，靠提示词里「跟用户的语言」那句。
+// 评测里 deepseek-flash 有近三成的进度说明顺着英文提示词写成了英文，具体写出语言名比抽象的「同一种语言」管用
+const SCRIPTS: Array<{ name: string; pattern: RegExp }> = [
+  { name: 'Japanese', pattern: /[぀-ヿ]/g },
+  { name: 'Korean', pattern: /[가-힯]/g },
+  { name: 'Chinese', pattern: /[一-鿿]/g },
+  { name: 'Russian', pattern: /[Ѐ-ӿ]/g },
+]
+
+export function detectUserLanguage(text: string): string | null {
+  // 代码、路径、链接本来就是英文，不算
+  const prose = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/https?:\S+/g, ' ')
+    .replace(/\S*[/\\]\S*/g, ' ')
+  const latin = prose.match(/[A-Za-z]/g)?.length ?? 0
+  for (const { name, pattern } of SCRIPTS) {
+    const count = prose.match(pattern)?.length ?? 0
+    // 日文里也有汉字，先看假名；汉字、谚文、西里尔字母有几个、又不比拉丁字母少太多，就算这种语言
+    if (count >= 2 && count * 4 >= latin) return name
+  }
+  return null
+}
+
+export function environmentContext(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config' | 'userLanguage'>): string {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const shell = session.environment.bashPath
     ? process.platform === 'win32'
@@ -56,11 +81,16 @@ export function environmentContext(session: Pick<Session, 'cwd' | 'environment' 
     `  <timezone>${timeZone}</timezone>`,
     `  <approvals>${PERMISSION_TEXT[session.permissionMode]}</approvals>`,
     ...(readOnly.length > 0 ? [`  <read_only_paths>${readOnly.join(', ')}</read_only_paths>`] : []),
+    ...(session.userLanguage
+      ? [
+          `  <user_language>${session.userLanguage}: write everything the user sees in ${session.userLanguage}, including the one-sentence progress notes before tool calls, plans, questions and the final message. Code, commands and identifiers stay as they are.</user_language>`,
+        ]
+      : []),
     '</environment_context>',
   ].join('\n')
 }
 
-export async function currentWorldState(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config'>): Promise<WorldState> {
+export async function currentWorldState(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config' | 'userLanguage'>): Promise<WorldState> {
   return { environment: environmentContext(session), agentsMd: renderProjectDocs(session.cwd, await loadProjectDocs(session.cwd)) }
 }
 
@@ -125,6 +155,6 @@ export async function pendingWorldState(session: Session): Promise<ModelMessage[
 }
 
 // 自己从头开对话的（子智能体、深度扫描）：全量
-export async function freshWorldState(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config'>): Promise<ModelMessage> {
+export async function freshWorldState(session: Pick<Session, 'cwd' | 'environment' | 'permissionMode' | 'config' | 'userLanguage'>): Promise<ModelMessage> {
   return { role: 'user', content: renderWorldState(await currentWorldState(session), {})!.text }
 }

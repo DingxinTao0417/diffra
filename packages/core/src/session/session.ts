@@ -102,6 +102,8 @@ export class Session {
   // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
   config: SessionConfig
   permissionMode: PermissionMode
+  // 用户最近一条消息用的语言（见 world-state.ts 的 detectUserLanguage），写进环境上下文；认不出时沿用上一次的
+  userLanguage: string | null = null
   readonly environment: SessionEnvironment
   readonly checkpoints: Checkpoints | null
   readonly rulePacks: RulePack[]

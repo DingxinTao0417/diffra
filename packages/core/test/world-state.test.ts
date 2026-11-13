@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { AGENTS_MD_MAX_BYTES, loadProjectDocs, renderProjectDocs } from '../src/session/agents-md.js'
-import { knownWorldState, renderWorldState, type WorldState, type WorldStateEntry } from '../src/session/world-state.js'
+import { detectUserLanguage, environmentContext, knownWorldState, renderWorldState, type WorldState, type WorldStateEntry } from '../src/session/world-state.js'
 
 let root: string
 
@@ -86,5 +86,25 @@ describe('世界状态的增量', () => {
     session.worldStateLog = [...log]
     const compacted = { ...session, compaction: { upTo: 2, summary: 's' } }
     expect(knownWorldState(compacted)).toEqual({ environment: 'e2' })
+  })
+})
+
+describe('用户的语言（第 624 步）', () => {
+  test('按文字系统认，代码、路径、链接不算；认不出是 null', () => {
+    expect(detectUserLanguage('跑 python -m app.report 报错 KeyError，帮我看看')).toBe('Chinese')
+    expect(detectUserLanguage('把 `src/cart.ts` 里的 checkout 改一下')).toBe('Chinese')
+    expect(detectUserLanguage('Fix the checkout in src/cart.ts please')).toBeNull()
+    expect(detectUserLanguage('このバグを直してください')).toBe('Japanese')
+    expect(detectUserLanguage('이 버그를 고쳐 주세요')).toBe('Korean')
+    expect(detectUserLanguage('Исправь эту ошибку')).toBe('Russian')
+    // 一大段英文日志里夹一两个汉字，不算中文
+    expect(detectUserLanguage(`看 ${'Error: connection refused at socket '.repeat(5)}`)).toBeNull()
+  })
+
+  test('认出来了就写进环境上下文，要求进度说明也用这个语言；没认出来不写', () => {
+    const base = { cwd: 'D:/p', environment: { bashPath: 'bash' }, permissionMode: 'auto' as const, config: { readOnlyPaths: [] } }
+    const zh = environmentContext({ ...base, userLanguage: 'Chinese' } as Parameters<typeof environmentContext>[0])
+    expect(zh).toContain('<user_language>Chinese: write everything the user sees in Chinese, including the one-sentence progress notes')
+    expect(environmentContext({ ...base, userLanguage: null } as Parameters<typeof environmentContext>[0])).not.toContain('user_language')
   })
 })

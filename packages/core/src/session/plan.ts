@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { toModelError } from '../models/errors.js'
 import { DEFAULT_CONTEXT_WINDOW, notice, takeCheckpoint, taskStateUpdate, type TurnIO } from './loop.js'
 import { READ_ONLY_TOOL_NAMES, READ_ONLY_TOOLS, runReadOnlyLoop } from './read-only.js'
-import { pendingWorldState } from './world-state.js'
+import { detectUserLanguage, pendingWorldState } from './world-state.js'
 import type { Session } from './session.js'
 
 const MAX_STEPS = 30
@@ -50,6 +50,7 @@ export async function runPlan(session: Session, turn: { id: string; text: string
   const controller = session.activateTurn()
   const { signal } = controller
   const planner = session.config.planModel ?? session.config.model
+  session.userLanguage = detectUserLanguage(turn.text) ?? session.userLanguage
   try {
     await takeCheckpoint(session, turn.id, io)
     // 撤销到这一轮时按这一份恢复待验证

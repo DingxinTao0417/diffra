@@ -237,7 +237,9 @@ describe('系统提示词里的保护说明', () => {
 
     const session = await makeSession(scriptedModel([{ text: '好的' }]), undefined, ['data', 'uploads'])
     await runTurn(session, { id: 't', text: '看看' }, recordingIO())
-    expect(textOf(session.messages[0]!)).toContain('  <read_only_paths>data, uploads</read_only_paths>\n</environment_context>')
+    expect(textOf(session.messages[0]!)).toContain('  <read_only_paths>data, uploads</read_only_paths>\n')
+    // 用户用中文说话：环境上下文里写明用中文（第 624 步）
+    expect(textOf(session.messages[0]!)).toContain('  <user_language>Chinese: ')
   })
 })
 

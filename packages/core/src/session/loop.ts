@@ -60,7 +60,7 @@ import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinRemind
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
-import { injectWorldState } from './world-state.js'
+import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import {
   annotateDiff,
@@ -298,6 +298,7 @@ export async function runTurn(
       stop = 'paused'
       return 'end_turn'
     }
+    session.userLanguage = detectUserLanguage(turn.text) ?? session.userLanguage
     // 环境、项目说明文件放在这一轮的提问前面（第一次是全量，之后只有变化）
     await injectWorldState(session)
     session.messages.push({
