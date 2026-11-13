@@ -1,6 +1,6 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test } from '@playwright/test'
+import { type ElectronApplication, expect, test } from '@playwright/test'
 import type { ChangelogRelease } from '../src/shared/changelog'
 import { APP_VERSION, desktopDir, launchApp, makeUserDataDir } from './launch'
 
@@ -16,9 +16,10 @@ test('更新日志：全新安装不提示，只记下版本；升级后第一�
   const previous = releases.find((release) => release.version !== APP_VERSION)
   expect(current, `out/changelog.json 里要有 ${APP_VERSION}`).toBeTruthy()
   expect(previous, 'out/changelog.json 里要有更早的版本').toBeTruthy()
+  let app: ElectronApplication | null = null
   try {
     // 全新安装：不提示，记下当前版本
-    let app = await launchApp(userDataDir)
+    app = await launchApp(userDataDir)
     let window = await app.firstWindow()
     await expect(window.getByTestId('sidebar')).toBeVisible()
     await expect.poll(() => settingsOf(userDataDir).lastSeenVersion).toBe(APP_VERSION)
@@ -45,9 +46,10 @@ test('更新日志：全新安装不提示，只记下版本；升级后第一�
     await expect(changelog).toBeVisible()
     await expect(changelog.getByRole('region')).toHaveCount(releases.length)
     const currentSection = changelog.getByRole('region', { name: `版本 ${APP_VERSION}` })
-    await expect(currentSection).toContainText('当前')
+    // 看「当前」这个标记本身：日志正文里也可能有「当前」两个字（0.4.0 的「从根目录到当前目录」）
+    await expect(currentSection.getByText('当前', { exact: true })).toBeVisible()
     await expect(currentSection).toContainText(firstItem)
-    await expect(changelog.getByRole('region', { name: `版本 ${previous!.version}` })).not.toContainText('当前')
+    await expect(changelog.getByRole('region', { name: `版本 ${previous!.version}` }).getByText('当前', { exact: true })).toHaveCount(0)
     await window.screenshot({ path: 'test-results/changelog-about.png', fullPage: true })
     await app.close()
 
@@ -57,8 +59,9 @@ test('更新日志：全新安装不提示，只记下版本；升级后第一�
     await expect(window.getByTestId('sidebar')).toBeVisible()
     await window.waitForTimeout(1500)
     await expect(window.getByTestId('update-notice')).toHaveCount(0)
-    await app.close()
   } finally {
+    // 中途断言失败时也先关掉应用：不然删目录报 EPERM，把真正的失败盖住
+    await app?.close()
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })

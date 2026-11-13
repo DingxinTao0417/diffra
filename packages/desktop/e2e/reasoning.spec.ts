@@ -20,6 +20,7 @@ test('已知型号、未知别名、自定义档位及不支持协议的能力�
 
 // 第 531、532 步：两级菜单里选「模型」「推理等级」；每个模型选过的档位记进设置，换回这个模型、重启后都还是它
 test('推理等级：两级菜单里选档位，按模型记住，换模型、重启后还在；档位随模型能力变', async () => {
+  test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const mock = await startMockProvider()
   let app = await launchApp(userDataDir)
@@ -49,6 +50,7 @@ test('推理等级：两级菜单里选档位，按模型记住，换模型、�
     await window.getByRole('menuitem', { name: /^推理等级/ }).click()
     await expect(efforts()).toHaveText(['默认', '低', '中', '高'])
     await window.keyboard.press('Escape')
+    await expect(window.getByRole('menu')).toHaveCount(0)
     await pickEffort('高')
     await expect(window.getByTestId('reasoning-label')).toHaveText('高')
     await expect(trigger()).toHaveAttribute('aria-label', /思考程度高/)

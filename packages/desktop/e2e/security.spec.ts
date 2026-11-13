@@ -98,7 +98,9 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     await window.screenshot({ path: 'test-results/security-gate.png' })
 
     // 深度扫描：确认后跑一轮只读审计，出报告；这一轮没有「重新生成」
-    await window.getByRole('button', { name: '扫描本任务改动' }).click()
+    // 第 529 步起任务监控里没有扫描按钮，从输入框的斜杠菜单发起
+    await taskInput(window).pressSequentially('/扫描')
+    await window.getByRole('listbox', { name: '命令和 Skill' }).getByRole('option').filter({ hasText: '深度扫描 · 本任务改动' }).click()
     await window.getByRole('button', { name: '开始扫描' }).click()
     const report = cards(window, 'deep-scan')
     await expect(report).toHaveCount(1, { timeout: 30_000 })
@@ -156,7 +158,7 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
     await startTask(window, '加一个计算函数')
-    await waitTaskStatus(window, 'unverified')
+    await waitTaskStatus(window, 'done')
     await expect(cards(window, 'security')).toHaveCount(2)
     await expect(cards(window, 'review')).toHaveCount(1)
 
@@ -174,7 +176,7 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
     await taskInput(window).fill('再加一个计算函数')
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await expect(window.getByTestId('turn')).toHaveCount(2)
-    await waitTaskStatus(window, 'unverified')
+    await waitTaskStatus(window, 'done')
     await expect(cards(window, 'security')).toHaveCount(2)
     await expect(cards(window, 'review')).toHaveCount(1)
     expect(model.securityReviews()).toBe(1)

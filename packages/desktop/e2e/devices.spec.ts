@@ -958,14 +958,14 @@ test('设备连接：远程任务页借用本机任务页——任务监控（�
     // 任务监控：对方的文件改动
     const monitor = remoteTask.getByTestId('monitor-panel')
     if (!(await monitor.isVisible())) await remoteTask.getByRole('button', { name: '任务监控' }).click()
-    await expect(monitor).toContainText('本任务改动 · 1 个文件', { timeout: 15_000 })
+    await expect(monitor.getByTestId('monitor-changes')).toContainText('1 个文件', { timeout: 15_000 })
     await expect(monitor.getByTestId('monitor-file')).toContainText('hello.txt')
     // 远程任务的环境信息写对方设备的名字，没有「提交或推送」
     await expect(monitor.getByTestId('monitor-commit')).toHaveCount(0)
     await guest.window.screenshot({ path: 'test-results/devices-remote-monitor.png' })
 
     // 审阅改动：只读时没有撤销
-    await monitor.getByRole('button', { name: '审阅', exact: true }).click()
+    await monitor.getByTestId('monitor-changes').click()
     const review = remoteTask.getByTestId('review-panel')
     await expect(review.getByTestId('review-file')).toHaveCount(1)
     await expect(review).toContainText('hello.txt')
@@ -1026,7 +1026,7 @@ test('设备连接：可操作的远程任务页用本机的输入框——切�
     // 任务监控跟着刷新：改回去之后没有改动了
     const monitor = remoteTask.getByTestId('monitor-panel')
     if (!(await monitor.isVisible())) await remoteTask.getByRole('button', { name: '任务监控' }).click()
-    await expect(monitor).toContainText('本任务改动 · 0 个文件', { timeout: 10_000 })
+    await expect(monitor.getByTestId('monitor-changes')).toContainText('还没有改动文件', { timeout: 10_000 })
     await guest.window.screenshot({ path: 'test-results/devices-remote-ops.png' })
   } finally {
     await close([host, guest])
@@ -1068,7 +1068,8 @@ test('设备连接：「完全控制」——连接端开对方电脑上的终�
     await guest.window.screenshot({ path: 'test-results/devices-remote-terminal.png' })
 
     // 关掉面板：对方的终端结束
-    await terminal.getByRole('button', { name: '关闭远程终端' }).click()
+    // 第 533 步起远程终端也在右侧栏，用面板的关闭按钮
+    await terminal.getByRole('button', { name: '关闭面板' }).click()
     await expect(terminal).toHaveCount(0)
     await expect(host.window.getByTestId('remote-control-indicator')).not.toContainText('开着')
 
@@ -1209,7 +1210,7 @@ test('左下角的设备和用量：设备、用量、设置竖着排；设备�
     await expect(indicator).toBeVisible()
     await host.window.getByRole('button', { name: '返回' }).click()
 
-    // 用量那行：右边写今天的 token，和用量统计一致
+    // 用量那行只写「用量」（第 544 步起不写今天的 token）；点开的面板和用量统计一致
     const usageOf = (days: number) =>
       host.window.evaluate<number>(`(() => {
         const now = new Date()
@@ -1220,7 +1221,7 @@ test('左下角的设备和用量：设备、用量、设置竖着排；设备�
     const today = await usageOf(0)
     expect(today).toBeGreaterThan(0)
     const usage = host.window.getByTestId('usage-button')
-    await expect(usage).toHaveText(`用量今天 ${format(today)}`)
+    await expect(usage).toHaveText('用量')
     await host.window.screenshot({ path: 'test-results/devices-footer.png' })
     // 点开：今天的总数、按模型（只有脚本模型，占 100%）、用得最多的任务
     await usage.click()

@@ -17,7 +17,6 @@ import {
   type LucideIcon,
   Plus,
   Server,
-  Sparkles,
   Square,
   SquareTerminal,
   TriangleAlert,
@@ -32,7 +31,6 @@ import { DiffCounts, relativePath } from '@/features/session/DiffView'
 import type { Turn } from '@/features/session/transcript'
 import { showTerminal } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
-import { formatTime } from '@/lib/format'
 import { turnVerdict } from '@/lib/turn-verdict'
 import { runDeepScan } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
@@ -54,7 +52,7 @@ interface MonitorPanelProps {
   onLocate(itemId: string): void
 }
 
-// 右侧栏只放这个任务的状态和产出，参照 Qoder（第 529 步）：摘要、运行中、环境、子智能体、产出、看过的网页、用户给的资料。
+// 右侧栏只放这个任务的状态和产出，参照 Qoder（第 529 步）：运行中、环境、子智能体、产出、看过的网页、用户给的资料（摘要卡第 543 步去掉）。
 // 检查、安全、规范、模型、MCP 这些配置在设置页和项目设置里改
 export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPanelProps) {
   const [expanded, setExpanded] = useState<{ sessionId: string; files: boolean; agents: boolean } | null>(null)
@@ -65,7 +63,6 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
   const terminals = useAppState((state) => state.terminals)
   const processes = useAppState((state) => state.processes[task.sessionId] ?? NO_PROCESSES)
   const verdict = turnVerdict(task)
-  const reply = useMemo(() => latestReply(task.turns), [task.turns])
   const agents = useMemo(() => taskAgents(task.turns), [task.turns])
   const pages = useMemo(() => (remote ? [] : visitedPages(task.turns)), [remote, task.turns])
   const sources = useMemo(() => attachedSources(task.turns), [task.turns])
@@ -96,24 +93,6 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
       }
     >
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 text-sm [scrollbar-gutter:stable]">
-        {reply && (
-          <button
-            type="button"
-            aria-label="跳到最近的回复"
-            className="-mx-1 flex flex-col gap-1.5 rounded-xl border bg-card px-3 py-2.5 text-left outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
-            data-testid="monitor-summary"
-            onClick={() => onLocate(reply.id)}
-          >
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Sparkles className="size-3.5 shrink-0" />
-              {reply.at !== null ? `更新于 ${formatTime(reply.at)}` : '最近的回复'}
-            </span>
-            <span className={cn('line-clamp-5 leading-relaxed text-muted-foreground', reply.text.length > 160 && '[mask-image:linear-gradient(to_bottom,black_70%,transparent)]')}>
-              {reply.text}
-            </span>
-          </button>
-        )}
-
         {(servers.length > 0 || processes.length > 0) && (
           <Section title="运行中">
             {servers.map((server) => (
@@ -346,27 +325,6 @@ export function DeepScanDialog({ sessionId, scope, onClose }: { sessionId: strin
   )
 }
 
-// 摘要卡：最近一条回复去掉 Markdown 记号，只留开头一段；时间是那一轮结束（还在跑就是开始）的时刻
-function latestReply(turns: Turn[]): { id: string; text: string; at: number | null } | null {
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const turn = turns[index]!
-    const item = turn.items.findLast((entry) => entry.kind === 'agent' && entry.text.trim() !== '')
-    if (item?.kind === 'agent') return { id: item.id, text: plainText(item.text), at: turn.endedAt ?? turn.startedAt }
-  }
-  return null
-}
-
-function plainText(markdown: string): string {
-  return markdown
-    .replace(/```[\s\S]*?(```|$)/g, ' ')
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
-    .replace(/\*\*|__|~~|`/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 600)
-}
-
 function taskAgents(turns: Turn[]) {
   return turns.flatMap((turn) => turn.items.flatMap((item) => (item.kind === 'tool' && item.agentCard ? [{ item, card: item.agentCard }] : [])))
 }
@@ -491,19 +449,20 @@ function RunningRow({ icon, command, url, onOpen, onOutput, onStop }: { icon: Lu
         {url && <span className="truncate text-xs text-muted-foreground">{url}</span>}
       </div>
       <div className="-mr-1 flex shrink-0 items-center">
-        {url && onOpen && <IconAction icon={Globe} label="在浏览器里打开" onClick={() => onOpen(url)} />}
-        <IconAction icon={SquareTerminal} label="查看输出" onClick={onOutput} />
-        <IconAction icon={Square} label="停止" onClick={onStop} />
+        {url && onOpen && <IconAction icon={Globe} label="在浏览器里打开" target={command} onClick={() => onOpen(url)} />}
+        <IconAction icon={SquareTerminal} label="查看输出" target={command} onClick={onOutput} />
+        <IconAction icon={Square} label="停止" target={command} onClick={onStop} />
       </div>
     </div>
   )
 }
 
-function IconAction({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick(): void }) {
+// 读屏念出是哪条命令的：页面上还有输入框的「停止」，只念「停止」分不清
+function IconAction({ icon: Icon, label, target, onClick }: { icon: LucideIcon; label: string; target: string; onClick(): void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-xs" aria-label={label} className="text-muted-foreground hover:text-foreground" onClick={onClick}>
+        <Button variant="ghost" size="icon-xs" aria-label={`${label}：${target}`} className="text-muted-foreground hover:text-foreground" onClick={onClick}>
           <Icon />
         </Button>
       </TooltipTrigger>

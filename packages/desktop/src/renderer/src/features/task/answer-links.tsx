@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
-import { Clipboard, ClipboardCopy, ExternalLink, FileText, FolderOpen, Globe, Link, PanelRight } from 'lucide-react'
+import { Clipboard, ClipboardCopy, ExternalLink, FileDiff, FileText, FolderOpen, Globe, Link, PanelRight } from 'lucide-react'
 import type { ProjectFile } from '../../../../shared/ipc'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { errorMessage } from '@/lib/errors'
@@ -9,7 +9,7 @@ import { showToast, store } from '@/state/store'
 export interface AnswerTarget {
   sessionId: string
   project: string
-  // 这个任务改过的文件（相对项目，用 /）：点了看审阅；没改过的看文件预览
+  // 这个任务改过的文件（相对项目，用 /）：右键多一项「查看改动」
   changed: ReadonlySet<string>
 }
 
@@ -90,8 +90,9 @@ function fileOfHref(href: string): { path: string; line: number | null } | null 
   return fileOfCode(text)
 }
 
-// 行内代码里像文件路径的：带扩展名、没有空格，后面可以跟 :行号（src/api.js、loop.ts:1430、D:\p\a.ts:12:3）
-const FILE_IN_CODE = /^((?:[A-Za-z]:)?[^\s:*?"<>|]*[^\s:*?"<>|/\\.]\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d+)(?:[:-]\d+)?)?$/
+// 行内代码里像文件路径的：带扩展名、没有空格，后面可以跟 :行号（src/api.js、loop.ts:1430、D:\p\a.ts:12:3）；
+// 点开头、没有扩展名的也算（.gitignore、src/.env，第 540 步）。是不是真有这个文件由主进程查
+const FILE_IN_CODE = /^((?:[A-Za-z]:)?(?:[^\s:*?"<>|]*[^\s:*?"<>|/\\.]\.[A-Za-z][A-Za-z0-9]{0,9}|(?:[^\s:*?"<>|]*[/\\])?\.[A-Za-z][\w.-]*))(?::(\d+)(?:[:-]\d+)?)?$/
 
 export function fileOfCode(text: string): { path: string; line: number | null } | null {
   const match = FILE_IN_CODE.exec(text.trim())
@@ -171,10 +172,9 @@ function FileReference({ path, line, label, code }: { path: string; line: number
     }
   }, [target.project, candidate])
   if (!file) return code ? <code>{label}</code> : <span>{label}</span>
-  const view = () => {
-    if (target.changed.has(file.relative)) store.set((state) => ({ ...state, panel: 'review', reviewFile: file.relative }))
-    else store.set((state) => ({ ...state, panel: 'file', filePreview: { project: target.project, path: file.relative, line } }))
-  }
+  // 点了都在右侧文件面板里打开这一个文件、定位到那一行（第 546 步）；看改动走右键
+  const view = () => store.set((state) => ({ ...state, panel: 'file', filePreview: { project: target.project, path: file.relative, line } }))
+  const changed = target.changed.has(file.relative)
   const run = (action: Promise<unknown>) => action.catch((error: unknown) => showToast(errorMessage(error)))
   const copyContent = async () => {
     const content = await window.diffra.readFile(target.project, file.relative)
@@ -199,8 +199,14 @@ function FileReference({ path, line, label, code }: { path: string; line: number
       <ContextMenuContent>
         <ContextMenuItem onSelect={view}>
           <PanelRight />
-          {target.changed.has(file.relative) ? '在右侧栏查看改动' : '在右侧栏查看'}
+          在右侧栏打开
         </ContextMenuItem>
+        {changed && (
+          <ContextMenuItem onSelect={() => store.set((state) => ({ ...state, panel: 'review', reviewFile: file.relative }))}>
+            <FileDiff />
+            查看改动
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={() => void run(window.diffra.openFile(target.project, file.relative))}>
           <FileText />
           用默认应用打开

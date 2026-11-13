@@ -768,7 +768,7 @@ export class PageAgent {
   // 指定了宽度时按那个宽度渲染后截图；整页截长图；都没有就截用户看到的样子，这时记下坐标换算比例
   private async screenshot(width: number | null, fullPage: boolean): Promise<BrowserActionResult> {
     if (!this.target.hasPage()) throw new Error('浏览器还没有打开网页，先用 browser_navigate 打开')
-    const notShown = '浏览器面板没有显示（这个任务不在前台），截不了图；用户切到这个任务后再试'
+    const notShown = '浏览器面板没有显示（用户在看别的面板，或这个任务不在前台），截不了图；先用 browser_snapshot 读页面，或请用户打开浏览器面板后再试'
     let image: NativeImage
     let source: string
     if (width === null && !fullPage) {

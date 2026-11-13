@@ -109,6 +109,14 @@
   --diff-add-fg: #17736a;
   --diff-del-fg: #b3362b;
   --highlight: #cfdcef;
+  /* 文件面板的代码高亮（第 546 步），配色接近编辑器的浅色主题 */
+  --code-keyword: #b42318;
+  --code-string: #0a4f8a;
+  --code-number: #0b5cad;
+  --code-comment: #7a7972;
+  --code-function: #6b3fb3;
+  --code-type: #8f4206;
+  --code-tag: #17733f;
   --chart-1: var(--primary);
   --chart-2: #4f7cac;
   /* 不用 warning：用量接近上限时总量条才用 warning，同一个弹层里同一种颜色不能有两个意思 */
@@ -175,6 +183,13 @@
   --diff-add-fg: #5ebfae;
   --diff-del-fg: #ee8278;
   --highlight: #2c3a4f;
+  --code-keyword: #f2786d;
+  --code-string: #9ccaf5;
+  --code-number: #7ebaf2;
+  --code-comment: #8c8b85;
+  --code-function: #c9a6f5;
+  --code-type: #f0a75e;
+  --code-tag: #7ed69e;
   --chart-2: #7ea6d6;
   --chart-3: #b49ad8;
   --chart-4: #8a8983;

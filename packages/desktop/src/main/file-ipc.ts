@@ -1,4 +1,4 @@
-import { open, stat } from 'node:fs/promises'
+import { open, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative } from 'node:path'
 import { ipcMain, shell } from 'electron'
 import { z } from 'zod'
@@ -6,7 +6,7 @@ import { IPC_CHANNELS, type ProjectFile } from '../shared/ipc'
 import { parse } from './ipc-input'
 import { pathInside } from './terminal-ipc'
 
-// 回答里提到的文件（第 535、536 步）：查哪些在项目里、读出来预览或复制、用默认应用打开、在资源管理器里显示。只认项目目录里的文件
+// 回答里提到的文件（第 535、536、546 步）：查哪些在项目里、读出来编辑或复制、保存、用默认应用打开、在资源管理器里显示。只认项目目录里的文件
 
 const MAX_PATHS = 100
 // 预览和复制最多读这么多，超出的截掉
@@ -36,6 +36,9 @@ async function requireFile(project: string, path: string): Promise<string> {
   return file.path
 }
 
+// 文件的版本：修改时间加大小。保存前比一下，读出来之后被智能体或别的程序改过就不直接覆盖
+const versionOf = (info: { mtimeMs: number; size: number }) => `${info.mtimeMs}:${info.size}`
+
 export function registerFileIpc(): void {
   ipcMain.handle(IPC_CHANNELS.fileResolve, async (_event, rawProject: unknown, rawPaths: unknown) => {
     const project = parse(projectSchema, rawProject)
@@ -53,10 +56,20 @@ export function registerFileIpc(): void {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
       const data = buffer.subarray(0, bytesRead)
       const binary = data.subarray(0, BINARY_PROBE_BYTES).includes(0)
-      return { text: binary ? '' : data.toString('utf8'), binary, truncated: size > bytesRead }
+      return { text: binary ? '' : data.toString('utf8'), binary, truncated: size > bytesRead, version: versionOf(await handle.stat()) }
     } finally {
       await handle.close()
     }
+  })
+
+  // 文件面板里编辑后保存。version 是读出来时的版本，对不上（外面改过了）就不写，交给界面问用户；null 是用户选了覆盖
+  ipcMain.handle(IPC_CHANNELS.fileWrite, async (_event, rawProject: unknown, rawPath: unknown, rawText: unknown, rawVersion: unknown) => {
+    const path = await requireFile(parse(projectSchema, rawProject), parse(pathSchema, rawPath))
+    const text = parse(z.string().max(MAX_READ_BYTES * 4), rawText)
+    const version = parse(z.string().nullable(), rawVersion)
+    if (version !== null && versionOf(await stat(path)) !== version) return { saved: false as const }
+    await writeFile(path, text, 'utf8')
+    return { saved: true as const, version: versionOf(await stat(path)) }
   })
 
   ipcMain.handle(IPC_CHANNELS.fileOpen, async (_event, rawProject: unknown, rawPath: unknown) => {

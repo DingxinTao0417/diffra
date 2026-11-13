@@ -111,9 +111,9 @@ test('斜杠菜单：选 Skill 和目标成标签，计划和目标二选一；�
     expect(first).toContain('up to 3 rounds')
     await expect(window.getByTestId('message-tags')).toHaveText(/目标.*diffra-e2e-style/)
     await expect(window.getByTestId('user-message')).toHaveText('写一个两行的 notes.txt')
-    // 每轮的完成卡片只列这一轮的改动
-    await expect(window.locator('[data-testid="tool-call"][data-kind="finish"]')).toHaveCount(2)
-    await expect(window.locator('[data-testid="tool-call"][data-kind="finish"]').first()).toContainText('+1')
+    // 第 526 步起没有完成卡；这一轮改了哪些文件写在这一轮底部
+    await expect(window.locator('[data-testid="tool-call"][data-kind="finish"]')).toHaveCount(0)
+    await expect(window.getByTestId('turn-files').last()).toContainText('1 个文件')
     await window.getByTestId('message-tags').locator('..').screenshot({ path: 'test-results/goal-request.png' })
     await window.screenshot({ path: 'test-results/goal-turn.png' })
 

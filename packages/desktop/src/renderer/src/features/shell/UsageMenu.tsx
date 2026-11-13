@@ -10,8 +10,8 @@ import { openSettings, openTask } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
 import { FooterButton } from './FooterButton'
 
-// 侧栏底部的用量（docs/decisions.md「左下角的设备和用量」）：右边写今天的 token，点开看今天、近 7 天、本月的构成、按模型、用得最多的任务。
-// 和用量页同一份统计、同样按本机时区；右边的数在启动、每轮跑完、切回窗口时读，面板的在打开、切换时读，不在后台一直刷新
+// 侧栏底部的用量（docs/decisions.md「左下角的设备和用量」）：点开看今天、近 7 天、本月的构成、按模型、用得最多的任务。
+// 和用量页同一份统计、同样按本机时区；面板在打开、切换时读，不在后台一直刷新。右边不再写今天的 token（第 544 步）
 type Period = 'today' | 'week' | 'thisMonth'
 
 const PERIODS: Array<{ value: Period; label: string; versus: string }> = [
@@ -51,34 +51,12 @@ async function readPeriod(period: Period): Promise<PeriodUsage> {
   return { current, previous, days: (week ?? current).days }
 }
 
-// 有任务从「在跑」变成不在跑（一轮跑完）时加一
-function useTurnsEnded(): number {
-  const running = useAppState((state) => Object.values(state.live).filter((task) => task.running).length)
-  const [ended, setEnded] = useState({ running, count: 0 })
-  if (running !== ended.running) setEnded({ running, count: running < ended.running ? ended.count + 1 : ended.count })
-  return ended.count
-}
-
 export function UsageButton() {
   const [open, setOpen] = useState(false)
-  const [today, setToday] = useState<number | null>(null)
-  const turnsEnded = useTurnsEnded()
-  useEffect(() => {
-    const load = () => read(rangeOf('today', new Date())).then((summary) => setToday(tokensOf(summary.totals)), (error: unknown) => console.error('读今天的用量失败', error))
-    load()
-    window.addEventListener('focus', load)
-    return () => window.removeEventListener('focus', load)
-  }, [turnsEnded])
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <FooterButton
-          aria-label={today === null ? '用量' : `用量：今天 ${formatTokens(today)} token`}
-          icon={<BarChart3 className="size-4" />}
-          label="用量"
-          meta={today !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">今天 {formatTokens(today)}</span>}
-          data-testid="usage-button"
-        />
+        <FooterButton icon={<BarChart3 className="size-4" />} label="用量" data-testid="usage-button" />
       </PopoverTrigger>
       <PopoverContent side="right" align="end" sideOffset={8} collisionPadding={8} className="w-80 p-0" data-testid="usage-panel">
         {open && <UsagePanel onNavigate={() => setOpen(false)} />}

@@ -29,6 +29,7 @@ import { Conversation } from './Conversation'
 import { BranchMenu } from './BranchMenu'
 import { FilePanel } from './FilePanel'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
+import { StepsBar } from './StepsBar'
 import { ReadOnlyContext } from './read-only'
 import { RemoteTaskContext, type RemoteTaskSource } from './remote-task'
 import { ReviewPanel } from './ReviewPanel'
@@ -211,7 +212,10 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
           <div className="px-8 pb-3.5 @max-[600px]:px-5">
             <div className="mx-auto flex max-w-(--content-max) flex-col gap-2">
               {remote ? (
-                remote.composer
+                <>
+                  <StepsBar turns={task.turns} running={task.running} />
+                  {remote.composer}
+                </>
               ) : (
                 <>
                   {/* 固定在输入框上方，用户往上翻着看改动时也能看到；多行命令只让命令区滚动，否则卡片会把对话挤没，按钮也不能随之滚出视野 */}
@@ -232,6 +236,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
                       </button>
                     </div>
                   ))}
+                  <StepsBar turns={task.turns} running={task.running} />
                   <Composer
                     size="normal"
                     draftKey={composerDraftKey.task(task.sessionId)}
@@ -288,7 +293,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
         {panel === 'browser' && !remote && <BrowserPanel sessionId={task.sessionId} />}
         {panel === 'design' && !remote && <DesignPanel sessionId={task.sessionId} project={task.project} noProject={task.noProject} />}
         {panel === 'terminal' && (remote ? remote.terminal : <TerminalPanel cwd={task.project} />)}
-        {panel === 'file' && !remote && <FilePanel />}
+        {panel === 'file' && !remote && <FilePanel sessionId={task.sessionId} changeVersion={task.changeVersion} />}
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />

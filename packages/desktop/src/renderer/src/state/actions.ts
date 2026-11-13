@@ -225,9 +225,10 @@ export function wireCoreEvents(): () => void {
     store.set((current) => ({ ...current, browsers: { ...current.browsers, [state.sessionId]: state } })),
   )
   // 智能体在用浏览器：正在看这个任务时把浏览器面板打开
+  // 智能体在用浏览器：在看这个任务、右侧栏关着或开着任务监控时切到浏览器；用户自己打开的终端、审阅、文件这些不抢（第 541 步），浏览器在后台照常操作
   const offBrowserActivity = window.diffra.onBrowserActivity(({ sessionId }) => {
     const { route, panel } = store.get()
-    if (route.name === 'task' && route.sessionId === sessionId && panel !== 'browser') store.set((current) => ({ ...current, panel: 'browser' }))
+    if (route.name === 'task' && route.sessionId === sessionId && (panel === null || panel === 'monitor')) store.set((current) => ({ ...current, panel: 'browser' }))
   })
   // 智能体在用设计面板：同样在看这个任务时打开，只有设计任务有设计面板
   const offDesignActivity = window.diffra.onDesignActivity(({ sessionId }) => {

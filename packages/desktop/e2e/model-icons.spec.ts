@@ -40,9 +40,17 @@ function writeSettings(userDataDir: string, extra: Record<string, unknown> = {})
 async function openMenuGroup(window: Page, providerName: string): Promise<{ label: Locator; group: Locator }> {
   await window.getByRole('button', { name: '返回', exact: true }).click()
   await window.getByTestId('model-menu').click()
-  const models = window.getByRole('menuitem', { name: /^模型/ })
-  if (await models.isVisible()) await models.click()
-  const label = window.getByRole('menu').last().locator('[data-slot="dropdown-menu-label"]').filter({ hasText: providerName })
+  const panel = window.getByTestId('model-panel')
+  await expect(panel).toBeVisible()
+  // 只认「模型」那一行子菜单；没选模型时菜单只有一级，里面的「模型与角色…」也以「模型」开头
+  const models = panel.locator('[data-slot="dropdown-menu-sub-trigger"]').filter({ hasText: /^模型/ })
+  let list = panel
+  if ((await models.count()) > 0) {
+    await models.click()
+    list = window.getByTestId('model-list')
+  }
+  const label = list.locator('[data-slot="dropdown-menu-label"]').filter({ hasText: providerName })
+  await expect(label).toBeVisible()
   return { label, group: label.locator('xpath=..') }
 }
 
