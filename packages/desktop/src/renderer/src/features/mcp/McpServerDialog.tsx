@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Segmented } from '@/components/ui/segmented'
 import { Textarea } from '@/components/ui/textarea'
-import { Field } from '@/features/models/ProviderDialog'
+import { Field } from '@/components/ui/field'
 import { errorMessage } from '@/lib/errors'
 
 interface McpServerDialogProps {

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
 import { APP_VERSION, launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, expandProvider, openModelCapabilities, openModelsPage } from './model-setup'
 import { reasoningEffortsFor } from '../src/shared/reasoning'
 
 test('已知型号、未知别名、自定义档位及不支持协议的能力列表', () => {
@@ -58,12 +58,13 @@ test('推理等级：两级菜单里选档位，按模型记住，换模型、�
 
     // 加一个能力不同的模型：换过去是它自己的档位（没选过就是默认），换回来还是「高」
     await openModelsPage(window)
-    const card = () => providerCard(window, '思考模型')
-    await card().getByRole('button', { name: '添加模型', exact: true }).click()
-    const capabilityDialog = window.getByRole('dialog')
-    await capabilityDialog.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
-    await capabilityDialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
-    await expect(capabilityDialog).toBeHidden()
+    const card = await expandProvider(window, '思考模型')
+    await card.getByRole('button', { name: '添加模型', exact: true }).click()
+    const newModel = card.getByTestId('model-editor')
+    await newModel.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
+    await newModel.getByRole('button', { name: '校验并添加模型', exact: true }).click()
+    await expect(newModel).toBeHidden()
+    await expect(card.getByTestId('model-row-gpt-5.2')).toBeVisible()
     await window.getByRole('button', { name: '返回', exact: true }).click()
     await pickModel('gpt-5.2')
     await expect(trigger()).toHaveAttribute('aria-label', /思考程度默认/)
@@ -79,11 +80,10 @@ test('推理等级：两级菜单里选档位，按模型记住，换模型、�
 
     // 能力里去掉极高：换到 gpt-5.2 时记住的极高不能用了，按默认
     await openModelsPage(window)
-    await card().getByTestId('model-row-gpt-5.2').getByRole('button', { name: 'gpt-5.2 模型操作', exact: true }).click()
-    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    await window.getByRole('dialog').getByRole('checkbox', { name: '极高', exact: true }).click()
-    await window.getByRole('dialog').getByRole('button', { name: '保存模型能力', exact: true }).click()
-    await expect(window.getByRole('dialog')).toBeHidden()
+    const capabilities = await openModelCapabilities(window, '思考模型', 'gpt-5.2')
+    await capabilities.getByRole('checkbox', { name: '极高', exact: true }).click()
+    await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
+    await expect(capabilities).toBeHidden()
     await window.getByRole('button', { name: '返回', exact: true }).click()
     await pickModel('gpt-5.2')
     await expect(trigger()).toHaveAttribute('aria-label', /思考程度默认/)

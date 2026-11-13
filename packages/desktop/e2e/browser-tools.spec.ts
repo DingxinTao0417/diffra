@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { DEVICE_SCALE, launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { lastToolResult, type ScriptMessages, startScriptedModel } from './scripted-model'
 
 // 测试页：右上角一块画布记下点击、双击、右键、拖动的位置；页面记下按键、下拉框和上传；还有延迟出现的文字、确认框、会失败的请求、开新窗口的链接
@@ -140,9 +140,7 @@ test('浏览器新工具：按坐标点击、双击、右键、拖动，组合�
 
     // 给模型打开「图片」，新任务里按截图坐标点
     await openModelsPage(window)
-    await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
-    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    const capabilities = window.getByRole('dialog')
+    const capabilities = await openModelCapabilities(window, '脚本模型', 'scripted')
     await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
     await expect(capabilities).toBeHidden()

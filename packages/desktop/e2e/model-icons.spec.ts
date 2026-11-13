@@ -61,29 +61,28 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
   try {
     const window = await app.firstWindow()
     await openModelsPage(window)
-    const dialog = window.getByRole('dialog')
-    const iconButton = dialog.getByTestId('provider-icon-button')
-    const unrecognized = dialog.getByRole('button', { name: '没认出来，点这里选', exact: true })
+    // 添加和编辑共用同一个表单面板，同一时间只有一个
+    const panel = window.getByTestId('provider-panel')
+    const iconButton = panel.getByTestId('provider-icon-button')
+    const unrecognized = panel.getByRole('button', { name: '没认出来，点这里选', exact: true })
     const addCustom = async (name: string) => {
       await window.getByRole('button', { name: '添加模型服务', exact: true }).click()
-      await dialog.getByRole('combobox', { name: '供应商', exact: true }).click()
-      await window.getByRole('option', { name: '自定义', exact: true }).click()
-      await dialog.getByLabel('名称', { exact: true }).fill(name)
-      await dialog.getByLabel('地址', { exact: true }).fill(`${mock.baseUrl}/openai/v1`)
-      await dialog.getByLabel('API Key', { exact: true }).fill(GOOD_KEY)
-      await dialog.getByRole('textbox', { name: '模型 ID 1', exact: true }).fill('mock-a')
+      await panel.getByRole('radio', { name: '自定义 API', exact: true }).click()
+      await panel.getByLabel('名称', { exact: true }).fill(name)
+      await panel.getByLabel('地址', { exact: true }).fill(`${mock.baseUrl}/openai/v1`)
+      await panel.getByLabel('API Key', { exact: true }).fill(GOOD_KEY)
+      await panel.getByRole('textbox', { name: '模型 ID 1', exact: true }).fill('mock-a')
     }
-    const saveDialog = async (button: '校验并添加模型' | '校验并保存') => {
-      await dialog.getByRole('button', { name: '下一步', exact: true }).click()
-      await dialog.getByRole('button', { name: button, exact: true }).click()
-      await expect(dialog).toBeHidden()
+    const savePanel = async (button: '校验并添加模型' | '校验并保存') => {
+      await panel.getByRole('button', { name: button, exact: true }).click()
+      await expect(panel).toBeHidden()
     }
 
     // ① 名称写 SiliconFlow，按钮自动换成 SiliconCloud 图标，保存后卡片头像也是它
     await addCustom('SiliconFlow')
     await expect(iconButton).toHaveAttribute('aria-label', '更换图标（当前：SiliconCloud）')
     await expect(unrecognized).toBeHidden()
-    await saveDialog('校验并添加模型')
+    await savePanel('校验并添加模型')
     await expect(brandTitles(providerCard(window, 'SiliconFlow')).first()).toHaveText('SiliconCloud')
     await expect.poll(() => savedIcon(userDataDir, 'SiliconFlow')).toBeNull()
 
@@ -93,14 +92,15 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
     await addCustom(name)
     await expect(unrecognized).toBeVisible()
     await expect(iconButton).toHaveAttribute('aria-label', '更换图标')
-    await saveDialog('校验并添加模型')
+    await savePanel('校验并添加模型')
     await expect(card.getByText('我', { exact: true }).first()).toBeVisible()
     await expect(brandTitles(card)).toHaveCount(0)
-    // 模型行的图标只有 16px，写不下字，回退成通用图标而不是首字母方块
+    // 模型行的图标只有 16px，写不下字，回退成通用图标而不是首字母方块（模型行在展开的面板里）
+    await card.getByRole('button', { name: '编辑', exact: true }).click()
+    await expect(card.getByTestId('model-row-mock-a')).toBeVisible()
     await expect(card.getByTestId('model-row-mock-a').getByText('我', { exact: true })).toHaveCount(0)
 
     // 编辑时点提示打开选择器，按中文别名搜到 DeepSeek，在搜索框按 Enter 选中第一条
-    await card.getByRole('button', { name: '编辑', exact: true }).click()
     await unrecognized.click()
     const picker = window.getByTestId('icon-picker')
     const search = picker.getByLabel('搜索图标', { exact: true })
@@ -111,12 +111,13 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
     await expect(picker).toBeHidden()
     await expect(iconButton).toHaveAttribute('aria-label', '更换图标（当前：DeepSeek）')
     await expect(unrecognized).toBeHidden()
-    await saveDialog('校验并保存')
+    await savePanel('校验并保存')
     await expect(brandTitles(card).first()).toHaveText('DeepSeek')
     await expect(card.getByText('我', { exact: true })).toHaveCount(0)
     await expect.poll(() => savedIcon(userDataDir, name)).toBe('DeepSeek')
 
-    // 卡片上切换模型的启用开关会整份重存服务配置，自选图标不能丢
+    // 展开后切换模型的启用开关会整份重存服务配置，自选图标不能丢
+    await card.getByRole('button', { name: '编辑', exact: true }).click()
     const enabledSwitch = card.getByRole('switch', { name: 'mock-a 启用', exact: true })
     await enabledSwitch.click()
     await expect.poll(() => savedEnabled(userDataDir, name, 'mock-a')).toBe(false)
@@ -144,7 +145,7 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
     await expect(picker).toBeHidden()
     await expect(iconButton).toHaveAttribute('aria-label', '更换图标')
     await expect(unrecognized).toBeVisible()
-    await saveDialog('校验并保存')
+    await savePanel('校验并保存')
     await expect(card.getByText('我', { exact: true }).first()).toBeVisible()
     await expect(brandTitles(card)).toHaveCount(0)
     await expect.poll(() => savedIcon(userDataDir, name)).toBeNull()
@@ -163,23 +164,24 @@ test('预设服务自动带上图标，模型行按模型 ID 匹配图标', asyn
     const window = await app.firstWindow()
     await openModelsPage(window)
     await window.getByRole('button', { name: '添加模型服务', exact: true }).click()
-    const dialog = window.getByRole('dialog')
-    await dialog.getByRole('combobox', { name: '供应商', exact: true }).click()
+    const panel = window.getByTestId('provider-panel')
+    await panel.getByRole('combobox', { name: '供应商', exact: true }).click()
     await window.getByRole('option', { name: 'DeepSeek', exact: true }).click()
-    // 改成认不出的名称，图标只能来自预设
+    // 预设的名称和地址预填好、默认收起；点开改成认不出的名称，图标只能来自预设
+    await panel.getByRole('button', { name: '名称和地址', exact: true }).click()
     const name = '主力服务'
-    await dialog.getByLabel('名称', { exact: true }).fill(name)
-    await expect(dialog.getByTestId('provider-icon-button')).toHaveAttribute('aria-label', '更换图标（当前：DeepSeek）')
-    await dialog.getByLabel('地址', { exact: true }).fill(`${mock.baseUrl}/openai/v1`)
-    await dialog.getByLabel('API Key', { exact: true }).fill(GOOD_KEY)
-    await dialog.getByRole('textbox', { name: '模型 ID 1', exact: true }).fill('qwen3-coder')
-    await dialog.getByRole('button', { name: '下一步', exact: true }).click()
-    await dialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
-    await expect(dialog).toBeHidden()
+    await panel.getByLabel('名称', { exact: true }).fill(name)
+    await expect(panel.getByTestId('provider-icon-button')).toHaveAttribute('aria-label', '更换图标（当前：DeepSeek）')
+    await panel.getByLabel('地址', { exact: true }).fill(`${mock.baseUrl}/openai/v1`)
+    await panel.getByLabel('API Key', { exact: true }).fill(GOOD_KEY)
+    await panel.getByRole('textbox', { name: '模型 ID 1', exact: true }).fill('qwen3-coder')
+    await panel.getByRole('button', { name: '校验并添加模型', exact: true }).click()
+    await expect(panel).toBeHidden()
 
-    // ④ 卡片头像是预设的 DeepSeek；⑤ 模型行按模型 ID 用 Qwen
+    // ④ 服务行头像是预设的 DeepSeek；⑤ 展开后模型行按模型 ID 用 Qwen
     const card = providerCard(window, name)
     await expect(brandTitles(card).first()).toHaveText('DeepSeek')
+    await card.getByRole('button', { name: '编辑', exact: true }).click()
     await expect(brandTitles(card.getByTestId('model-row-qwen3-coder'))).toHaveText('Qwen')
     await expect.poll(() => savedIcon(userDataDir, name)).toBeNull()
 
@@ -215,6 +217,7 @@ test('旧设置文件没有 icon 字段：预设服务照样显示图标，改�
     const card = providerCard(window, 'DeepSeek')
     await expect(brandTitles(card).first()).toHaveText('DeepSeek')
 
+    await card.getByRole('button', { name: '编辑', exact: true }).click()
     await card.getByRole('switch', { name: 'deepseek-chat 启用', exact: true }).click()
     await expect.poll(() => savedEnabled(userDataDir, 'DeepSeek', 'deepseek-chat')).toBe(false)
     expect(savedIcon(userDataDir, 'DeepSeek')).toBeNull()

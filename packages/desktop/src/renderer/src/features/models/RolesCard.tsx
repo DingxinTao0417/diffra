@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { modelDisplayName, type ModelRef, type Role, ROLES, type SettingsView } from '../../../../shared/settings'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { errorMessage } from '@/lib/errors'
+import { useLobeIcons } from '@/lib/model-icons'
+import { BrandIcon } from './BrandIcon'
 import { SettingsGroup, SettingsRow } from '../settings/SettingsLayout'
 
 export const ROLE_INFO: Record<Role, { label: string; description: string; required: boolean; none: string }> = {
@@ -25,6 +27,7 @@ interface RolesCardProps {
 
 export function RolesCard({ view, onChange }: RolesCardProps) {
   const [error, setError] = useState<string | null>(null)
+  const icons = useLobeIcons()
 
   const groups = view.providers
     .map((provider) => ({
@@ -34,6 +37,7 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
         value: encode({ providerId: provider.id, modelId: model.id }),
         ref: { providerId: provider.id, modelId: model.id },
         name: modelDisplayName(model),
+        icon: icons?.matchModelIcon(model.id) ?? icons?.matchProviderIcon(provider) ?? null,
       })),
     }))
     .filter((group) => group.options.length > 0)
@@ -71,7 +75,10 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
                 {/* 列表里供应商已是分组标题，触发器离开了列表，要带上供应商前缀才分得清不同供应商的同名模型 */}
                 <SelectValue>
                   {selectedGroup && selectedOption ? (
-                    <span className="truncate"><span className="text-muted-foreground">{selectedGroup.name} / </span>{selectedOption.name}</span>
+                    <>
+                      <BrandIcon id={selectedOption.icon} fallbackText={selectedGroup.name} size={16} />
+                      <span className="truncate"><span className="text-muted-foreground">{selectedGroup.name} / </span>{selectedOption.name}</span>
+                    </>
                   ) : info.none}
                 </SelectValue>
               </SelectTrigger>
@@ -83,6 +90,7 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
                     <SelectLabel>{group.name}</SelectLabel>
                     {group.options.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
+                        <BrandIcon id={option.icon} fallbackText={group.name} size={16} />
                         <span className="truncate">{option.name}</span>
                       </SelectItem>
                     ))}

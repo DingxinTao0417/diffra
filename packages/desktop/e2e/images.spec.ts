@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { startScriptedModel } from './scripted-model'
 
 // 在输入框上触发一次粘贴，剪贴板里是一张 3000x1500 的 PNG。页面里跑的代码，e2e 的类型配置里没有 DOM 类型，写成字符串
@@ -88,9 +88,7 @@ test('图片输入：粘贴的大图缩小后带上；模型没开图片时说�
 
     // 在模型设置里打开「视觉」，回首页再发
     await openModelsPage(window)
-    await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
-    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    const capabilities = window.getByRole('dialog')
+    const capabilities = await openModelCapabilities(window, '脚本模型', 'scripted')
     await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
     await expect(capabilities.getByRole('checkbox', { name: '视觉', exact: true })).toBeChecked()
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()

@@ -6,7 +6,7 @@ import { type ElectronApplication, expect, type Page, test } from '@playwright/t
 import { createRelay, type Relay } from '../../relay/src/relay.ts'
 import { chooseProject, settingsNav, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { exec, read, replaceLines, startScriptedModel } from './scripted-model'
 import { IPC_CHANNELS } from '../src/shared/ipc'
 
@@ -286,9 +286,7 @@ const turnTexts = (window: Page, root: string) =>
 
 async function enableVision(window: Page, provider: string): Promise<void> {
   await openModelsPage(window)
-  await providerCard(window, provider).getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
-  await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-  const capabilities = window.getByRole('dialog')
+  const capabilities = await openModelCapabilities(window, provider, 'scripted')
   await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
   await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
   await expect(capabilities).toBeHidden()

@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Field } from '@/features/models/ProviderDialog'
+import { Field } from '@/components/ui/field'
 import { SavedHint, SettingsHeader, useSavedFlash } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 

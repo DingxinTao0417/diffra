@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { replaceLines, startScriptedModel } from './scripted-model'
 
 test('Enter 发送、Shift+Enter 换行；项目外读写分别申请，本会话授权复用且拒绝不写入', async () => {
@@ -31,9 +31,7 @@ test('Enter 发送、Shift+Enter 换行；项目外读写分别申请，本会�
     await configureCoderModel(window, { name: '权限测试', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
     // 能看图的模型才有 view_image
     await openModelsPage(window)
-    await providerCard(window, '权限测试').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
-    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    const capabilities = window.getByRole('dialog')
+    const capabilities = await openModelCapabilities(window, '权限测试', 'scripted')
     await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
     await expect(capabilities).toBeHidden()

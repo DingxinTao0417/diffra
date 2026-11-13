@@ -8,7 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Segmented } from '@/components/ui/segmented'
 import { formatTokens } from '@/lib/format'
-import { Field, ReadonlyField } from './ProviderDialog'
+import { Field, ReadonlyField } from '@/components/ui/field'
 
 const DEFAULT_ENABLED_REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
 const AUTO_CONTEXT = 'auto'
@@ -49,8 +49,8 @@ export function capabilitySummary(model: ModelConfig, protocol: Protocol): strin
   return parts.filter(Boolean).join(' · ')
 }
 
-// idField：readonly 用于向导第二步（第一步已填过）和编辑已保存的模型
-export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' }) {
+// idField：readonly 用于编辑已保存的模型；hidden 用于添加面板，模型 ID 已经在那一行上填
+export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' | 'hidden' }) {
   const [customContext, setCustomContext] = useState(() => model.contextWindow !== null && !isPresetContext(model.contextWindow))
   const supportsEffort = protocol === 'openai-compatible' || protocol === 'openai-responses'
   const efforts = reasoningEffortsFor({ protocol }, model).filter((value) => value !== 'default')

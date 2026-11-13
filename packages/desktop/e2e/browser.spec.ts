@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
-import { configureCoderModel, openModelsPage, providerCard } from './model-setup'
+import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { startScriptedModel } from './scripted-model'
 
 // 测试网站：一个表单（填名字、点按钮打招呼）、一条控制台日志、一个去第二页的链接
@@ -125,9 +125,7 @@ test('内置浏览器：智能体打开本地页面、读页面、输入、点�
 
     // 给模型打开「图片」，新任务里截图：截图作为图片跟在工具结果后面发给模型
     await openModelsPage(window)
-    await providerCard(window, '脚本模型').getByRole('button', { name: 'scripted 模型操作', exact: true }).click()
-    await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    const capabilities = window.getByRole('dialog')
+    const capabilities = await openModelCapabilities(window, '脚本模型', 'scripted')
     await capabilities.getByRole('checkbox', { name: '视觉', exact: true }).click()
     await capabilities.getByRole('button', { name: '保存模型能力', exact: true }).click()
     await expect(capabilities).toBeHidden()
