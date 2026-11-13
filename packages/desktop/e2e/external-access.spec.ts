@@ -47,9 +47,10 @@ test('Enter 发送、Shift+Enter 换行；项目外读写分别申请，本会�
     await input.press('Enter')
     await expect(permission).toContainText('项目外写入')
     await permission.getByRole('button', { name: '仅允许本次操作' }).click()
-    // 改了文件没调 finish：拉回三次后停下，不冒充已完成
-    await waitTaskStatus(window, 'unfinished')
+    // 改的是项目外的文件（第 484 步起不算本轮改动）：不要求 finish、不拉回，回完话就结束
+    await waitTaskStatus(window, 'done')
     expect(readFileSync(target, 'utf8')).toBe('approved')
+    expect(model.requests()).toBe(7)
   } finally {
     await app.close()
     await model.close()
