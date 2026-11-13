@@ -36,11 +36,14 @@ function writeSettings(userDataDir: string, extra: Record<string, unknown> = {})
   writeFileSync(join(userDataDir, 'settings.json'), JSON.stringify({ version: 1, providers: [], roles, lastSeenVersion: APP_VERSION, ...extra }))
 }
 
-async function openMenuGroup(window: Page, providerName: string): Promise<{ label: Locator; menu: Locator }> {
+// 选好了模型时菜单分两级（第 532 步）：先点「模型」展开模型列表；group 是这个服务那一组（标题和它的模型）
+async function openMenuGroup(window: Page, providerName: string): Promise<{ label: Locator; group: Locator }> {
   await window.getByRole('button', { name: '返回', exact: true }).click()
   await window.getByTestId('model-menu').click()
-  const menu = window.getByRole('menu')
-  return { menu, label: menu.locator('[data-slot="dropdown-menu-label"]').filter({ hasText: providerName }) }
+  const models = window.getByRole('menuitem', { name: /^模型/ })
+  if (await models.isVisible()) await models.click()
+  const label = window.getByRole('menu').last().locator('[data-slot="dropdown-menu-label"]').filter({ hasText: providerName })
+  return { label, group: label.locator('xpath=..') }
 }
 
 test('自定义服务按名称自动匹配图标，认不出来时手动选，也能改回自动匹配', async () => {
@@ -117,9 +120,10 @@ test('自定义服务按名称自动匹配图标，认不出来时手动选，�
     expect(savedIcon(userDataDir, name)).toBe('DeepSeek')
     await expect(brandTitles(card).first()).toHaveText('DeepSeek')
 
-    // 输入框模型菜单的分组标题也用自选的图标
-    const { label } = await openMenuGroup(window, name)
-    await expect(brandTitles(label)).toHaveText('DeepSeek')
+    // 输入框模型菜单：分组标题只写名字，不带图标（第 532 步）；认不出型号的模型行用服务的自选图标
+    const { label, group } = await openMenuGroup(window, name)
+    await expect(brandTitles(label)).toHaveCount(0)
+    await expect(brandTitles(group.getByRole('menuitem').filter({ hasText: 'mock-a' }))).toHaveText('DeepSeek')
     await window.keyboard.press('Escape')
 
     // ③ 改回自动匹配，回到首字母方块
@@ -171,9 +175,9 @@ test('预设服务自动带上图标，模型行按模型 ID 匹配图标', asyn
     await expect(brandTitles(card.getByTestId('model-row-qwen3-coder'))).toHaveText('Qwen')
     await expect.poll(() => savedIcon(userDataDir, name)).toBeNull()
 
-    const { label, menu } = await openMenuGroup(window, name)
-    await expect(brandTitles(label)).toHaveText('DeepSeek')
-    await expect(brandTitles(menu.getByRole('menuitem').filter({ hasText: 'qwen3-coder' }))).toHaveText('Qwen')
+    const { label, group } = await openMenuGroup(window, name)
+    await expect(brandTitles(label)).toHaveCount(0)
+    await expect(brandTitles(group.getByRole('menuitem').filter({ hasText: 'qwen3-coder' }))).toHaveText('Qwen')
     await window.keyboard.press('Escape')
   } finally {
     await app.close()

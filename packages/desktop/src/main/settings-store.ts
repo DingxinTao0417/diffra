@@ -92,7 +92,6 @@ export const layoutSchema = z.object({
   widePanelWidth: layoutSizeSchema,
   monitorWidth: layoutSizeSchema,
   designChatWidth: layoutSizeSchema,
-  terminalHeight: layoutSizeSchema,
 })
 
 // 主机名：小写，去掉协议、路径和端口，写成 example.com
@@ -179,6 +178,8 @@ const settingsSchema = z.object({
   defaultWorkspace: z.string().nullable().default(null),
   // 第 293 步加的：上次启动的版本，升级后第一次启动提示改了什么
   lastSeenVersion: z.string().nullable().default(null),
+  // 第 531 步加的
+  reasoningChoices: z.record(z.string(), z.enum(REASONING_EFFORTS)).default({}),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -197,6 +198,7 @@ const EMPTY_SETTINGS: Settings = {
   plugins: [],
   defaultWorkspace: null,
   lastSeenVersion: null,
+  reasoningChoices: {},
 }
 
 export class SettingsStore {

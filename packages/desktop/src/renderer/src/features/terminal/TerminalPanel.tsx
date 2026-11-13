@@ -1,21 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react'
+import { MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react'
 import { cn } from 'cn'
 import { folderName } from '@/lib/format'
-import { saveLayout, setLayout } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
+import { SidePanel } from '@/features/task/SidePanel'
 import { attachTerminal, closeTerminal, fitTerminal, newTerminal, terminalAttachment } from './terminals'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { Kbd } from '@/components/ui/kbd'
-import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TERMINAL_ATTACHMENT_MAX_CHARS } from '../../../../shared/terminal-output'
-import { shortcutLabel } from '@/lib/platform'
-
-const MIN_HEIGHT = 120
-const DEFAULT_HEIGHT = 280
 
 const SHELL_LABELS: Record<string, string> = { 'powershell.exe': 'PowerShell', 'pwsh.exe': 'PowerShell', 'bash.exe': 'Git Bash', 'cmd.exe': 'cmd' }
 
@@ -25,13 +19,11 @@ function shellLabel(shell: string) {
   return SHELL_LABELS[name.toLowerCase()] ?? name.replace(/\.exe$/i, '')
 }
 
-// 任务页对话列底部的终端面板；cwd 是「新建终端」用的目录（当前任务的项目）
+// 任务页右侧栏的终端面板，和浏览器、审阅在同一个位置、共用宽度（第 533 步）；cwd 是「新建终端」用的目录（当前任务的项目）
 export function TerminalPanel({ cwd }: { cwd: string }) {
   const terminals = useAppState((state) => state.terminals)
   const active = useAppState((state) => state.activeTerminal)
-  const panelRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
-  const height = useAppState((state) => state.settings?.layout.terminalHeight ?? DEFAULT_HEIGHT)
   const [preview, setPreview] = useState<string | null>(null)
 
   useLayoutEffect(() => {
@@ -43,21 +35,22 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
     return () => observer.disconnect()
   }, [active])
 
-  // 对话区有最小高度，面板会被 flex 压得比 height 矮：拖动从实际高度算起，松手后存实际高度，避免下次拖动出现空行程
-  const renderedHeight = () => Math.round(panelRef.current?.getBoundingClientRect().height ?? height)
-
   return (
-    <div ref={panelRef} className="flex flex-col border-t" style={{ height, minHeight: MIN_HEIGHT }} data-testid="terminal-panel">
-      <ResizeHandle
-        orientation="horizontal"
-        grow={-1}
-        label="拖动调整终端高度"
-        className="relative -my-1 shrink-0"
-        measure={() => ({ size: renderedHeight(), min: MIN_HEIGHT, max: Math.max(MIN_HEIGHT, Math.round(window.innerHeight * 0.7)) })}
-        onResize={(size) => setLayout({ terminalHeight: size })}
-        onCommit={() => void saveLayout({ terminalHeight: renderedHeight() })}
-        onReset={() => void saveLayout({ terminalHeight: null })}
-      />
+    <SidePanel
+      width="wide"
+      testId="terminal-panel"
+      title="终端"
+      actions={
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="附加终端内容" className="text-muted-foreground" disabled={!active} onClick={() => active && setPreview(terminalAttachment(active))}>
+              <MessageSquarePlus className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>附加终端内容到输入框</TooltipContent>
+        </Tooltip>
+      }
+    >
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-3 text-sm">
         {/* overflow-x-auto 会连带裁掉纵向溢出：撑满栏高并留出左右内边距，焦点环才不会被切掉 */}
         <div className="-ml-1 flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto px-1" role="tablist" aria-label="终端">
@@ -96,24 +89,6 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
             <TooltipContent>在 {folderName(cwd)} 新建终端</TooltipContent>
           </Tooltip>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="附加终端内容" className="text-muted-foreground" disabled={!active} onClick={() => active && setPreview(terminalAttachment(active))}>
-              <MessageSquarePlus className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>附加终端内容到输入框</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="收起终端" className="text-muted-foreground" onClick={() => store.set((state) => ({ ...state, terminalOpen: false }))}>
-              <ChevronDown className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            收起终端 <Kbd>{shortcutLabel('Ctrl+`')}</Kbd>
-          </TooltipContent>
-        </Tooltip>
       </div>
       <Dialog open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null) }}>
         <DialogContent>
@@ -127,6 +102,6 @@ export function TerminalPanel({ cwd }: { cwd: string }) {
         </DialogContent>
       </Dialog>
       <div ref={hostRef} className="min-h-0 flex-1 px-3 pt-1.5 pb-2" data-testid="terminal-host" />
-    </div>
+    </SidePanel>
   )
 }

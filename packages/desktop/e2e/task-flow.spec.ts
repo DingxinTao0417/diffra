@@ -170,6 +170,42 @@ test('流式输出时点时间线跳到前面一轮，不会被贴底拉回底�
   }
 })
 
+// 第 530 步：滚轮往上滚一格时平滑滚动的前几帧还在底部 80px 内，以前贴底又被打开，下一批更新一到就被拉回底部
+test('流式输出时滚轮往上滚一格就停在那里，不会一卡一卡地被拉回底部', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-wheel-'))
+  for (let index = 0; index < 60; index++) writeFileSync(join(project, `f-${index}.txt`), `${index}\n`)
+  const model = await startScriptedModel([
+    ...Array.from({ length: 60 }, (_, index) => ({ text: `读第 ${index} 个文件`, toolCalls: [read(`f-${index}.txt`)], delayMs: 20 })),
+    { text: '都读完了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '一个个读文件')
+    // 内容超过一屏、还在持续更新时往上滚一格
+    await expect.poll(() => window.evaluate(`(() => { const s = ${SCROLLER}; return s.scrollHeight - s.clientHeight })()`)).toBeGreaterThan(300)
+    const scroller = conversationScroller(window)
+    await scroller.hover()
+    await window.mouse.wheel(0, -120)
+    const wheeledAt = model.requests()
+    await expect.poll(() => model.requests()).toBeGreaterThan(wheeledAt + 5)
+    // 又来了几批更新：离底部越来越远，没有被拉回去
+    const distance = await window.evaluate(`(() => { const s = ${SCROLLER}; return s.scrollHeight - s.scrollTop - s.clientHeight })()`)
+    expect(distance).toBeGreaterThan(100)
+    await expect(window.getByRole('button', { name: '回到底部' })).toBeVisible()
+    await waitTaskDone(window, 60_000)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
 test('不跟随时下面长出新内容、没有滚动事件，也会出「回到底部」', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
@@ -221,14 +257,14 @@ test('不跟随时下面长出新内容、没有滚动事件，也会出「回�
   }
 })
 
-test('开了减少动态效果：跳到某一轮、回到底部、定位失败的命令都直接到位，不走平滑滚动', async () => {
+test('开了减少动态效果：跳到某一轮、回到底部都直接到位，不走平滑滚动', async () => {
   test.setTimeout(60_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-reduced-motion-'))
   writeFileSync(join(project, 'notes.txt'), 'hello\n')
   const model = await startScriptedModel([
     { text: paragraphs(1, 80) },
-    // false 在只读命令名单里，直接执行，退出码 1；后面一大段回复把它挤出视口
+    // 中间一组工具调用，后面一大段回复
     {
       toolCalls: [
         exec('ls'),
@@ -272,22 +308,6 @@ test('开了减少动态效果：跳到某一轮、回到底部、定位失败�
       return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
     })()`)
     expect(distance).toBeLessThan(1)
-
-    // 定位经过状态和 effect，给一帧
-    const failed = window.locator('[data-testid="tool-call"][data-succeeded="false"]')
-    await expect(failed).not.toBeInViewport()
-    await expect(window.getByTestId('monitor-panel').getByRole('button', { name: '跳到失败的命令：false', exact: true })).toBeVisible()
-    const located = await window.evaluate(`(async () => {
-      const scroller = ${SCROLLER}
-      const row = document.querySelector('[data-testid="tool-call"][data-succeeded="false"]')
-      document.querySelector('[data-testid="monitor-failed-command"]').click()
-      await new Promise(requestAnimationFrame)
-      const view = scroller.getBoundingClientRect()
-      const box = row.getBoundingClientRect()
-      return box.top >= view.top && box.bottom <= view.bottom
-    })()`)
-    expect(located).toBe(true)
-    await expect(failed.getByRole('button')).toBeFocused()
   } finally {
     await app.close()
     await model.close()

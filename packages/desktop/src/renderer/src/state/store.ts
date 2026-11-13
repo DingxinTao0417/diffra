@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { DiagramKind } from '@diffra/core/architecture'
-import type { PermissionMode, PromptImage, RemoteSource, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
+import type { BackgroundProcess, PermissionMode, PromptImage, RemoteSource, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { RemoteView } from '../../../shared/remote'
 import type { RemoteListState, RemoteTask } from '@/features/devices/remote-tasks'
@@ -25,7 +25,7 @@ export type Route =
 export type ArchitectureTab = 'overview' | 'diagram' | 'dependencies' | 'flows' | 'hotspots' | 'target'
 export type DependencySection = 'graph' | 'matrix' | 'cycles' | 'externals'
 
-export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | null
+export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | 'terminal' | 'file' | null
 
 // 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
 export interface MessageOptions {
@@ -75,6 +75,8 @@ export interface TerminalTab {
   cwd: string
   shell: string
   exitCode: number | null
+  // 智能体起的开发服务器：哪个任务的、什么命令、输出里看到的本地地址
+  devServer?: { sessionId: string; command: string; url: string | null }
 }
 
 export interface AppState {
@@ -108,11 +110,16 @@ export interface AppState {
   expandedProjects: ReadonlySet<string>
   searchOpen: boolean
   panel: SidePanel
-  terminalOpen: boolean
   // 往输入框塞文字：target 是任务 id 或 home。append 接在末尾（附加终端内容）；fill 空着就填、有字就空一行接上，带撤销（定位结果的「填入输入框」）
   composerInsert?: { target: string; text: string; mode: 'append' | 'fill' }
   terminals: TerminalTab[]
   activeTerminal: string | null
+  // 各任务转到后台的命令（内核推来的整份列表），只在内存里
+  processes: Record<string, BackgroundProcess[]>
+  // 审阅面板打开后滚到这个文件（任务监控「产出」、回答里的文件引用点的），滚到后清掉
+  reviewFile: string | null
+  // 右侧栏文件预览看的文件（回答里点了这个任务没改过的文件，第 536 步）：项目、相对项目的路径、要定位的行
+  filePreview: { project: string; path: string; line: number | null } | null
   toast: { id: number; text: string } | null
   // 待办：启动时读一次，之后改了整份存回去；读到之前为 null
   todos: Todo[] | null
@@ -144,9 +151,11 @@ const initialState: AppState = {
   expandedProjects: new Set(),
   searchOpen: false,
   panel: 'monitor',
-  terminalOpen: false,
   terminals: [],
   activeTerminal: null,
+  processes: {},
+  reviewFile: null,
+  filePreview: null,
   toast: null,
   todos: null,
   quickTodoOpen: false,
@@ -185,7 +194,7 @@ export function useAppState<T>(selector: (state: AppState) => T): T {
 // 宽面板（浏览器、审阅）按主区一半取宽，收起侧栏省出的宽度一半让面板吃掉，对话列在默认 1200 窗口下也到不了阈值，
 // 收了只会让侧栏一开面板就消失，所以开着宽面板时不自动收起
 export function hasWidePanel(state: AppState): boolean {
-  return state.route.name === 'task' && (state.panel === 'browser' || state.panel === 'review' || state.panel === 'design')
+  return state.route.name === 'task' && (state.panel === 'browser' || state.panel === 'review' || state.panel === 'design' || state.panel === 'terminal' || state.panel === 'file')
 }
 
 export function isSidebarShown(state: AppState): boolean {

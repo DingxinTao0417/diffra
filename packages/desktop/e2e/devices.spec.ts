@@ -952,7 +952,7 @@ test('设备连接：远程任务页借用本机任务页——任务监控（�
     await expect(remoteTask.getByRole('button', { name: '查看改动 hello.txt', exact: true })).toBeVisible()
     const shown = (await remoteTask.innerText()).replace(/\\/g, '/').toLowerCase()
     expect(shown).not.toContain(project.replace(/\\/g, '/').toLowerCase())
-    await expect(remoteTask.getByRole('button', { name: '终端 Ctrl+`' })).toHaveCount(0)
+    await expect(remoteTask.getByRole('button', { name: '终端', exact: true })).toHaveCount(0)
     await expect(remoteTask.getByRole('button', { name: '浏览器' })).toHaveCount(0)
 
     // 任务监控：对方的文件改动
@@ -960,7 +960,8 @@ test('设备连接：远程任务页借用本机任务页——任务监控（�
     if (!(await monitor.isVisible())) await remoteTask.getByRole('button', { name: '任务监控' }).click()
     await expect(monitor).toContainText('本任务改动 · 1 个文件', { timeout: 15_000 })
     await expect(monitor.getByTestId('monitor-file')).toContainText('hello.txt')
-    await expect(monitor.getByRole('button', { name: '编辑检查命令' })).toHaveCount(0)
+    // 远程任务的环境信息写对方设备的名字，没有「提交或推送」
+    await expect(monitor.getByTestId('monitor-commit')).toHaveCount(0)
     await guest.window.screenshot({ path: 'test-results/devices-remote-monitor.png' })
 
     // 审阅改动：只读时没有撤销
@@ -1055,7 +1056,7 @@ test('设备连接：「完全控制」——连接端开对方电脑上的终�
     await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('完全控制')
 
     // 打开终端：在对方电脑上跑命令，输出回来
-    await remoteTask.getByRole('button', { name: '终端 Ctrl+`' }).click()
+    await remoteTask.getByRole('button', { name: '终端', exact: true }).click()
     const terminal = remoteTask.getByTestId('remote-terminal')
     await expect(terminal).not.toContainText('正在打开', { timeout: 15_000 })
     await expect(host.window.getByTestId('remote-control-indicator')).toContainText('开着 1 个终端')

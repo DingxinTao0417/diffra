@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
 import { useProject } from '@/features/project/useProject'
 import { BrowserPanel } from '@/features/browser/BrowserPanel'
 import { DesignPanel } from '@/features/design/DesignPanel'
@@ -26,6 +27,7 @@ import { composerDraftKey } from './composer-drafts'
 import { CacheUsage, ContextUsage } from './ContextUsage'
 import { Conversation } from './Conversation'
 import { BranchMenu } from './BranchMenu'
+import { FilePanel } from './FilePanel'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { ReadOnlyContext } from './read-only'
 import { RemoteTaskContext, type RemoteTaskSource } from './remote-task'
@@ -57,20 +59,22 @@ export interface RemoteTaskSlots {
   source: RemoteTaskSource
   project: ProjectState | null
   branch: string | null
-  // 「完全控制」时有：对方电脑上的终端
-  terminal?: { open: boolean; toggle(): void; panel: ReactNode }
+  // 对方设备的名字，任务监控「环境信息」里写
+  device: string
+  // 「完全控制」时有：对方电脑上的终端，在右侧栏
+  terminal?: ReactNode
 }
 
 export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRef?: Ref<HTMLElement>; remote?: RemoteTaskSlots }) {
   const panel = useAppState((state) => state.panel)
   const designChatWidth = useAppState((state) => state.settings?.layout.designChatWidth ?? null)
-  const terminalOpen = useAppState((state) => state.terminalOpen)
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
   const local = useProject(remote ? null : task.project)
   const project = remote ? remote.project : local.project
   const branch = remote ? remote.branch : local.branch
   const [confirm, setConfirm] = useState<{ mode: 'restore' | 'regenerate'; turnId: string; changes: CheckpointChange[] | null } | null>(null)
   const [scanScope, setScanScope] = useState<'task' | 'project' | null>(null)
+  const [editingProject, setEditingProject] = useState(false)
   const [locate, setLocate] = useState<{ id: string; at: number } | null>(null)
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const firstTurn = task.turns[0]?.id ?? null
@@ -131,7 +135,15 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
           {task.title}
         </span>
         {!remote && (
-          <TaskMenu sessionId={task.sessionId} title={task.title} project={task.project} noProject={task.noProject} archived={archived}>
+          <TaskMenu
+            sessionId={task.sessionId}
+            title={task.title}
+            project={task.project}
+            noProject={task.noProject}
+            archived={archived}
+            // 无项目任务的文件夹不是用户的项目，不给它存项目设置
+            onProjectSettings={task.noProject ? undefined : () => setEditingProject(true)}
+          >
             <Button variant="ghost" size="icon-sm" aria-label="任务菜单" className="text-muted-foreground">
               <Ellipsis className="size-4" />
             </Button>
@@ -139,32 +151,19 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
         )}
         <StatusLabel status={status} />
         <div className="flex-1" />
-        {(!remote || remote.terminal) && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="终端 Ctrl+`"
-                  aria-pressed={remote?.terminal ? remote.terminal.open : terminalOpen}
-                  className={cn('text-muted-foreground', (remote?.terminal ? remote.terminal.open : terminalOpen) && 'bg-accent text-foreground hover:bg-accent dark:hover:bg-accent')}
-                  onClick={() => (remote?.terminal ? remote.terminal.toggle() : toggleTerminalPanel(task.project))}
-                >
-                  <SquareTerminal className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                终端 <Kbd>{shortcutLabel('Ctrl+`')}</Kbd>
-              </TooltipContent>
-            </Tooltip>
-            <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-          </>
-        )}
-        {/* 右侧面板互斥，做成一组，设计面板只有设计任务有；终端是独立开关，放在分隔线另一侧。远程任务没有浏览器和设计 */}
+        {/* 右侧面板互斥，做成一组，设计面板只有设计任务有；终端也在右侧栏（第 533 步），远程任务只有「完全控制」时有。远程任务没有浏览器和设计 */}
         <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
-          {PANEL_BUTTONS.filter((item) => (item.panel !== 'design' || task.design) && !(remote && (item.panel === 'browser' || item.panel === 'design'))).map((item) => (
-            <PanelButton key={item.panel} label={item.label} active={panel === item.panel} onClick={() => togglePanel(item.panel)}>
+          {PANEL_BUTTONS.filter(
+            (item) => (item.panel !== 'design' || task.design) && !(remote && (item.panel === 'browser' || item.panel === 'design')) && !(item.panel === 'terminal' && remote && !remote.terminal),
+          ).map((item) => (
+            <PanelButton
+              key={item.panel}
+              label={item.label}
+              shortcut={item.panel === 'terminal' ? shortcutLabel('Ctrl+`') : undefined}
+              active={panel === item.panel}
+              // 本机终端没有标签页时顺手开一个
+              onClick={() => (item.panel === 'terminal' && !remote ? toggleTerminalPanel(task.project) : togglePanel(item.panel))}
+            >
               <item.icon className="size-4" />
             </PanelButton>
           ))}
@@ -283,16 +282,17 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
               </div>
             </div>
           </div>
-          {terminalOpen && !remote && <TerminalPanel cwd={task.project} />}
-          {remote?.terminal?.open && remote.terminal.panel}
         </section>
-        {panel === 'monitor' && <MonitorPanel task={task} project={project} branch={branch} diff={monitorDiff} onProjectSaved={local.setProject} onDeepScan={setScanScope} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
+        {panel === 'monitor' && <MonitorPanel task={task} branch={branch} device={remote ? remote.device : null} diff={monitorDiff} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={remote && !source?.restore ? undefined : (turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && !remote && <BrowserPanel sessionId={task.sessionId} />}
         {panel === 'design' && !remote && <DesignPanel sessionId={task.sessionId} project={task.project} noProject={task.noProject} />}
+        {panel === 'terminal' && (remote ? remote.terminal : <TerminalPanel cwd={task.project} />)}
+        {panel === 'file' && !remote && <FilePanel />}
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
+      {!remote && <ProjectSettingsDialog project={project} open={editingProject} onClose={() => setEditingProject(false)} onSaved={local.setProject} />}
       <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} turnNumber={confirmIndex >= 0 ? confirmIndex + 1 : null} lastTurn={confirmIndex >= 0 && confirmIndex === task.turns.length - 1} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
     </div>
   )
@@ -346,12 +346,13 @@ function StatusIndicator({ tone }: { tone: VerdictTone }) {
 
 const PANEL_BUTTONS = [
   { panel: 'design', label: '设计', icon: PenTool },
+  { panel: 'terminal', label: '终端', icon: SquareTerminal },
   { panel: 'browser', label: '浏览器', icon: Globe },
   { panel: 'review', label: '审阅改动', icon: FileDiff },
   { panel: 'monitor', label: '任务监控', icon: PanelRight },
 ] as const
 
-function PanelButton({ label, active, onClick, children }: { label: string; active: boolean; onClick(): void; children: React.ReactNode }) {
+function PanelButton({ label, shortcut, active, onClick, children }: { label: string; shortcut?: string; active: boolean; onClick(): void; children: React.ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -366,7 +367,10 @@ function PanelButton({ label, active, onClick, children }: { label: string; acti
           {children}
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>
+        {label}
+        {shortcut && <> <Kbd>{shortcut}</Kbd></>}
+      </TooltipContent>
     </Tooltip>
   )
 }

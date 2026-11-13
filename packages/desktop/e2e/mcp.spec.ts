@@ -76,7 +76,6 @@ test('MCP：设置里添加服务器看到连接状态；任务里模型调它�
     const whoami = window.locator('[data-testid="tool-call"]').filter({ hasText: 'whoami' })
     await whoami.getByRole('button').click()
     await expect(whoami).toContainText(`token=${TOKEN}`)
-    await expect(window.getByTestId('monitor-panel')).toContainText('4 个工具')
     await window.screenshot({ path: 'test-results/mcp-task.png' })
 
     // 斜杠菜单里的 MCP prompt：填参数后展开到输入框

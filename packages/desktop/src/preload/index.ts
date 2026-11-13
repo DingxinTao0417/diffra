@@ -1,7 +1,7 @@
 import type { ArchitectureEvent } from '@diffra/core/architecture'
-import type { PromptImage, SessionNotification } from '@diffra/core/types'
+import type { PromptImage, SessionNotification, SessionProcesses } from '@diffra/core/types'
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
-import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type UpdateStatus } from '../shared/ipc'
+import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type TerminalOpenedEvent, type UpdateStatus } from '../shared/ipc'
 import type { RemoteAction, RemoteSyncEvent, RemoteTaskCall, RemoteView } from '../shared/remote'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -51,7 +51,12 @@ const api: DiffraApi = {
   resizeTerminal: (id, size) => ipcRenderer.send(IPC_CHANNELS.terminalResize, id, size),
   killTerminal: (id) => ipcRenderer.invoke(IPC_CHANNELS.terminalKill, id),
   onTerminalData: (listener) => subscribe<{ id: string; data: string }>(IPC_CHANNELS.terminalData, listener),
-  onTerminalOpened: (listener) => subscribe<{ id: string; cwd: string; shell: string }>(IPC_CHANNELS.terminalOpened, listener),
+  onTerminalOpened: (listener) => subscribe<TerminalOpenedEvent>(IPC_CHANNELS.terminalOpened, listener),
+  onTerminalUrl: (listener) => subscribe<{ id: string; url: string }>(IPC_CHANNELS.terminalUrl, listener),
+  resolveFiles: (project, paths) => ipcRenderer.invoke(IPC_CHANNELS.fileResolve, project, paths),
+  readFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileRead, project, path),
+  openFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileOpen, project, path),
+  revealFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileReveal, project, path),
   onTerminalExit: (listener) => subscribe<{ id: string; exitCode: number }>(IPC_CHANNELS.terminalExit, listener),
   savePreferences: (change) => ipcRenderer.invoke(IPC_CHANNELS.preferencesSave, change),
   pickWorkspace: () => ipcRenderer.invoke(IPC_CHANNELS.workspacePick),
@@ -67,6 +72,9 @@ const api: DiffraApi = {
   deepScan: (sessionId, turnId, scope) => ipcRenderer.invoke(IPC_CHANNELS.sessionDeepScan, sessionId, turnId, scope),
   plan: (sessionId, turnId, text, skills) => ipcRenderer.invoke(IPC_CHANNELS.sessionPlan, sessionId, turnId, text, skills),
   retryStep: (sessionId, agent) => ipcRenderer.invoke(IPC_CHANNELS.sessionRetryStep, sessionId, agent),
+  onSessionProcesses: (listener) => subscribe<SessionProcesses>(IPC_CHANNELS.sessionProcesses, listener),
+  stopProcess: (sessionId, id) => ipcRenderer.invoke(IPC_CHANNELS.sessionProcessStop, sessionId, id),
+  processOutput: (sessionId, id) => ipcRenderer.invoke(IPC_CHANNELS.sessionProcessOutput, sessionId, id),
   diagnose: (sessionId, turnId, text, target) => ipcRenderer.invoke(IPC_CHANNELS.sessionDiagnose, sessionId, turnId, text, target),
   enhancePrompt: (request) => ipcRenderer.invoke(IPC_CHANNELS.promptEnhance, request),
   saveVisualPng: (rect, title) => ipcRenderer.invoke(IPC_CHANNELS.visualSavePng, rect, title),

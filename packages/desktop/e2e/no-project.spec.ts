@@ -173,7 +173,7 @@ test('删除无项目任务：终端开在文件夹里也能移到回收站；�
     await startTask(window, '终端开着')
     await waitTaskDone(window)
     const inTerminal = folderOf(root, '终端开着')
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
+    await window.getByRole('button', { name: '终端', exact: true }).click()
     await expect(window.getByTestId('terminal-tab')).toContainText(basename(inTerminal))
     const host = window.getByTestId('terminal-host')
     await host.click()

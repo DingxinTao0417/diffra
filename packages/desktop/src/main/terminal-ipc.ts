@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, sep } from 'node:path'
+import { localUrlIn } from '@diffra/core'
 import type { DevServerParams, DevServerResult } from '@diffra/core/types'
 import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import { type IPty, spawn } from 'node-pty'
@@ -22,6 +23,8 @@ interface TerminalEntry {
   // 开发服务器的终端留着最近的输出（去掉颜色控制符），给智能体看
   output: string | null
   exited: boolean
+  // 开发服务器的终端：输出里第一次出现本地地址时告诉界面（任务监控「运行中」），之后不再找
+  url?: string | null
 }
 
 // 开发服务器：一个任务一个，跑在终端里
@@ -29,7 +32,6 @@ const DEV_SERVER_WAIT_MS = 60_000
 const MAX_OUTPUT_CHARS = 64_000
 const LOG_LINES = 80
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)/g
-const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+\.localhost):\d+[^\s'"\x1b]*/
 const devServers = new Map<string, { terminalId: string; command: string }>()
 // 结束终端后等它退出的上限
 const EXIT_WAIT_MS = 5000
@@ -83,6 +85,7 @@ async function openTerminal(
   cwd: string,
   shell: { file: string; args: string[] },
   size: { cols: number; rows: number },
+  devServer = false,
 ): Promise<string> {
   if (!(await stat(cwd).catch(() => null))?.isDirectory()) throw new Error(`目录不存在：${cwd}`)
   if (terminals.size >= MAX_TERMINALS) throw new Error(`最多同时开 ${MAX_TERMINALS} 个终端，先关掉几个`)
@@ -96,11 +99,15 @@ async function openTerminal(
   }
   const pty = spawn(shell.file, shell.args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: process.env })
   const id = randomUUID()
-  const entry: TerminalEntry = { cwd, pty, owner, output: '', exited: false }
+  const entry: TerminalEntry = { cwd, pty, owner, output: '', exited: false, ...(devServer ? { url: null } : {}) }
   terminals.set(id, entry)
   pty.onData((data) => {
     if (entry.output !== null) entry.output = (entry.output + data.replace(ANSI, '')).slice(-MAX_OUTPUT_CHARS)
     if (!owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalData, { id, data })
+    if (entry.url === null && entry.output !== null) {
+      entry.url = localUrlIn(entry.output)
+      if (entry.url && !owner.isDestroyed()) owner.send(IPC_CHANNELS.terminalUrl, { id, url: entry.url })
+    }
   })
   pty.onExit(({ exitCode }) => {
     entry.exited = true
@@ -111,11 +118,6 @@ async function openTerminal(
 }
 
 const tail = (output: string) => output.split(/\r?\n/).slice(-LOG_LINES).join('\n').trim()
-
-function localUrl(output: string): string | null {
-  const match = LOCAL_URL.exec(output)
-  return match ? match[0].replace('0.0.0.0', 'localhost').replace(/[.,;)]+$/, '') : null
-}
 
 // 智能体起开发服务器：开一个终端标签页跑命令，等它打出本地地址（最多一分钟）
 export async function devServer(params: DevServerParams): Promise<DevServerResult> {
@@ -141,11 +143,11 @@ export async function devServer(params: DevServerParams): Promise<DevServerResul
   if (params.action === 'logs') {
     if (!running) return { text: '这个任务还没有起开发服务器。', url: null }
     const output = entry?.output ?? ''
-    return { text: `${entry ? '运行中' : '已退出'}：${running.command}\n${tail(output) || '（还没有输出）'}`, url: localUrl(output) }
+    return { text: `${entry ? '运行中' : '已退出'}：${running.command}\n${tail(output) || '（还没有输出）'}`, url: localUrlIn(output) }
   }
   if (running && entry) {
     const output = entry.output ?? ''
-    return { text: `已经在运行：${running.command}\n地址：${localUrl(output) ?? '还没看到'}\n${tail(output)}`, url: localUrl(output) }
+    return { text: `已经在运行：${running.command}\n地址：${localUrlIn(output) ?? '还没看到'}\n${tail(output)}`, url: localUrlIn(output) }
   }
   const owner = BrowserWindow.getAllWindows()[0]?.webContents
   if (!owner) throw new Error('应用窗口还没打开')
@@ -153,14 +155,14 @@ export async function devServer(params: DevServerParams): Promise<DevServerResul
     process.platform === 'win32'
       ? { file: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-Command', params.command] }
       : { file: process.env.SHELL || '/bin/bash', args: ['-lc', params.command] }
-  const terminalId = await openTerminal(owner, params.cwd, shell, { cols: 120, rows: 30 })
+  const terminalId = await openTerminal(owner, params.cwd, shell, { cols: 120, rows: 30 }, true)
   devServers.set(params.sessionId, { terminalId, command: params.command })
-  owner.send(IPC_CHANNELS.terminalOpened, { id: terminalId, cwd: params.cwd, shell: '开发服务器' })
+  owner.send(IPC_CHANNELS.terminalOpened, { id: terminalId, cwd: params.cwd, shell: '开发服务器', devServer: { sessionId: params.sessionId, command: params.command } })
   const started = Date.now()
   const opened = terminals.get(terminalId)
   while (Date.now() - started < DEV_SERVER_WAIT_MS) {
     const output = opened?.output ?? ''
-    const url = localUrl(output)
+    const url = localUrlIn(output)
     if (url) return { text: `已启动：${params.command}\n地址：${url}\n${tail(output)}`, url }
     if (!opened || opened.exited) return { text: `命令退出了：${params.command}\n${tail(output) || '（没有输出）'}`, url: null }
     await new Promise((resolve) => setTimeout(resolve, 200))

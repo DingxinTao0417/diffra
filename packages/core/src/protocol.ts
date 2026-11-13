@@ -476,6 +476,21 @@ export interface DevServerResult {
   url: string | null
 }
 
+// exec_command 到点还没结束、转到后台接着跑的命令（第 528 步）：内核在列表变化时推给客户端，界面列在「运行中」
+export interface BackgroundProcess {
+  id: number
+  command: string
+  cwd: string
+  startedAt: number
+  // 输出里看到的本地地址（开发服务器）
+  url: string | null
+}
+
+export interface SessionProcesses {
+  sessionId: string
+  processes: BackgroundProcess[]
+}
+
 // 设计面板（OpenPencil 矢量编辑器）的工具，来自客户端的设计页：name 是 OpenPencil 的工具名，参数是 JSON Schema
 export interface DesignToolSpec {
   name: string
@@ -741,6 +756,9 @@ export const SESSION_EXT_METHODS = {
   retryStep: '_diffra/session/retry-step',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
+  // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）
+  processStop: '_diffra/session/process-stop',
+  processOutput: '_diffra/session/process-output',
   // 浏览器的站点名单（设置里管理）：允许的直接打开，禁止的不打开也不问；所有会话共用
   browserSites: '_diffra/browser/sites',
   // 优化输入框里的提示词：一次调用交回改写稿和只有用户能回答的问题，不进任何对话
@@ -780,6 +798,8 @@ export const SESSION_EXT_METHODS = {
 // core 主动推给客户端的通知
 export const CLIENT_EXT_NOTIFICATIONS = {
   architectureEvent: '_diffra/architecture/event',
+  // 会话的后台命令列表变了，带上现在的整份列表
+  processes: '_diffra/session/processes',
 } as const
 
 // 只能由本机的人确认的权限请求，toolCall._meta.diffra 里带上它（设备连接不转给远程设备）：

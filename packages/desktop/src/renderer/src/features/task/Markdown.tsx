@@ -4,8 +4,8 @@ import remarkGfm from 'remark-gfm'
 import { Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { errorMessage } from '@/lib/errors'
 import { showToast } from '@/state/store'
+import { AnswerCode, AnswerLink } from './answer-links'
 
 // 代码块：顶栏放语言名和复制按钮。语言来自 remark 给 code 加的 language-xxx 类名
 function CodeBlock({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
@@ -40,19 +40,10 @@ function CodeBlock({ node, children, ...props }: ComponentProps<'pre'> & ExtraPr
   )
 }
 
-// 链接交给系统浏览器打开；主进程只放行 http(s)
+// 链接默认在内置浏览器打开、右键换系统浏览器；项目里的文件显示成文件引用（见 answer-links）
 const components: Components = {
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      onClick={(event) => {
-        event.preventDefault()
-        if (href) window.diffra.openExternal(href).catch((error: unknown) => showToast(errorMessage(error)))
-      }}
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => <AnswerLink href={href}>{children}</AnswerLink>,
+  code: ({ className, children }) => <AnswerCode className={className}>{children}</AnswerCode>,
   pre: CodeBlock,
 }
 

@@ -138,8 +138,6 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
   )
   // 「先出计划」开关在本机记，发消息时带上
   const [planMode, setPlanMode] = useState(false)
-  // 对方电脑上的终端（「完全控制」）：面板关了、离开任务时对方的终端结束
-  const [terminalOpen, setTerminalOpen] = useState(false)
   const details = task?.details ?? null
   const turns = task?.turns
   const changeVersion = useMemo(() => changeVersionOf(turns ?? []), [turns])
@@ -277,13 +275,11 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
           source,
           project: projectState,
           branch: details?.branch ?? null,
+          device: peer.name,
           ...(full && supported
             ? {
-                terminal: {
-                  open: terminalOpen,
-                  toggle: () => setTerminalOpen((open) => !open),
-                  panel: <RemoteTerminalPanel deviceId={deviceId} sessionId={sessionId} deviceName={peer.name} onClose={() => setTerminalOpen(false)} />,
-                },
+                // 对方电脑上的终端（「完全控制」），在右侧栏：面板关了、离开任务时对方的终端结束
+                terminal: <RemoteTerminalPanel deviceId={deviceId} sessionId={sessionId} deviceName={peer.name} />,
               }
             : {}),
         }}

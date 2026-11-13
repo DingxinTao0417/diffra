@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { configureSecurity, type ModelEndpoint, type ModelError, requestListModels, requestTestModel } from '@diffra/core'
+import { REASONING_EFFORTS } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, ROLES, type Settings, type SettingsView } from '../shared/settings'
+import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, reasoningChoiceKey, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
@@ -77,9 +78,17 @@ export function workspaceRoot(settings: SettingsStore): { path: string; isDefaul
   return { path: app.isPackaged ? join(app.getPath('documents'), 'Diffra') : join(app.getPath('userData'), 'workspace'), isDefault: true }
 }
 
+// 只留还在的模型的选择，删掉的模型不会在设置文件里越积越多；不认识的模型不记
+function rememberReasoning(current: Settings, choice: { providerId: string; modelId: string; effort: Settings['reasoningChoices'][string] }): Settings['reasoningChoices'] {
+  const keys = new Set(current.providers.flatMap((provider) => provider.models.map((model) => reasoningChoiceKey({ providerId: provider.id, modelId: model.id }))))
+  const kept = Object.fromEntries(Object.entries(current.reasoningChoices).filter(([key]) => keys.has(key)))
+  const key = reasoningChoiceKey(choice)
+  return keys.has(key) ? { ...kept, [key]: choice.effort } : kept
+}
+
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
   const view = async (): Promise<SettingsView> => {
-    const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers } = settings.get()
+    const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices } = settings.get()
     return {
       providers: await Promise.all(
         providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -92,6 +101,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
       security,
       execution,
       mcpServers,
+      reasoningChoices,
       defaultWorkspace: workspaceRoot(settings),
       loadError: settings.loadError ?? secrets.loadError,
     }
@@ -110,10 +120,12 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
         defaultPermissionMode: permissionModeSchema.optional(),
         security: securitySchema.optional(),
         execution: executionSchema.optional(),
+        reasoningChoice: z.object({ providerId: z.string().min(1), modelId: z.string().min(1), effort: z.enum(REASONING_EFFORTS) }).optional(),
       }),
       raw,
     )
-    await settings.update((current) => ({ ...current, ...change }))
+    const { reasoningChoice, ...preferences } = change
+    await settings.update((current) => ({ ...current, ...preferences, ...(reasoningChoice ? { reasoningChoices: rememberReasoning(current, reasoningChoice) } : {}) }))
     if (change.browser) browserHost.pushSites()
     // 检查开关对已经打开的任务立即生效；推送失败时设置照样存下，之后新建、载入的任务按设置
     if (change.security) {

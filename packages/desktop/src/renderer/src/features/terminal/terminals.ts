@@ -120,7 +120,7 @@ export async function newTerminal(cwd: string): Promise<void> {
     createView(id)
     store.set((state) => ({
       ...state,
-      terminalOpen: true,
+      panel: 'terminal',
       terminals: [...state.terminals, { id, cwd, shell, exitCode: null }],
       activeTerminal: id,
     }))
@@ -129,12 +129,16 @@ export async function newTerminal(cwd: string): Promise<void> {
   }
 }
 
-// 面板没有终端时顺手开一个
+export function showTerminal(id: string): void {
+  store.set((state) => ({ ...state, panel: 'terminal', activeTerminal: id }))
+}
+
+// 终端在右侧栏（第 533 步），和别的面板互斥；没有终端时顺手开一个
 export function toggleTerminalPanel(cwd: string): void {
   const state = store.get()
-  if (state.terminalOpen) store.set((current) => ({ ...current, terminalOpen: false }))
+  if (state.panel === 'terminal') store.set((current) => ({ ...current, panel: null }))
   else if (state.terminals.length === 0) void newTerminal(cwd)
-  else store.set((current) => ({ ...current, terminalOpen: true }))
+  else store.set((current) => ({ ...current, panel: 'terminal' }))
 }
 
 export function closeTerminal(id: string): void {
@@ -149,7 +153,7 @@ export function closeTerminal(id: string): void {
       ...state,
       terminals,
       activeTerminal: state.activeTerminal === id ? (terminals.at(-1)?.id ?? null) : state.activeTerminal,
-      terminalOpen: state.terminalOpen && terminals.length > 0,
+      panel: state.panel === 'terminal' && terminals.length === 0 ? null : state.panel,
     }
   })
 }
@@ -167,10 +171,17 @@ export function wireTerminalEvents(): () => void {
     if (chunks.length > MAX_PENDING_CHUNKS) chunks.shift()
     pending.set(id, chunks)
   })
-  // 智能体起的开发服务器：加一个标签页，打开终端面板让用户看到
-  const offOpened = window.diffra.onTerminalOpened(({ id, cwd, shell }) => {
+  // 智能体起的开发服务器：在后台加一个标签页，不打开终端面板；任务监控「运行中」列着它，点「查看输出」才打开（第 527 步）
+  const offOpened = window.diffra.onTerminalOpened(({ id, cwd, shell, devServer }) => {
     if (!views.has(id)) createView(id)
-    store.set((state) => ({ ...state, terminalOpen: true, terminals: [...state.terminals, { id, cwd, shell, exitCode: null }], activeTerminal: id }))
+    store.set((state) => ({
+      ...state,
+      terminals: [...state.terminals, { id, cwd, shell, exitCode: null, devServer: { ...devServer, url: null } }],
+      activeTerminal: state.activeTerminal ?? id,
+    }))
+  })
+  const offUrl = window.diffra.onTerminalUrl(({ id, url }) => {
+    store.set((state) => ({ ...state, terminals: state.terminals.map((item) => (item.id === id && item.devServer ? { ...item, devServer: { ...item.devServer, url } } : item)) }))
   })
   const offExit = window.diffra.onTerminalExit(({ id, exitCode }) => {
     views.get(id)?.term.write(`\r\n\x1b[2m[进程已退出，代码 ${exitCode}]\x1b[0m\r\n`)
@@ -190,6 +201,7 @@ export function wireTerminalEvents(): () => void {
   return () => {
     offData()
     offOpened()
+    offUrl()
     offExit()
     observer.disconnect()
   }

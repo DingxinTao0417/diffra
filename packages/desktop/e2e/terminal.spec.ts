@@ -20,7 +20,7 @@ test('底部终端：在项目目录开 shell、多个标签、收起再打开�
     await startTask(window, '开个终端')
     await waitTaskDone(window)
 
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
+    await window.getByRole('button', { name: '终端', exact: true }).click()
     const host = window.getByTestId('terminal-host')
     const tabs = window.getByTestId('terminal-tab')
     await expect(tabs).toHaveCount(1)

@@ -36,8 +36,6 @@ test('完成前规范审查（默认开着）：违规被打回，改好后审�
     await waitTaskDone(window)
     // 打回和通过都看审查卡，对话里不再有完成卡（第 526 步）
     await expect(cards(window, 'finish')).toHaveCount(0)
-    await expect(window.getByTestId('monitor-rule-packs')).toHaveText('通用、安全、TypeScript / JavaScript')
-    await expect(window.getByTestId('monitor-panel')).toContainText('完成前规范审查已开')
     await expect(reviews.nth(0)).toHaveAttribute('data-status', 'failed')
     await expect(reviews.nth(0)).toContainText('1 处问题，已打回')
     await expect(reviews.nth(0)).toContainText('GEN-ERR-1')

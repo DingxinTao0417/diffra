@@ -7,7 +7,7 @@ import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { read, replaceLines, startScriptedModel } from './scripted-model'
 
-test('在任务监控里自动检测完成检查，确认、试运行后保存，新任务完成时按它检查', async () => {
+test('在项目设置里自动检测完成检查，确认、试运行后保存，新任务完成时按它检查', async () => {
   test.setTimeout(90_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-detect-'))
@@ -34,11 +34,12 @@ test('在任务监控里自动检测完成检查，确认、试运行后保存�
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
 
-    // 首页没有检查入口：先开一个任务，在任务监控里编辑检查命令。
+    // 首页没有检查入口：先开一个任务，从任务菜单进项目设置编辑检查命令（第 529 步起任务监控里没有配置项）。
     // 只有一栏完成检查；自动检测后下面列出建议的命令、每条的来源和脚本的实际内容
     await startTask(window, '先看看')
     await waitTaskDone(window)
-    await window.getByTestId('monitor-panel').getByRole('button', { name: '编辑检查命令' }).click()
+    await window.locator('header').getByRole('button', { name: '任务菜单' }).click()
+    await window.getByRole('menuitem', { name: '项目设置' }).click()
     await expect(window.getByLabel('快速检查', { exact: true })).toHaveCount(0)
     await window.getByRole('button', { name: '自动检测' }).click()
     const suggestion = window.getByTestId('check-before-finish-suggestion')

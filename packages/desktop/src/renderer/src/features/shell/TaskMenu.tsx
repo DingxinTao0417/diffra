@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { Archive, FolderOpen, Pencil, Trash2 } from 'lucide-react'
+import { Archive, FolderCog, FolderOpen, Pencil, Trash2 } from 'lucide-react'
 import type { TaskFolderState } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,10 +28,12 @@ interface TaskMenuProps {
   open?: boolean
   onOpenChange?(open: boolean): void
   align?: 'start' | 'end'
+  // 任务页顶栏的菜单给：打开项目设置（检查命令、禁止修改的目录等）
+  onProjectSettings?(): void
   children: ReactNode
 }
 
-export function TaskMenu({ sessionId, title, project, noProject, archived, open, onOpenChange, align = 'start', children }: TaskMenuProps) {
+export function TaskMenu({ sessionId, title, project, noProject, archived, open, onOpenChange, align = 'start', onProjectSettings, children }: TaskMenuProps) {
   const running = useAppState((state) => state.live[sessionId]?.running ?? false)
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -52,6 +54,12 @@ export function TaskMenu({ sessionId, title, project, noProject, archived, open,
             <FolderOpen />
             在资源管理器中打开
           </DropdownMenuItem>
+          {onProjectSettings && (
+            <DropdownMenuItem onSelect={onProjectSettings}>
+              <FolderCog />
+              项目设置
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem disabled={running} onSelect={() => void setArchived(sessionId, !archived)}>
             <Archive />
             {archived ? '取消归档' : '归档'}

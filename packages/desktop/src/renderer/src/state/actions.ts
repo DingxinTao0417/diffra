@@ -251,7 +251,9 @@ export function wireCoreEvents(): () => void {
   )
   const offRemote = window.diffra.onRemoteState((remote) => store.set((current) => ({ ...current, remote })))
   const offRemoteEvent = window.diffra.onRemoteEvent(applyRemoteEvent)
+  const offProcesses = window.diffra.onSessionProcesses(({ sessionId, processes }) => store.set((current) => ({ ...current, processes: { ...current.processes, [sessionId]: processes } })))
   return () => {
+    offProcesses()
     offUpdate()
     offPermission()
     offPermissionSettled()
@@ -730,6 +732,17 @@ export async function setPermissionMode(sessionId: string | null, mode: Permissi
     }
   } catch (error) {
     showToast(errorMessage(error))
+  }
+}
+
+// 输入框里给模型选了思考程度：记进设置，新任务、重开的任务按它（第 531 步）
+export async function rememberReasoning(ref: ModelRef): Promise<void> {
+  if (!ref.reasoningEffort) return
+  try {
+    const settings = await window.diffra.savePreferences({ reasoningChoice: { providerId: ref.providerId, modelId: ref.modelId, effort: ref.reasoningEffort } })
+    store.set((state) => ({ ...state, settings }))
+  } catch (error) {
+    showToast(`记住思考程度失败：${errorMessage(error)}`)
   }
 }
 

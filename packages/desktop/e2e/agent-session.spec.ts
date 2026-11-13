@@ -62,8 +62,6 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
     expect(readFileSync(join(project, 'done.txt'), 'utf8').trim()).toBe('done')
     expect(model.requests()).toBe(6)
-    await expect(window.getByTestId('monitor-panel')).toContainText('禁止修改的目录')
-    await expect(window.getByTestId('monitor-panel')).toContainText('data')
 
     // 读 .env（用户拒绝）、改禁写目录的两次调用都失败了：和别的调用收在同一个过程组里（上面已经点开），标题上写着失败次数
     await expect(window.getByRole('button', { name: /执行工具 5 次 · 2 次失败/ })).toHaveAttribute('aria-expanded', 'true')

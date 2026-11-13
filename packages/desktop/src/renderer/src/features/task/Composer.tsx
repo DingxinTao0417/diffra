@@ -1,10 +1,10 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type CommandInfo, type PermissionMode, type PromptImage, type PromptQuestion, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X, Zap } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, ChevronUp, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../../shared/attachments'
 import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
-import { reasoningEffortsFor } from '../../../../shared/reasoning'
+import { reasoningEffortsFor, withRememberedEffort } from '../../../../shared/reasoning'
 import { cn } from 'cn'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -15,6 +15,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Kbd } from '@/components/ui/kbd'
@@ -26,7 +29,7 @@ import { formatTokens } from '@/lib/format'
 import { imageUrl, MAX_PROMPT_IMAGES, prepareImage } from '@/lib/images'
 import { useLobeIcons } from '@/lib/model-icons'
 import { PERMISSION_MODES, permissionModeLabel } from '@/lib/permission-modes'
-import { openSettings, refreshSettings } from '@/state/actions'
+import { openSettings, refreshSettings, rememberReasoning } from '@/state/actions'
 import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
 import { QuestionBar } from './QuestionBar'
 import { clearComposerDraft, type ComposerDraft, type ComposerFile, type ComposerImage, readComposerDraft, writeComposerDraft } from './composer-drafts'
@@ -105,6 +108,12 @@ function expandCommand(body: string, input: string): string {
 
 const MAX_COMPOSER_LINES = 10
 
+// 任务监控「来源」的「+」打开这个任务输入框的选文件，按任务 id 找。选文件框要在用户点击的那次事件里打开，所以直接调，不经过 store
+const attachPickers = new Map<string, () => void>()
+export function pickAttachments(sessionId: string): void {
+  attachPickers.get(sessionId)?.()
+}
+
 type PreviewTarget =
   | { kind: 'image'; image: ComposerImage }
   | { kind: 'file'; file: ComposerFile }
@@ -171,6 +180,16 @@ export function Composer(props: ComposerProps) {
   const mentionCounter = useRef(initialDraft?.images.reduce((max, image) => Math.max(max, Number(/(\d+)$/.exec(image.mention)?.[1] ?? 0)), 0) ?? 0)
   const attachmentBusy = useRef(false)
   const dragDepth = useRef(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const pickerTarget = props.mcpTarget && 'sessionId' in props.mcpTarget ? props.mcpTarget.sessionId : null
+  useEffect(() => {
+    if (!pickerTarget) return
+    const pick = () => fileInputRef.current?.click()
+    attachPickers.set(pickerTarget, pick)
+    return () => {
+      if (attachPickers.get(pickerTarget) === pick) attachPickers.delete(pickerTarget)
+    }
+  }, [pickerTarget])
   // 当前模型打开了「视觉」没有；对不上设置里的模型时为 null，交给 core 判断
   const imagesSupported = useAppState((state) => {
     const ref = props.modelRef
@@ -641,6 +660,18 @@ export function Composer(props: ComposerProps) {
       {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-card/95 text-sm text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
       {/* 处理附件的提示只给读屏，界面上由发送按钮转圈表示，不插新行，免得输入框跳高 */}
       {addingAttachments && <p role="status" className="sr-only">正在添加附件…</p>}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        data-testid="composer-file-input"
+        onChange={(event) => {
+          const files = [...(event.currentTarget.files ?? [])]
+          event.currentTarget.value = ''
+          if (files.length > 0) void addAttachments(files, true)
+        }}
+      />
       {menuOpen && (
         <div
           ref={listRef}
@@ -988,74 +1019,9 @@ const REASONING_LABELS: Record<ReasoningEffort, string> = { default: '默认', n
 // 模型多于这么多个时，列表上方出搜索框
 const SEARCH_THRESHOLD = 8
 
-// 思考阶梯：一排逐级升高的柱子，第一根是「默认」（虚线，交给模型自己定），点哪根就到哪档；方向键也能调。
-// mini 是输入框按钮里的小号，只显示不能点
-function ReasoningLadder({ efforts, value, onChange, mini }: { efforts: ReasoningEffort[]; value: ReasoningEffort; onChange?(effort: ReasoningEffort): void; mini?: boolean }) {
-  const selected = efforts.indexOf(value)
-  const steps = efforts.length - 1
-  if (mini) {
-    return (
-      <span className="flex h-3 shrink-0 items-end gap-[2px]" aria-hidden="true" data-testid="reasoning-mini">
-        {efforts.slice(1).map((effort, index) => (
-          <span
-            key={effort}
-            // primary-color-allow: 思考阶梯里已选的档位，和菜单里的阶梯同色
-            className={cn('w-[3px] rounded-[1px] transition-colors motion-reduce:transition-none', index + 1 <= selected ? 'bg-primary' : 'bg-muted-foreground/30')}
-            style={{ height: `${35 + (65 * (index + 1)) / Math.max(steps, 1)}%` }}
-          />
-        ))}
-      </span>
-    )
-  }
-  const move = (step: number) => {
-    const next = efforts[Math.min(Math.max(selected + step, 0), efforts.length - 1)]
-    if (next && next !== value) onChange?.(next)
-  }
-  return (
-    <div
-      role="radiogroup"
-      aria-label="思考强度"
-      className="flex h-14 items-end gap-1.5"
-      onKeyDown={(event) => {
-        const step = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -1 : 0
-        const edge = event.key === 'Home' ? -efforts.length : event.key === 'End' ? efforts.length : 0
-        if (!step && !edge) return
-        event.preventDefault()
-        event.stopPropagation()
-        move(step || edge)
-      }}
-    >
-      {efforts.map((effort, index) => {
-        const active = index === selected
-        const filled = index > 0 && index <= selected
-        const look =
-          index === 0
-            ? cn('border border-dashed', active ? 'border-foreground/50 bg-soft' : 'border-muted-foreground/40 hover:bg-accent')
-            : filled
-              ? // primary-color-allow: 思考阶梯里已选的档位
-                'bg-primary hover:bg-primary/90'
-              : 'bg-muted-foreground/20 hover:bg-muted-foreground/35'
-        return (
-          <button
-            key={effort}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            aria-label={REASONING_LABELS[effort]}
-            title={REASONING_LABELS[effort]}
-            tabIndex={active ? 0 : -1}
-            className={cn('flex-1 rounded-md transition-[height,background-color] duration-200 ease-out outline-none focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none', look)}
-            style={{ height: index === 0 ? '28%' : `${28 + (72 * index) / Math.max(steps, 1)}%` }}
-            onClick={() => onChange?.(effort)}
-          />
-        )
-      })}
-    </div>
-  )
-}
-
-// trigger：换掉默认的按钮（停下说明里的「换模型继续」）；modelsOnly：只列模型，不出思考强度。
-// 一个面板：上面是思考阶梯（模型支持调强度时），下面是模型列表；模型多时可以搜索
+// trigger：换掉默认的按钮（停下说明里的「换模型继续」）；modelsOnly：只列模型，不出思考程度。
+// 参照 Qoder（第 532 步）：按钮写模型和思考程度；点开两行「模型」「推理等级」，各自展开子菜单。
+// 换模型时用这个模型上次选的思考程度，选了思考程度就记下来（第 531 步）
 export function ModelMenu({
   label,
   modelRef,
@@ -1071,10 +1037,10 @@ export function ModelMenu({
   trigger?: ReactNode
   modelsOnly?: boolean
 }) {
-  // 远程任务换成对方的模型服务
+  // 远程任务换成对方的模型服务；对方的模型不记思考程度
   const remote = useRemoteTask()
-  const localProviders = useAppState((state) => state.settings?.providers ?? null)
-  const providers = remote ? (remote.providers ?? null) : localProviders
+  const settings = useAppState((state) => state.settings)
+  const providers = remote ? (remote.providers ?? null) : (settings?.providers ?? null)
   const selectedProvider = providers?.find((provider) => provider.id === modelRef?.providerId)
   const selectedModel = selectedProvider?.models.find((model) => model.id === modelRef?.modelId)
   const efforts = selectedProvider && selectedModel ? reasoningEffortsFor(selectedProvider, selectedModel) : ['default' as const]
@@ -1090,12 +1056,76 @@ export function ModelMenu({
     [icons, selectedProvider, selectedModelId],
   )
   const modelName = label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'
-  const showLadder = supportsReasoning && modelRef !== undefined && !modelsOnly
   const enabled = (providers ?? []).flatMap((provider) => provider.models.filter((model) => model.enabled !== false).map((model) => ({ provider, model })))
   const words = query.trim().toLowerCase()
   const matches = (provider: { name: string }, model: { id: string }) =>
     !words || model.id.toLowerCase().includes(words) || modelDisplayName(model as Parameters<typeof modelDisplayName>[0]).toLowerCase().includes(words) || provider.name.toLowerCase().includes(words)
   const noMatch = words !== '' && enabled.length > 0 && !enabled.some(({ provider, model }) => matches(provider, model))
+  const chooseModel = (ref: ModelRef) => onChange(remote || !settings ? ref : withRememberedEffort(ref, settings.providers, settings.reasoningChoices))
+  const chooseEffort = (next: ReasoningEffort) => {
+    if (locked || !modelRef) return
+    const ref = { ...modelRef, reasoningEffort: next }
+    onChange(ref)
+    if (!remote) void rememberReasoning(ref)
+  }
+
+  const modelList = (
+    <>
+      {enabled.length > SEARCH_THRESHOLD && (
+        <div className="px-1 pb-1" onKeyDown={(event) => event.key !== 'Escape' && event.stopPropagation()}>
+          <input
+            aria-label="搜索模型"
+            value={query}
+            placeholder="搜索模型"
+            className="h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus:border-ring/60"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+      )}
+      <div className="max-h-80 overflow-y-auto">
+        {providers?.map((provider) => {
+          const models = provider.models.filter((model) => model.enabled !== false && matches(provider, model))
+          if (models.length === 0) return null
+          const providerIcon = icons && icons.matchProviderIcon(provider)
+          return (
+            <div key={provider.id}>
+              {/* 分组标题只写供应商名，不带图标；模型自己的图标在每一行 */}
+              <DropdownMenuLabel className="truncate pt-2 pb-1 text-xs font-normal text-muted-foreground">{provider.name}</DropdownMenuLabel>
+              {models.map((model) => {
+                const selected = modelRef?.providerId === provider.id && modelRef.modelId === model.id
+                // 上下文、视觉放在右边，一眼能比
+                const detail = [model.contextWindow ? formatTokens(model.contextWindow) : null, model.images ? '视觉' : null].filter((part): part is string => part !== null).join(' · ')
+                return (
+                  <DropdownMenuItem
+                    key={model.id}
+                    title={model.id}
+                    // primary-color-allow: 选中模型的底色，表示当前选择
+                    className={cn('items-center gap-2.5', selected && 'bg-soft focus:bg-soft')}
+                    onSelect={() => chooseModel({ providerId: provider.id, modelId: model.id })}
+                  >
+                    <BrandIcon id={(icons && icons.matchModelIcon(model.id)) ?? providerIcon} fallbackText={provider.name} size={16} className="size-4" />
+                    <span className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
+                    {detail && <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>}
+                    {/* primary-color-allow: 选中标记 */}
+                    <Check className={cn('size-4 shrink-0 text-primary', selected ? 'visible' : 'invisible')} />
+                  </DropdownMenuItem>
+                )
+              })}
+            </div>
+          )
+        })}
+        {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
+        {noMatch && <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的模型</p>}
+      </div>
+      {/* 分隔线带负的左右外边距，放在滚动区外面：放在里面会比滚动区宽，出横向滚动条（第 532 步） */}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onSelect={() => openSettings('models')}>
+        <Settings2 />
+        模型与角色…
+      </DropdownMenuItem>
+    </>
+  )
+
   return (
     <DropdownMenu
       onOpenChange={(open) => {
@@ -1109,91 +1139,58 @@ export function ModelMenu({
         {trigger ?? (
           <button
             type="button"
-            aria-label={supportsReasoning ? `模型 ${modelName}，思考强度${REASONING_LABELS[effort]}` : '模型'}
+            aria-label={supportsReasoning ? `模型 ${modelName}，思考程度${REASONING_LABELS[effort]}` : `模型 ${modelName}`}
             data-testid="model-menu"
             disabled={locked}
-            title={locked ? '运行中不能切换模型' : supportsReasoning ? `${modelName} · 思考强度${REASONING_LABELS[effort]}` : '切换模型'}
+            title={locked ? '运行中不能切换模型' : undefined}
             className={cn(MENU_TRIGGER, 'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground')}
           >
             {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
-            <span className="truncate">{modelName}</span>
-            {label && supportsReasoning && <ReasoningLadder mini efforts={efforts} value={effort} />}
-            <ChevronDown className="size-3 shrink-0" />
+            <span className="truncate text-foreground/90">{modelName}</span>
+            {label && supportsReasoning && (
+              <span className="shrink-0" data-testid="reasoning-label">
+                {REASONING_LABELS[effort]}
+              </span>
+            )}
+            <ChevronUp className="size-3 shrink-0" />
           </button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72 p-0" data-testid="model-panel">
-        {showLadder && modelRef && (
-          <div className="border-b px-3 pt-3 pb-2.5">
-            <div className="flex items-baseline gap-2">
-              <span className="text-lg leading-none font-bold" data-testid="reasoning-label">
-                {REASONING_LABELS[effort]}
+      {modelsOnly || !modelRef ? (
+        <DropdownMenuContent align="end" className="w-72" data-testid="model-panel">
+          {modelList}
+        </DropdownMenuContent>
+      ) : (
+        <DropdownMenuContent align="end" side="top" className="w-64" data-testid="model-panel">
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="gap-3">
+              <span className="shrink-0">模型</span>
+              <span className="ml-auto flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label ?? ''} size={14} className="size-3.5" />
+                <span className="truncate">{modelName}</span>
               </span>
-              <Zap className="ml-auto size-3.5 self-center text-muted-foreground" aria-hidden="true" />
-            </div>
-            <div className="mt-2.5">
-              <ReasoningLadder efforts={efforts} value={effort} onChange={(next) => !locked && onChange({ ...modelRef, reasoningEffort: next })} />
-            </div>
-            <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-              <span>快</span>
-              <span>深</span>
-            </div>
-          </div>
-        )}
-        <div className="max-h-80 overflow-y-auto p-1">
-          {enabled.length > SEARCH_THRESHOLD && (
-            <div className="px-1 pb-1" onKeyDown={(event) => event.key !== 'Escape' && event.stopPropagation()}>
-              <input
-                aria-label="搜索模型"
-                value={query}
-                placeholder="搜索模型"
-                className="h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus:border-ring/60"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-          )}
-          {providers?.map((provider) => {
-            const models = provider.models.filter((model) => model.enabled !== false && matches(provider, model))
-            if (models.length === 0) return null
-            const providerIcon = icons && icons.matchProviderIcon(provider)
-            return (
-              <div key={provider.id}>
-                <DropdownMenuLabel className="flex items-center gap-2 pt-2 pb-1 text-xs text-muted-foreground">
-                  <BrandIcon id={providerIcon} fallbackText={provider.name} size={16} className="size-4" />
-                  <span className="min-w-0 truncate">{provider.name}</span>
-                </DropdownMenuLabel>
-                {models.map((model) => {
-                  const selected = modelRef?.providerId === provider.id && modelRef.modelId === model.id
-                  // 上下文、视觉放在右边，一眼能比
-                  const detail = [model.contextWindow ? formatTokens(model.contextWindow) : null, model.images ? '视觉' : null].filter((part): part is string => part !== null).join(' · ')
-                  return (
-                    <DropdownMenuItem
-                      key={model.id}
-                      title={model.id}
-                      // primary-color-allow: 选中模型的底色，表示当前选择
-                      className={cn('items-center gap-2.5', selected && 'bg-soft focus:bg-soft')}
-                      onSelect={() => onChange({ providerId: provider.id, modelId: model.id })}
-                    >
-                      <BrandIcon id={(icons && icons.matchModelIcon(model.id)) ?? providerIcon} fallbackText={provider.name} size={16} className="size-4" />
-                      <span className="min-w-0 flex-1 truncate">{modelDisplayName(model)}</span>
-                      {detail && <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>}
-                      {/* primary-color-allow: 选中标记 */}
-                      <Check className={cn('size-4 shrink-0 text-primary', selected ? 'visible' : 'invisible')} />
-                    </DropdownMenuItem>
-                  )
-                })}
-              </div>
-            )
-          })}
-          {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
-          {noMatch && <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的模型</p>}
-          <DropdownMenuSeparator className="my-1" />
-          <DropdownMenuItem onSelect={() => openSettings('models')}>
-            <Settings2 />
-            模型与角色…
-          </DropdownMenuItem>
-        </div>
-      </DropdownMenuContent>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-72" data-testid="model-list">
+              {modelList}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="gap-3" disabled={!supportsReasoning}>
+              <span className="shrink-0">推理等级</span>
+              <span className="ml-auto truncate text-muted-foreground">{supportsReasoning ? REASONING_LABELS[effort] : '不支持'}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-40" data-testid="reasoning-list">
+              {efforts.map((item) => (
+                <DropdownMenuItem key={item} className="items-center" onSelect={() => chooseEffort(item)}>
+                  <span className="flex-1">{REASONING_LABELS[item]}</span>
+                  {/* primary-color-allow: 选中标记 */}
+                  <Check className={cn('size-4 shrink-0 text-primary', item === effort ? 'visible' : 'invisible')} />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      )}
     </DropdownMenu>
   )
 }

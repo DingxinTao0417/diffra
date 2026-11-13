@@ -95,7 +95,6 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     await expect(security.nth(4)).toContainText('没有发现安全问题')
     expect(model.securityReviews()).toBe(2)
     expect(readFileSync(join(project, 'files.ts'), 'utf8')).toContain('path.basename(name)')
-    await expect(window.getByTestId('monitor-panel')).toContainText('完成前自动检查')
     await window.screenshot({ path: 'test-results/security-gate.png' })
 
     // 深度扫描：确认后跑一轮只读审计，出报告；这一轮没有「重新生成」
@@ -160,7 +159,6 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
     await waitTaskStatus(window, 'unverified')
     await expect(cards(window, 'security')).toHaveCount(2)
     await expect(cards(window, 'review')).toHaveCount(1)
-    await expect(window.getByTestId('monitor-panel')).toContainText('提交前询问')
 
     // 任务开着时到设置里关掉三项
     await window.keyboard.press('ControlOrMeta+,')
@@ -172,7 +170,6 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
     }
     await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).security).toEqual({ staticCheck: false, lightScan: false, deepScan: true, review: false })
     await window.getByRole('button', { name: '返回' }).click()
-    await expect(window.getByTestId('monitor-panel')).toContainText('完成前规范审查已关')
 
     await taskInput(window).fill('再加一个计算函数')
     await window.getByRole('button', { name: '发送', exact: true }).click()

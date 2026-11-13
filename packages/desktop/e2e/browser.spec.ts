@@ -222,7 +222,10 @@ test('开发服务器：智能体按 package.json 的 dev 脚本在终端里启�
     expect(bodies[3]).toContain('开发服务器的页面')
     expect(bodies[4]).toContain('GET /')
     expect(bodies[5]).toContain('已停止：npm run dev')
-    // 开发服务器在底部终端的一个标签页里跑，停了以后标签页显示已退出
+    // 开发服务器在终端的一个标签页里跑，但不自动打开终端面板（第 527 步）；停了以后任务监控里没有「运行中」，打开终端看到标签页已退出
+    await expect(window.getByTestId('terminal-panel')).toHaveCount(0)
+    await expect(window.getByTestId('monitor-running')).toHaveCount(0)
+    await window.getByRole('button', { name: '终端', exact: true }).click()
     await expect(window.getByTestId('terminal-tab')).toHaveCount(1)
     await expect(window.getByTestId('terminal-tab')).toContainText('已退出')
     await window.screenshot({ path: 'test-results/devserver.png' })

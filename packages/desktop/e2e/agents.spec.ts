@@ -70,7 +70,7 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
     // 工人的步骤不出现在主对话里
     await expect(window.getByTestId('turn').locator(':scope > [data-testid="tool-call"][data-kind="edit"]')).toHaveCount(0)
     // 任务监控：工人都交回了，改动文件标出是谁改的
-    await expect(window.getByTestId('monitor-agent').filter({ hasText: '甲' })).toContainText('已交回')
+    await expect(window.getByTestId('monitor-agent').filter({ hasText: '甲' })).toHaveAttribute('data-status', 'completed')
     await expect(window.getByTestId('monitor-file').filter({ hasText: 'a.txt' }).getByTestId('monitor-file-agent')).toHaveText('甲')
     await expect(window.getByTestId('monitor-file').filter({ hasText: /^b\.txt/ }).getByTestId('monitor-file-agent')).toHaveText('乙')
     // 主智能体和两个工人的请求都发给了模型；工人的请求从它的任务开始，带认领说明

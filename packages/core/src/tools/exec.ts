@@ -1,7 +1,9 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { randomInt } from 'node:crypto'
 import { resolve } from 'node:path'
+import type { BackgroundProcess } from '../protocol.js'
 import { DEFAULT_MAX_OUTPUT_TOKENS, killTree, killTreeSync, truncateForModel } from '../process.js'
+import { localUrlIn } from '../urls.js'
 import { applyPatchTool, patchFromCommand } from './apply-patch.js'
 import { commandEnv, missingCommandHint, saveFullOutput } from './command.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
@@ -30,10 +32,14 @@ const CTRL_D = '\u0004'
 const CONTROL_SPELLINGS: Record<string, string> = { '\\u0003': CTRL_C, '\\x03': CTRL_C, '^C': CTRL_C, '\\u0004': CTRL_D, '\\x04': CTRL_D, '^D': CTRL_D }
 // 停止后最多等进程退出这么久
 const STOP_WAIT_MS = 5_000
+// 界面「查看输出」看的最近输出，和交给模型的 pending 分开留
+const RECENT_CHARS = 64_000
+const URL_OVERLAP_CHARS = 200
 
 interface ExecProcess {
   id: number
   command: string
+  cwd: string
   child: ChildProcess
   started: number
   lastUsed: number
@@ -43,6 +49,13 @@ interface ExecProcess {
   exited: boolean
   // 是我们结束的（Ctrl-C、用户点停止）：退出码不算命令失败
   stopped: boolean
+  // 用户在「运行中」点的停止，告诉模型是用户停的
+  stoppedByUser: boolean
+  // 工具到点返回时还在跑：转到了后台，界面「运行中」列着它
+  background: boolean
+  recent: string
+  // 输出里第一次出现的本地地址（开发服务器），界面「运行中」据此给「打开网页」
+  url: string | null
   waiters: Set<() => void>
 }
 
@@ -65,6 +78,8 @@ function hookExit(sessions: ExecSessions): void {
 // 一个会话里所有后台进程；会话删除、应用退出时全部结束
 export class ExecSessions {
   private readonly processes = new Map<number, ExecProcess>()
+  // 后台命令列表变了（有命令转到后台、后台的命令结束了）时调，会话据此告诉界面
+  onChange: (() => void) | null = null
 
   get size(): number {
     return this.processes.size
@@ -88,9 +103,32 @@ export class ExecSessions {
       detached: process.platform !== 'win32',
     })
     const now = Date.now()
-    const entry: ExecProcess = { id, command, child, started: now, lastUsed: now, pending: emptyPending(), exitCode: null, exited: false, stopped: false, waiters: new Set() }
+    const entry: ExecProcess = {
+      id,
+      command,
+      cwd,
+      child,
+      started: now,
+      lastUsed: now,
+      pending: emptyPending(),
+      exitCode: null,
+      exited: false,
+      stopped: false,
+      stoppedByUser: false,
+      background: false,
+      recent: '',
+      url: null,
+      waiters: new Set(),
+    }
     const collect = (chunk: Buffer) => {
-      appendOutput(entry, chunk.toString('utf8'))
+      const text = chunk.toString('utf8')
+      // 地址可能被切在两块输出之间：带上一块的末尾一起找
+      const before = entry.recent.slice(-URL_OVERLAP_CHARS)
+      appendOutput(entry, text)
+      if (entry.url === null) {
+        entry.url = localUrlIn(before + text)
+        if (entry.url && entry.background) this.onChange?.()
+      }
       for (const wake of entry.waiters) wake()
     }
     child.stdout?.on('data', collect)
@@ -102,6 +140,7 @@ export class ExecSessions {
       entry.exited = true
       entry.exitCode = code
       for (const wake of entry.waiters) wake()
+      if (entry.background) this.onChange?.()
     }
     child.on('error', (error) => {
       appendOutput(entry, `\n${error.message}\n`)
@@ -122,11 +161,29 @@ export class ExecSessions {
     this.processes.delete(id)
   }
 
-  kill(id: number): void {
+  kill(id: number, byUser = false): void {
     const entry = this.processes.get(id)
     if (!entry || entry.exited) return
     entry.stopped = true
+    entry.stoppedByUser = byUser
     killTree(entry.child.pid)
+  }
+
+  markBackground(id: number): void {
+    const entry = this.processes.get(id)
+    if (!entry || entry.exited || entry.background) return
+    entry.background = true
+    this.onChange?.()
+  }
+
+  background(): BackgroundProcess[] {
+    return [...this.processes.values()].filter((entry) => entry.background && !entry.exited).map((entry) => ({ id: entry.id, command: entry.command, cwd: entry.cwd, startedAt: entry.started, url: entry.url }))
+  }
+
+  // 不动交给模型的那份新输出
+  recentOutput(id: number): { text: string; running: boolean } | null {
+    const entry = this.processes.get(id)
+    return entry ? { text: entry.recent, running: !entry.exited } : null
   }
 
   // sync：内核退出前调，等进程真的结束再返回
@@ -149,6 +206,7 @@ export class ExecSessions {
 }
 
 function appendOutput(entry: ExecProcess, text: string): void {
+  entry.recent = (entry.recent + text).slice(-RECENT_CHARS)
   const pending = entry.pending
   pending.bytes += Buffer.byteLength(text)
   if (Buffer.byteLength(pending.head) < HEAD_BYTES) {
@@ -194,6 +252,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 
 function statusLine(entry: ExecProcess): string {
   if (!entry.exited) return `Process running with session ID ${entry.id}`
+  if (entry.stoppedByUser) return 'Process stopped by the user'
   return entry.stopped ? 'Process stopped (Ctrl-C)' : `Process exited with code ${entry.exitCode ?? -1}`
 }
 
@@ -287,6 +346,7 @@ async function finishReport(context: ToolContext, entry: ExecProcess, started: n
   const saved = shortened ? await saveFullOutput(context.outputDir, output.raw) : ''
   const hint = entry.exited && !entry.stopped && entry.exitCode === 127 ? await missingCommandHint(context, output.text) : ''
   if (entry.exited) context.execSessions?.remove(entry.id)
+  else context.execSessions?.markBackground(entry.id)
   const header = !entry.exited ? `运行中（会话 ${entry.id}）` : entry.stopped ? '已停止' : `Exit code: ${entry.exitCode}`
   return {
     text: text + saved + hint,

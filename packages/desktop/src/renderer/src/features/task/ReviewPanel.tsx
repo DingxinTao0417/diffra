@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileDiff as FileDiffIcon, GitBranch, Undo2 } from 'lucide-react'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { DiffCounts } from '@/features/session/DiffView'
 import { DiffLines } from '@/features/session/DiffLines'
 import type { FileDiff } from '@/lib/unified-diff'
-import type { LiveTask } from '@/state/store'
+import { type LiveTask, store, useAppState } from '@/state/store'
 import { SidePanel } from './SidePanel'
 import { type TaskDiff, useTaskDiff } from './useTaskDiff'
 
@@ -27,6 +27,17 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
   const files = diff?.state === 'ready' ? diff.files : []
   const added = files.reduce((sum, file) => sum + file.added, 0)
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
+  // 任务监控「产出」里点的文件：读到改动后滚到那张卡片
+  const focus = useAppState((state) => state.reviewFile)
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!focus || diff?.state !== 'ready') return
+    store.set((state) => ({ ...state, reviewFile: null }))
+    // 不用 scrollIntoView：它会连带滚动 overflow-hidden 的外壳
+    const list = listRef.current
+    const card = list?.querySelector(`[data-path="${CSS.escape(focus)}"]`)
+    if (list && card) list.scrollTop += card.getBoundingClientRect().top - list.getBoundingClientRect().top - 16
+  }, [focus, diff])
 
   return (
     <SidePanel
@@ -79,7 +90,7 @@ export function ReviewPanel({ task, onRestore }: ReviewPanelProps) {
         )
       }
     >
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <ReviewBody task={task} diff={diff} files={files} />
       </div>
     </SidePanel>
@@ -126,7 +137,7 @@ const STATUS_BADGES: Record<FileDiff['status'], React.ReactNode> = {
 function FileCard({ file }: { file: FileDiff }) {
   const [open, setOpen] = useState(true)
   return (
-    <div className="overflow-hidden rounded-lg border" data-testid="review-file">
+    <div className="overflow-hidden rounded-lg border" data-testid="review-file" data-path={file.path}>
       <button
         type="button"
         className={cn('flex w-full items-center gap-2 bg-muted/50 px-2 py-1.5 text-left text-sm hover:bg-accent dark:bg-muted dark:hover:bg-accent', open && 'border-b')}

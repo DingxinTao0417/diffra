@@ -11,6 +11,7 @@ import {
   type BrowserActionParams,
   type BrowserActionResult,
   CLIENT_EXT_METHODS,
+  CLIENT_EXT_NOTIFICATIONS,
   type DesignActionParams,
   type DesignActionResult,
   type DevServerParams,
@@ -85,6 +86,7 @@ export interface AgentOptions {
 }
 
 const checkpointParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1) })
+const processParams = z.object({ sessionId: z.string().min(1), id: z.number().int() })
 const sessionUpdateParams = z.object({
   sessionId: z.string().min(1),
   title: z.string().trim().min(1).max(100).optional(),
@@ -317,6 +319,9 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     remote?: RemoteSource,
   ): Promise<acp.StopReason> => {
     const notify = notifier(client, session.id)
+    // 后台命令在一轮结束后还会退出：用这一轮的客户端推，不进会话记录（重开应用时进程已经不在了）
+    session.execSessions.onChange = () =>
+      void client.notify(CLIENT_EXT_NOTIFICATIONS.processes, { sessionId: session.id, processes: session.execSessions.background() }).catch(() => {})
     session.startTurn(turnId, text, kind, skills, images, from, remote)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
@@ -576,6 +581,17 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const retry = sessionOf(params.sessionId).stepRetries.get(params.agent)
       retry?.()
       return { retried: retry !== undefined }
+    })
+    .onRequest(SESSION_EXT_METHODS.processStop, processParams, ({ params }) => {
+      const exec = sessionOf(params.sessionId).execSessions
+      const running = exec.background().some((process) => process.id === params.id)
+      if (running) exec.kill(params.id, true)
+      return { stopped: running }
+    })
+    .onRequest(SESSION_EXT_METHODS.processOutput, processParams, ({ params }) => {
+      const output = sessionOf(params.sessionId).execSessions.recentOutput(params.id)
+      if (!output) throw acp.RequestError.resourceNotFound(String(params.id))
+      return output
     })
     .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
       sessions.get(params.sessionId)?.cancel()

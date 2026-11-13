@@ -7,6 +7,8 @@ import {
   diagnose,
   enhancePrompt,
   retryStep,
+  stopProcess,
+  processOutput,
   configureSession,
   compactSession,
   type CoreClientHandlers,
@@ -49,7 +51,7 @@ import {
   type TaskFolderState,
 } from '../shared/ipc'
 import { modelDisplayName, type ModelRef, NO_HOOKS } from '../shared/settings'
-import { reasoningEffortsFor } from '../shared/reasoning'
+import { reasoningEffortsFor, withRememberedEffort } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { currentBranch, listBranches, switchBranch } from './project-branch'
 import { browserHost } from './browser'
@@ -170,6 +172,9 @@ export const coreClientHandlers: CoreClientHandlers = {
   onArchitectureEvent: (event) => {
     broadcast(IPC_CHANNELS.architectureEvent, event)
   },
+  onProcesses: (event) => {
+    broadcast(IPC_CHANNELS.sessionProcesses, event)
+  },
   onTaskAction: (params) =>
     new Promise((resolve) => {
       const requestId = randomUUID()
@@ -244,6 +249,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return ref ? resolveModel(ref, `「${label}」角色的模型`) : null
   }
 
+  // 编码角色的模型，思考程度用输入框里给它选过的（第 531 步）
+  const coderRef = () => {
+    const { roles, providers, reasoningChoices } = settings.get()
+    return roles.coder ? withRememberedEffort(roles.coder, providers, reasoningChoices) : null
+  }
+
   const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
 
   ipcMain.handle(IPC_CHANNELS.projectPick, async (event) => {
@@ -288,7 +299,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     path: string,
     options: SessionOptions = {},
   ): Promise<{ config: SessionConfig; modelLabel: string; planLabel: string | null; fallbackLabel: string | null }> => {
-    const coder = options.model ? await resolveModel(options.model, '所选模型') : await resolveRole('coder', '编码')
+    const remembered = coderRef()
+    const coder = options.model ? await resolveModel(options.model, '所选模型') : remembered ? await resolveModel(remembered, '「编码」角色的模型') : null
     if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
     // 规范审查按设置开关；没分配评审角色时 core 用编码模型审查
@@ -376,7 +388,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       sessionId,
       info,
       modelLabel,
-      modelRef: options.model ?? settings.get().roles.coder ?? undefined,
+      modelRef: options.model ?? coderRef() ?? undefined,
       planLabel,
       fallbackLabel,
       permissionMode: config.permissionMode,
@@ -408,6 +420,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionProcessStop, async (_event, rawSessionId: unknown, rawId: unknown) =>
+    stopProcess(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.number().int(), rawId)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionProcessOutput, async (_event, rawSessionId: unknown, rawId: unknown) =>
+    processOutput(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.number().int(), rawId)),
   )
 
   ipcMain.handle(IPC_CHANNELS.checkpointDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
@@ -470,7 +488,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       sessionId,
       info: loaded.info,
       modelLabel,
-      modelRef: settings.get().roles.coder ?? undefined,
+      modelRef: coderRef() ?? undefined,
       planLabel,
       fallbackLabel,
       permissionMode: config.permissionMode,

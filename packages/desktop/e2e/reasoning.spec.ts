@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { GOOD_KEY, startMockProvider } from '../../core/test/mock-provider'
@@ -18,76 +18,76 @@ test('已知型号、未知别名、自定义档位及不支持协议的能力�
   expect(reasoningEffortsFor({ protocol: 'gemini' }, model)).toEqual(['default'])
 })
 
-test('思考阶梯：点柱子或用方向键调强度，重新打开后保留；模型和强度在同一个面板里，档位随模型能力变', async () => {
+// 第 531、532 步：两级菜单里选「模型」「推理等级」；每个模型选过的档位记进设置，换回这个模型、重启后都还是它
+test('推理等级：两级菜单里选档位，按模型记住，换模型、重启后还在；档位随模型能力变', async () => {
   const userDataDir = makeUserDataDir()
   const mock = await startMockProvider()
-  const app = await launchApp(userDataDir)
+  let app = await launchApp(userDataDir)
   try {
-    const window = await app.firstWindow()
+    let window = await app.firstWindow()
     await configureCoderModel(window, { name: '思考模型', baseUrl: `${mock.baseUrl}/openai/v1`, apiKey: GOOD_KEY, modelId: 'o3-mini' })
-    const trigger = window.getByTestId('model-menu')
-    const ladder = window.getByRole('radiogroup', { name: '思考强度' })
-    const level = (name: string) => ladder.getByRole('radio', { name, exact: true })
-    await trigger.click()
-    await expect(ladder.getByRole('radio')).toHaveCount(4)
-    await expect(level('默认')).toHaveAttribute('aria-checked', 'true')
-    // 方向键：End 到最高一档，大字跟着变；输入框按钮上的小阶梯也跟着亮
-    await level('默认').focus()
-    await window.keyboard.press('End')
-    await expect(level('高')).toHaveAttribute('aria-checked', 'true')
+    const trigger = () => window.getByTestId('model-menu')
+    const efforts = () => window.getByTestId('reasoning-list').getByRole('menuitem')
+    const pickEffort = async (name: string) => {
+      await trigger().click()
+      await window.getByRole('menuitem', { name: /^推理等级/ }).click()
+      await window.getByTestId('reasoning-list').getByRole('menuitem', { name, exact: true }).click()
+      await expect(window.getByRole('menu')).toHaveCount(0)
+    }
+    const pickModel = async (id: string) => {
+      await trigger().click()
+      await window.getByRole('menuitem', { name: /^模型/ }).click()
+      await window.getByTestId('model-list').getByRole('menuitem').filter({ hasText: id }).click()
+      await expect(window.getByRole('menu')).toHaveCount(0)
+    }
+    const savedChoices = () => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).reasoningChoices as Record<string, string>
+
+    // 第一级两行：模型、推理等级；推理等级展开是档位列表
+    await trigger().click()
+    await expect(window.getByRole('menuitem', { name: /^模型/ })).toContainText('o3-mini')
+    await expect(window.getByRole('menuitem', { name: /^推理等级/ })).toContainText('默认')
+    await window.getByRole('menuitem', { name: /^推理等级/ }).click()
+    await expect(efforts()).toHaveText(['默认', '低', '中', '高'])
+    await window.keyboard.press('Escape')
+    await pickEffort('高')
     await expect(window.getByTestId('reasoning-label')).toHaveText('高')
-    await expect(trigger).toHaveAttribute('aria-label', /思考强度高/)
-    await window.keyboard.press('Escape')
-    await expect(ladder).toBeHidden()
-    await trigger.click()
-    await expect(level('高')).toHaveAttribute('aria-checked', 'true')
-    // 点柱子：直接到那一档
-    await level('低').click()
-    await expect(level('低')).toHaveAttribute('aria-checked', 'true')
-    await window.keyboard.press('Escape')
+    await expect(trigger()).toHaveAttribute('aria-label', /思考程度高/)
+    await expect.poll(() => Object.entries(savedChoices()).filter(([key]) => key.endsWith('/o3-mini')).map(([, value]) => value)).toEqual(['high'])
+
+    // 加一个能力不同的模型：换过去是它自己的档位（没选过就是默认），换回来还是「高」
     await openModelsPage(window)
-    const card = providerCard(window, '思考模型')
-    await card.getByRole('button', { name: '添加模型', exact: true }).click()
+    const card = () => providerCard(window, '思考模型')
+    await card().getByRole('button', { name: '添加模型', exact: true }).click()
     const capabilityDialog = window.getByRole('dialog')
     await capabilityDialog.getByLabel('模型 ID', { exact: true }).fill('gpt-5.2')
     await capabilityDialog.getByRole('button', { name: '校验并添加模型', exact: true }).click()
     await expect(capabilityDialog).toBeHidden()
-    await expect(card.getByTestId('model-row-gpt-5.2')).toBeVisible()
     await window.getByRole('button', { name: '返回', exact: true }).click()
-    // 同一个面板里直接换模型
-    await trigger.click()
-    await window.getByRole('menuitem').filter({ hasText: 'gpt-5.2' }).click()
-    await expect(window.getByRole('menu')).toBeHidden()
-    await trigger.click()
-    await expect(ladder.getByRole('radio')).toHaveCount(6)
-    await expect(level('默认')).toHaveAttribute('aria-checked', 'true')
-    await level('极高').click()
-    await expect(trigger).toHaveAttribute('aria-label', /思考强度极高/)
-    // 第一根「默认」就是恢复默认，菜单不关
-    await level('默认').click()
-    await expect(level('默认')).toHaveAttribute('aria-checked', 'true')
-    await level('极高').click()
-    await window.keyboard.press('Escape')
-    await expect(ladder).toBeHidden()
+    await pickModel('gpt-5.2')
+    await expect(trigger()).toHaveAttribute('aria-label', /思考程度默认/)
+    await pickEffort('极高')
+    await pickModel('o3-mini')
+    await expect(trigger()).toHaveAttribute('aria-label', /思考程度高/)
+
+    // 重启：首页的模型还是「高」
+    await app.close()
+    app = await launchApp(userDataDir)
+    window = await app.firstWindow()
+    await expect(trigger()).toHaveAttribute('aria-label', /o3-mini，思考程度高/)
+
+    // 能力里去掉极高：换到 gpt-5.2 时记住的极高不能用了，按默认
     await openModelsPage(window)
-    const row = card.getByTestId('model-row-gpt-5.2')
-    await row.getByRole('button', { name: 'gpt-5.2 模型操作', exact: true }).click()
+    await card().getByTestId('model-row-gpt-5.2').getByRole('button', { name: 'gpt-5.2 模型操作', exact: true }).click()
     await window.getByRole('menuitem', { name: '配置能力', exact: true }).click()
-    await capabilityDialog.getByRole('checkbox', { name: '极高', exact: true }).click()
-    await expect(capabilityDialog.getByRole('checkbox', { name: '极高', exact: true })).not.toBeChecked()
-    await capabilityDialog.getByRole('button', { name: '保存模型能力', exact: true }).click()
-    await expect(capabilityDialog).toBeHidden()
+    await window.getByRole('dialog').getByRole('checkbox', { name: '极高', exact: true }).click()
+    await window.getByRole('dialog').getByRole('button', { name: '保存模型能力', exact: true }).click()
+    await expect(window.getByRole('dialog')).toBeHidden()
     await window.getByRole('button', { name: '返回', exact: true }).click()
-    await trigger.click()
-    await window.getByRole('menuitem').filter({ hasText: 'o3-mini' }).click()
-    await expect(window.getByRole('menu')).toBeHidden()
-    await trigger.click()
-    await window.getByRole('menuitem').filter({ hasText: 'gpt-5.2' }).click()
-    await expect(window.getByRole('menu')).toBeHidden()
-    await trigger.click()
-    // 能力里去掉了极高：只剩 5 档，原来选的极高不在了，按默认
-    await expect(ladder.getByRole('radio')).toHaveCount(5)
-    await expect(level('默认')).toHaveAttribute('aria-checked', 'true')
+    await pickModel('gpt-5.2')
+    await expect(trigger()).toHaveAttribute('aria-label', /思考程度默认/)
+    await trigger().click()
+    await window.getByRole('menuitem', { name: /^推理等级/ }).click()
+    await expect(efforts()).toHaveCount(5)
   } finally {
     await app.close()
     await mock.close()
@@ -95,7 +95,7 @@ test('思考阶梯：点柱子或用方向键调强度，重新打开后保留�
   }
 })
 
-test('模型多于 8 个时面板上方有搜索框，按名称或服务商筛选', async () => {
+test('模型多于 8 个时模型列表上方有搜索框，按名称或服务商筛选', async () => {
   const userDataDir = makeUserDataDir()
   const models = Array.from({ length: 9 }, (_, index) => ({ id: `model-${index + 1}`, contextWindow: 128_000, images: false }))
   const providers = [{ id: 'many', presetId: null, icon: null, name: '很多模型', protocol: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', models }]
@@ -106,6 +106,7 @@ test('模型多于 8 个时面板上方有搜索框，按名称或服务商筛�
   try {
     const window = await app.firstWindow()
     await window.getByTestId('model-menu').click()
+    await window.getByRole('menuitem', { name: /^模型/ }).click()
     const search = window.getByLabel('搜索模型')
     await expect(window.getByRole('menuitem').filter({ hasText: /^model-/ })).toHaveCount(9)
     await search.fill('7')

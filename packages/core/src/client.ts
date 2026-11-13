@@ -38,6 +38,7 @@ import {
   type SessionConfig,
   type SessionDesign,
   type SessionModel,
+  type SessionProcesses,
   type SessionInfo,
   type SessionSearchResult,
   type StoredSessionMeta,
@@ -49,7 +50,7 @@ import {
 
 export * from './protocol.js'
 export { parseRulePack, RulePackError } from './rules/pack.js'
-export { isLocalHost, normalizeUrl } from './urls.js'
+export { isLocalHost, localUrlIn, normalizeUrl } from './urls.js'
 export { isProtectedFile } from './tools/protected.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
@@ -65,6 +66,8 @@ export interface CoreClientHandlers {
   onTaskAction?(params: TaskActionParams): Promise<TaskActionResult>
   // 架构分析、解读的进度和结束
   onArchitectureEvent?(event: ArchitectureEvent): void
+  // 会话的后台命令列表变了
+  onProcesses?(event: SessionProcesses): void
 }
 
 // core 对每次模型请求都设了超时，这里再兜一层，防止 core 自身卡住时调用方一直等
@@ -94,6 +97,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     const onArchitectureEvent = handlers.onArchitectureEvent
     // core 自己发的通知，结构由 core 保证
     if (onArchitectureEvent) app.onNotification(CLIENT_EXT_NOTIFICATIONS.architectureEvent, (raw: unknown) => raw as ArchitectureEvent, ({ params }) => onArchitectureEvent(params))
+    const onProcesses = handlers.onProcesses
+    if (onProcesses) app.onNotification(CLIENT_EXT_NOTIFICATIONS.processes, (raw: unknown) => raw as SessionProcesses, ({ params }) => onProcesses(params))
   }
   return app.connect(acp.ndJsonStream(Writable.toWeb(coreStdin), Readable.toWeb(coreStdout), { maxMessageBytes: ACP_MAX_MESSAGE_BYTES }))
 }
@@ -190,6 +195,15 @@ export function enhancePrompt(
 // 模型很久没有输出时，让卡住的那一步重发；agent 是 main 或子智能体的 id
 export function retryStep(connection: acp.ClientConnection, sessionId: string, agent: string): Promise<{ retried: boolean }> {
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
+}
+
+// 界面「运行中」停止一条后台命令；已经结束了就是 stopped: false
+export function stopProcess(connection: acp.ClientConnection, sessionId: string, id: number): Promise<{ stopped: boolean }> {
+  return requestOf(connection)<{ stopped: boolean }, { sessionId: string; id: number }>(SESSION_EXT_METHODS.processStop, { sessionId, id }, extRequestOptions())
+}
+
+export function processOutput(connection: acp.ClientConnection, sessionId: string, id: number): Promise<{ text: string; running: boolean }> {
+  return requestOf(connection)<{ text: string; running: boolean }, { sessionId: string; id: number }>(SESSION_EXT_METHODS.processOutput, { sessionId, id }, extRequestOptions())
 }
 
 // 用户手动压缩，和任务一样可取消；限制请求等待时间，不自动重试模型操作。

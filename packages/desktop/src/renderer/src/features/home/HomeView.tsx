@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { DESIGN_STYLES, type PromptImage, type StoredSessionSummary } from '@diffra/core/types'
 import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, GitBranch, LoaderCircle, Palette } from 'lucide-react'
 import { decodeStartTaskError, type StartTaskErrorCode } from '../../../../shared/ipc'
+import { withRememberedEffort } from '../../../../shared/reasoning'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -66,7 +67,9 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const listed = useMemo(() => (live ? designTasksOf(tasks, live) : []), [tasks, live])
   const openPage = design ? openDesign : openHome
   const draftKey = design ? composerDraftKey.design(projectPath) : composerDraftKey.home(projectPath)
-  const modelLabel = modelLabelOf(settings, model ?? settings?.roles.coder ?? null)
+  // 没选过模型时用编码角色的模型，思考程度用输入框里给它选过的（第 531 步）
+  const coder = useMemo(() => (settings?.roles.coder ? withRememberedEffort(settings.roles.coder, settings.providers, settings.reasoningChoices) : null), [settings])
+  const modelLabel = modelLabelOf(settings, model ?? coder)
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
   const workspacePath = settings?.defaultWorkspace.path
 
@@ -189,7 +192,7 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
           permissionMode={permissionMode}
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
-          modelRef={model ?? settings?.roles.coder ?? undefined}
+          modelRef={model ?? coder ?? undefined}
           onModelChange={setModel}
           planMode={planMode}
           onPlanModeChange={setPlanMode}

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { SquareTerminal, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { SidePanel } from '@/features/task/SidePanel'
 import { createXterm } from '@/features/terminal/terminals'
 import { errorMessage } from '@/lib/errors'
 import { listenRemoteTerminal } from './remote-tasks'
@@ -9,9 +8,9 @@ import { listenRemoteTerminal } from './remote-tasks'
 const INPUT_BATCH_MS = 20
 const RESIZE_DEBOUNCE_MS = 150
 
-// 对方电脑上的终端（「完全控制」）：打开面板时请对方在这个任务的项目目录里开一个，关掉面板、离开任务时请对方结束。
+// 对方电脑上的终端（「完全控制」），和本机终端一样在右侧栏（第 533 步）：打开面板时请对方在这个任务的项目目录里开一个，关掉面板、离开任务时请对方结束。
 // 输出、结束经推送来（remote-tasks.ts 的 listenRemoteTerminal）
-export function RemoteTerminalPanel({ deviceId, sessionId, deviceName, onClose }: { deviceId: string; sessionId: string; deviceName: string; onClose(): void }) {
+export function RemoteTerminalPanel({ deviceId, sessionId, deviceName }: { deviceId: string; sessionId: string; deviceName: string }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<{ state: 'opening' | 'open' | 'exited' | 'error'; message?: string }>({ state: 'opening' })
 
@@ -76,20 +75,20 @@ export function RemoteTerminalPanel({ deviceId, sessionId, deviceName, onClose }
   }, [deviceId, sessionId])
 
   return (
-    <div className="flex h-64 shrink-0 flex-col border-t" data-testid="remote-terminal">
-      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-xs text-muted-foreground">
-        <SquareTerminal className="size-3.5" />
-        <span className="min-w-0 flex-1 truncate">
+    <SidePanel
+      width="wide"
+      testId="remote-terminal"
+      title="终端"
+      controls={
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
           「{deviceName}」上的终端
           {status.state === 'opening' && ' · 正在打开…'}
           {status.state === 'exited' && ' · 已结束'}
           {status.state === 'error' && <span className="text-destructive"> · {status.message}</span>}
         </span>
-        <Button variant="ghost" size="icon-xs" aria-label="关闭远程终端" className="size-5 rounded-sm" onClick={onClose}>
-          <X className="size-3" />
-        </Button>
-      </div>
-      <div ref={hostRef} className="min-h-0 flex-1 px-3 pb-2" />
-    </div>
+      }
+    >
+      <div ref={hostRef} className="min-h-0 flex-1 px-3 pt-1.5 pb-2" />
+    </SidePanel>
   )
 }

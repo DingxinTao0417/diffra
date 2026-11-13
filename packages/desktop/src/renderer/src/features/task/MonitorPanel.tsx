@@ -1,91 +1,88 @@
-import { useState } from 'react'
-import { type AgentTag, parseSteps, STEPS_CARD_TITLE } from '@diffra/core/types'
-import { Check, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CirclePause, CircleX, Info, LoaderCircle } from 'lucide-react'
-import type { ProjectState } from '../../../../shared/ipc'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import type { BackgroundProcess } from '@diffra/core/types'
+import {
+  BookOpen,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
+  File,
+  Folder,
+  GitBranch,
+  GitCommitHorizontal,
+  GitCompareArrows,
+  Globe,
+  Laptop,
+  Link,
+  LoaderCircle,
+  type LucideIcon,
+  Plus,
+  Server,
+  Sparkles,
+  Square,
+  SquareTerminal,
+  TriangleAlert,
+} from 'lucide-react'
 import { cn } from 'cn'
-import { DiffCounts, relativePath } from '@/features/session/DiffView'
-import { useMcpStatus } from '@/features/mcp/useMcpStatus'
-import { useRemoteTask } from './remote-task'
-import { ProjectSettingsDialog } from '@/features/project/ProjectSettingsDialog'
+import { splitFileReferences } from '../../../../shared/attachments'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
-import { openSettings, runDeepScan } from '@/state/actions'
-import { type LiveTask, store, useAppState } from '@/state/store'
-import { splitTitle } from './Conversation'
+import { useMcpStatus } from '@/features/mcp/useMcpStatus'
+import { DiffCounts, relativePath } from '@/features/session/DiffView'
+import type { Turn } from '@/features/session/transcript'
+import { showTerminal } from '@/features/terminal/terminals'
+import { errorMessage } from '@/lib/errors'
+import { formatTime } from '@/lib/format'
+import { turnVerdict } from '@/lib/turn-verdict'
+import { runDeepScan } from '@/state/actions'
+import { type LiveTask, showToast, store, useAppState } from '@/state/store'
+import { pickAttachments } from './Composer'
 import { SidePanel } from './SidePanel'
-import { StepMark } from './StepMark'
 import type { TaskDiff } from './useTaskDiff'
 
-const COLLAPSED_CHANGED_FILE_LIMIT = 10
-const FAILED_COMMAND_LIMIT = 3
+const COLLAPSED_LIMIT = 10
+const OUTPUT_LINES = 300
+const COMMIT_PROMPT = '把这些改动提交并推送'
+const NO_PROCESSES: BackgroundProcess[] = []
 
 interface MonitorPanelProps {
   task: LiveTask
-  project: ProjectState | null
   branch: string | null
+  // 远程任务：对方设备的名字；本机任务是 null
+  device: string | null
   diff: TaskDiff | null
-  onProjectSaved(project: ProjectState): void
-  // 点了深度扫描，由任务页弹确认框
-  onDeepScan(scope: 'task' | 'project'): void
   onLocate(itemId: string): void
 }
 
-export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDeepScan, onLocate }: MonitorPanelProps) {
-  const [editing, setEditing] = useState(false)
-  const [configOpen, setConfigOpen] = useState(false)
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
-  const filesExpanded = expandedSessionId === task.sessionId
-  const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
-  const securitySettings = useAppState((state) => state.settings?.security ?? null)
-  // 远程任务：MCP 状态是对方电脑上的，这里不查；改项目设置、深度扫描也不在这里做
-  const remote = useRemoteTask()
-  // 本机任务的检查开关跟着设置走（改了立即生效）；远程任务看对方建会话时报的
-  const security = !remote && securitySettings ? securitySettings : { ...task.info.security, deepScan: false, review: task.info.rulePacks.length > 0 }
+// 右侧栏只放这个任务的状态和产出，参照 Qoder（第 529 步）：摘要、运行中、环境、子智能体、产出、看过的网页、用户给的资料。
+// 检查、安全、规范、模型、MCP 这些配置在设置页和项目设置里改
+export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPanelProps) {
+  const [expanded, setExpanded] = useState<{ sessionId: string; files: boolean; agents: boolean } | null>(null)
+  const show = expanded?.sessionId === task.sessionId ? expanded : { sessionId: task.sessionId, files: false, agents: false }
+  const [output, setOutput] = useState<BackgroundProcess | null>(null)
+  const remote = device !== null
   const mcp = useMcpStatus(remote ? null : { sessionId: task.sessionId })
+  const terminals = useAppState((state) => state.terminals)
+  const processes = useAppState((state) => state.processes[task.sessionId] ?? NO_PROCESSES)
   const verdict = turnVerdict(task)
-  const verdictTurn = task.turns.findLast((turn) => turn.kind === 'prompt' || turn.kind === 'goal')
-  const failedCommands = verdictTurn?.items.flatMap((item) => (item.kind === 'tool' && item.succeeded === false ? [item] : [])) ?? []
-  // 同一条命令失败多次只列一行，定位到最近一次；先删再加，Map 的顺序就是各命令最近一次失败的顺序
-  const failedRows = new Map<string, { command: string; id: string; count: number }>()
-  for (const item of failedCommands) {
-    const command = splitTitle(item.title).target
-    const count = (failedRows.get(command)?.count ?? 0) + 1
-    failedRows.delete(command)
-    failedRows.set(command, { command, id: item.id, count })
-  }
-  const shownFailed = [...failedRows.values()].reverse().slice(0, FAILED_COMMAND_LIMIT)
-  const hiddenFailed = failedCommands.length - shownFailed.reduce((total, row) => total + row.count, 0)
-  // 最近一轮派出的子智能体：在做什么、认领了哪些文件
-  const agentTurn = task.turns.findLast((turn) => turn.items.some((item) => item.kind === 'tool' && item.agentCard))
-  const agents = (agentTurn?.items ?? []).flatMap((item) =>
-    item.kind === 'tool' && item.agentCard ? [{ item, card: item.agentCard, steps: agentTurn!.items.flatMap((step) => (step.kind === 'tool' && step.parentId === item.id ? [step] : [])) }] : [],
-  )
+  const reply = useMemo(() => latestReply(task.turns), [task.turns])
+  const agents = useMemo(() => taskAgents(task.turns), [task.turns])
+  const pages = useMemo(() => (remote ? [] : visitedPages(task.turns)), [remote, task.turns])
+  const sources = useMemo(() => attachedSources(task.turns), [task.turns])
   // 改动文件是哪个子智能体改的（工人用 apply_patch 改的；命令改的看不出是谁）
-  const owners = new Map<string, AgentTag[]>()
-  for (const turn of task.turns) {
-    for (const item of turn.items) {
-      if (item.kind !== 'tool' || !item.agent || item.status !== 'completed') continue
-      for (const content of item.content) {
-        if (content.type !== 'diff') continue
-        const path = relativePath(content.path, task.project)
-        const list = owners.get(path) ?? []
-        if (!list.some((owner) => owner.id === item.agent!.id)) owners.set(path, [...list, item.agent])
-      }
-    }
-  }
-  // 智能体这一轮列的步骤清单（最新的一份）；这一轮没列就不显示
-  const stepsCard = verdictTurn?.items.findLast((item) => item.kind === 'tool' && item.title === STEPS_CARD_TITLE)
-  const steps = stepsCard?.kind === 'tool' ? parseSteps(stepsCard.content.flatMap((content) => (content.type === 'content' && content.content.type === 'text' ? [content.content.text] : [])).join('\n')) : []
-  // 有完成条件时下面的完成条件区已经写了这句原因，不重复
-  const verdictReason = verdict.reason && !(task.progress?.requirements.length && verdict.reason === task.progress.reason) ? verdict.reason : null
-  const checks = task.info.checks ?? project?.checks
-  // 检查命令建会话时就定了，项目设置之后改过的要新任务才用上
-  const projectChecks = task.info.checks ? project?.checks : undefined
-  const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
+  const owners = useMemo(() => fileOwners(task), [task])
+  const servers = terminals.filter((terminal) => terminal.devServer?.sessionId === task.sessionId && terminal.exitCode === null)
+  const files = diff?.state === 'ready' ? diff.files : []
+  const added = files.reduce((sum, file) => sum + file.added, 0)
+  const removed = files.reduce((sum, file) => sum + file.removed, 0)
   const mcpFailed = mcp.statuses?.some((server) => server.state === 'failed') ?? false
-  const configProblems = [mcpFailed ? 'MCP 连接失败' : null, task.info.bashPath ? null : '没找到 Git Bash'].filter((item) => item !== null)
+  const openReview = (path?: string) => store.set((state) => ({ ...state, panel: 'review', reviewFile: path ?? null }))
+  const openPage = (url: string) => {
+    store.set((state) => ({ ...state, panel: 'browser' }))
+    window.diffra.browserNavigate(task.sessionId, url).catch((error: unknown) => showToast(errorMessage(error)))
+  }
+  const stopProcess = (id: number) => window.diffra.stopProcess(task.sessionId, id).catch((error: unknown) => showToast(`停止失败：${errorMessage(error)}`))
+  const stopServer = (id: string) => window.diffra.killTerminal(id).catch((error: unknown) => showToast(`停止失败：${errorMessage(error)}`))
 
   return (
     <SidePanel
@@ -98,281 +95,224 @@ export function MonitorPanel({ task, project, branch, diff, onProjectSaved, onDe
         </span>
       }
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-sm [scrollbar-gutter:stable] [&>section+section]:border-t [&>section+section]:pt-3">
-        {verdict.tone !== 'idle' && (
-          <Section title="本轮结论">
-            <div className="flex items-center gap-2">
-              <VerdictIcon tone={verdict.tone} />
-              <span
-                className={cn(
-                  'min-w-0 flex-1 truncate text-foreground/90',
-                  verdict.tone === 'confirm' && 'text-warning',
-                  (verdict.tone === 'error' || verdict.tone === 'failed') && 'text-destructive',
-                )}
-              >
-                {verdict.label}
-              </span>
-              {failedCommands.length > 0 && (
-                <span className="shrink-0 text-muted-foreground">
-                  {verdict.tone === 'verified' ? `过程中 ${failedCommands.length} 条命令失败` : `${failedCommands.length} 条命令失败`}
-                </span>
-              )}
-            </div>
-            {verdictReason && <p className="text-muted-foreground">{verdictReason}</p>}
-            {failedCommands.length > 0 && (
-              <div className="flex flex-col">
-                {shownFailed.map((row) => (
-                  <button
-                    key={row.command}
-                    type="button"
-                    aria-label={row.count > 1 ? `跳到失败 ${row.count} 次的命令：${row.command}` : `跳到失败的命令：${row.command}`}
-                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                    data-testid="monitor-failed-command"
-                    onClick={() => onLocate(row.id)}
-                  >
-                    <CircleAlert className={cn('size-3.5 shrink-0', verdict.tone === 'verified' ? 'text-muted-foreground' : 'text-warning')} />
-                    <span className="min-w-0 truncate" title={row.command}>
-                      {row.command}
-                    </span>
-                    {row.count > 1 && <span className="ml-auto shrink-0 text-muted-foreground">{row.count} 次</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-            {hiddenFailed > 0 && <p className="text-muted-foreground">还有 {hiddenFailed} 条命令失败</p>}
-          </Section>
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 text-sm [scrollbar-gutter:stable]">
+        {reply && (
+          <button
+            type="button"
+            aria-label="跳到最近的回复"
+            className="-mx-1 flex flex-col gap-1.5 rounded-xl border bg-card px-3 py-2.5 text-left outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="monitor-summary"
+            onClick={() => onLocate(reply.id)}
+          >
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Sparkles className="size-3.5 shrink-0" />
+              {reply.at !== null ? `更新于 ${formatTime(reply.at)}` : '最近的回复'}
+            </span>
+            <span className={cn('line-clamp-5 leading-relaxed text-muted-foreground', reply.text.length > 160 && '[mask-image:linear-gradient(to_bottom,black_70%,transparent)]')}>
+              {reply.text}
+            </span>
+          </button>
         )}
 
-        {steps.length > 0 && (
-          <Section title={`步骤 · ${steps.filter((step) => step.status === 'completed').length}/${steps.length}`}>
-            <ul className="flex flex-col gap-0.5" data-testid="monitor-steps">
-              {steps.map((step, index) => (
-                <li key={index} className="flex items-start gap-2 leading-relaxed">
-                  <StepMark status={step.status} />
-                  <span className={cn('min-w-0 break-words', step.status === 'completed' ? 'text-muted-foreground' : 'text-foreground/90', step.status === 'in_progress' && 'font-bold')}>{step.content}</span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
-
-        {agents.length > 0 && (
-          <Section title={`子智能体 · ${agents.length} 个`}>
-            <div className="flex flex-col">
-              {agents.map(({ item, card, steps }) => {
-                const running = item.status !== 'completed' && item.status !== 'failed'
-                const current = steps.at(-1)
-                const action = current ? splitTitle(current.title) : null
-                const state = running ? `第 ${Math.max(steps.length, 1)} 步${action ? ` · ${action.action}${action.target ? ` ${action.target}` : ''}` : ''}` : item.status === 'completed' ? '已交回' : '未完成'
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    title={[card.task, card.files.length > 0 ? `认领：${card.files.join('、')}` : ''].filter(Boolean).join('\n')}
-                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                    data-testid="monitor-agent"
-                    onClick={() => onLocate(item.id)}
-                  >
-                    <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: card.color }} aria-hidden="true" />
-                    <span className="shrink-0 text-foreground/90">{card.name}</span>
-                    <span className={cn('min-w-0 flex-1 truncate text-right text-xs', item.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>{state}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </Section>
-        )}
-
-        {/* 每轮没调 finish 时 core 都会写一句 blocked 原因；没定义完成条件时只在主动暂停等待时显示原因 */}
-        {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
-          <Section title="完成条件">
-            {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
-            {task.progress.requirements.map((item) => (
-              // success-color-allow: 完成条件的证据已核对
-              <Row key={item.id} status={item.receiptId ? 'success' : 'off'} label={item.title} value={item.receiptId ? '证据已核对' : '待完成'} />
+        {(servers.length > 0 || processes.length > 0) && (
+          <Section title="运行中">
+            {servers.map((server) => (
+              <RunningRow
+                key={server.id}
+                icon={Server}
+                command={server.devServer!.command}
+                url={server.devServer!.url}
+                onOpen={openPage}
+                onOutput={() => showTerminal(server.id)}
+                onStop={() => void stopServer(server.id)}
+              />
+            ))}
+            {processes.map((process) => (
+              <RunningRow
+                key={process.id}
+                icon={SquareTerminal}
+                command={process.command}
+                url={process.url}
+                onOpen={remote ? undefined : openPage}
+                onOutput={() => setOutput(process)}
+                onStop={() => void stopProcess(process.id)}
+              />
             ))}
           </Section>
         )}
 
-        <Section
-          title={diff?.state === 'ready' ? `本任务改动 · ${diff.files.length} 个文件` : '本任务改动'}
-          action={task.info.checkpoints ? <SectionAction onClick={openReview}>审阅</SectionAction> : undefined}
-        >
-          {!task.info.checkpoints && <p className="text-muted-foreground">检查点不可用（需要 Git），看不到改动汇总</p>}
-          {diff?.state === 'loading' && (
-            <div role="status" aria-label="正在读取改动" className="flex h-7 items-center gap-2 motion-safe:animate-pulse">
-              <div className="h-3 w-2/3 rounded-sm bg-muted" />
-              <div className="ml-auto h-3 w-10 rounded-sm bg-muted" />
-            </div>
-          )}
-          {diff?.state === 'error' && <p className="text-destructive">{diff.message}</p>}
-          {diff?.state === 'ready' && diff.files.length === 0 && <p className="text-muted-foreground">还没有改动文件</p>}
-          {diff?.state === 'ready' && diff.files.length > 0 && (
-            <div className="flex flex-col">
-              {diff.files.slice(0, filesExpanded ? diff.files.length : COLLAPSED_CHANGED_FILE_LIMIT).map((file) => {
-                const nameStart = file.path.lastIndexOf('/') + 1
-                return (
-                  <button
-                    key={file.path}
-                    type="button"
-                    title={file.path}
-                    className="-mx-1.5 flex h-7 items-center gap-2 rounded-md px-1.5 text-left font-mono text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                    data-testid="monitor-file"
-                    onClick={openReview}
-                  >
-                    <span className="flex min-w-0 flex-1">
-                      {/* 目录从左侧截断，文件名始终可见；bdi 防止 rtl 把末尾的斜杠挪到左边 */}
-                      <span className="min-w-0 truncate text-muted-foreground [direction:rtl]">
-                        <bdi dir="ltr">{file.path.slice(0, nameStart)}</bdi>
-                      </span>
-                      <span className="max-w-full shrink-0 truncate text-foreground">{file.path.slice(nameStart)}</span>
-                    </span>
-                    {(owners.get(file.path) ?? []).map((owner) => (
-                      <span key={owner.id} className="flex shrink-0 items-center gap-1 font-sans text-muted-foreground" title={`子智能体 ${owner.name} 改的`} data-testid="monitor-file-agent">
-                        <span className="size-2 rounded-full" style={{ backgroundColor: owner.color }} aria-hidden="true" />
-                        {owner.name}
-                      </span>
-                    ))}
-                    {file.binary ? <span className="shrink-0 text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {diff?.state === 'ready' && diff.files.length > COLLAPSED_CHANGED_FILE_LIMIT && (
-            <Button
-              variant="ghost"
-              size="xs"
-              aria-expanded={filesExpanded}
-              className="-mx-2 self-start text-muted-foreground"
-              onClick={() => setExpandedSessionId(filesExpanded ? null : task.sessionId)}
-            >
-              {filesExpanded ? '收起改动列表' : `展开全部（剩余 ${diff.files.length - COLLAPSED_CHANGED_FILE_LIMIT} 个）`}
-            </Button>
-          )}
-        </Section>
-
-        {/* 无项目任务的文件夹不是用户的项目，不给它存项目设置 */}
-        <Section title="检查" action={task.noProject || remote ? undefined : <SectionAction onClick={() => setEditing(true)}>编辑检查命令</SectionAction>}>
-          {/* 只有完成检查一栏：旧设置里的快速检查在没填完成检查时就是完成时跑的那条 */}
-          {checks && (
-            <Row
-              status={checks.beforeFinish || checks.afterEdit ? 'on' : 'off'}
-              label="完成检查"
-              value={checks.beforeFinish ?? checks.afterEdit ?? '未配置'}
-              mono={!!(checks.beforeFinish ?? checks.afterEdit)}
-              note={projectChecks && (projectChecks.beforeFinish ?? projectChecks.afterEdit) !== (checks.beforeFinish ?? checks.afterEdit) ? '新任务生效' : undefined}
-            />
-          )}
-        </Section>
-
-        {deepScanEnabled && !remote && (
-          <Section
-            title="深度扫描"
-            hint="只读地跨文件追踪数据流，出一份报告，勾选后交给智能体修复。"
-            action={
-              <>
-                <SectionAction disabled={task.running || task.turns.length === 0} onClick={() => onDeepScan('task')}>
-                  扫描本任务改动
-                </SectionAction>
-                <SectionAction disabled={task.running} onClick={() => onDeepScan('project')}>
-                  扫描整个项目
-                </SectionAction>
-              </>
-            }
-          />
+        {/* 目标模式的完成条件；没定义完成条件时只在主动暂停等待时显示原因 */}
+        {task.progress && (task.progress.requirements.length > 0 || (task.progress.status === 'waiting' && task.progress.reason)) && (
+          <Section title="完成条件">
+            {task.progress.reason && <p className="text-muted-foreground">{task.progress.reason}</p>}
+            {task.progress.requirements.map((item) => (
+              <div key={item.id} className="flex items-center gap-2">
+                {/* success-color-allow: 完成条件的证据已核对 */}
+                {item.receiptId ? <CircleCheck className="size-3.5 shrink-0 text-success" /> : <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />}
+                <span className="min-w-0 flex-1 truncate text-foreground/90" title={item.title}>
+                  {item.title}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">{item.receiptId ? '证据已核对' : '待完成'}</span>
+              </div>
+            ))}
+          </Section>
         )}
 
-        <section className="flex flex-col gap-3">
-          <button
-            type="button"
-            aria-expanded={configOpen}
-            className="-mx-1.5 flex flex-col gap-1 rounded-md px-1.5 py-1 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => setConfigOpen(!configOpen)}
+        <Section title="环境信息">
+          <Row
+            leading={<IconBox icon={GitCompareArrows} />}
+            testId="monitor-changes"
+            onClick={task.info.checkpoints && diff?.state === 'ready' ? () => openReview() : undefined}
+            label={files.length > 0 ? `审阅 ${files.length} 个文件的改动` : undefined}
           >
-            <span className="flex items-center gap-2 text-xs text-muted-foreground">
-              <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', configOpen && 'rotate-90')} />
-              任务配置
-            </span>
-            {!configOpen && (
-              <span className="truncate pl-5.5 text-muted-foreground">
-                {task.modelLabel} · {branch ?? '不是 Git 仓库'}
-                {configProblems.map((problem) => (
-                  <span key={problem} className="text-destructive">
-                    {' · '}
-                    {problem}
-                  </span>
-                ))}
+            {!task.info.checkpoints ? (
+              <span className="truncate text-muted-foreground">检查点不可用（需要 Git）</span>
+            ) : diff?.state === 'error' ? (
+              <span className="truncate text-destructive" title={diff.message}>
+                {diff.message}
               </span>
+            ) : diff?.state !== 'ready' ? (
+              <span className="text-muted-foreground">正在读取改动…</span>
+            ) : files.length === 0 ? (
+              <span className="text-muted-foreground">还没有改动文件</span>
+            ) : (
+              <>
+                <DiffCounts added={added} removed={removed} />
+                <span className="text-xs text-muted-foreground">{files.length} 个文件</span>
+              </>
             )}
-          </button>
+          </Row>
+          <Row leading={<IconBox icon={Laptop} />}>
+            <span className="truncate text-foreground/90">{device ?? '本地'}</span>
+          </Row>
+          <Row leading={<IconBox icon={GitBranch} />}>
+            <span className="truncate text-foreground/90">{branch ?? '不是 Git 仓库'}</span>
+          </Row>
+          {branch && !remote && (
+            <Row
+              leading={<IconBox icon={GitCommitHorizontal} />}
+              testId="monitor-commit"
+              onClick={() => store.set((state) => ({ ...state, composerInsert: { target: task.sessionId, text: COMMIT_PROMPT, mode: 'fill' } }))}
+            >
+              <span className="text-foreground/90">提交或推送</span>
+            </Row>
+          )}
+          {!task.info.bashPath && (
+            <Row leading={<IconBox icon={TriangleAlert} tone="bad" />}>
+              <span className="truncate text-destructive">没找到 Git Bash，命令跑不了</span>
+            </Row>
+          )}
+          {mcpFailed && (
+            <Row leading={<IconBox icon={TriangleAlert} tone="bad" />} onClick={mcp.retry} label="MCP 连接失败，重新连接">
+              <span className="truncate text-destructive">MCP 连接失败</span>
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">重新连接</span>
+            </Row>
+          )}
+        </Section>
 
-          {/* 折叠只用 CSS 隐藏，内容留在 DOM 里，e2e 的 toContainText 仍能读到 */}
-          <div className={cn('flex flex-col gap-4', !configOpen && 'hidden')}>
-            <Section title="安全" action={remote ? undefined : <SectionAction onClick={() => openSettings('security')}>安全设置</SectionAction>}>
-              <Row status={security.staticCheck ? 'on' : 'off'} label="静态检查" value={security.staticCheck ? '完成前自动检查' : '未开'} />
-              <Row status={security.lightScan ? 'on' : 'off'} label="轻量扫描" value={security.lightScan ? '完成前自动扫描' : '未开'} />
-              {!remote && <Row status={security.deepScan ? 'on' : 'off'} label="深度扫描" value={security.deepScan ? '提交前询问' : '未开'} />}
-            </Section>
-
-            <Section title="规范">
-              {task.info.rulePacks.length === 0 ? (
-                <Row status="off" label="没有选中的规则包，不会审查" />
-              ) : (
-                <Row status={security.review ? 'on' : 'off'} label="完成前规范审查" value={security.review ? '已开' : '已关'} />
-              )}
-              {task.info.rulePacks.length > 0 && (
-                <div className="flex gap-2">
-                  <span className="size-3.5 shrink-0" />
-                  <span className="min-w-0 flex-1 text-foreground/90" data-testid="monitor-rule-packs">
-                    {task.info.rulePacks.join('、')}
+        {agents.length > 0 && (
+          <Section title="子智能体">
+            {agents.slice(0, show.agents ? agents.length : COLLAPSED_LIMIT).map(({ item, card }) => {
+              const running = item.status !== 'completed' && item.status !== 'failed'
+              const state = running ? '进行中' : item.status === 'completed' ? '已交回' : '未完成'
+              return (
+                <Row
+                  key={item.id}
+                  leading={<span className="size-5 shrink-0 rounded-full" style={{ background: `radial-gradient(circle at 30% 30%, color-mix(in oklab, ${card.color} 35%, white), ${card.color})` }} aria-hidden="true" />}
+                  testId="monitor-agent"
+                  status={item.status}
+                  title={[card.task, card.files.length > 0 ? `认领：${card.files.join('、')}` : ''].filter(Boolean).join('\n')}
+                  label={`跳到子智能体 ${card.name}（${state}）`}
+                  onClick={() => onLocate(item.id)}
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    <span className="text-foreground/90">{card.name}</span> · {card.task}
                   </span>
-                </div>
-              )}
-            </Section>
+                  {running ? (
+                    <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                  ) : item.status === 'failed' ? (
+                    <CircleX className="size-3.5 shrink-0 text-destructive" />
+                  ) : null}
+                </Row>
+              )
+            })}
+            <ExpandButton total={agents.length} expanded={show.agents} onToggle={() => setExpanded({ ...show, agents: !show.agents })} />
+          </Section>
+        )}
 
-            <Section title="模型" action={remote ? undefined : <SectionAction onClick={() => openSettings('models')}>模型与角色</SectionAction>}>
-              <Row label="编码" value={task.modelLabel} />
-              <Row label="规划" value={task.planLabel ?? '沿用编码模型'} />
-              <Row label="备用" value={task.fallbackLabel ?? '不使用'} />
-            </Section>
+        {files.length > 0 && (
+          <Section title="产出">
+            {files.slice(0, show.files ? files.length : COLLAPSED_LIMIT).map((file) => {
+              const nameStart = file.path.lastIndexOf('/') + 1
+              return (
+                <Row key={file.path} leading={<IconBox icon={File} />} testId="monitor-file" title={file.path} label={`审阅 ${file.path}`} onClick={() => openReview(file.path)}>
+                  <span className="flex min-w-0 flex-1">
+                    <span className="max-w-full shrink-0 truncate text-foreground/90">{file.path.slice(nameStart)}</span>
+                    {/* 目录从左侧截断，文件名始终可见；bdi 防止 rtl 把末尾的斜杠挪到左边 */}
+                    <span className="ml-2 min-w-0 truncate text-xs leading-5 text-muted-foreground [direction:rtl]">
+                      <bdi dir="ltr">{file.path.slice(0, Math.max(0, nameStart - 1))}</bdi>
+                    </span>
+                  </span>
+                  {(owners.get(file.path) ?? []).map((owner) => (
+                    <span key={owner.id} className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" title={`子智能体 ${owner.name} 改的`} data-testid="monitor-file-agent">
+                      <span className="size-2 rounded-full" style={{ backgroundColor: owner.color }} aria-hidden="true" />
+                      {owner.name}
+                    </span>
+                  ))}
+                  {file.binary ? <span className="shrink-0 text-xs text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
+                </Row>
+              )
+            })}
+            <ExpandButton total={files.length} expanded={show.files} onToggle={() => setExpanded({ ...show, files: !show.files })} />
+          </Section>
+        )}
 
-            {mcp.statuses && mcp.statuses.length > 0 && (
-              <Section
-                title="MCP"
-                action={
-                  <>
-                    {mcpFailed && <SectionAction onClick={mcp.retry}>重新连接</SectionAction>}
-                    <SectionAction onClick={() => openSettings('mcp')}>MCP 设置</SectionAction>
-                  </>
-                }
-              >
-                {mcp.statuses.map((server) => (
-                  <Row
-                    key={server.name}
-                    status={server.state === 'connected' ? 'on' : 'bad'}
-                    label={server.name}
-                    value={server.state === 'connected' ? `${server.tools.length} 个工具` : '连接失败'}
-                  />
-                ))}
-              </Section>
+        {pages.length > 0 && (
+          <Section title="网页查阅">
+            {pages.map((url) => (
+              <Row key={url} leading={<IconBox icon={Globe} />} testId="monitor-page" title={url} label={`在浏览器里打开 ${url}`} onClick={() => openPage(url)}>
+                <span className="truncate text-foreground/90">{url.replace(/^https?:\/\//, '')}</span>
+              </Row>
+            ))}
+          </Section>
+        )}
+
+        {(sources.length > 0 || !remote) && (
+          <Section
+            title="来源"
+            action={
+              !remote && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-xs" aria-label="添加文件" className="text-muted-foreground" onClick={() => pickAttachments(task.sessionId)}>
+                      <Plus />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>添加文件到输入框</TooltipContent>
+                </Tooltip>
+              )
+            }
+          >
+            {sources.length === 0 && <p className="text-muted-foreground">附加的文件、提到的网址和用到的 Skill 会列在这里</p>}
+            {sources.map((source) =>
+              source.kind === 'url' ? (
+                <Row key={`url:${source.url}`} leading={<IconBox icon={Link} />} testId="monitor-source" title={source.url} label={remote ? undefined : `在浏览器里打开 ${source.url}`} onClick={remote ? undefined : () => openPage(source.url)}>
+                  <span className="truncate text-foreground/90">{source.url.replace(/^https?:\/\//, '')}</span>
+                </Row>
+              ) : source.kind === 'skill' ? (
+                <Row key={`skill:${source.name}`} leading={<IconBox icon={BookOpen} />} testId="monitor-source" title={`Skill：${source.name}`}>
+                  <span className="truncate text-foreground/90">{source.name}</span>
+                </Row>
+              ) : (
+                <Row key={`file:${source.path}`} leading={<IconBox icon={source.kind === 'directory' ? Folder : File} />} testId="monitor-source" title={source.path}>
+                  <span className="truncate text-foreground/90">{relativePath(source.path, task.project)}</span>
+                </Row>
+              ),
             )}
-
-            <Section title="项目保护">
-              <Row label="禁止修改的目录" value={project && project.readOnlyPaths.length > 0 ? project.readOnlyPaths.join(', ') : '无'} mono={!!project?.readOnlyPaths.length} />
-              <Row status="on" label="密钥文件" value="不读进模型" title=".env、私钥等密钥文件不会读进模型" />
-            </Section>
-
-            <Section title="环境">
-              <Row label="分支" value={branch ?? '不是 Git 仓库'} />
-              <Row status={task.info.checkpoints ? 'on' : 'bad'} label="检查点" value={task.info.checkpoints ? '可撤销' : '不可用（需要 Git）'} />
-              <Row status={task.info.bashPath ? 'on' : 'bad'} label="命令执行" value={task.info.bashPath ? 'Git Bash' : '没找到 Git Bash'} />
-            </Section>
-          </div>
-        </section>
-
-        <ProjectSettingsDialog project={project} open={editing} onClose={() => setEditing(false)} onSaved={onProjectSaved} />
+          </Section>
+        )}
       </div>
+      <ProcessOutputDialog sessionId={task.sessionId} process={output} onClose={() => setOutput(null)} onStop={(id) => void stopProcess(id)} />
     </SidePanel>
   )
 }
@@ -406,85 +346,227 @@ export function DeepScanDialog({ sessionId, scope, onClose }: { sessionId: strin
   )
 }
 
-function Section({ title, hint, action, children }: { title: string; hint?: string; action?: React.ReactNode; children?: React.ReactNode }) {
+// 摘要卡：最近一条回复去掉 Markdown 记号，只留开头一段；时间是那一轮结束（还在跑就是开始）的时刻
+function latestReply(turns: Turn[]): { id: string; text: string; at: number | null } | null {
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const turn = turns[index]!
+    const item = turn.items.findLast((entry) => entry.kind === 'agent' && entry.text.trim() !== '')
+    if (item?.kind === 'agent') return { id: item.id, text: plainText(item.text), at: turn.endedAt ?? turn.startedAt }
+  }
+  return null
+}
+
+function plainText(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?(```|$)/g, ' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/\*\*|__|~~|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600)
+}
+
+function taskAgents(turns: Turn[]) {
+  return turns.flatMap((turn) => turn.items.flatMap((item) => (item.kind === 'tool' && item.agentCard ? [{ item, card: item.agentCard }] : [])))
+}
+
+function fileOwners(task: LiveTask) {
+  const owners = new Map<string, Array<{ id: string; name: string; color: string }>>()
+  for (const turn of task.turns) {
+    for (const item of turn.items) {
+      if (item.kind !== 'tool' || !item.agent || item.status !== 'completed') continue
+      for (const content of item.content) {
+        if (content.type !== 'diff') continue
+        const path = relativePath(content.path, task.project)
+        const list = owners.get(path) ?? []
+        if (!list.some((owner) => owner.id === item.agent!.id)) owners.set(path, [...list, item.agent])
+      }
+    }
+  }
+  return owners
+}
+
+// 智能体在内置浏览器里打开过的网址（标题见 core 的 browserTitle），最近打开的在前
+const PAGE_TITLE = /^浏览器 (?:打开|新标签页) (https?:\/\/\S+)$/
+function visitedPages(turns: Turn[]): string[] {
+  const urls = new Set<string>()
+  for (const turn of turns) {
+    for (const item of turn.items) {
+      const url = item.kind === 'tool' && item.status === 'completed' ? PAGE_TITLE.exec(item.title)?.[1] : undefined
+      if (!url) continue
+      urls.delete(url)
+      urls.add(url)
+    }
+  }
+  return [...urls].reverse()
+}
+
+type Source = { kind: 'file' | 'directory'; path: string } | { kind: 'url'; url: string } | { kind: 'skill'; name: string }
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'`，。、；：！？）」』】]+/g
+// 用户自己发的消息里附加的文件、提到的网址、选的 Skill；别的任务发来的、出计划之外的内部轮次不算
+function attachedSources(turns: Turn[]): Source[] {
+  const seen = new Set<string>()
+  const sources: Source[] = []
+  const add = (key: string, source: Source) => {
+    if (seen.has(key)) return
+    seen.add(key)
+    sources.push(source)
+  }
+  for (const turn of turns) {
+    if (turn.from || (turn.kind !== 'prompt' && turn.kind !== 'goal' && turn.kind !== 'plan')) continue
+    const { text, files } = splitFileReferences(turn.prompt)
+    for (const file of files) add(`file:${file.path}`, { kind: file.kind, path: file.path })
+    for (const match of text.match(URL_IN_TEXT) ?? []) {
+      const url = match.replace(/[.,;:)]+$/, '')
+      add(`url:${url}`, { kind: 'url', url })
+    }
+    for (const skill of turn.skills) add(`skill:${skill}`, { kind: 'skill', name: skill })
+  }
+  return sources
+}
+
+function Section({ title, action, children }: { title: string; action?: ReactNode; children?: ReactNode }) {
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-1">
       <div className="flex min-h-6 items-center gap-1">
-        <span className="min-w-0 truncate text-xs text-muted-foreground">{title}</span>
-        {hint && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={`${title}说明`}
-                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Info className="size-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-60">{hint}</TooltipContent>
-          </Tooltip>
-        )}
-        <div className="-mr-2 ml-auto flex shrink-0 items-center">{action}</div>
+        <span className="min-w-0 truncate text-muted-foreground">{title}</span>
+        <div className="-mr-1 ml-auto flex shrink-0 items-center">{action}</div>
       </div>
       {children}
     </section>
   )
 }
 
-const STATUS_ICONS = {
-  // success-color-allow: 只给完成条件的「证据已核对」，配置已开、连接正常用 on
-  success: <CircleCheck className="size-3.5 shrink-0 text-success" />,
-  on: <CircleCheck className="size-3.5 shrink-0 text-muted-foreground" />,
-  off: <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />,
-  bad: <CircleX className="size-3.5 shrink-0 text-destructive" />,
-}
-
-// 形状和颜色跟顶栏 TaskView 的 StatusIndicator 保持一致，放大到面板行的 14px 图标槽
-function VerdictIcon({ tone }: { tone: VerdictTone }) {
-  if (tone === 'running') return <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-  // success-color-allow: 和顶栏同一个结论，只在本轮被接受的 finish 经检查命令验证过时出现
-  if (tone === 'verified') return <Check className="size-3.5 shrink-0 text-success" />
-  if (tone === 'unverified' || tone === 'unfinished') return <CircleAlert className="size-3.5 shrink-0 text-warning" />
-  if (tone === 'blocked') return <CirclePause className="size-3.5 shrink-0 text-warning" />
-  const dot = {
-    confirm: 'size-2 border-2 border-warning',
-    error: 'size-2 bg-destructive',
-    failed: 'size-2 bg-destructive',
-    waiting: 'size-2 border-2 border-muted-foreground/60',
-    stopped: 'size-1.5 bg-muted-foreground/60',
-    nochange: null,
-    done: null,
-    idle: null,
-  }[tone]
-  return <span className="flex size-3.5 shrink-0 items-center justify-center">{dot && <span className={cn('rounded-full', dot)} />}</span>
-}
-
-// 每行都留 14px 图标槽，有无状态图标的行标签都对齐
-function Row({ status, label, value, mono, note, title }: { status?: keyof typeof STATUS_ICONS; label: string; value?: string; mono?: boolean; note?: string; title?: string }) {
+function IconBox({ icon: Icon, tone }: { icon: LucideIcon; tone?: 'bad' }) {
   return (
-    <div className="flex items-center gap-2" title={title}>
-      {status ? STATUS_ICONS[status] : <span className="size-3.5 shrink-0" />}
-      <span className="min-w-0 flex-1 truncate text-foreground/90" title={title ? undefined : label}>
-        {label}
-      </span>
-      {value && (
-        <span
-          className={cn('min-w-0 max-w-[60%] truncate text-right', mono ? 'font-mono text-xs' : 'text-muted-foreground', status === 'bad' && 'text-destructive')}
-          title={title ? undefined : value}
-        >
-          {value}
+    <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-md bg-muted', tone === 'bad' ? 'text-destructive' : 'text-muted-foreground')}>
+      <Icon className="size-3.5" />
+    </span>
+  )
+}
+
+// 每行左边一个 24px 的图标块；能点的行整行是按钮
+function Row({ leading, onClick, label, title, testId, status, children }: { leading: ReactNode; onClick?: () => void; label?: string; title?: string; testId?: string; status?: string; children: ReactNode }) {
+  const className = '-mx-1.5 flex min-h-8 items-center gap-2.5 rounded-md px-1.5 py-1 text-left'
+  const body = (
+    <>
+      {leading}
+      <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
+    </>
+  )
+  if (!onClick) {
+    return (
+      <div className={className} title={title} data-testid={testId} data-status={status}>
+        {body}
+      </div>
+    )
+  }
+  return (
+    <button type="button" aria-label={label} title={title} data-testid={testId} data-status={status} className={cn(className, 'outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring')} onClick={onClick}>
+      {body}
+    </button>
+  )
+}
+
+function ExpandButton({ total, expanded, onToggle }: { total: number; expanded: boolean; onToggle(): void }) {
+  if (total <= COLLAPSED_LIMIT) return null
+  return (
+    <Button variant="ghost" size="xs" aria-expanded={expanded} className="-mx-2 self-start text-muted-foreground" onClick={onToggle}>
+      {expanded ? '收起' : `展开全部（剩余 ${total - COLLAPSED_LIMIT} 个）`}
+    </Button>
+  )
+}
+
+// 「运行中」的一行：开发服务器（终端里跑的）或转到后台的命令；看输出、停止，有本地地址时能在浏览器里打开
+function RunningRow({ icon, command, url, onOpen, onOutput, onStop }: { icon: LucideIcon; command: string; url: string | null; onOpen?: (url: string) => void; onOutput(): void; onStop(): void }) {
+  return (
+    <div className="-mx-1.5 flex min-h-8 items-center gap-2.5 rounded-md px-1.5 py-1" data-testid="monitor-running">
+      <IconBox icon={icon} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate font-mono text-xs text-foreground/90" title={command}>
+          {command}
         </span>
-      )}
-      {note && <span className="shrink-0 text-xs text-muted-foreground">{note}</span>}
+        {url && <span className="truncate text-xs text-muted-foreground">{url}</span>}
+      </div>
+      <div className="-mr-1 flex shrink-0 items-center">
+        {url && onOpen && <IconAction icon={Globe} label="在浏览器里打开" onClick={() => onOpen(url)} />}
+        <IconAction icon={SquareTerminal} label="查看输出" onClick={onOutput} />
+        <IconAction icon={Square} label="停止" onClick={onStop} />
+      </div>
     </div>
   )
 }
 
-function SectionAction({ disabled, onClick, children }: { disabled?: boolean; onClick(): void; children: React.ReactNode }) {
+function IconAction({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick(): void }) {
   return (
-    <Button variant="ghost" size="xs" disabled={disabled} className="text-foreground/80 hover:text-foreground" onClick={onClick}>
-      {children}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-xs" aria-label={label} className="text-muted-foreground hover:text-foreground" onClick={onClick}>
+          <Icon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+// 后台命令的最近输出；不动交给模型的那份。命令在框开着时结束了也照样看得到最后的输出
+function ProcessOutputDialog({ sessionId, process, onClose, onStop }: { sessionId: string; process: BackgroundProcess | null; onClose(): void; onStop(id: number): void }) {
+  const [output, setOutput] = useState<{ id: number; text: string; running: boolean } | { id: number; error: string } | null>(null)
+  const [version, setVersion] = useState(0)
+  const preRef = useRef<HTMLPreElement>(null)
+  const id = process?.id ?? null
+  useEffect(() => {
+    if (id === null) return
+    let stale = false
+    window.diffra.processOutput(sessionId, id).then(
+      (result) => !stale && setOutput({ id, ...result }),
+      (error: unknown) => !stale && setOutput({ id, error: errorMessage(error) }),
+    )
+    return () => {
+      stale = true
+    }
+  }, [sessionId, id, version])
+  const current = output && output.id === id ? output : null
+  useEffect(() => {
+    const pre = preRef.current
+    if (pre) pre.scrollTop = pre.scrollHeight
+  }, [current])
+  const text = current && 'text' in current ? current.text.split('\n').slice(-OUTPUT_LINES).join('\n').trim() : ''
+  return (
+    <Dialog open={process !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>命令输出</DialogTitle>
+          <DialogDescription className="truncate font-mono text-xs">{process?.command}</DialogDescription>
+        </DialogHeader>
+        {current && 'error' in current ? (
+          <p className="text-sm text-destructive">{current.error}</p>
+        ) : (
+          <pre ref={preRef} className="max-h-[60vh] min-h-24 overflow-auto rounded-md bg-muted p-3 font-mono text-xs break-all whitespace-pre-wrap" data-testid="process-output">
+            {current ? text || '（还没有输出）' : '正在读取…'}
+          </pre>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setVersion((value) => value + 1)}>
+            刷新
+          </Button>
+          {current && 'running' in current && current.running && process && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                onStop(process.id)
+                onClose()
+              }}
+            >
+              停止
+            </Button>
+          )}
+          <Button onClick={onClose}>关闭</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

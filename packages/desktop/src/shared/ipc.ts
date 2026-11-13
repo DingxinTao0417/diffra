@@ -7,6 +7,7 @@ import type {
   McpServerStatus,
   PromptEnhancement,
   PromptImage,
+  ReasoningEffort,
   PermissionMode,
   PermissionOption,
   RequestPermissionRequest,
@@ -17,6 +18,7 @@ import type {
   StoredTurn,
   SessionInfo,
   SessionNotification,
+  SessionProcesses,
   StopReason,
   TaskActionParams,
   TaskActionResult,
@@ -94,6 +96,11 @@ export const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
   terminalOpened: 'terminal:opened',
+  terminalUrl: 'terminal:url',
+  fileResolve: 'file:resolve',
+  fileRead: 'file:read',
+  fileOpen: 'file:open',
+  fileReveal: 'file:reveal',
   preferencesSave: 'settings:preferences-save',
   workspacePick: 'settings:workspace-pick',
   workspaceReset: 'settings:workspace-reset',
@@ -103,6 +110,9 @@ export const IPC_CHANNELS = {
   sessionDeepScan: 'session:deep-scan',
   sessionPlan: 'session:plan',
   sessionRetryStep: 'session:retry-step',
+  sessionProcesses: 'session:processes',
+  sessionProcessStop: 'session:process-stop',
+  sessionProcessOutput: 'session:process-output',
   sessionDiagnose: 'session:diagnose',
   promptEnhance: 'prompt:enhance',
   todosList: 'todos:list',
@@ -248,6 +258,20 @@ export type MenuCommand =
   | 'check-updates'
   | 'about'
   | 'quick-todo'
+
+// 回答里提到的、在项目里的文件（第 535 步）：path 是完整路径，relative 是相对项目的路径（用 /）
+export interface ProjectFile {
+  path: string
+  relative: string
+}
+
+// 智能体起的开发服务器在主进程开的终端（第 527 步）
+export interface TerminalOpenedEvent {
+  id: string
+  cwd: string
+  shell: string
+  devServer: { sessionId: string; command: string }
+}
 
 export type CoreStatus =
   | { state: 'connected'; agentName: string; agentVersion: string; protocolVersion: number }
@@ -419,8 +443,15 @@ export interface DiffraApi {
   killTerminal(id: string): Promise<void>
   onTerminalData(listener: (event: { id: string; data: string }) => void): () => void
   onTerminalExit(listener: (event: { id: string; exitCode: number }) => void): () => void
-  // 主进程开的终端（智能体起的开发服务器），界面加一个标签页
-  onTerminalOpened(listener: (event: { id: string; cwd: string; shell: string }) => void): () => void
+  // 主进程开的终端（智能体起的开发服务器），界面在后台加一个标签页，不打开终端面板
+  onTerminalOpened(listener: (event: TerminalOpenedEvent) => void): () => void
+  // 开发服务器的输出里第一次出现本地地址
+  onTerminalUrl(listener: (event: { id: string; url: string }) => void): () => void
+  // 回答里提到的文件：哪些在项目里（不在的是 null）、读出来（最多 1 MB）、用默认应用打开、在资源管理器里显示
+  resolveFiles(project: string, paths: string[]): Promise<Record<string, ProjectFile | null>>
+  readFile(project: string, path: string): Promise<{ text: string; binary: boolean; truncated: boolean }>
+  openFile(project: string, path: string): Promise<void>
+  revealFile(project: string, path: string): Promise<void>
   savePreferences(change: {
     appearance?: Appearance
     layout?: Layout
@@ -428,6 +459,8 @@ export interface DiffraApi {
     defaultPermissionMode?: PermissionMode
     security?: SecuritySettings
     execution?: ExecutionSettings
+    // 输入框里给这个模型选了思考程度，记下来
+    reasoningChoice?: { providerId: string; modelId: string; effort: ReasoningEffort }
   }): Promise<SettingsView>
   // 无项目任务的默认保存位置：弹出文件夹选择框，取消时返回 null；恢复默认；在资源管理器里打开（还没建就先建）
   pickWorkspace(): Promise<SettingsView | null>
@@ -483,6 +516,10 @@ export interface DiffraApi {
   diagnose(sessionId: string, turnId: string, text: string, target: { turnId: string; cardId: string | null }): Promise<StopReason>
   // 模型很久没有输出时让卡住的那一步重发；agent 是 main 或子智能体的 id
   retryStep(sessionId: string, agent: string): Promise<{ retried: boolean }>
+  // 智能体转到后台的命令：列表变化、停止、最近的输出（任务监控「运行中」）
+  onSessionProcesses(listener: (event: SessionProcesses) => void): () => void
+  stopProcess(sessionId: string, id: number): Promise<{ stopped: boolean }>
+  processOutput(sessionId: string, id: number): Promise<{ text: string; running: boolean }>
   compactSession(sessionId: string, turnId: string): Promise<StopReason>
   // 项目、用户目录、插件和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个；任务里按建任务时开着的插件，首页按设置里开着的插件
   listSkills(target: McpStatusTarget): Promise<SkillInfo[]>

@@ -22,9 +22,6 @@ test('内置规范全部生效：按项目语言选包，强制级和推荐级�
     // 项目里只有 TypeScript：通用、安全、TS 三个包，Java 和 Python 不选
     await startTask(window, '看看项目')
     await waitTaskDone(window)
-    await expect(window.getByTestId('monitor-rule-packs')).toHaveText('通用、安全、TypeScript / JavaScript')
-    await expect(window.getByTestId('monitor-panel')).toContainText('完成前规范审查已开')
-    await expect(window.getByTestId('monitor-panel').getByRole('button', { name: '规范设置' })).toHaveCount(0)
     const prompt = model.bodies()[0] ?? ''
     // 强制级（通用、安全、TS 各一条）和推荐级都在系统提示词里
     for (const ruleId of ['GEN-ERR-1', 'SEC-INJ-1', 'TS-TYPE-1']) expect(prompt).toContain(`- ${ruleId}: `)

@@ -20,6 +20,7 @@ import { finishVerdict } from '@/lib/turn-verdict'
 import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
+import { AnswerContext, type AnswerTarget } from './answer-links'
 import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
@@ -220,6 +221,10 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   const stickRef = useRef(true)
   // 定位和时间线跳转用的平滑滚动起步那几帧还在底部 80px 内，onScroll 会把贴底改回去，流式输出一到就被拉回底部；滚出这一带之前不改贴底
   const locatingRef = useRef(false)
+  // 上一次滚动事件时的位置：往上的位移不会重新打开贴底（第 530 步）
+  const lastTopRef = useRef(0)
+  // 按着鼠标拖滚动条
+  const draggingRef = useRef(false)
   const [atBottom, setAtBottom] = useState(true)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   const workIndex = lastWorkIndex(task.turns)
@@ -231,14 +236,28 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   const locateItem = useCallback((id: string) => callbacks.current.onLocate(id), [])
   const restoreTurn = useCallback((turnId: string) => callbacks.current.onRestore(turnId), [])
   const regenerateTurn = useCallback((turnId: string) => callbacks.current.onRegenerate(turnId), [])
+  // 回答里的链接和文件引用（第 534、535 步）：远程任务的文件在对方电脑上、也没有内置浏览器，不给
+  const remote = useRemoteTask()
+  const turns = task.turns
+  const answerTarget = useMemo<AnswerTarget | null>(() => {
+    if (remote || readOnly) return null
+    const changed = new Set(turns.flatMap((turn) => turn.items.flatMap((item) => (item.kind === 'tool' ? item.content.flatMap((content) => (content.type === 'diff' ? [relativePath(content.path, project)] : [])) : []))))
+    return { sessionId, project, changed }
+  }, [remote, readOnly, turns, sessionId, project])
 
   const onScroll = () => {
     const element = scrollRef.current
     if (!element) return
     scrolled.current = { first: task.turns[0]?.id, height: element.scrollHeight, top: element.scrollTop }
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    const movedUp = element.scrollTop < lastTopRef.current
+    lastTopRef.current = element.scrollTop
     if (distance >= 80) locatingRef.current = false
-    if (!locatingRef.current) stickRef.current = distance < 80
+    // 往上滚时只会停掉贴底：滚轮往上的平滑滚动前几帧还在底部这一带，以前在这里又打开贴底，下一段输出一到就被拉回底部（第 530 步）。
+    // 内容变矮时浏览器把位置往上挪，也是往上的位移，这时离底部还近，照常跟随
+    if (movedUp) {
+      if (distance >= 80 || draggingRef.current) stickRef.current = false
+    } else if (!locatingRef.current) stickRef.current = distance < 80
     setAtBottom(distance < 200)
     let current: string | null = null
     for (const turn of task.turns) {
@@ -258,8 +277,18 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
     scrolled.current = { first, height: element.scrollHeight, top: element.scrollTop }
   })
 
+  // 用户往上翻（滚轮、键盘）：马上停掉贴底，不等滚动事件
+  const leaveBottom = () => {
+    stickRef.current = false
+    locatingRef.current = false
+  }
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') leaveBottom()
+  }
+
   // 滚到顶以后还在往上滚：顶上那一行跟着拉高，拉够了取更早的一页；停下一会儿就弹回去
   const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) leaveBottom()
     const element = scrollRef.current
     if (!element || !earlier || earlier.count === 0 || earlier.loading) return
     if (element.scrollTop > 0 || event.deltaY >= 0) {
@@ -356,12 +385,20 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
 
   return (
     <ReadOnlyContext.Provider value={readOnly}>
+    <AnswerContext.Provider value={answerTarget}>
     <div className="relative min-h-0 flex-1">
       {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        onWheel={earlier ? onWheel : undefined}
+        onWheel={onWheel}
+        onKeyDown={onKeyDown}
+        // 按在滚动容器本身上（滚动条、两侧留白）才算拖滚动条；在窗口里哪里松手都算
+        onPointerDown={(event) => {
+          if (event.target !== event.currentTarget) return
+          draggingRef.current = true
+          window.addEventListener('pointerup', () => (draggingRef.current = false), { once: true })
+        }}
         className={cn(
           'h-full overflow-y-auto px-8 pt-6 pb-8 [scrollbar-gutter:stable_both-edges] [mask-image:linear-gradient(to_bottom,black_calc(100%_-_24px),transparent)]',
           // 往前插内容时自己挪位置（见上面），不让浏览器的滚动锚定再挪一次
@@ -401,6 +438,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
         </Button>
       )}
     </div>
+    </AnswerContext.Provider>
     </ReadOnlyContext.Provider>
   )
 }
@@ -702,7 +740,7 @@ function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<Tra
       )
     case 'agent':
       return (
-        <div data-testid="agent-message">
+        <div data-testid="agent-message" data-item-id={item.id}>
           <Markdown text={item.text} />
         </div>
       )

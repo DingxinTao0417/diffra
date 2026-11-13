@@ -21,9 +21,8 @@ async function drag(window: Page, handle: Locator, dx: number, dy = 0): Promise<
 }
 
 const width = async (locator: Locator) => Math.round((await locator.boundingBox())!.width)
-const height = async (locator: Locator) => Math.round((await locator.boundingBox())!.height)
 
-test('分栏拖动：侧栏、任务监控、审阅和浏览器共用的宽度、设计任务的对话列、终端高度都能拖；有上下限，方向键能调，双击恢复默认；重启后还在；浏览器网页跟着面板走', async () => {
+test('分栏拖动：侧栏、任务监控、审阅浏览器和终端共用的宽度、设计任务的对话列都能拖；有上下限，方向键能调，双击恢复默认；重启后还在；浏览器网页跟着面板走', async () => {
   test.setTimeout(180_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-layout-'))
@@ -103,17 +102,11 @@ test('分栏拖动：侧栏、任务监控、审阅和浏览器共用的宽度�
     await expect.poll(viewWidth).toBe(await width(browser.getByTestId('browser-viewport')))
     const wideWidth = await width(browser)
 
-    // 终端：往上拖 100 变高
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
-    const terminal = window.getByTestId('terminal-panel')
-    const terminalDefault = await height(terminal)
-    await drag(window, window.getByRole('separator', { name: '拖动调整终端高度' }), 0, -100)
-    await expect.poll(() => height(terminal)).toBe(terminalDefault + 100)
-    // 收起再打开还是这个高度
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
-    await expect.poll(() => height(terminal)).toBe(terminalDefault + 100)
-    await window.getByRole('button', { name: '终端 Ctrl+`' }).click()
+    // 终端在右侧栏，和浏览器、审阅共用宽度（第 533 步）
+    await window.getByRole('button', { name: '终端', exact: true }).click()
+    await expect.poll(() => width(window.getByTestId('terminal-panel'))).toBe(wideWidth)
+    await window.getByRole('button', { name: '终端', exact: true }).click()
+    await expect(window.getByTestId('terminal-panel')).toHaveCount(0)
 
     // 设计任务：对话列和画布之间能拖
     await startDesignTask(window, '画个按钮')
@@ -128,7 +121,7 @@ test('分栏拖动：侧栏、任务监控、审阅和浏览器共用的宽度�
     // 存进设置文件；重启后都还在
     await expect
       .poll(() => (JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')) as { layout: Record<string, number | null> }).layout)
-      .toEqual({ sidebarWidth: sidebarDefault + 40, widePanelWidth: wideWidth, monitorWidth: monitorDefault + 100, designChatWidth: designDefault + 90, terminalHeight: terminalDefault + 100 })
+      .toEqual({ sidebarWidth: sidebarDefault + 40, widePanelWidth: wideWidth, monitorWidth: monitorDefault + 100, designChatWidth: designDefault + 90 })
     await app.close()
     app = await launchApp(userDataDir)
     window = await app.firstWindow()

@@ -9,6 +9,9 @@ export interface ModelRef {
   modelId: string
 }
 
+// 设置里 reasoningChoices 的键
+export const reasoningChoiceKey = (ref: Pick<ModelRef, 'providerId' | 'modelId'>) => `${ref.providerId}/${ref.modelId}`
+
 export const MAX_MODEL_ID_LENGTH = 200
 export const MAX_MODEL_DISPLAY_NAME_LENGTH = 100
 export const MAX_MODEL_CONTEXT_WINDOWS = 20
@@ -86,14 +89,13 @@ export const DEFAULT_APPEARANCE: Appearance = { theme: 'system', palette: 'fores
 // 拖过的分栏尺寸，单位像素；null 是默认尺寸（侧栏、监控面板、设计模式的对话列按 rem 跟着文字大小，宽面板取主区一半）
 export interface Layout {
   sidebarWidth: number | null
-  // 审阅和浏览器共用，两者互切时对话列不动
+  // 审阅、浏览器和终端共用，互切时对话列不动
   widePanelWidth: number | null
   monitorWidth: number | null
   designChatWidth: number | null
-  terminalHeight: number | null
 }
 
-export const DEFAULT_LAYOUT: Layout = { sidebarWidth: null, widePanelWidth: null, monitorWidth: null, designChatWidth: null, terminalHeight: null }
+export const DEFAULT_LAYOUT: Layout = { sidebarWidth: null, widePanelWidth: null, monitorWidth: null, designChatWidth: null }
 
 // 和智能体的 browser_switch 用同一份清单
 export const AGENT_BROWSERS = BROWSER_BACKENDS
@@ -206,6 +208,8 @@ export interface Settings {
   defaultWorkspace: string | null
   // 上次启动的版本；升级后第一次启动据此提示改了什么，界面不显示
   lastSeenVersion: string | null
+  // 输入框里给各模型选的思考程度，键见 reasoningChoiceKey；新任务、重开的任务按它（第 531 步）
+  reasoningChoices: Record<string, ReasoningEffort>
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
@@ -223,6 +227,7 @@ export interface SettingsView {
   security: SecuritySettings
   execution: ExecutionSettings
   mcpServers: McpServerConfig[]
+  reasoningChoices: Settings['reasoningChoices']
   // 无项目任务的保存位置，已经按默认值解析好
   defaultWorkspace: { path: string; isDefault: boolean }
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件

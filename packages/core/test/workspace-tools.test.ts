@@ -174,6 +174,36 @@ describe('exec_command 和 write_stdin', () => {
     expect(execSessions.size).toBe(0)
   }, 30_000)
 
+  // 第 528 步：到点没结束的命令转到后台，界面「运行中」列出来，用户能停、能看最近的输出
+  test('到点没结束的命令列进后台列表；用户停止后模型看到是用户停的，列表变化都通知', async () => {
+    const changes: number[] = []
+    execSessions.onChange = () => changes.push(execSessions.background().length)
+    const quick = await execCommandTool(context, { cmd: 'echo quick' })
+    expect(quick.text).toContain('Process exited with code 0')
+    expect(changes).toEqual([])
+    const started = await execCommandTool(context, { cmd: 'echo serving; sleep 30', yield_time_ms: 300 })
+    const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
+    expect(execSessions.background()).toEqual([{ id, command: 'echo serving; sleep 30', cwd: project, startedAt: expect.any(Number), url: null }])
+    expect(changes).toEqual([1])
+    // 看最近的输出不动交给模型的那份：模型下次取到的还是新来的输出
+    expect(execSessions.recentOutput(id)).toEqual({ text: 'serving\n', running: true })
+    execSessions.kill(id, true)
+    await expect.poll(() => changes, { timeout: 10_000 }).toEqual([1, 0])
+    expect(execSessions.background()).toEqual([])
+    const polled = await writeStdinTool(context, { session_id: id })
+    expect(polled.text).toContain('Process stopped by the user')
+    expect(polled.commandSucceeded).toBeUndefined()
+  }, 20_000)
+
+  test('转到后台后才打出本地地址：列表带上地址（0.0.0.0 换成 localhost）并通知', async () => {
+    const urls: Array<string | null> = []
+    execSessions.onChange = () => urls.push(execSessions.background()[0]?.url ?? null)
+    const started = await execCommandTool(context, { cmd: 'sleep 1; echo "  Local:   http://0.0.0.0:5173/"; sleep 30', yield_time_ms: 250 })
+    const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
+    await expect.poll(() => urls, { timeout: 10_000 }).toEqual([null, 'http://localhost:5173/'])
+    await writeStdinTool(context, { session_id: id, chars: '\u0003' })
+  }, 20_000)
+
   test('没开输入的命令不能往里输入，报错说清用 stdin: true', async () => {
     const started = await execCommandTool(context, { cmd: 'sleep 5', yield_time_ms: 250 })
     const id = Number(/session ID (\d+)/.exec(started.text)?.[1])
