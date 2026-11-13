@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compareVersions, formatNotes, parseNotes, releaseItems } from '../src/shared/changelog.ts'
-import { SUBJECT_OVERRIDES } from './changelog-overrides.ts'
+import { RELEASE_OVERRIDES, SUBJECT_OVERRIDES } from './changelog-overrides.ts'
 import { checkRelease } from './changelog.ts'
 
 test('只收 feat 和 fix，按「；」分条，去掉末尾的开发步骤；fix 和以「修」开头的算修复', () => {
@@ -50,6 +50,17 @@ test('换掉的说法：feat、fix 开头的都是中文条目，chore 开头的
     }
     assert.ok(added.length + fixed.length > 0, subject)
     assert.equal(checkRelease('x', { version: 'x', date: '', added, fixed }), null, subject)
+  }
+})
+
+test('整版改写的日志：每版至少一条、都是中文，一条一句不带「；」，修复都以「修」开头，写成文字再读回来一样', () => {
+  for (const [version, release] of Object.entries(RELEASE_OVERRIDES)) {
+    assert.match(version, /^\d+\.\d+\.\d+$/)
+    assert.equal(checkRelease(version, { version, date: '', ...release }), null, version)
+    for (const item of [...release.added, ...release.fixed]) assert.doesNotMatch(item, /[；;]|^\s|\s$/, `${version}：${item}`)
+    for (const item of release.added) assert.ok(!item.startsWith('修'), `${version}：${item}`)
+    for (const item of release.fixed) assert.ok(item.startsWith('修'), `${version}：${item}`)
+    assert.deepEqual(parseNotes(formatNotes(release)), release, version)
   }
 })
 

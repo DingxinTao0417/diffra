@@ -3,6 +3,7 @@
 // - package.json 的版本比最新的 tag 新（改了版本号还没打 tag）时，最新 tag 之后的提交算这个版本，日期是今天
 // - 写到 out/changelog.json，客户端从这里读；electron-builder.config.ts 也从这里取这个版本的说明写进 latest.yml
 // - 早期几条英文提交按 scripts/changelog-overrides.ts 换成中文
+// - 发过的版本按 changelog-overrides.ts 的 RELEASE_OVERRIDES 整版改写成只留重点的说法，有的就不从提交生成
 // - --check：package.json 这个版本一条日志都没有、或者有不是中文的条目就失败（CI 发版前用）
 // - --notes <文件>：把这个版本的说明写到文件里（GitHub Release 用）
 // - 官网的更新日志页由 build-website.ts 生成
@@ -11,7 +12,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type ChangelogRelease, compareVersions, formatNotes, releaseItems } from '../src/shared/changelog.ts'
-import { SUBJECT_OVERRIDES } from './changelog-overrides.ts'
+import { RELEASE_OVERRIDES, SUBJECT_OVERRIDES } from './changelog-overrides.ts'
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const CHANGELOG_FILE = join(desktopDir, 'out', 'changelog.json')
@@ -30,6 +31,10 @@ function subjects(range: string): string[] {
       return SUBJECT_OVERRIDES[hash] ?? rest.join('\t')
     })
     .reverse()
+}
+
+function items(version: string, range: string): Pick<ChangelogRelease, 'added' | 'fixed'> {
+  return RELEASE_OVERRIDES[version] ?? releaseItems(subjects(range))
 }
 
 const CHINESE = /[一-鿿]/
@@ -61,11 +66,11 @@ export function readChangelog(): ChangelogRelease[] {
     .sort((a, b) => compareVersions(a.version, b.version))
   const releases: ChangelogRelease[] = tags.map((tag, index) => {
     const previous = tags[index - 1]
-    return { version: tag.version, date: tag.date, ...releaseItems(subjects(previous ? `${previous.name}..${tag.name}` : tag.name)) }
+    return { version: tag.version, date: tag.date, ...items(tag.version, previous ? `${previous.name}..${tag.name}` : tag.name) }
   })
   const latest = tags.at(-1)
   if (!latest || compareVersions(version, latest.version) > 0) {
-    releases.push({ version, date: today(), ...releaseItems(subjects(latest ? `${latest.name}..HEAD` : 'HEAD')) })
+    releases.push({ version, date: today(), ...items(version, latest ? `${latest.name}..HEAD` : 'HEAD') })
   }
   return releases.reverse()
 }
