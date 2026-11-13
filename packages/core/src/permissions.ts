@@ -1,7 +1,9 @@
-import { basename } from 'node:path'
+import { type Dirent, readdirSync, statSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 import { parse } from 'shell-quote'
 import type { PermissionMode } from './protocol.js'
-import { isUnderReadOnly } from './tools/protected.js'
+import { isProtectedFile, isUnderReadOnly } from './tools/protected.js'
+import { fromMsysPath } from './tools/workspace.js'
 
 export type CommandDecision = { level: 'allow' } | { level: 'ask' } | { level: 'deny'; reason: string }
 
@@ -16,7 +18,7 @@ export interface CommandPolicy {
   mode: PermissionMode
 }
 
-// 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）
+// 命令里出现受保护文件的名字就要用户确认，哪怕是只读命令（cat .env 会把密钥读给模型）；完全访问模式不问（第 495 步）
 const MENTIONS_SECRET = /\.env|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_ed25519|id_ecdsa|\.(pem|key|p12|pfx)\b/i
 
 // 和 tools/protected.ts 的判断保持一致：这些文件名可能含密钥
@@ -69,18 +71,20 @@ export function classifyCommand(command: string, policy: CommandPolicy): Command
     return { level: 'deny', reason: '递归删除根目录、用户目录、上级目录或整个项目' }
   }
   if (policy.trusted.some((item) => item.trim() === trimmed)) return { level: 'allow' }
-  // 通配符、递归搜索、关掉忽略规则都能读到 .env 这类受保护文件，不只是字面写出名字
-  if (mayReadSecret(loose)) return { level: 'ask' }
-  if (MENTIONS_SECRET.test(trimmed)) return { level: 'ask' }
   // 涉及禁写目录的非只读命令，哪种模式、之前选没选过「同类命令始终允许」都要再问；
   // 重定向也按分隔符拆开，echo x > data/db.json 的目标路径同样算在内
   const touchesReadOnly = (argv: string[]) =>
     !isReadOnly(argv) && argv.some((arg) => argumentPaths(arg).some((path) => isUnderReadOnly(policy.cwd, path, policy.readOnlyPaths)))
+  // 完全访问只剩上面的直接拒绝和禁写目录（第 495 步）：和 Claude Code 的 bypassPermissions、Codex 的完全访问一样，
+  // 不因为命令可能读到 .env 再问。read_file 读不了受保护文件这条另算，不受模式影响
+  if (policy.mode === 'full') return loose.some(touchesReadOnly) ? { level: 'ask' } : { level: 'allow' }
+  // 通配符、递归搜索、关掉忽略规则能读到 .env 这类受保护文件：真会读到才问，要搜的地方没有就放行
+  if (mayReadSecret(loose, policy.cwd)) return { level: 'ask' }
+  if (MENTIONS_SECRET.test(trimmed)) return { level: 'ask' }
   if (loose.some(touchesReadOnly)) return { level: 'ask' }
   // 命令替换、反引号里可以藏任何命令
   const substitution = /\$\(|`|<\(|>\(/.test(trimmed)
 
-  if (policy.mode === 'full') return { level: 'allow' }
   if (policy.mode === 'auto') return substitution || loose.some(isRisky) ? { level: 'ask' } : { level: 'allow' }
 
   if (substitution) return { level: 'ask' }
@@ -181,17 +185,79 @@ function splitSegments(command: string, loose = false): string[][] | null {
 
 // 只读命令也可能读到受保护文件：cat .e* 用通配符绕过字面名字，rg -uuu / grep -r 会扫到 .env。
 // 这两种情况都要问一下，不能当成安全只读命令直接放行
-function mayReadSecret(segments: string[][]): boolean {
+// 第 495 步起只在真会读到时才问：看递归搜索要搜的目录、通配符能匹配到的文件里有没有受保护文件。
+// cd 会换后面几段的目录；目录写成 ~、$HOME 这类没法确定的，按会读到处理
+function mayReadSecret(segments: string[][], cwd: string): boolean {
+  let dir: string | null = cwd
   for (const argv of segments) {
     const program = programName(argv[0] ?? '')
+    if (program === 'cd') {
+      const target = argv[1]
+      dir = dir !== null && target !== undefined && isKnownPath(target) ? resolve(dir, fromMsysPath(target)) : null
+      continue
+    }
     if (!CONTENT_READERS.has(program)) continue
     const args = argv.slice(1)
-    if (program === 'grep' && args.some((arg) => GREP_RECURSIVE.test(arg))) return true
-    if (program === 'rg' && args.some((arg) => IGNORE_OFF_FLAG.test(arg))) return true
+    const recursive = (program === 'grep' && args.some((arg) => GREP_RECURSIVE.test(arg))) || (program === 'rg' && args.some((arg) => IGNORE_OFF_FLAG.test(arg)))
     // grep/rg 的第一个非选项参数是搜索模式，可能带正则里的 *；只看它后面的文件参数
     const firstValue = args.findIndex((arg) => !arg.startsWith('-'))
-    const files = program === 'grep' || program === 'rg' ? args.slice(firstValue + 1) : args
-    if (files.some((arg) => !arg.startsWith('-') && /[*?]/.test(arg) && couldMatchProtected(arg))) return true
+    const files = (program === 'grep' || program === 'rg' ? args.slice(firstValue + 1) : args).filter((arg) => !arg.startsWith('-'))
+    // grep -r、rg 不写路径时搜当前目录
+    if (recursive && (files.length > 0 ? files : ['.']).some((arg) => reachesProtected(dir, arg, true))) return true
+    if (files.some((arg) => /[*?]/.test(arg) && couldMatchProtected(arg) && reachesProtected(dir, arg, false))) return true
+  }
+  return false
+}
+
+// 递归搜索、通配符最多看这么多个目录项，看不完就当会读到受保护文件。一万项在本机几十毫秒，普通项目（跳过依赖和 .git）够用
+export const MAX_SCAN_ENTRIES = 10_000
+const SKIPPED_DIRS = new Set(['node_modules', '.git'])
+
+const isKnownPath = (arg: string) => !/[$~`]/.test(arg)
+
+// 这个参数在 dir 下（递归时连同子目录）能碰到受保护文件吗
+function reachesProtected(dir: string | null, arg: string, recursive: boolean): boolean {
+  if (dir === null || !isKnownPath(arg)) return true
+  const path = resolve(dir, fromMsysPath(arg))
+  if (/[*?[]/.test(arg)) {
+    // 通配符只认最后一段，前面的目录里还有通配符就不细看了
+    const base = dirname(path)
+    if (/[*?[]/.test(base)) return true
+    const pattern = basename(path)
+    if (recursive) return scanForProtected(base, () => true)
+    return scanForProtected(base, (name) => globMatches(pattern, name), false)
+  }
+  let stats
+  try {
+    stats = statSync(path)
+  } catch {
+    // 不存在的路径读不到东西
+    return false
+  }
+  if (!stats.isDirectory()) return isProtectedFile(path)
+  return recursive && scanForProtected(path, () => true)
+}
+
+// 在 root 里找名字符合 match 的受保护文件；超过 MAX_SCAN_ENTRIES 还没看完按找到处理
+function scanForProtected(root: string, match: (name: string) => boolean, recursive = true): boolean {
+  const pending = [root]
+  let seen = 0
+  while (pending.length > 0) {
+    const dir = pending.pop()!
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (++seen > MAX_SCAN_ENTRIES) return true
+      if (entry.isDirectory()) {
+        if (recursive && !SKIPPED_DIRS.has(entry.name)) pending.push(resolve(dir, entry.name))
+      } else if (match(entry.name) && isProtectedFile(entry.name)) {
+        return true
+      }
+    }
   }
   return false
 }
