@@ -41,9 +41,13 @@ test('发版前检查：这一版没有日志、或者有英文条目都不行',
   assert.equal(checkRelease('0.2.0', { version: '0.2.0', date: '2026-11-10', added: ['能用自己的 Chrome'], fixed: ['修 CI'] }), null)
 })
 
-test('早期英文提交都有中文说明', () => {
+test('换掉的说法：feat、fix 开头的都是中文条目，chore 开头的不进更新日志', () => {
   for (const subject of Object.values(SUBJECT_OVERRIDES)) {
     const { added, fixed } = releaseItems([subject])
+    if (subject.startsWith('chore:')) {
+      assert.equal(added.length + fixed.length, 0, subject)
+      continue
+    }
     assert.ok(added.length + fixed.length > 0, subject)
     assert.equal(checkRelease('x', { version: 'x', date: '', added, fixed }), null, subject)
   }
