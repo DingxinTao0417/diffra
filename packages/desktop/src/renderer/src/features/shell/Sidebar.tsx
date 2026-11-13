@@ -255,10 +255,10 @@ const rowButtonClass =
 // 时间、计数和悬停按钮叠在同一位置淡入淡出；悬停按钮不能 display:none，否则键盘 Tab 不到
 const trailingClass = 'flex min-w-5 shrink-0 justify-end text-xs text-muted-foreground tabular-nums transition-opacity'
 const rowActionClass =
-  'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100'
+  'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100'
 // 项目行的加号一直显示，不用悬停；不显示任务条数
 const projectActionClass =
-  'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
+  'absolute top-1/2 right-1 z-10 flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
 
 // 侧栏里可以直接输入的搜索：没输入时列最近任务，输入后用和搜索弹窗同一套会话搜索
 function SidebarSearch() {

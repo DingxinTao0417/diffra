@@ -27,7 +27,7 @@ export function TargetView() {
       <div className="h-full overflow-y-auto" data-testid="architecture-target-start">
         <div className="mx-auto max-w-3xl space-y-5 p-8">
           <div className="space-y-1">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <h2 className="flex items-center gap-2 text-lg font-bold">
               <Target className="size-5 text-muted-foreground" />
               目标架构
             </h2>
@@ -131,7 +131,7 @@ function StartOption({ icon, title, description, disabled, onClick }: { icon: Re
   return (
     <button type="button" disabled={disabled} className="flex flex-col gap-2 rounded-xl border bg-card p-4 text-left transition-colors hover:bg-accent disabled:opacity-50" onClick={onClick}>
       <span className="text-muted-foreground">{icon}</span>
-      <span className="font-medium">{title}</span>
+      <span className="font-bold">{title}</span>
       <span className="text-xs text-muted-foreground">{description}</span>
     </button>
   )
@@ -220,11 +220,11 @@ function GapList() {
         {total === 0 && <p className="text-sm text-muted-foreground">现状和目标架构一致：没有违规，没有没认领的代码，方块都有代码了。</p>}
         {evaluation!.violations.length > 0 && (
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold">违反规则的依赖（{evaluation!.violations.length}）</h3>
+            <h3 className="text-sm font-bold">违反规则的依赖（{evaluation!.violations.length}）</h3>
             {evaluation!.violations.map((violation) => {
               const prompt = violationPrompt(violation, files, blockInfo)
               return (
-                <div key={`${violation.ruleId}:${violation.from}:${violation.to}`} className="space-y-2 rounded-lg border border-destructive/40 p-3" data-testid="architecture-gap">
+                <div key={`${violation.ruleId}:${violation.from}:${violation.to}`} className="space-y-2 rounded-lg border border-destructive/30 p-3" data-testid="architecture-gap">
                   <div className="flex items-start gap-2">
                     <span className="min-w-0 flex-1 text-sm">{violation.message}</span>
                     <Badge variant="outline">{violation.edges.length} 处</Badge>
@@ -245,11 +245,11 @@ function GapList() {
         )}
         {evaluation!.planned.length > 0 && (
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold">计划了还没有代码的方块（{evaluation!.planned.length}）</h3>
+            <h3 className="text-sm font-bold">计划了还没有代码的方块（{evaluation!.planned.length}）</h3>
             {evaluation!.planned.map((id) => (
               <div key={id} className="space-y-2 rounded-lg border border-dashed p-3">
                 <div className="text-sm">
-                  <span className="font-medium">{blockInfo(id).name}</span>
+                  <span className="font-bold">{blockInfo(id).name}</span>
                   <span className="text-muted-foreground"> · {blockInfo(id).paths.join('、') || '还没写路径'}</span>
                 </div>
                 <GapActions projectPath={project.path} prompt={plannedPrompt(id)} todo={`架构：新建「${blockInfo(id).name}」`} />
@@ -259,7 +259,7 @@ function GapList() {
         )}
         {unassigned.length > 0 && (
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold">没被任何方块认领的代码（{unassigned.length} 个目录）</h3>
+            <h3 className="text-sm font-bold">没被任何方块认领的代码（{unassigned.length} 个目录）</h3>
             <p className="text-xs text-muted-foreground">归到一个方块，就把这个目录加进它认领的代码。</p>
             {unassigned.map((item) => (
               <div key={item.dir} className="flex items-center gap-2 rounded-lg border px-3 py-2">

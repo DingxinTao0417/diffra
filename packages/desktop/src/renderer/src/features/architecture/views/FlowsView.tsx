@@ -33,13 +33,13 @@ export function FlowsView() {
       <div className="w-64 shrink-0 space-y-1 overflow-y-auto border-r p-2">
         {flows.map((item, at) => (
           <button key={item.name} type="button" className={cn('block w-full rounded-lg px-3 py-2 text-left hover:bg-accent', at === selected && 'bg-accent')} onClick={() => setSelected(at)}>
-            <div className="text-sm font-medium">{item.name}</div>
+            <div className="text-sm font-bold">{item.name}</div>
             <div className="line-clamp-2 text-xs text-muted-foreground">{item.description}</div>
           </button>
         ))}
       </div>
       <div className="min-w-0 flex-1 overflow-auto p-5">
-        <h2 className="font-semibold">{flow.name}</h2>
+        <h2 className="font-bold">{flow.name}</h2>
         <p className="mb-4 text-sm text-muted-foreground">{flow.description}</p>
         <Sequence flow={flow} />
       </div>

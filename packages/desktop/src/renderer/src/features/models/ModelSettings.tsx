@@ -66,7 +66,7 @@ export function ModelSettings() {
         )}
 
         {empty ? (
-          <EmptyState icon={Boxes} title="还没有接入模型" description="填好服务地址和 API Key，再选要用的模型。" className="border bg-card">
+          <EmptyState icon={Boxes} title="还没有接入模型" description="填好服务地址和 API Key，再选要用的模型。" variant="card">
             <Button onClick={addProvider} disabled={view.loadError !== null}>
               <Plus />
               添加模型服务

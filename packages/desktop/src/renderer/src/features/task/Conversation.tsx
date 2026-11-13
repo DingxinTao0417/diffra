@@ -44,6 +44,10 @@ const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' &&
 // 这几种块在跑的时候自己会转圈（StatusIcon、LoaderCircle）；步骤清单、计划、可视化、定位结果、深度扫描报告不转
 const SPINNING_BLOCKS = new Set<Block['type']>(['edit', 'agent', 'task', 'compaction', 'verify', 'wait'])
 
+// 对话里的卡片只有两档：标准给出错、定位结果、计划、深度扫描报告；紧凑给提醒、子智能体、规范审查打回、安全检查有发现（可视化卡同紧凑档）
+const CARD = 'flex flex-col gap-2.5 rounded-xl border px-3.5 py-3'
+const CARD_COMPACT = 'flex flex-col gap-1.5 rounded-xl border px-3 py-2.5'
+
 // 这一轮最后一块已经在显示进度时（过程组在跑、思考中、工具调用在跑），下面不再多一行「进行中…」，免得两个圈一起转（第 496 步）。
 // 运行中的过程组标题行一直在转；只有一项时是那一行自己：思考在转，工具调用跑完就不转了
 function showsProgress(block: Block | undefined): boolean {
@@ -408,7 +412,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
         <div className="mx-auto flex min-h-full max-w-(--content-max) flex-col gap-7">
           {earlier && <EarlierRow earlier={earlier} pull={pull} />}
           {task.turns.length === 0 && (
-            <EmptyState icon={MessageSquare} title="描述你要做的事" description="比如「修复登录页的报错」或「给 utils 加单元测试」。" className="my-auto bg-transparent" />
+            <EmptyState icon={MessageSquare} title="描述你要做的事" description="比如「修复登录页的报错」或「给 utils 加单元测试」。" variant="plain" className="my-auto" />
           )}
           {task.turns.map((turn, index) => {
             const last = index === task.turns.length - 1
@@ -592,7 +596,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
       {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} />}
       {!active && <StopSummary turn={turn} task={task} actionable={!readOnly && latestWork && !task.running} />}
       {turn.error && (
-        <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive-soft px-3.5 py-3 text-sm" role="alert" data-testid="turn-error">
+        <div className={cn(CARD, 'border-destructive/30 bg-destructive-soft text-sm')} role="alert" data-testid="turn-error">
           <div className="flex items-center gap-2 font-bold text-destructive">
             <CircleAlert className="size-4 shrink-0" />
             这一轮出错了
@@ -653,12 +657,12 @@ function PermissionPending({ toolCall }: { toolCall: PermissionRequestEvent['too
   const target = command ?? toolCall.title ?? ''
   return (
     <div data-testid="permission-pending">
-      <DisclosureRow className="text-foreground/85">
+      <DisclosureRow className="text-foreground">
         <span className="flex size-3.5 shrink-0 items-center justify-center">
           <span className="size-2 rounded-full border-2 border-warning" />
         </span>
         <span className="shrink-0 text-muted-foreground">等待确认</span>
-        {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
+        {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
       </DisclosureRow>
     </div>
   )
@@ -748,13 +752,14 @@ function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<Tra
           data-testid="notice"
           role={item.severity === 'error' ? 'alert' : undefined}
           className={cn(
-            'rounded-xl border px-3 py-2 text-sm',
+            CARD_COMPACT,
+            'text-sm',
             item.severity === 'error' && 'border-destructive/30 bg-destructive-soft text-destructive',
             item.severity === 'warning' && 'border-warning/30 bg-warning-soft',
           )}
         >
           <div className="font-bold">{item.title}</div>
-          {item.description && <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.description}</div>}
+          {item.description && <div className="whitespace-pre-wrap text-muted-foreground">{item.description}</div>}
         </div>
       )
   }
@@ -864,10 +869,10 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
   const elapsed = useElapsed(item.startedAt, item.status !== 'completed' && item.status !== 'failed')
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)} data-item-id={item.id} tabIndex={commandFailed && !output ? -1 : undefined}>
-      <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground/85">
+      <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground">
         {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={commandFailed ? 'command-failed' : item.status} />}
         <span className="shrink-0 text-muted-foreground">{action}</span>
-        {target && <span className="min-w-0 truncate rounded bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
+        {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
       </DisclosureRow>
       {item.taskLink && (
@@ -945,7 +950,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
   const result = textOf(item)
   return (
     <div
-      className="flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm"
+      className={cn(CARD_COMPACT, 'text-sm')}
       data-testid="agent-card"
       data-agent={card.name}
       data-status={item.status}
@@ -974,7 +979,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
           {elapsed !== null && <span className="ml-auto shrink-0 tabular-nums">{formatDuration(elapsed)}</span>}
         </p>
       ) : (
-        result && <p className="pl-5.5 leading-relaxed break-words whitespace-pre-wrap text-foreground/85">{result}</p>
+        result && <p className="pl-5.5 leading-relaxed break-words whitespace-pre-wrap text-foreground">{result}</p>
       )}
       {onDiagnose && (
         <Button variant="outline" size="sm" className="ml-5.5 h-7 gap-1 self-start" onClick={onDiagnose}>
@@ -1125,7 +1130,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
   const { target } = diagnosis
   const readOnly = useReadOnly()
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="diagnosis">
+    <div className={cn(CARD, 'text-sm')} data-testid="diagnosis">
       <div className="flex items-center gap-2 font-bold">
         <SearchCheck className="size-4 text-muted-foreground" />
         定位结果
@@ -1137,8 +1142,8 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
       {diagnosis.evidence.length > 0 && (
         <ul className="flex flex-col gap-1">
           {diagnosis.evidence.map((evidence, index) => (
-            <li key={index} className="flex min-w-0 items-baseline gap-1.5 text-foreground/85">
-              <button type="button" className="shrink-0 rounded bg-muted px-1.5 font-mono text-xs hover:bg-accent" title="滚到这一步" onClick={() => onLocate(evidence.itemId)}>
+            <li key={index} className="flex min-w-0 items-baseline gap-1.5 text-foreground">
+              <button type="button" className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-xs hover:bg-accent" title="滚到这一步" onClick={() => onLocate(evidence.itemId)}>
                 {evidence.title.length > 40 ? `${evidence.title.slice(0, 40)}…` : evidence.title}
               </button>
               <span className="min-w-0">{evidence.note}</span>
@@ -1147,7 +1152,7 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
         </ul>
       )}
       {(diagnosis.done.length > 0 || diagnosis.remaining.length > 0) && (
-        <div className="grid gap-x-6 gap-y-1.5 text-foreground/85 sm:grid-cols-2">
+        <div className="grid gap-x-6 gap-y-1.5 text-foreground sm:grid-cols-2">
           {diagnosis.done.length > 0 && (
             <div>
               <p className="text-xs text-muted-foreground">已经完成</p>
@@ -1209,7 +1214,7 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
   const readOnly = useReadOnly()
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3" data-testid="tool-call" data-kind="plan" data-status={item.status}>
+    <div className={CARD} data-testid="tool-call" data-kind="plan" data-status={item.status}>
       <div className="flex items-center gap-2 font-bold">
         <ListChecks className="size-4 text-muted-foreground" />
         计划
@@ -1247,7 +1252,7 @@ function CompactionRow({ item }: { item: ToolItem }) {
   const detail = rest.join('\n').trim()
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="compaction" data-status={item.status}>
-      <button type="button" className="flex max-w-full items-start gap-2 text-left text-foreground/85" onClick={() => setOpen(!open)} disabled={!detail}>
+      <button type="button" className="flex max-w-full items-start gap-2 text-left text-foreground" onClick={() => setOpen(!open)} disabled={!detail}>
         <StatusIcon status={item.status} className="mt-1" />
         <span className="shrink-0 text-muted-foreground">上下文压缩</span>
         <span className="min-w-0 text-muted-foreground">{item.status === 'completed' || item.status === 'failed' ? headline : '正在压缩…'}</span>
@@ -1314,7 +1319,7 @@ function CheckGroup({ items }: { items: ToolItem[] }) {
   const verified = items.some((item) => toolBlockType(item) === 'check')
   return (
     <div className="flex flex-col gap-1.5" data-testid="check-group">
-      <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground/85">
+      <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-foreground">
         {/* success-color-allow: 组里有检查命令且全部通过时才画绿色 */}
         <Check className={cn('size-3.5 shrink-0', verified ? 'text-success' : 'text-muted-foreground')} strokeWidth={2.6} />
         <span className="shrink-0 text-muted-foreground">{verified ? '自动检查通过' : '未发现问题'}</span>
@@ -1420,7 +1425,7 @@ function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
   const findings = lines.map((line) => FINDING_PATTERN.exec(line))
   const count = findings.filter(Boolean).length
   return (
-    <div {...common} className="flex flex-col gap-1.5 rounded-xl border border-destructive/25 bg-destructive-soft px-3 py-2.5 text-sm">
+    <div {...common} className={cn(CARD_COMPACT, 'border-destructive/30 bg-destructive-soft text-sm')}>
       <div className="flex items-center gap-2 font-bold text-destructive">
         <X className="size-3.5" strokeWidth={2.6} />
         {count > 0 ? `${label} · ${count} 处问题，已打回` : label}
@@ -1486,8 +1491,9 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     <div
       {...common}
       className={cn(
-        'flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-sm',
-        high > 0 ? 'border-destructive/25 bg-destructive-soft' : 'border-warning/25 bg-warning-soft',
+        CARD_COMPACT,
+        'text-sm',
+        high > 0 ? 'border-destructive/30 bg-destructive-soft' : 'border-warning/30 bg-warning-soft',
       )}
     >
       <div className={cn('flex items-center gap-2 font-bold', high > 0 && 'text-destructive')}>
@@ -1497,7 +1503,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
       {rows.map(({ line, match }, index) =>
         match ? (
           <div key={index} className="flex flex-wrap items-baseline gap-x-2.5 leading-relaxed" data-testid="security-finding">
-            <span className={cn('shrink-0 rounded px-1.5 text-xs', LEVEL_STYLES[match[1] ?? ''])}>{match[1]}</span>
+            <span className={cn('shrink-0 rounded-sm px-1.5 text-xs', LEVEL_STYLES[match[1] ?? ''])}>{match[1]}</span>
             <span className="font-mono text-xs">{match[2]}</span>
             <span className="font-mono text-xs">{match[3]}</span>
             <span>{match[4]}</span>
@@ -1563,7 +1569,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
   }
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border px-3.5 py-3 text-sm" data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
+    <div className={cn(CARD, 'text-sm')} data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
       <div className="font-bold">深度扫描报告</div>
       <p className="text-muted-foreground">{summary}</p>
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
@@ -1572,7 +1578,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
           {!readOnly && <Checkbox className="mt-0.5" checked={selected.has(index)} onCheckedChange={() => toggle(index)} />}
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className={cn('rounded px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
+              <span className={cn('rounded-sm px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
               <span className="font-mono text-xs">{finding.ruleId}</span>
               <span className="font-mono text-xs">{finding.location}</span>
             </div>

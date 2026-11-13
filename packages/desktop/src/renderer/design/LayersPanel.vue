@@ -45,7 +45,7 @@ function nodeState(id: string, _version: number) {
     <PageListRoot v-slot="{ pages, currentPageId, actions }">
       <div class="flex h-8 shrink-0 items-center justify-between px-3 font-medium text-muted-foreground">
         <span>页面</span>
-        <button type="button" class="rounded px-1.5 hover:bg-accent hover:text-foreground" title="新建页面" @click="actions.add()">＋</button>
+        <button type="button" class="rounded-sm px-1.5 hover:bg-accent hover:text-foreground" title="新建页面" @click="actions.add()">＋</button>
       </div>
       <ul class="max-h-36 shrink-0 overflow-y-auto px-1.5 pb-1.5">
         <li v-for="page in pages" :key="page.id" class="group flex items-center">
@@ -54,7 +54,7 @@ function nodeState(id: string, _version: number) {
             ref="renameInput"
             v-model="renaming.name"
             aria-label="页面名称"
-            class="h-6 w-full rounded bg-muted px-2 outline-none ring-1 ring-ring/60"
+            class="h-6 w-full rounded-sm bg-muted px-2 outline-none ring-1 ring-ring/60"
             @keydown.enter="($event.target as HTMLInputElement).blur()"
             @keydown.escape="renaming = null"
             @blur="renaming && (renaming.name.trim() && actions.rename(page.id, renaming.name.trim()), (renaming = null))"
@@ -62,7 +62,7 @@ function nodeState(id: string, _version: number) {
           <button
             v-else
             type="button"
-            class="h-6 min-w-0 flex-1 truncate rounded px-2 text-left hover:bg-accent"
+            class="h-6 min-w-0 flex-1 truncate rounded-sm px-2 text-left hover:bg-accent"
             :class="page.id === currentPageId ? 'bg-soft font-medium text-foreground' : 'text-muted-foreground'"
             @click="actions.switch(page.id)"
             @dblclick="startRename('page', page.id, page.name)"
@@ -72,7 +72,7 @@ function nodeState(id: string, _version: number) {
           <button
             v-if="pages.length > 1"
             type="button"
-            class="ml-0.5 hidden rounded px-1 text-muted-foreground group-hover:block hover:bg-accent hover:text-foreground"
+            class="ml-0.5 hidden rounded-sm px-1 text-muted-foreground group-hover:block hover:bg-accent hover:text-foreground"
             title="删除页面"
             @click="actions.delete(page.id)"
           >
@@ -94,7 +94,7 @@ function nodeState(id: string, _version: number) {
           :has-children="row.hasChildren"
         >
           <div
-            class="group flex h-6 items-center gap-1 rounded pr-1"
+            class="group flex h-6 items-center gap-1 rounded-sm pr-1"
             :class="isSelected ? 'bg-soft text-foreground' : 'text-muted-foreground hover:bg-accent'"
             :style="{ paddingLeft: padLeft }"
             :data-testid="`layer-${node.name}`"
@@ -106,7 +106,7 @@ function nodeState(id: string, _version: number) {
               ref="renameInput"
               v-model="renaming.name"
               aria-label="图层名称"
-              class="h-5 min-w-0 flex-1 rounded bg-muted px-1 outline-none ring-1 ring-ring/60"
+              class="h-5 min-w-0 flex-1 rounded-sm bg-muted px-1 outline-none ring-1 ring-ring/60"
               @keydown.enter="($event.target as HTMLInputElement).blur()"
               @keydown.escape="renaming = null"
               @blur="renaming && (renaming.name.trim() && actions.rename(renaming.name.trim()), (renaming = null))"
@@ -123,7 +123,7 @@ function nodeState(id: string, _version: number) {
             </button>
             <button
               type="button"
-              class="shrink-0 rounded px-0.5 hover:text-foreground"
+              class="shrink-0 rounded-sm px-0.5 hover:text-foreground"
               :class="nodeState(node.id, treeVersion).locked ? '' : 'invisible group-hover:visible'"
               :title="nodeState(node.id, treeVersion).locked ? '解锁' : '锁定'"
               @click="actions.toggleLock()"
@@ -132,7 +132,7 @@ function nodeState(id: string, _version: number) {
             </button>
             <button
               type="button"
-              class="shrink-0 rounded px-0.5 hover:text-foreground"
+              class="shrink-0 rounded-sm px-0.5 hover:text-foreground"
               :class="nodeState(node.id, treeVersion).visible ? 'invisible group-hover:visible' : ''"
               :title="nodeState(node.id, treeVersion).visible ? '隐藏' : '显示'"
               @click="actions.toggleVisibility()"

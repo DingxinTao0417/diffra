@@ -134,7 +134,7 @@ function highlightDraft(text: string, mentions: MentionTarget[]): ReactNode[] {
     if (target) {
       nodes.push(
         // primary-color-allow: @附件点击后打开预览，是可点的动作
-        <span key={`mention-${key++}`} className="rounded-[3px] bg-primary/10 text-primary">
+        <span key={`mention-${key++}`} className="rounded-sm bg-primary/10 text-primary">
           {target.token}
         </span>,
       )
@@ -632,7 +632,7 @@ export function Composer(props: ComposerProps) {
     <div
       className={cn(
         'relative flex flex-col border border-input bg-card focus-within:border-ring/60 dark:border-input/50 dark:focus-within:border-ring',
-        large ? 'rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.04)]' : 'rounded-2xl',
+        large ? 'rounded-2xl shadow-composer' : 'rounded-2xl',
         // primary-color-allow: 用户正在拖放文件
         dragging && 'border-primary/60 bg-primary/5 dark:border-primary/60',
       )}
@@ -679,7 +679,7 @@ export function Composer(props: ComposerProps) {
           role="listbox"
           aria-label="命令和 Skill"
           className={cn(
-            'absolute left-0 z-30 max-h-80 w-full overflow-y-auto rounded-xl bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10',
+            'absolute left-0 z-30 max-h-80 w-full overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-overlay',
             // 首页输入框上面是标题，向下展开不盖住它；任务页输入框贴底，只能向上
             large ? 'top-full mt-2' : 'bottom-full mb-2 max-w-[480px]',
           )}
@@ -725,7 +725,7 @@ export function Composer(props: ComposerProps) {
               <button
                 type="button"
                 aria-label={`移除图片 ${index + 1}`}
-                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-overlay hover:text-foreground"
                 onClick={() => removeImage(image)}
               >
                 <X className="size-3" />
@@ -736,11 +736,11 @@ export function Composer(props: ComposerProps) {
       )}
       {fileReferences.length > 0 && <div className={cn('flex flex-wrap gap-2', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')}>
         {fileReferences.map((file) => <div key={file.path} title={file.path} className="flex max-w-full items-center gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1 pl-2.5 text-xs" data-testid="composer-file">
-          <button type="button" aria-label={`预览附件 ${file.name}`} className="flex min-w-0 items-center gap-2 rounded outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setPreview({ kind: 'file', file })}>
+          <button type="button" aria-label={`预览附件 ${file.name}`} className="flex min-w-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setPreview({ kind: 'file', file })}>
             {file.kind === 'directory' ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
             <span className="max-w-52 truncate">{file.name}</span><span className="text-muted-foreground">{file.kind === 'directory' ? '文件夹' : '文件'}</span>
           </button>
-          <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded p-1 hover:bg-muted" onClick={() => removeFile(file)}><X className="size-3" /></button>
+          <button type="button" aria-label={`移除附件 ${file.name}`} className="rounded-sm p-1 hover:bg-muted" onClick={() => removeFile(file)}><X className="size-3" /></button>
         </div>)}
       </div>}
       {(props.planMode || goal || skills.length > 0) && (
@@ -762,7 +762,7 @@ export function Composer(props: ComposerProps) {
         <div className={cn('flex flex-col gap-1.5 border-b pb-2.5', large ? 'px-4.5 pt-3.5' : 'px-3.5 pt-2.5')} data-testid="composer-questions">
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>优化时按选中的答案写的；选别的只改提示词里对应的那一行</span>
-            <button type="button" aria-label="收起问题" className="rounded p-0.5 hover:bg-accent hover:text-foreground" onClick={() => setQuestions((current) => ({ ...current, items: [] }))}>
+            <button type="button" aria-label="收起问题" className="rounded-sm p-0.5 hover:bg-accent hover:text-foreground" onClick={() => setQuestions((current) => ({ ...current, items: [] }))}>
               <X className="size-3.5" />
             </button>
           </div>
@@ -945,7 +945,7 @@ function Chip({ icon: Icon, label, removeLabel, onRemove }: { icon: LucideIcon; 
     <span className="flex h-6.5 items-center gap-1 rounded-md border bg-muted/40 pr-0.5 pl-1.5 text-xs text-foreground" data-testid="composer-chip">
       <Icon className="size-3.5" />
       {label}
-      <button type="button" aria-label={removeLabel} className="flex size-5 items-center justify-center rounded hover:bg-muted" onClick={onRemove}>
+      <button type="button" aria-label={removeLabel} className="flex size-5 items-center justify-center rounded-sm hover:bg-muted" onClick={onRemove}>
         <X className="size-3" />
       </button>
     </span>
@@ -1146,7 +1146,7 @@ export function ModelMenu({
             className={cn(MENU_TRIGGER, 'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground')}
           >
             {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
-            <span className="truncate text-foreground/90">{modelName}</span>
+            <span className="truncate text-foreground">{modelName}</span>
             {label && supportsReasoning && (
               <span className="shrink-0" data-testid="reasoning-label">
                 {REASONING_LABELS[effort]}

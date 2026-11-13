@@ -120,7 +120,7 @@ export function UsageSection() {
       )}
       {!error && !summary && <UsageSkeleton />}
       {summary && summary.totals.calls === 0 && (
-        <EmptyState icon={BarChart3} title="这段时间还没有用量" description="开始一个任务后，这里会按天统计 token。" className="border bg-card">
+        <EmptyState icon={BarChart3} title="这段时间还没有用量" description="开始一个任务后，这里会按天统计 token。" variant="card">
           <Button onClick={() => openHome()}>
             <Plus />
             新建任务
@@ -184,7 +184,7 @@ function UsageSkeleton() {
     <div role="status" aria-label="正在统计用量" className="motion-safe:animate-pulse">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {[0, 1, 2, 3, 4, 5].map((index) => (
-          <div key={index} aria-hidden className="space-y-2.5 rounded-xl border px-4 py-3">
+          <div key={index} aria-hidden className="space-y-2.5 rounded-xl border p-4">
             <div className="h-3 w-12 rounded-sm bg-muted" />
             <div className="h-6 w-20 rounded-sm bg-muted" />
             <div className="h-3 w-16 rounded-sm bg-muted" />
@@ -225,10 +225,11 @@ function Tiles({ totals, days }: { totals: UsageTotals; days: UsageSummary['days
   ]
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      {tiles.map((tile) => (
-        <div key={tile.label} className="min-w-0 rounded-xl border bg-card px-4 py-3" data-testid="usage-tile">
+      {tiles.map((tile, index) => (
+        <div key={tile.label} className="min-w-0 rounded-xl border bg-card p-4" data-testid="usage-tile">
           <div className="text-xs text-muted-foreground">{tile.label}</div>
-          <div className="mt-1 truncate text-2xl font-semibold tabular-nums" title={tile.title}>
+          {/* 总用量是这一页的焦点，其余五项小一档 */}
+          <div className={cn('mt-1 truncate font-semibold tabular-nums', index === 0 ? 'text-2xl' : 'text-xl')} title={tile.title}>
             {tile.value} {tile.unit && <span className="text-sm font-normal text-muted-foreground">{tile.unit}</span>}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">{tile.note}</div>
@@ -294,14 +295,14 @@ function Composition({ totals }: { totals: UsageTotals }) {
               })}
           </svg>
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-lg font-bold tabular-nums">{formatTokens(whole)}</span>
+            <span className="text-lg font-semibold tabular-nums">{formatTokens(whole)}</span>
             <span className="text-xs text-muted-foreground">token</span>
           </div>
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           {parts.map((part) => (
             <div key={part.key} className="flex items-center gap-2 text-xs">
-              <span aria-hidden className="size-2 shrink-0 rounded-[2px]" style={{ background: part.color }} />
+              <span aria-hidden className="size-2 shrink-0 rounded-xs" style={{ background: part.color }} />
               <span className="min-w-0 flex-1 truncate">{part.label}</span>
               <span className="tabular-nums">{compact(part.value)}</span>
               <span className="w-9 text-right text-muted-foreground tabular-nums">{percent(part.value, whole)}</span>
@@ -322,7 +323,7 @@ function CacheEfficiency({ totals }: { totals: UsageTotals }) {
         缓存效率
       </h2>
       <div className="mt-2 flex items-baseline gap-1.5">
-        <span className="text-3xl font-bold tabular-nums">{rate === null ? '—' : `${rate}%`}</span>
+        <span className="text-2xl font-semibold tabular-nums">{rate === null ? '—' : `${rate}%`}</span>
         <span className="text-xs text-muted-foreground">命中率</span>
       </div>
       <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden>
@@ -371,7 +372,7 @@ function ActivityHeatmap({ days }: { days: UsageSummary['days'] }) {
                   key={day.date}
                   title={`${day.date} · ${exact(total(day))} token · ${day.calls} 次调用`}
                   aria-label={`${day.date}，${exact(total(day))} token，${day.calls} 次调用`}
-                  className={cn('size-3.5 rounded-[2px]', levelOf(total(day)) === 0 && 'bg-muted')}
+                  className={cn('size-3.5 rounded-xs', levelOf(total(day)) === 0 && 'bg-muted')}
                   style={levelOf(total(day)) === 0 ? undefined : { backgroundColor: `color-mix(in oklab, var(--chart-1) ${levelOf(total(day)) * 20}%, transparent)` }}
                 />
               ) : (
@@ -390,7 +391,7 @@ function ActivityHeatmap({ days }: { days: UsageSummary['days'] }) {
         {[0, 1, 2, 3, 4, 5].map((level) => (
           <span
             key={level}
-            className={cn('size-2.5 rounded-[2px]', level === 0 && 'bg-muted')}
+            className={cn('size-2.5 rounded-xs', level === 0 && 'bg-muted')}
             style={level === 0 ? undefined : { backgroundColor: `color-mix(in oklab, var(--chart-1) ${level * 20}%, transparent)` }}
           />
         ))}
@@ -420,10 +421,10 @@ function DailyChart({ days }: { days: UsageSummary['days'] }) {
     <section aria-label="每天的 token 用量" className={USAGE_CARD}>
       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 className={cn(USAGE_CARD_TITLE, 'mr-auto')}>每天</h2>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-[2px] bg-chart-2" />缓存命中</span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-[2px] bg-chart-3" />新增输入</span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-[2px] bg-chart-1" />输出</span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-[2px] bg-chart-4" />推理</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-xs bg-chart-2" />缓存命中</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-xs bg-chart-3" />新增输入</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-xs bg-chart-1" />输出</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className="size-2 rounded-xs bg-chart-4" />推理</span>
       </div>
       <div className="flex gap-2">
         <div className="relative min-w-0 flex-1">

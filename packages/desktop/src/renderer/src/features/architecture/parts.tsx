@@ -54,7 +54,7 @@ export function Thumbnail({ thumbnail }: { thumbnail: ArchitectureThumbnail }) {
           </span>
           <span className="flex min-w-0 flex-1 gap-0.5 overflow-hidden rounded-sm px-0.5 py-px" style={{ background: layerTint(at, 6) }}>
             {layer.blocks.map((name, index) => (
-              <span key={index} className="max-w-16 shrink-0 truncate rounded-[3px] border bg-card px-1 text-[9px] leading-[14px]" data-testid="architecture-thumbnail-block">
+              <span key={index} className="max-w-16 shrink-0 truncate rounded-xs border bg-card px-1 text-[9px] leading-[14px]" data-testid="architecture-thumbnail-block">
                 {name}
               </span>
             ))}

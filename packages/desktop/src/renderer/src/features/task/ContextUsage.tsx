@@ -137,7 +137,7 @@ export function ContextUsage({ sessionId, usage, running }: { sessionId: string;
             <div className="flex flex-col gap-1.5 text-xs">
               {USAGE_PARTS.map((part) => (
                 <div key={part.key} className="flex items-center gap-2">
-                  <span className={cn('size-2 shrink-0 rounded-[2px]', part.className)} />
+                  <span className={cn('size-2 shrink-0 rounded-xs', part.className)} />
                   <span className="min-w-0 flex-1 truncate">{part.label}</span>
                   <span className="text-muted-foreground tabular-nums">
                     {formatTokens(breakdown[part.key])} · {share(breakdown[part.key])}

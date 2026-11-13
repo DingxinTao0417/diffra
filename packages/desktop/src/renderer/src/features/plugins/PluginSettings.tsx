@@ -90,7 +90,7 @@ export function PluginSettings() {
         ) : empty ? (
           <EmptyState
             icon={Puzzle}
-            className="border bg-card"
+            variant="card"
             title="还没有插件"
             description={
               <span>

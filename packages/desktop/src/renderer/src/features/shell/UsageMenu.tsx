@@ -3,6 +3,7 @@ import { ARCHITECTURE_USAGE_ID, PROMPT_ENHANCE_USAGE_ID, type UsageSummary, type
 import { ArrowRight, BarChart3 } from 'lucide-react'
 import { cn } from 'cn'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Segmented } from '@/components/ui/segmented'
 import { compositionOf, rangeOf } from '@/features/settings/UsageSection'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
@@ -86,20 +87,7 @@ function UsagePanel({ onNavigate }: { onNavigate(): void }) {
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
-        <div className="flex rounded-md bg-muted p-0.5 text-xs" role="radiogroup" aria-label="时间段">
-          {PERIODS.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="radio"
-              aria-checked={item.value === period}
-              className={cn('rounded-[5px] px-2 py-0.5 text-muted-foreground', item.value === period && 'bg-background text-foreground shadow-xs')}
-              onClick={() => setPeriod(item.value)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <Segmented<Period> label="时间段" size="sm" value={period} options={PERIODS} onChange={setPeriod} />
         <button
           type="button"
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -160,10 +148,10 @@ function PeriodView({ period, versus, data, onNavigate }: { period: Period; vers
           <div className="mx-3 mt-2 flex h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
             {parts.map((part) => (part.value > 0 ? <span key={part.key} style={{ flex: part.value, background: part.color }} /> : null))}
           </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 pt-1.5 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 pt-1.5 text-xs text-muted-foreground">
             {parts.map((part) => (
               <span key={part.key} className="flex items-center gap-1">
-                <span className="size-2 rounded-[2px]" style={{ background: part.color }} />
+                <span className="size-2 rounded-xs" style={{ background: part.color }} />
                 {part.label} {formatTokens(part.value)}
               </span>
             ))}
@@ -182,7 +170,7 @@ function PeriodView({ period, versus, data, onNavigate }: { period: Period; vers
         ))}
       </div>
       {days.length <= 7 ? (
-        <div className="flex gap-1 px-3 pt-1 text-center text-[10px] text-muted-foreground">
+        <div className="flex gap-1 px-3 pt-1 text-center text-xs text-muted-foreground">
           {days.map((day, index) => (
             <span key={day.date} className={cn('flex-1', index === days.length - 1 && 'text-foreground')}>
               {index === days.length - 1 ? '今天' : WEEKDAYS[new Date(`${day.date}T00:00:00`).getDay()]}
@@ -190,7 +178,7 @@ function PeriodView({ period, versus, data, onNavigate }: { period: Period; vers
           ))}
         </div>
       ) : (
-        <div className="flex justify-between px-3 pt-1 text-[10px] text-muted-foreground">
+        <div className="flex justify-between px-3 pt-1 text-xs text-muted-foreground">
           <span>{Number(days[0]?.date.slice(8))} 日</span>
           <span className="text-foreground">今天</span>
         </div>
@@ -198,7 +186,7 @@ function PeriodView({ period, versus, data, onNavigate }: { period: Period; vers
 
       {models.length > 0 && (
         <>
-          <p className="mx-3 mt-2.5 border-t pt-2 text-[11px] text-muted-foreground">按模型</p>
+          <p className="mx-3 mt-2.5 border-t pt-2 text-xs text-muted-foreground">按模型</p>
           {[...shownModels.map((model) => ({ key: `${model.providerId}/${model.modelId}`, name: model.modelId, value: tokensOf(model) })), ...(otherModels.length > 0 ? [{ key: 'other', name: `其他 ${otherModels.length} 个`, value: otherTokens }] : [])].map((row) => (
             <div key={row.key} className="flex items-center gap-2 px-3 py-0.5 text-xs" data-testid="usage-model">
               <span className="min-w-0 flex-1 truncate" title={row.name}>
@@ -215,7 +203,7 @@ function PeriodView({ period, versus, data, onNavigate }: { period: Period; vers
 
       {topTasks.length > 0 && (
         <>
-          <p className="mx-3 mt-2.5 border-t pt-2 text-[11px] text-muted-foreground">用得最多的任务</p>
+          <p className="mx-3 mt-2.5 border-t pt-2 text-xs text-muted-foreground">用得最多的任务</p>
           {topTasks.map((task) => {
             const stored = tasks.find((item) => item.sessionId === task.sessionId) ?? store.get().tasks.find((item) => item.sessionId === task.sessionId)
             // 首页还没建任务时优化提示词的用量记在一个固定的 id 下（和用量页一样）

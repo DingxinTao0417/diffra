@@ -60,15 +60,18 @@
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
-  /* 圆角用固定像素，不随文字大小缩放；按「控件 < 容器 < 浮层和输入框」分级 */
+  /* 圆角用固定像素，不随文字大小缩放；按「控件 < 容器 < 浮层和输入框」分级。xs 只给图例色块、热力格、14px 以下的小徽标。
+   * 不写裸 rounded：它是 Tailwind 默认的 0.25rem，会跟着文字大小变 */
+  --radius-xs: 2px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 10px;
   --radius-2xl: 14px;
-  /* 卡片不加阴影，只用 1px 边线；只有浮层和弹窗有阴影 */
+  /* 卡片不加阴影，只用 1px 边线；只有浮层和弹窗有阴影。例外只有首页输入框（composer）：它是首页唯一的焦点，轻微的托起是焦点的一部分 */
   --shadow-overlay: var(--elevation-overlay);
   --shadow-modal: var(--elevation-modal);
+  --shadow-composer: var(--elevation-composer);
 }
 
 /*
@@ -124,6 +127,7 @@
   --chart-4: #9a9992;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.18);
+  --elevation-composer: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.04);
   --primary: #2e6b57;
   --primary-foreground: #ffffff;
   --soft: #e6efea;

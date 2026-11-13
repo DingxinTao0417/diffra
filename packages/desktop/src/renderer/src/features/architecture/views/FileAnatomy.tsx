@@ -52,7 +52,7 @@ export function FileAnatomy({ path }: { path: string }) {
       <div className="mx-auto max-w-6xl space-y-4 p-6">
         <div className="flex flex-wrap items-center gap-2">
           <FileCode2 className="size-5 text-muted-foreground" />
-          <h2 className="font-mono text-base font-semibold">{file.path}</h2>
+          <h2 className="font-mono text-base font-bold">{file.path}</h2>
           <Badge variant="secondary">{file.language}</Badge>
           {file.entry && <Badge variant="outline">入口</Badge>}
           <span className="text-xs text-muted-foreground">
@@ -73,17 +73,17 @@ export function FileAnatomy({ path }: { path: string }) {
                   <FileLink path={importer.file.path} onOpen={() => go({ scope: `file:${importer.file.path}`, focus: null })} />
                   <div className="mt-1 flex flex-wrap gap-1">
                     {importer.names.length === 0 ? (
-                      <span className="text-[11px] text-muted-foreground">整个模块</span>
+                      <span className="text-xs text-muted-foreground">整个模块</span>
                     ) : (
                       importer.names.map((name) => (
-                        <span key={name} className={cn('rounded bg-muted px-1 font-mono text-[11px]', hovered === name && 'bg-highlight')}>
+                        <span key={name} className={cn('rounded-sm bg-muted px-1 font-mono text-xs', hovered === name && 'bg-highlight')}>
                           {name}
                         </span>
                       ))
                     )}
                   </div>
                   {importer.imports.map((item) => (
-                    <button key={item.line} type="button" className="block text-[11px] text-muted-foreground hover:underline" onClick={() => peek(importer.file.path, item.line)}>
+                    <button key={item.line} type="button" className="block text-xs text-muted-foreground hover:underline" onClick={() => peek(importer.file.path, item.line)}>
                       第 {item.line} 行
                     </button>
                   ))}
@@ -113,7 +113,7 @@ export function FileAnatomy({ path }: { path: string }) {
               <div key={dependency.file.path} className="rounded-md border p-2">
                 <FileLink path={dependency.file.path} onOpen={() => go({ scope: `file:${dependency.file.path}`, focus: null })} />
                 {dependency.imports.map((item) => (
-                  <button key={`${item.line}:${item.specifier}`} type="button" className="mt-0.5 flex w-full gap-1.5 text-left font-mono text-[11px] hover:underline" onClick={() => peek(file.path, item.line)}>
+                  <button key={`${item.line}:${item.specifier}`} type="button" className="mt-0.5 flex w-full gap-1.5 text-left font-mono text-xs hover:underline" onClick={() => peek(file.path, item.line)}>
                     <span className="text-muted-foreground">{item.line}</span>
                     <span className="truncate">{item.names.length > 0 ? item.names.join(', ') : item.specifier}</span>
                   </button>
@@ -141,7 +141,7 @@ export function FileAnatomy({ path }: { path: string }) {
 function Column({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="min-w-0 space-y-2">
-      <h3 className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+      <h3 className="flex items-center gap-1 text-xs text-muted-foreground">
         {icon}
         {title}
       </h3>
@@ -197,7 +197,7 @@ function SymbolRow({
           {symbol.name}
         </span>
         {!nested && symbol.exported && (uses > 0 || wholeModule > 0) && (
-          <span className="shrink-0 text-[11px] text-muted-foreground" title="按导入的名字统计；整模块导入的另算">
+          <span className="shrink-0 text-xs text-muted-foreground" title="按导入的名字统计；整模块导入的另算">
             {uses > 0 ? `${uses} 处引用` : ''}
           </span>
         )}

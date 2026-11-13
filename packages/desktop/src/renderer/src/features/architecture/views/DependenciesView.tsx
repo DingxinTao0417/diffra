@@ -122,8 +122,8 @@ function Cycles() {
         const members = new Set(cycle)
         const inner = cycle.flatMap((file) => index.outgoing[file]!.filter((edge) => members.has(analysis.edges[edge]!.to)))
         return (
-          <div key={at} className="space-y-2 rounded-lg border border-warning/40 p-3" data-testid="architecture-cycle">
-            <div className="text-xs font-medium">
+          <div key={at} className="space-y-2 rounded-lg border border-warning/30 p-3" data-testid="architecture-cycle">
+            <div className="text-xs font-bold">
               {cycle.length} 个文件 · {inner.length} 条依赖
             </div>
             <div className="flex flex-wrap gap-1">
@@ -142,7 +142,7 @@ function Cycles() {
                   <button
                     key={edgeIndex}
                     type="button"
-                    className="block w-full truncate text-left font-mono text-[11px] text-muted-foreground hover:text-foreground"
+                    className="block w-full truncate text-left font-mono text-xs text-muted-foreground hover:text-foreground"
                     onClick={() => go({ focus: `edge:file:${analysis.files[edge.from]!.path}>file:${analysis.files[edge.to]!.path}` }, false)}
                   >
                     {analysis.files[edge.from]!.path.split('/').pop()}:{edge.imports[0]?.line} → {analysis.files[edge.to]!.path.split('/').pop()}
@@ -209,7 +209,7 @@ function Externals() {
       </table>
       {unused.length > 0 && (
         <div className="space-y-1.5">
-          <h3 className="text-sm font-semibold">声明了但代码里没导入（{unused.length}）</h3>
+          <h3 className="text-sm font-bold">声明了但代码里没导入（{unused.length}）</h3>
           <p className="text-xs text-muted-foreground">可能是构建工具、命令行工具、类型或插件，不一定能删，删之前确认一下。</p>
           <div className="flex flex-wrap gap-1">
             {unused.map((item) => (

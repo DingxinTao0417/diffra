@@ -107,7 +107,7 @@ function DiagramSummary() {
   return (
     <>
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">{DIAGRAM_NAMES[route.diagram]}图</h2>
+        <h2 className="text-base font-bold">{DIAGRAM_NAMES[route.diagram]}图</h2>
         <div className="text-xs text-muted-foreground">
           {diagram.source === 'model' && diagram.model ? `${diagram.model.modelId} 画于 ${formatTime(diagram.generatedAt)}` : '按包、目录和依赖自动排的'}
           {diagram.source === 'model' && diagram.fingerprint !== analysis.fingerprint && ' · 基于上一次分析'}
@@ -118,23 +118,23 @@ function DiagramSummary() {
         </div>
       </div>
       <section className="space-y-1">
-        <h3 className="text-xs font-medium text-muted-foreground">各层</h3>
+        <h3 className="text-sm text-muted-foreground">各层</h3>
         {diagram.layers.map((layer) => {
           const items = layer.groups.flatMap((group) => group.blocks)
           return (
             <div key={layer.id} className="space-y-0.5">
-              <div className="flex justify-between text-xs font-medium">
+              <div className="flex justify-between text-xs">
                 <span>{layer.name}</span>
                 <span className="text-muted-foreground tabular-nums">{items.length}</span>
               </div>
-              {layer.description && <div className="text-[11px] text-muted-foreground">{layer.description}</div>}
+              {layer.description && <div className="text-xs text-muted-foreground">{layer.description}</div>}
               <div className="flex flex-wrap gap-1">
                 {items.slice(0, 12).map((item) => (
-                  <button key={item.id} type="button" className="rounded border px-1.5 text-[11px] hover:bg-accent" onClick={() => go({ focus: blockFocus(route.diagram, item.id) }, false)}>
+                  <button key={item.id} type="button" className="rounded-sm border px-1.5 text-xs hover:bg-accent" onClick={() => go({ focus: blockFocus(route.diagram, item.id) }, false)}>
                     {item.name}
                   </button>
                 ))}
-                {items.length > 12 && <span className="text-[11px] text-muted-foreground">…还有 {items.length - 12} 个</span>}
+                {items.length > 12 && <span className="text-xs text-muted-foreground">…还有 {items.length - 12} 个</span>}
               </div>
             </div>
           )
@@ -147,7 +147,7 @@ function DiagramSummary() {
         ))}
       </section>
       <section className="space-y-1 text-xs text-muted-foreground">
-        <h3 className="font-medium">怎么看</h3>
+        <h3 className="text-sm">怎么看</h3>
         <p>单击方块看它的说明、认领的代码和上下游；双击{route.diagram === 'technology' ? '看它在哪些地方被用到' : '进到它内部的依赖图，再到文件和符号'}。</p>
         <p>选中方块后，实线框是它依赖的方块，虚线框是依赖它的方块。虚线边的方块是计划中或者对不上代码的。</p>
       </section>
@@ -164,17 +164,17 @@ function TargetSummary() {
   return (
     <>
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">目标架构</h2>
+        <h2 className="text-base font-bold">目标架构</h2>
         <div className="text-xs text-muted-foreground">{target.enforceInTasks ? '任务改完时检查新增的依赖' : '不在任务里检查'}</div>
       </div>
       <section className="space-y-1">
-        <h3 className="text-xs font-medium text-muted-foreground">差距</h3>
+        <h3 className="text-sm text-muted-foreground">差距</h3>
         <div className="text-xs">
           <span className={evaluation.violations.length > 0 ? 'text-destructive' : undefined}>{evaluation.violations.length} 处违规</span> · {evaluation.planned.length} 个方块还没有代码 · {unassignedDirs} 个目录没被认领
         </div>
       </section>
       <section className="space-y-1">
-        <h3 className="text-xs font-medium text-muted-foreground">规则（{target.rules.length}）</h3>
+        <h3 className="text-sm text-muted-foreground">规则（{target.rules.length}）</h3>
         {target.rules.length === 0 && <p className="text-xs text-muted-foreground">还没有规则</p>}
         {target.rules.map((rule) => (
           <div key={rule.id} className="text-xs">

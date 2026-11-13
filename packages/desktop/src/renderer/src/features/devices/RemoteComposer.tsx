@@ -33,7 +33,7 @@ export function RemoteComposer({ deviceName, running, disabled, onSend, onStop }
   }
 
   return (
-    <div className="rounded-2xl border bg-background px-3 pt-2 pb-2.5 shadow-xs" data-testid="remote-composer">
+    <div className="rounded-2xl border border-input bg-card px-3 pt-2 pb-2.5 focus-within:border-ring/60 dark:border-input/50 dark:focus-within:border-ring" data-testid="remote-composer">
       <Textarea
         aria-label="发给对方的消息"
         placeholder={`发给「${deviceName}」上的这个任务`}

@@ -34,18 +34,22 @@ export function ProjectCards() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto" data-testid="architecture-view">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-6 py-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <Network className="size-5 text-muted-foreground" />
-          <h1 className="text-lg font-bold">架构</h1>
-          <span className="text-sm text-muted-foreground">拆解项目的代码结构：包、模块、依赖、分层和关键流程，再对照你定的目标架构</span>
-          <Button className="ml-auto" size="sm" onClick={() => void add(null)}>
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-6 py-10 lg:py-12">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-3">
+              <Network className="size-5 text-muted-foreground" />
+              <h1 className="text-xl font-bold">架构</h1>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">拆解项目的代码结构：包、模块、依赖、分层和关键流程，再对照你定的目标架构。</p>
+          </div>
+          <Button className="shrink-0" size="sm" onClick={() => void add(null)}>
             <Plus className="size-4" />
             添加项目
           </Button>
         </div>
         {listError && (
-          <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive-soft px-3 py-2 text-sm">
+          <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive-soft px-3 py-2 text-sm">
             <CircleAlert className="size-4 text-destructive" />
             读取架构列表失败：{listError}
           </div>
@@ -103,7 +107,7 @@ function ProjectCard({ project }: { project: ArchitectureProjectSummary }) {
       role="button"
       tabIndex={0}
       aria-label={`打开「${project.name}」的架构`}
-      className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-card text-left transition-shadow hover:shadow-overlay focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-card text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       onClick={open}
       onKeyDown={(event) => {
         if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
@@ -132,7 +136,7 @@ function ProjectCard({ project }: { project: ArchitectureProjectSummary }) {
       <div className="flex flex-1 flex-col gap-3 p-4">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <div className="truncate font-semibold">{project.name}</div>
+            <div className="truncate font-bold">{project.name}</div>
             <div className="truncate text-xs text-muted-foreground" title={project.path}>
               {project.path}
             </div>
@@ -199,7 +203,7 @@ function Stat({ label, value, warn = false }: { label: string; value: string; wa
   return (
     <div>
       <div className={warn ? 'text-sm font-semibold text-warning tabular-nums' : 'text-sm font-semibold tabular-nums'}>{value}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   )
 }

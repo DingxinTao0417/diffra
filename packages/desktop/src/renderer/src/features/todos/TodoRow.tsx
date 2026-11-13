@@ -175,7 +175,7 @@ export function TodoRow({
               <CircleCheck className="size-3" />
               任务已完成，待验收
               {/* primary-color-allow: 验收并完成待办，是下一步动作 */}
-              <button type="button" className="ml-0.5 font-semibold text-primary hover:underline" onClick={() => acceptTodos([todo.id]).catch(() => showToast('验收失败，请重试'))}>
+              <button type="button" className="ml-0.5 font-bold text-primary hover:underline" onClick={() => acceptTodos([todo.id]).catch(() => showToast('验收失败，请重试'))}>
                 验收
               </button>
             </span>
@@ -253,13 +253,13 @@ function TimeColumn({ todo, now, overdue, onPick }: { todo: Todo; now: Date; ove
           )}
         >
           <span className="text-sm font-bold tabular-nums">{parts.clock}</span>
-          <span className="flex items-center gap-0.5 text-[11px] opacity-75">
+          <span className="flex items-center gap-0.5 text-xs">
             {schedule?.action.kind === 'send' ? <Send className="size-2.5" /> : <Bell className="size-2.5" />}
             {parts.day}
           </span>
         </button>
       ) : (
-        <button type="button" aria-label="定时" title="定个时间" className="flex h-9 w-14 shrink-0 items-center rounded-md px-1.5 text-muted-foreground/50 hover:bg-accent hover:text-foreground">
+        <button type="button" aria-label="定时" title="定个时间" className="flex h-9 w-14 shrink-0 items-center rounded-md px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
           <AlarmClock className="size-4" />
         </button>
       )}

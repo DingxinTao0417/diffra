@@ -128,7 +128,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
               <div key={item.id} className="flex items-center gap-2">
                 {/* success-color-allow: 完成条件的证据已核对 */}
                 {item.receiptId ? <CircleCheck className="size-3.5 shrink-0 text-success" /> : <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />}
-                <span className="min-w-0 flex-1 truncate text-foreground/90" title={item.title}>
+                <span className="min-w-0 flex-1 truncate text-foreground" title={item.title}>
                   {item.title}
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">{item.receiptId ? '证据已核对' : '待完成'}</span>
@@ -162,10 +162,10 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
             )}
           </Row>
           <Row leading={<IconBox icon={Laptop} />}>
-            <span className="truncate text-foreground/90">{device ?? '本地'}</span>
+            <span className="truncate text-foreground">{device ?? '本地'}</span>
           </Row>
           <Row leading={<IconBox icon={GitBranch} />}>
-            <span className="truncate text-foreground/90">{branch ?? '不是 Git 仓库'}</span>
+            <span className="truncate text-foreground">{branch ?? '不是 Git 仓库'}</span>
           </Row>
           {branch && !remote && (
             <Row
@@ -173,7 +173,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
               testId="monitor-commit"
               onClick={() => store.set((state) => ({ ...state, composerInsert: { target: task.sessionId, text: COMMIT_PROMPT, mode: 'fill' } }))}
             >
-              <span className="text-foreground/90">提交或推送</span>
+              <span className="text-foreground">提交或推送</span>
             </Row>
           )}
           {!task.info.bashPath && (
@@ -205,7 +205,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
                   onClick={() => onLocate(item.id)}
                 >
                   <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                    <span className="text-foreground/90">{card.name}</span> · {card.task}
+                    <span className="text-foreground">{card.name}</span> · {card.task}
                   </span>
                   {running ? (
                     <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
@@ -226,7 +226,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
               return (
                 <Row key={file.path} leading={<IconBox icon={File} />} testId="monitor-file" title={file.path} label={`审阅 ${file.path}`} onClick={() => openReview(file.path)}>
                   <span className="flex min-w-0 flex-1">
-                    <span className="max-w-full shrink-0 truncate text-foreground/90">{file.path.slice(nameStart)}</span>
+                    <span className="max-w-full shrink-0 truncate text-foreground">{file.path.slice(nameStart)}</span>
                     {/* 目录从左侧截断，文件名始终可见；bdi 防止 rtl 把末尾的斜杠挪到左边 */}
                     <span className="ml-2 min-w-0 truncate text-xs leading-5 text-muted-foreground [direction:rtl]">
                       <bdi dir="ltr">{file.path.slice(0, Math.max(0, nameStart - 1))}</bdi>
@@ -250,7 +250,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
           <Section title="网页查阅">
             {pages.map((url) => (
               <Row key={url} leading={<IconBox icon={Globe} />} testId="monitor-page" title={url} label={`在浏览器里打开 ${url}`} onClick={() => openPage(url)}>
-                <span className="truncate text-foreground/90">{url.replace(/^https?:\/\//, '')}</span>
+                <span className="truncate text-foreground">{url.replace(/^https?:\/\//, '')}</span>
               </Row>
             ))}
           </Section>
@@ -276,15 +276,15 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
             {sources.map((source) =>
               source.kind === 'url' ? (
                 <Row key={`url:${source.url}`} leading={<IconBox icon={Link} />} testId="monitor-source" title={source.url} label={remote ? undefined : `在浏览器里打开 ${source.url}`} onClick={remote ? undefined : () => openPage(source.url)}>
-                  <span className="truncate text-foreground/90">{source.url.replace(/^https?:\/\//, '')}</span>
+                  <span className="truncate text-foreground">{source.url.replace(/^https?:\/\//, '')}</span>
                 </Row>
               ) : source.kind === 'skill' ? (
                 <Row key={`skill:${source.name}`} leading={<IconBox icon={BookOpen} />} testId="monitor-source" title={`Skill：${source.name}`}>
-                  <span className="truncate text-foreground/90">{source.name}</span>
+                  <span className="truncate text-foreground">{source.name}</span>
                 </Row>
               ) : (
                 <Row key={`file:${source.path}`} leading={<IconBox icon={source.kind === 'directory' ? Folder : File} />} testId="monitor-source" title={source.path}>
-                  <span className="truncate text-foreground/90">{relativePath(source.path, task.project)}</span>
+                  <span className="truncate text-foreground">{relativePath(source.path, task.project)}</span>
                 </Row>
               ),
             )}
@@ -443,7 +443,7 @@ function RunningRow({ icon, command, url, onOpen, onOutput, onStop }: { icon: Lu
     <div className="-mx-1.5 flex min-h-8 items-center gap-2.5 rounded-md px-1.5 py-1" data-testid="monitor-running">
       <IconBox icon={icon} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-mono text-xs text-foreground/90" title={command}>
+        <span className="truncate font-mono text-xs text-foreground" title={command}>
           {command}
         </span>
         {url && <span className="truncate text-xs text-muted-foreground">{url}</span>}

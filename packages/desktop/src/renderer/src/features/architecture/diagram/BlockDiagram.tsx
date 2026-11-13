@@ -113,8 +113,8 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
               title={layer.description || undefined}
               data-testid="diagram-layer"
             >
-              <EditableText value={layer.name} editing={editing} className="text-sm font-semibold" label="层名" onCommit={(name) => change(updateLayer(diagram, layer.id, { name }))} />
-              {layer.description && <span className="line-clamp-2 text-[11px] text-muted-foreground">{layer.description}</span>}
+              <EditableText value={layer.name} editing={editing} className="text-sm font-bold" label="层名" onCommit={(name) => change(updateLayer(diagram, layer.id, { name }))} />
+              {layer.description && <span className="line-clamp-2 text-xs text-muted-foreground">{layer.description}</span>}
               {editing && (
                 <span className="flex gap-0.5">
                   <IconButton label="上移这一层" disabled={at === 0} onClick={() => change(moveLayer(diagram, layer.id, -1))}>
@@ -144,7 +144,7 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
                 >
                   {(group.name || editing) && (
                     <div className="flex items-center gap-1 px-0.5">
-                      <EditableText value={group.name} placeholder="（无标题分组）" editing={editing} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground" label="分组名" onCommit={(name) => change(updateGroup(diagram, group.id, name))} />
+                      <EditableText value={group.name} placeholder="（无标题分组）" editing={editing} className="min-w-0 flex-1 truncate text-xs text-muted-foreground" label="分组名" onCommit={(name) => change(updateGroup(diagram, group.id, name))} />
                       {editing && (
                         <IconButton label="删除分组（方块挪到同层别的分组）" onClick={() => change(removeGroup(diagram, group.id))}>
                           <X className="size-3" />
@@ -155,7 +155,7 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
                   <div className="flex flex-wrap gap-1.5">
                     {group.blocks.map((block) => renderBlock(block))}
                     {editing && <AddBlockButton onAdd={(kind) => change(addBlock(diagram, { group: group.id }, kind).diagram)} />}
-                    {!editing && group.blocks.length === 0 && <span className="px-1 text-[11px] text-muted-foreground">空</span>}
+                    {!editing && group.blocks.length === 0 && <span className="px-1 text-xs text-muted-foreground">空</span>}
                   </div>
                 </div>
               ))}
@@ -167,7 +167,7 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
               )}
             </div>,
             at + 1 < diagram.layers.length ? (
-              <div key={`connector:${layer.id}`} className="flex items-center justify-center gap-2 py-1 text-[11px] text-muted-foreground" style={{ gridColumn: 2, gridRow: at * 2 + 2 }} data-testid="diagram-connector">
+              <div key={`connector:${layer.id}`} className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground" style={{ gridColumn: 2, gridRow: at * 2 + 2 }} data-testid="diagram-connector">
                 <ArrowDown className="size-4" />
                 <EditableText
                   value={connector?.label ?? ''}
@@ -196,7 +196,7 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
               data-testid="diagram-side"
             >
               <div className="flex items-center gap-1 px-0.5">
-                <EditableText value={side.name} editing={editing} className="min-w-0 flex-1 text-center text-xs font-semibold" label="竖栏名" onCommit={(name) => change(updateSide(diagram, side.id, { name }))} />
+                <EditableText value={side.name} editing={editing} className="min-w-0 flex-1 text-center text-xs font-bold" label="竖栏名" onCommit={(name) => change(updateSide(diagram, side.id, { name }))} />
                 {editing && (
                   <IconButton label={side.blocks.length === 0 ? '删除竖栏' : '先把方块移走才能删竖栏'} disabled={side.blocks.length > 0} onClick={() => change(removeSide(diagram, side.id))}>
                     <X className="size-3" />
@@ -204,7 +204,7 @@ export const BlockDiagramView = forwardRef<HTMLDivElement, BlockDiagramProps>(fu
                 )}
               </div>
               {editing && (
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <LayerSelect diagram={diagram} value={side.from} label="竖栏从哪一层开始" onChange={(from) => change(updateSide(diagram, side.id, { from }))} />
                   到
                   <LayerSelect diagram={diagram} value={side.to} label="竖栏到哪一层" onChange={(to) => change(updateSide(diagram, side.id, { to }))} />
@@ -312,13 +312,13 @@ function BlockBox({
       }}
       title={title || undefined}
       className={cn(
-        'group/block relative flex min-w-[5.5rem] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border bg-card px-2.5 py-1.5 text-center text-xs shadow-xs transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'group/block relative flex min-w-[5.5rem] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md border bg-card px-2.5 py-1.5 text-center text-xs transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-ring',
         vertical && 'w-full',
         block.kind === 'external' && 'bg-muted/60',
         (block.unverified || overlay?.planned) && 'border-dashed',
         block.unverified && 'border-warning',
         (overlay?.violations ?? 0) > 0 && 'border-destructive',
-        selected && 'z-10 bg-accent font-semibold shadow-md ring-2 ring-ring ring-offset-2 ring-offset-background',
+        selected && 'z-10 bg-accent ring-2 ring-ring ring-offset-2 ring-offset-background',
         relation === 'uses' && 'outline-2 outline-offset-1 outline-foreground/70',
         relation === 'usedBy' && 'outline-2 outline-offset-1 outline-dashed outline-foreground/50',
         relation === 'other' && 'opacity-35',
@@ -332,7 +332,7 @@ function BlockBox({
           autoFocus
           defaultValue={block.name}
           aria-label="方块名"
-          className="w-24 rounded border bg-background px-1 text-center text-xs outline-none"
+          className="w-24 rounded-sm border bg-background px-1 text-center text-xs outline-none"
           onClick={(event) => event.stopPropagation()}
           onBlur={(event) => {
             setRenaming(false)
@@ -344,15 +344,15 @@ function BlockBox({
           }}
         />
       ) : (
-        <span className="flex max-w-40 items-center gap-1 font-medium">
+        <span className="flex max-w-40 items-center gap-1">
           {Icon && <Icon className="size-3 shrink-0 text-muted-foreground" />}
           <span className="truncate">{block.name}</span>
           {block.unverified && <CircleHelp className="size-3 shrink-0 text-warning" aria-label="对不上分析结果" />}
         </span>
       )}
-      {detail && <span className="text-[10px] text-muted-foreground tabular-nums">{detail}</span>}
-      {overlay?.planned && <span className="text-[10px] text-muted-foreground">计划中</span>}
-      {(overlay?.violations ?? 0) > 0 && <span className="absolute -top-1.5 -right-1.5 rounded-full bg-destructive px-1 text-[10px] leading-4 text-white tabular-nums">{overlay!.violations}</span>}
+      {detail && <span className="text-xs text-muted-foreground tabular-nums">{detail}</span>}
+      {overlay?.planned && <span className="text-xs text-muted-foreground">计划中</span>}
+      {(overlay?.violations ?? 0) > 0 && <span className="absolute -top-1.5 -right-1.5 rounded-full bg-destructive px-1 text-xs leading-4 text-destructive-foreground tabular-nums">{overlay!.violations}</span>}
       {editing && !renaming && (
         <button
           type="button"
@@ -374,7 +374,7 @@ function AddBlockButton({ onAdd }: { onAdd(kind: BlockKind): void }) {
   return (
     <button
       type="button"
-      className="flex min-w-[5.5rem] items-center justify-center gap-1 rounded-md border border-dashed px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+      className="flex min-w-[5.5rem] items-center justify-center gap-1 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
       onClick={(event) => {
         event.stopPropagation()
         onAdd('code')
@@ -393,7 +393,7 @@ function IconButton({ label, disabled, onClick, children }: { label: string; dis
       aria-label={label}
       title={label}
       disabled={disabled}
-      className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background/60 hover:text-foreground disabled:opacity-30"
+      className="flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground disabled:opacity-30"
       onClick={(event) => {
         event.stopPropagation()
         onClick()
@@ -413,7 +413,7 @@ function EditableText({ value, placeholder = '', editing, className, label, onCo
         autoFocus
         defaultValue={value}
         aria-label={label}
-        className={cn('w-full min-w-0 rounded border bg-background px-1 outline-none', className)}
+        className={cn('w-full min-w-0 rounded-sm border bg-background px-1 outline-none', className)}
         onClick={(event) => event.stopPropagation()}
         onBlur={(event) => {
           setOpen(false)
@@ -428,7 +428,7 @@ function EditableText({ value, placeholder = '', editing, className, label, onCo
   }
   return (
     <span
-      className={cn(className, editing && 'cursor-text rounded hover:bg-background/60', !value && 'text-muted-foreground/70')}
+      className={cn(className, editing && 'cursor-text rounded-sm hover:bg-background/60', !value && 'text-muted-foreground')}
       title={editing ? `双击修改${label}` : undefined}
       onDoubleClick={(event) => {
         if (!editing) return
@@ -443,7 +443,7 @@ function EditableText({ value, placeholder = '', editing, className, label, onCo
 
 function LayerSelect({ diagram, value, label, onChange }: { diagram: Diagram; value: string; label: string; onChange(value: string): void }) {
   return (
-    <select aria-label={label} value={value} className="min-w-0 flex-1 rounded border bg-background px-0.5 py-0.5 text-[10px]" onClick={(event) => event.stopPropagation()} onChange={(event) => onChange(event.target.value)}>
+    <select aria-label={label} value={value} className="min-w-0 flex-1 rounded-sm border bg-background px-0.5 py-0.5 text-xs" onClick={(event) => event.stopPropagation()} onChange={(event) => onChange(event.target.value)}>
       {diagram.layers.map((layer) => (
         <option key={layer.id} value={layer.id}>
           {layer.name}

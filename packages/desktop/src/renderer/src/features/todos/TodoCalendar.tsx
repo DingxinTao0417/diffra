@@ -102,7 +102,7 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
                       <span
                         key={todo.id}
                         className={cn(
-                          'w-full truncate rounded px-1 py-px text-[11px] leading-4',
+                          'w-full truncate rounded-sm px-1 py-px text-xs leading-4',
                           todo.done ? 'text-muted-foreground line-through' : overdue ? 'bg-warning-soft text-warning' : 'bg-background/80 text-foreground ring-1 ring-border',
                         )}
                         title={todoParts(todo).title}
@@ -113,7 +113,7 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
                       </span>
                     )
                   })}
-                  {items.length > CELL_ITEMS && <span className="px-1 text-[11px] text-muted-foreground">还有 {items.length - CELL_ITEMS} 条</span>}
+                  {items.length > CELL_ITEMS && <span className="px-1 text-xs text-muted-foreground">还有 {items.length - CELL_ITEMS} 条</span>}
                 </button>
               )
             })}

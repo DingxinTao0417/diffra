@@ -60,18 +60,18 @@ export function ModuleTree() {
           return (
             <div key={child}>
               <div
-                className={cn('group flex h-7 items-center gap-1 rounded-md pr-2 text-sm hover:bg-accent', active && 'bg-accent font-medium')}
+                className={cn('group flex h-7 items-center gap-1 rounded-md pr-2 text-sm hover:bg-accent', active && 'bg-accent')}
                 style={{ paddingLeft: depth * 12 + 4 }}
                 data-testid="architecture-tree-dir"
               >
-                <button type="button" className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground" aria-label={expanded ? '收起' : '展开'} onClick={() => toggle(collapsed)}>
+                <button type="button" className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground" aria-label={expanded ? '收起' : '展开'} onClick={() => toggle(collapsed)}>
                   <ChevronRight className={cn('size-3.5 transition-transform', expanded && 'rotate-90')} />
                 </button>
                 <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" title={collapsed} onClick={() => selectDir(child)}>
                   <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate">{collapsed.slice(dir ? dir.length + 1 : 0)}</span>
                 </button>
-                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{module ? formatCount(module.lines) : ''}</span>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{module ? formatCount(module.lines) : ''}</span>
               </div>
               {expanded && renderDir(collapsed, depth + 1)}
             </div>
@@ -84,7 +84,7 @@ export function ModuleTree() {
             <button
               key={file.path}
               type="button"
-              className={cn('flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-sm hover:bg-accent', active && 'bg-accent font-medium')}
+              className={cn('flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-sm hover:bg-accent', active && 'bg-accent')}
               style={{ paddingLeft: depth * 12 + 28 }}
               title={file.path}
               onClick={() => selectFile(file.path)}
@@ -92,7 +92,7 @@ export function ModuleTree() {
             >
               <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{file.path.split('/').pop()}</span>
-              <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatCount(file.lines)}</span>
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatCount(file.lines)}</span>
             </button>
           )
         })}

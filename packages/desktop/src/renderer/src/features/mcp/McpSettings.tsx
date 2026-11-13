@@ -80,7 +80,7 @@ export function McpSettings() {
         )}
 
         {empty ? (
-          <EmptyState icon={Plug} title="还没有 MCP 服务器" description="接上外部工具后，智能体可以在任务里直接调用它们。" className="border bg-card">
+          <EmptyState icon={Plug} title="还没有 MCP 服务器" description="接上外部工具后，智能体可以在任务里直接调用它们。" variant="card">
             {addButton}
           </EmptyState>
         ) : (

@@ -41,7 +41,7 @@ export function QuestionBar({ questions, text, onChange, className }: { question
         const current = choices[questionIndex] ?? { index: 0 }
         return (
           <div key={questionIndex} className="flex flex-col gap-1.5" data-testid="question">
-            <p className="text-sm text-foreground/85">{question.question}</p>
+            <p className="text-sm text-foreground">{question.question}</p>
             <div className="flex flex-wrap items-center gap-1.5">
               {question.options.map((option, optionIndex) => {
                 const selected = 'index' in current && current.index === optionIndex

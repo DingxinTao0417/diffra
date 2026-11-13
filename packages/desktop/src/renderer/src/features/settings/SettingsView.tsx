@@ -116,18 +116,18 @@ export function SettingsView({ section }: { section: SettingsSection }) {
       <nav aria-label="设置分区" className="flex w-(--sidebar-w) shrink-0 flex-col gap-1 bg-sidebar px-2 py-3">
         {/* Mac：红绿灯和顶栏按钮浮在这里（TitleBar），留出位置 */}
         {IS_MAC && <div aria-hidden className="shrink-0" style={{ height: MAC_CHROME_HEIGHT - 12 }} />}
-        <button type="button" className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-accent" onClick={leaveSettings}>
+        <button type="button" className="flex h-8.5 items-center gap-2 rounded-lg px-2 text-left hover:bg-accent" onClick={leaveSettings}>
           <ArrowLeft className="size-4" />
           返回
         </button>
         <div className="relative my-2">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={(event) => setQuery(event.target.value)} className="bg-background pl-8" />
+          <Input aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={(event) => setQuery(event.target.value)} className="h-8.5 bg-background pl-8" />
         </div>
         {groups.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">没有匹配的设置</p>}
         {groups.map((group) => (
           <div key={group.name} className="mb-2 flex flex-col gap-0.5">
-            <div className="px-2 pb-1 text-xs text-muted-foreground">{group.name}</div>
+            <div className="px-2 pb-0.5 text-xs text-muted-foreground">{group.name}</div>
             {group.items.map((item) => {
               const selected = item.id === section
               return (
@@ -135,10 +135,10 @@ export function SettingsView({ section }: { section: SettingsSection }) {
                   key={item.id}
                   type="button"
                   aria-current={selected ? 'page' : undefined}
-                  className={cn('flex h-8 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-accent', selected && 'bg-soft text-foreground hover:bg-soft')}
+                  className={cn('flex h-8.5 items-center gap-2 rounded-lg px-2 text-left hover:bg-accent', selected && 'bg-soft text-foreground hover:bg-soft')}
                   onClick={() => openSettings(item.id)}
                 >
-                  <item.icon className={cn('size-4 shrink-0', selected ? 'text-foreground' : 'text-muted-foreground')} />
+                  <item.icon className="size-4 shrink-0" />
                   {item.label}
                 </button>
               )
@@ -212,10 +212,9 @@ function GeneralSection() {
       </SettingsGroup>
       <SettingsGroup title="快捷键">
         {SHORTCUTS.map(({ keys, action }) => (
-          <div key={action} className="flex h-10 items-center gap-4 px-4 text-base">
-            <span className="flex-1">{action}</span>
+          <SettingsRow key={action} label={action}>
             <KbdGroup>{shortcutKeys(keys).map((key) => <Kbd key={key}>{key}</Kbd>)}</KbdGroup>
-          </div>
+          </SettingsRow>
         ))}
       </SettingsGroup>
     </>
@@ -271,7 +270,7 @@ function AppearanceSection() {
 
   return (
     <>
-      <SettingsHeader title="外观" actions={<SavedHint saved={saved} />} />
+      <SettingsHeader title="外观" description="调整主题、强调色、字体和界面大小。" actions={<SavedHint saved={saved} />} />
       <SettingsGroup data-testid="appearance-settings">
         <SettingsRow label="主题" hint="浅色、深色或跟随系统。">
           <Select value={appearance.theme} onValueChange={(value) => { const theme = THEME_MODES.find((item) => item === value); if (theme) void change({ theme }) }}>
@@ -300,10 +299,10 @@ function AppearanceSection() {
               >
                 {/* primary-color-allow: 配色缩略图选中框 */}
                 <span className={cn('relative flex h-24 overflow-hidden rounded-lg border bg-(--thumb-side) dark:bg-sidebar', selected ? 'border-primary ring-1 ring-primary/30' : 'border-border group-hover:border-input')}>
-                  <span className="absolute top-3 left-3 h-1.5 w-1/2 rounded bg-(--thumb)" />
-                  <span className="absolute top-6 left-3 h-1 w-1/3 rounded bg-foreground/10" />
+                  <span className="absolute top-3 left-3 h-1.5 w-1/2 rounded-sm bg-(--thumb)" />
+                  <span className="absolute top-6 left-3 h-1 w-1/3 rounded-sm bg-foreground/10" />
                   <span className={cn('absolute top-2.5 right-2.5 flex size-4 items-center justify-center rounded-full border bg-background text-(--thumb)', selected ? 'border-(--thumb)' : 'border-input')}>{selected && <Check className="size-3" />}</span>
-                  <span className="absolute inset-x-3 top-10 bottom-0 space-y-2 rounded-t-md border border-border bg-background p-3"><span className="block h-1.5 w-3/4 rounded bg-foreground/20" /><span className="block h-1.5 w-1/2 rounded bg-foreground/10" /></span>
+                  <span className="absolute inset-x-3 top-10 bottom-0 space-y-2 rounded-t-md border border-border bg-background p-3"><span className="block h-1.5 w-3/4 rounded-sm bg-foreground/20" /><span className="block h-1.5 w-1/2 rounded-sm bg-foreground/10" /></span>
                 </span>
                 <span className={selected ? 'text-foreground' : 'text-muted-foreground'}>{item.label}</span>
               </button>
@@ -626,7 +625,7 @@ function StorageSection() {
       <WorkspaceGroup />
       <SettingsGroup title="已归档的任务">
         {archived.length === 0 ? (
-          <EmptyState icon={Archive} title="没有已归档的任务" description="在任务菜单里选择「归档」后，任务会出现在这里。" className="rounded-none bg-transparent py-8" />
+          <EmptyState icon={Archive} title="没有已归档的任务" description="在任务菜单里选择「归档」后，任务会出现在这里。" variant="plain" className="py-8" />
         ) : (
           archived.map((task) => <ArchivedRow key={task.sessionId} task={task} />)
         )}
@@ -754,7 +753,7 @@ function AboutSection() {
         </SettingsRow>
         {(status?.state === 'downloading' || status?.state === 'downloaded') && status.notes && (
           <div className="px-4 py-3" data-testid="update-notes">
-            <div className="mb-2 text-sm font-medium tabular-nums">{status.version} 的改动</div>
+            <div className="mb-2 text-sm font-bold tabular-nums">{status.version} 的改动</div>
             <ReleaseItems added={status.notes.added} fixed={status.notes.fixed} />
           </div>
         )}

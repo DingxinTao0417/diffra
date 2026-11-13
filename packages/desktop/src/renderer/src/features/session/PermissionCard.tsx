@@ -71,7 +71,7 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
             <ul className="space-y-1 text-xs text-muted-foreground">
               {question.options.map((option) => (
                 <li key={option.label} className="break-words">
-                  <span className="font-bold text-foreground/90">{option.label}</span>
+                  <span className="font-bold text-foreground">{option.label}</span>
                   {option.description ? `：${option.description}` : ''}
                 </li>
               ))}

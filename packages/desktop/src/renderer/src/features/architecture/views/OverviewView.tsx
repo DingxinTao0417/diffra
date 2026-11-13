@@ -28,7 +28,7 @@ export function OverviewView() {
         <section className="space-y-3 rounded-xl border bg-card p-5">
           <div className="flex items-center gap-2">
             <Sparkles className="size-4 text-muted-foreground" />
-            <h2 className="font-semibold">系统简介</h2>
+            <h2 className="font-bold">系统简介</h2>
             {interpretation?.generatedAt && (
               <span className="text-xs text-muted-foreground">
                 {interpretation.model.modelId} · {formatTime(interpretation.generatedAt)}
@@ -80,13 +80,13 @@ export function OverviewView() {
         </section>
 
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold">语言</h2>
+          <h2 className="text-sm font-bold">语言</h2>
           <LanguageBar languages={analysis.stats.languages} limit={8} />
         </section>
 
         <div className="grid gap-6 md:grid-cols-2">
           <section className="space-y-2">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+            <h2 className="flex items-center gap-1.5 text-sm font-bold">
               <LogIn className="size-4 text-muted-foreground" />
               入口
             </h2>
@@ -100,7 +100,7 @@ export function OverviewView() {
           </section>
           {interpretation && interpretation.readingOrder.length > 0 && (
             <section className="space-y-2">
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <h2 className="flex items-center gap-1.5 text-sm font-bold">
                 <BookOpen className="size-4 text-muted-foreground" />
                 建议从这里开始读
               </h2>
@@ -123,7 +123,7 @@ export function OverviewView() {
 
         {interpretation && interpretation.externalSystems.length > 0 && (
           <section className="space-y-2">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+            <h2 className="flex items-center gap-1.5 text-sm font-bold">
               <Globe className="size-4 text-muted-foreground" />
               外部系统
             </h2>
@@ -131,7 +131,7 @@ export function OverviewView() {
               {interpretation.externalSystems.map((system) => (
                 <button key={system.name} type="button" className="rounded-lg border p-3 text-left hover:bg-accent" onClick={() => go({ tab: 'dependencies', section: 'graph', scope: 'system', focus: `system:${system.name}` })}>
                   <div className="flex items-center gap-2">
-                    <span className="font-medium">{system.name}</span>
+                    <span className="font-bold">{system.name}</span>
                     <Badge variant="outline">{system.kind}</Badge>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{system.description}</p>
@@ -169,7 +169,7 @@ function AnalysisDetails() {
   const { skipped } = analysis.stats
   return (
     <section className="space-y-2 text-xs text-muted-foreground">
-      <h2 className="text-sm font-semibold text-foreground">分析说明</h2>
+      <h2 className="text-sm font-bold text-foreground">分析说明</h2>
       <p>
         深度解析了 {analysis.stats.parsedFiles} 个文件（TS/JS/Vue/Python/Go/Rust/Java），其余语言只统计文件和行数。这次重新解析了 {analysis.stats.reparsed} 个文件，其余用上次的结果。
         {analysis.commits.length > 0 ? ` 改动频率按最近 ${analysis.churnDays} 天的 ${analysis.commits.length} 次提交算。` : ' 不是 git 仓库，没有改动频率。'}
@@ -189,7 +189,7 @@ function AnalysisDetails() {
           </button>
           {showUnresolved &&
             analysis.unresolved.map((item) => (
-              <button key={`${item.file}:${item.line}:${item.specifier}`} type="button" className="flex w-full gap-2 rounded px-1 text-left font-mono hover:bg-accent" onClick={() => peek(analysis.files[item.file]!.path, item.line)}>
+              <button key={`${item.file}:${item.line}:${item.specifier}`} type="button" className="flex w-full gap-2 rounded-sm px-1 text-left font-mono hover:bg-accent" onClick={() => peek(analysis.files[item.file]!.path, item.line)}>
                 <span className="min-w-0 flex-1 truncate">
                   {analysis.files[item.file]!.path}:{item.line}
                 </span>

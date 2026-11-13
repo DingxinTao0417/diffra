@@ -46,7 +46,7 @@ function TooltipContent({
       >
         {children}
         {/* 箭头按 side=top 画好再由 Radix 整体旋转，露在外面的永远是右边和下边，暗色的描边只画这两条 */}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground dark:border-r dark:border-b dark:border-white/10 dark:bg-popover dark:fill-popover" />
+        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-foreground fill-foreground dark:border-r dark:border-b dark:border-white/10 dark:bg-popover dark:fill-popover" />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

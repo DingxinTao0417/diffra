@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from 'react'
-import { Copy } from 'lucide-react'
+import { Copy, MonitorSmartphone, ShieldCheck } from 'lucide-react'
 import type { RemoteAuditEntry, RemoteDeviceView, RemoteGrantView, RemoteProjectGrant, RemoteRelayStatus, RemoteView } from '../../../../shared/remote'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Segmented } from '@/components/ui/segmented'
 import { Switch } from '@/components/ui/switch'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Textarea } from '@/components/ui/textarea'
 import { Field } from '@/features/models/ProviderDialog'
 import { SettingsGroup, SettingsHeader, SettingsRow } from '@/features/settings/SettingsLayout'
@@ -81,7 +82,7 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
   return (
     <>
       <SettingsGroup title="已添加的设备" data-testid="peers">
-        {remote.peers.length === 0 && <div className="px-4 py-6 text-center text-sm text-muted-foreground">还没有添加设备。在对方电脑的「允许连接本机」里生成邀请串，再点下面的「添加设备」粘贴进来。</div>}
+        {remote.peers.length === 0 && <EmptyState icon={MonitorSmartphone} title="还没有添加设备" description="在对方电脑的「允许连接本机」里生成邀请串，再点下面的「添加设备」粘贴进来。" variant="plain" className="py-8" />}
         {remote.peers.map((peer) => (
           <SettingsRow
             key={peer.deviceId}
@@ -256,7 +257,7 @@ function AllowTab({ remote }: { remote: RemoteView }) {
         {remote.invite && <div className="px-4 pb-3 text-xs text-muted-foreground">{formatTime(remote.invite.expiresAt)} 前有效</div>}
       </SettingsGroup>
       <SettingsGroup title="已授权设备" data-testid="grants">
-        {remote.grants.length === 0 && <div className="px-4 py-6 text-center text-sm text-muted-foreground">还没有设备与本机配对。生成邀请串后，在另一台设备上添加本机。</div>}
+        {remote.grants.length === 0 && <EmptyState icon={ShieldCheck} title="还没有设备与本机配对" description="生成邀请串后，在另一台设备上添加本机。" variant="plain" className="py-8" />}
         {remote.grants.map((grant) => (
           <SettingsRow
             key={grant.deviceId}

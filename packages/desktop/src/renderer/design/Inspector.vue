@@ -105,10 +105,10 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
           <NumField label="旋转" :value="position.rotation.value" suffix="°" @commit="(v, p) => setPosition('rotation', v, p)" />
         </div>
         <div class="flex gap-0.5">
-          <button v-for="pos in (['min', 'center', 'max'] as const)" :key="`h-${pos}`" type="button" class="h-6 flex-1 rounded bg-muted hover:bg-accent" :title="`水平${{ min: '左', center: '居中', max: '右' }[pos]}对齐`" @click="position.align('horizontal', pos)">
+          <button v-for="pos in (['min', 'center', 'max'] as const)" :key="`h-${pos}`" type="button" class="h-6 flex-1 rounded-sm bg-muted hover:bg-accent" :title="`水平${{ min: '左', center: '居中', max: '右' }[pos]}对齐`" @click="position.align('horizontal', pos)">
             {{ { min: '左', center: '中', max: '右' }[pos] }}
           </button>
-          <button v-for="pos in (['min', 'center', 'max'] as const)" :key="`v-${pos}`" type="button" class="h-6 flex-1 rounded bg-muted hover:bg-accent" :title="`垂直${{ min: '顶', center: '居中', max: '底' }[pos]}对齐`" @click="position.align('vertical', pos)">
+          <button v-for="pos in (['min', 'center', 'max'] as const)" :key="`v-${pos}`" type="button" class="h-6 flex-1 rounded-sm bg-muted hover:bg-accent" :title="`垂直${{ min: '顶', center: '居中', max: '底' }[pos]}对齐`" @click="position.align('vertical', pos)">
             {{ { min: '顶', center: '中', max: '底' }[pos] }}
           </button>
         </div>
@@ -121,7 +121,7 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
             v-for="mode in LAYOUT_MODES"
             :key="mode.value"
             type="button"
-            class="h-6 flex-1 rounded"
+            class="h-6 flex-1 rounded-sm"
             :class="node.layoutMode === mode.value ? 'bg-background shadow-xs ring-1 ring-border' : 'text-muted-foreground hover:text-foreground'"
             :aria-pressed="node.layoutMode === mode.value"
             @click="editor.setLayoutMode(node.id, mode.value)"
@@ -140,7 +140,7 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
               v-for="(cell, index) in layout.alignGrid.value"
               :key="index"
               type="button"
-              class="size-6 rounded"
+              class="size-6 rounded-sm"
               :class="/* primary-color-allow: 对齐格选中态，标签属性之间放不了注释 */ node.primaryAxisAlign === cell.primary && node.counterAxisAlign === cell.counter ? 'bg-primary' : 'bg-muted hover:bg-accent'"
               :title="`${cell.primary} / ${cell.counter}`"
               @click="layout.setAlignment(cell.primary, cell.counter)"
@@ -167,7 +167,7 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
       <section class="space-y-1.5 border-t border-border px-3 py-2.5">
         <h3 class="flex items-center justify-between font-medium text-muted-foreground">
           外观
-          <button type="button" class="rounded px-1.5 hover:bg-accent hover:text-foreground" @click="appearance.toggleVisibility()">
+          <button type="button" class="rounded-sm px-1.5 hover:bg-accent hover:text-foreground" @click="appearance.toggleVisibility()">
             {{ appearance.visibilityState.value === 'hidden' ? '显示' : '隐藏' }}
           </button>
         </h3>
@@ -192,28 +192,28 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
       <section class="space-y-1.5 border-t border-border px-3 py-2.5">
         <h3 class="flex items-center justify-between font-medium text-muted-foreground">
           填充
-          <button type="button" class="rounded px-1.5 hover:bg-accent hover:text-foreground" title="添加填充" @click="fills.actions.add(fillControls.defaultFill)">＋</button>
+          <button type="button" class="rounded-sm px-1.5 hover:bg-accent hover:text-foreground" title="添加填充" @click="fills.actions.add(fillControls.defaultFill)">＋</button>
         </h3>
         <p v-if="fills.isMixed.value" class="text-muted-foreground">多个图层的填充不同</p>
         <div v-for="(fill, index) in fills.items.value" v-else :key="index" class="flex items-center gap-1.5">
           <template v-if="fill.type === 'SOLID'">
-            <input type="color" class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent" :aria-label="`填充 ${index + 1} 颜色`" :value="toHex(fill.color)" @change="setColor(fills, index, fill, ($event.target as HTMLInputElement).value)" />
+            <input type="color" class="size-7 shrink-0 cursor-pointer rounded-sm border border-border bg-transparent" :aria-label="`填充 ${index + 1} 颜色`" :value="toHex(fill.color)" @change="setColor(fills, index, fill, ($event.target as HTMLInputElement).value)" />
             <input class="h-7 min-w-0 flex-1 rounded-md bg-muted px-2 uppercase outline-none focus:ring-1 focus:ring-ring/60" :aria-label="`填充 ${index + 1} 色值`" :value="toHex(fill.color)" @change="setColor(fills, index, fill, ($event.target as HTMLInputElement).value)" />
           </template>
           <span v-else class="h-7 flex-1 rounded-md bg-muted px-2 leading-7 text-muted-foreground">{{ fill.type === 'IMAGE' ? '图片' : '渐变' }}</span>
-          <button type="button" class="rounded px-1 text-muted-foreground hover:text-foreground" :title="fill.visible ? '隐藏这层' : '显示这层'" @click="fills.actions.toggleVisibility(index)">{{ fill.visible ? '显' : '隐' }}</button>
-          <button type="button" class="rounded px-1 text-muted-foreground hover:text-foreground" title="删除这层" @click="fills.actions.remove(index)">×</button>
+          <button type="button" class="rounded-sm px-1 text-muted-foreground hover:text-foreground" :title="fill.visible ? '隐藏这层' : '显示这层'" @click="fills.actions.toggleVisibility(index)">{{ fill.visible ? '显' : '隐' }}</button>
+          <button type="button" class="rounded-sm px-1 text-muted-foreground hover:text-foreground" title="删除这层" @click="fills.actions.remove(index)">×</button>
         </div>
       </section>
 
       <section class="space-y-1.5 border-t border-border px-3 py-2.5">
         <h3 class="flex items-center justify-between font-medium text-muted-foreground">
           描边
-          <button type="button" class="rounded px-1.5 hover:bg-accent hover:text-foreground" title="添加描边" @click="strokes.actions.add(strokeControls.defaultStroke)">＋</button>
+          <button type="button" class="rounded-sm px-1.5 hover:bg-accent hover:text-foreground" title="添加描边" @click="strokes.actions.add(strokeControls.defaultStroke)">＋</button>
         </h3>
         <p v-if="strokes.isMixed.value" class="text-muted-foreground">多个图层的描边不同</p>
         <div v-for="(stroke, index) in strokes.items.value" v-else :key="index" class="flex items-center gap-1.5">
-          <input type="color" class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent" :aria-label="`描边 ${index + 1} 颜色`" :value="toHex(stroke.color)" @change="setColor(strokes, index, stroke, ($event.target as HTMLInputElement).value)" />
+          <input type="color" class="size-7 shrink-0 cursor-pointer rounded-sm border border-border bg-transparent" :aria-label="`描边 ${index + 1} 颜色`" :value="toHex(stroke.color)" @change="setColor(strokes, index, stroke, ($event.target as HTMLInputElement).value)" />
           <div class="w-20 shrink-0">
             <NumField label="粗" :min="0" :value="stroke.weight" @commit="(v) => strokes.actions.patch(index, { weight: v })" />
           </div>
@@ -222,7 +222,7 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
             <option value="CENTER">居中</option>
             <option value="OUTSIDE">外侧</option>
           </select>
-          <button type="button" class="rounded px-1 text-muted-foreground hover:text-foreground" title="删除描边" @click="strokes.actions.remove(index)">×</button>
+          <button type="button" class="rounded-sm px-1 text-muted-foreground hover:text-foreground" title="删除描边" @click="strokes.actions.remove(index)">×</button>
         </div>
       </section>
 
@@ -256,15 +256,15 @@ const letterSpacing = computed(() => node.value?.letterSpacing?.value ?? 0)
             v-for="align in ALIGNS"
             :key="align.value"
             type="button"
-            class="h-6 flex-1 rounded"
+            class="h-6 flex-1 rounded-sm"
             :class="node.textAlignHorizontal === align.value ? 'bg-soft text-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'"
             @click="typography.setAlign(align.value)"
           >
             {{ align.label }}
           </button>
-          <button type="button" class="h-6 flex-1 rounded bg-muted font-bold hover:bg-accent" title="粗体" @click="typography.toggleBold()">B</button>
-          <button type="button" class="h-6 flex-1 rounded bg-muted italic hover:bg-accent" title="斜体" @click="typography.toggleItalic()">I</button>
-          <button type="button" class="h-6 flex-1 rounded bg-muted underline hover:bg-accent" title="下划线" @click="typography.toggleDecoration('UNDERLINE')">U</button>
+          <button type="button" class="h-6 flex-1 rounded-sm bg-muted font-bold hover:bg-accent" title="粗体" @click="typography.toggleBold()">B</button>
+          <button type="button" class="h-6 flex-1 rounded-sm bg-muted italic hover:bg-accent" title="斜体" @click="typography.toggleItalic()">I</button>
+          <button type="button" class="h-6 flex-1 rounded-sm bg-muted underline hover:bg-accent" title="下划线" @click="typography.toggleDecoration('UNDERLINE')">U</button>
         </div>
       </section>
     </template>

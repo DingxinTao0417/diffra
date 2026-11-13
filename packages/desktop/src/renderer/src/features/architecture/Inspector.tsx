@@ -51,7 +51,7 @@ export function Inspector({ focus, scope = false, onCollapse }: { focus: string;
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      <h3 className="text-sm text-muted-foreground">{title}</h3>
       {children}
     </section>
   )
@@ -116,7 +116,7 @@ function NodeDetails({ id }: { id: string }) {
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           {file && <FileCode2 className="size-4 shrink-0 text-muted-foreground" />}
-          <h2 className="min-w-0 truncate text-base font-semibold" title={path}>
+          <h2 className="min-w-0 truncate text-base font-bold" title={path}>
             {title}
           </h2>
           {pkg && <Badge variant="secondary">{pkg.ecosystem === 'none' ? '根目录' : pkg.ecosystem}</Badge>}
@@ -124,7 +124,7 @@ function NodeDetails({ id }: { id: string }) {
         </div>
         {path && <div className="font-mono text-xs break-all text-muted-foreground">{path}</div>}
         {owner && (
-          <button type="button" className="block text-left text-xs font-medium hover:underline" onClick={() => go({ tab: 'diagram', diagram: 'application', focus: blockFocus('application', owner.id) })}>
+          <button type="button" className="block text-left text-xs hover:underline" onClick={() => go({ tab: 'diagram', diagram: 'application', focus: blockFocus('application', owner.id) })}>
             应用架构图里的「{owner.name}」
           </button>
         )}
@@ -195,7 +195,7 @@ function NodeDetails({ id }: { id: string }) {
                 ))}
               </div>
             )}
-            <div className="text-[11px] text-muted-foreground">
+            <div className="text-xs text-muted-foreground">
               {note.model.modelId} · {formatTime(note.generatedAt)}
             </div>
           </div>
@@ -212,7 +212,7 @@ function NodeDetails({ id }: { id: string }) {
         <Section title={`符号（${file.symbols.length}）`}>
           <div className="max-h-56 space-y-0.5 overflow-y-auto">
             {file.symbols.map((symbol) => (
-              <button key={`${symbol.parent}.${symbol.name}.${symbol.line}`} type="button" className="flex w-full items-center gap-2 rounded px-1 text-left text-xs hover:bg-accent" onClick={() => peek(file.path, symbol.line)}>
+              <button key={`${symbol.parent}.${symbol.name}.${symbol.line}`} type="button" className="flex w-full items-center gap-2 rounded-sm px-1 text-left text-xs hover:bg-accent" onClick={() => peek(file.path, symbol.line)}>
                 <span className="w-12 shrink-0 text-muted-foreground">{symbol.kind}</span>
                 <span className={symbol.exported ? 'min-w-0 truncate font-mono' : 'min-w-0 truncate font-mono text-muted-foreground'}>
                   {symbol.parent ? `${symbol.parent}.` : ''}
@@ -245,7 +245,7 @@ function NodeDetails({ id }: { id: string }) {
       {cycles.length > 0 && (
         <Section title="循环依赖">
           {cycles.slice(0, 4).map((cycle, at) => (
-            <div key={at} className="rounded-md border border-warning/40 bg-warning-soft p-2 text-xs">
+            <div key={at} className="rounded-md border border-warning/30 bg-warning-soft p-2 text-xs">
               {cycle.slice(0, 6).map((file) => analysis.files[file]!.path.split('/').pop()).join(' → ')}
               {cycle.length > 6 ? ` …共 ${cycle.length} 个文件` : ' → …'}
             </div>
@@ -256,7 +256,7 @@ function NodeDetails({ id }: { id: string }) {
       {violations.length > 0 && (
         <Section title="违反目标架构">
           {violations.slice(0, 6).map((violation) => (
-            <button key={`${violation.ruleId}:${violation.from}:${violation.to}`} type="button" className="block w-full rounded-md border border-destructive/40 p-2 text-left text-xs hover:bg-accent" onClick={() => go({ tab: 'target', focus: null })}>
+            <button key={`${violation.ruleId}:${violation.from}:${violation.to}`} type="button" className="block w-full rounded-md border border-destructive/30 p-2 text-left text-xs hover:bg-accent" onClick={() => go({ tab: 'target', focus: null })}>
               {violation.message}
               <span className="text-muted-foreground"> · {violation.edges.length} 处</span>
             </button>
@@ -276,7 +276,7 @@ function NodeDetails({ id }: { id: string }) {
           </div>
         </Section>
       )}
-      {route.tab === 'dependencies' && selection.kind === 'file' && <div className="text-[11px] text-muted-foreground">双击节点看文件里的符号</div>}
+      {route.tab === 'dependencies' && selection.kind === 'file' && <div className="text-xs text-muted-foreground">双击节点看文件里的符号</div>}
     </>
   )
 }
@@ -285,7 +285,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="text-sm font-semibold tabular-nums">{value}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   )
 }
@@ -296,7 +296,7 @@ function DirList({ title, items, onPick, empty }: { title: string; items: Array<
     <Section title={`${title}（${items.length} 个目录）`}>
       {items.length === 0 && <div className="text-xs text-muted-foreground">{empty}</div>}
       {(all ? items : items.slice(0, MAX_LIST)).map((item) => (
-        <button key={item.dir} type="button" className="flex w-full items-center gap-2 rounded px-1 text-left text-xs hover:bg-accent" onClick={() => onPick(item.dir)}>
+        <button key={item.dir} type="button" className="flex w-full items-center gap-2 rounded-sm px-1 text-left text-xs hover:bg-accent" onClick={() => onPick(item.dir)}>
           <span className="min-w-0 flex-1 truncate font-mono" title={item.dir}>
             {item.dir || '（根目录）'}
           </span>
@@ -333,7 +333,7 @@ function EdgeDetails({ from, to }: { from: string; to: string }) {
   return (
     <>
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">依赖</h2>
+        <h2 className="text-base font-bold">依赖</h2>
         <div className="flex flex-wrap items-center gap-1 font-mono text-xs">
           <button type="button" className="hover:underline" onClick={() => go({ focus: from }, false)}>
             {label(from)}
@@ -357,7 +357,7 @@ function EdgeDetails({ from, to }: { from: string; to: string }) {
                 {source.path.split('/').pop()} <span className="text-muted-foreground">→</span> {analysis.files[edge.to]!.path.split('/').pop()}
               </div>
               {edge.imports.map((item) => (
-                <button key={`${item.line}:${item.specifier}`} type="button" className="flex w-full gap-2 rounded px-1 text-left font-mono hover:bg-accent" onClick={() => peek(source.path, item.line)}>
+                <button key={`${item.line}:${item.specifier}`} type="button" className="flex w-full gap-2 rounded-sm px-1 text-left font-mono hover:bg-accent" onClick={() => peek(source.path, item.line)}>
                   <span className="w-8 shrink-0 text-right text-muted-foreground">{item.line}</span>
                   <span className="min-w-0 truncate">
                     {item.kind === 'type' ? 'type ' : ''}
@@ -383,7 +383,7 @@ function ExternalDetails({ name, ecosystem }: { name: string; ecosystem: string 
   return (
     <>
       <div className="space-y-1">
-        <h2 className="font-mono text-base font-semibold break-all">{name}</h2>
+        <h2 className="font-mono text-base font-bold break-all">{name}</h2>
         <div className="flex flex-wrap gap-1">
           <Badge variant="secondary">{ecosystem}</Badge>
           {external.builtin && <Badge variant="outline">语言自带</Badge>}
@@ -393,7 +393,7 @@ function ExternalDetails({ name, ecosystem }: { name: string; ecosystem: string 
       </div>
       <Section title={`使用的地方（${external.count}）`}>
         {external.uses.map((use) => (
-          <button key={`${use.file}:${use.line}`} type="button" className="flex w-full gap-2 rounded px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(analysis.files[use.file]!.path, use.line)}>
+          <button key={`${use.file}:${use.line}`} type="button" className="flex w-full gap-2 rounded-sm px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(analysis.files[use.file]!.path, use.line)}>
             <span className="min-w-0 flex-1 truncate">{analysis.files[use.file]!.path}</span>
             <span className="text-muted-foreground">{use.line}</span>
           </button>
@@ -411,7 +411,7 @@ function SystemDetails({ name }: { name: string }) {
   return (
     <>
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">{system.name}</h2>
+        <h2 className="text-base font-bold">{system.name}</h2>
         <Badge variant="secondary">{system.kind}</Badge>
         <p className="text-xs text-muted-foreground">{system.description}</p>
       </div>
@@ -429,7 +429,7 @@ function SystemDetails({ name }: { name: string }) {
       {system.anchors.length > 0 && (
         <Section title="代码位置">
           {system.anchors.map((anchor) => (
-            <button key={`${anchor.path}:${anchor.line}`} type="button" className="flex w-full gap-2 rounded px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(anchor.path, anchor.line)}>
+            <button key={`${anchor.path}:${anchor.line}`} type="button" className="flex w-full gap-2 rounded-sm px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(anchor.path, anchor.line)}>
               <span className="min-w-0 flex-1 truncate">{anchor.symbol ?? anchor.path}</span>
               <span className="text-muted-foreground">
                 {anchor.path.split('/').pop()}:{anchor.line}
@@ -482,7 +482,7 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
   return (
     <>
       <div className="space-y-1">
-        <h2 className="text-base font-semibold">{block.name}</h2>
+        <h2 className="text-base font-bold">{block.name}</h2>
         <div className="text-xs text-muted-foreground">
           {DIAGRAM_LABELS[kind]} · {place.layer ? `「${place.layer.name}」层${place.group?.name ? ` · ${place.group.name}` : ''}` : place.side ? `右侧「${place.side.name}」` : ''}
           {block.pinned && ' · 手改过'}
@@ -550,7 +550,7 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
                     key={path}
                     type="button"
                     disabled={!file && !dir}
-                    className="block w-full truncate rounded px-1 text-left font-mono text-xs hover:bg-accent disabled:hover:bg-transparent"
+                    className="block w-full truncate rounded-sm px-1 text-left font-mono text-xs hover:bg-accent disabled:hover:bg-transparent"
                     onClick={() => (file ? peek(path, 1) : go({ tab: 'dependencies', section: 'graph', scope: `dir:${index.collapse(path)}`, focus: null }))}
                   >
                     {path}
@@ -580,14 +580,14 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
             <Section title={`用到的地方（${packageUses.reduce((sum, item) => sum + item.count, 0)}）`}>
               {packageUses.map(({ name: packageName, uses: places, count }) => (
                 <div key={packageName} className="space-y-0.5">
-                  {packageUses.length > 1 && <div className="font-mono text-[11px] text-muted-foreground">{packageName} · {count}</div>}
+                  {packageUses.length > 1 && <div className="font-mono text-xs text-muted-foreground">{packageName} · {count}</div>}
                   {places.map((use) => (
-                    <button key={`${use.file}:${use.line}`} type="button" className="flex w-full gap-2 rounded px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(analysis.files[use.file]!.path, use.line)}>
+                    <button key={`${use.file}:${use.line}`} type="button" className="flex w-full gap-2 rounded-sm px-1 text-left font-mono text-xs hover:bg-accent" onClick={() => peek(analysis.files[use.file]!.path, use.line)}>
                       <span className="min-w-0 flex-1 truncate">{analysis.files[use.file]!.path}</span>
                       <span className="text-muted-foreground">{use.line}</span>
                     </button>
                   ))}
-                  {count > places.length && <div className="text-[11px] text-muted-foreground">只记了前 {places.length} 处</div>}
+                  {count > places.length && <div className="text-xs text-muted-foreground">只记了前 {places.length} 处</div>}
                 </div>
               ))}
             </Section>
@@ -596,7 +596,7 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
             <>
               <Section title={`依赖的方块（${uses.length}）`}>
                 {uses.map((item) => (
-                  <button key={item.id} type="button" className="flex w-full justify-between rounded px-1 text-left text-xs hover:bg-accent" onClick={() => go({ focus: `edge:block:${kind}:${id}>block:${kind}:${item.id}` }, false)}>
+                  <button key={item.id} type="button" className="flex w-full justify-between rounded-sm px-1 text-left text-xs hover:bg-accent" onClick={() => go({ focus: `edge:block:${kind}:${id}>block:${kind}:${item.id}` }, false)}>
                     <span>{name(item.id)}</span>
                     <span className="text-muted-foreground tabular-nums">{item.count}</span>
                   </button>
@@ -604,7 +604,7 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
               </Section>
               <Section title={`被哪些方块依赖（${usedBy.length}）`}>
                 {usedBy.map((item) => (
-                  <button key={item.id} type="button" className="flex w-full justify-between rounded px-1 text-left text-xs hover:bg-accent" onClick={() => go({ focus: `edge:block:${kind}:${item.id}>block:${kind}:${id}` }, false)}>
+                  <button key={item.id} type="button" className="flex w-full justify-between rounded-sm px-1 text-left text-xs hover:bg-accent" onClick={() => go({ focus: `edge:block:${kind}:${item.id}>block:${kind}:${id}` }, false)}>
                     <span>{name(item.id)}</span>
                     <span className="text-muted-foreground tabular-nums">{item.count}</span>
                   </button>
@@ -615,7 +615,7 @@ function BlockDetails({ diagram: kind, id }: { diagram: keyof typeof DIAGRAM_LAB
           {violations.length > 0 && (
             <Section title="违反目标架构">
               {violations.slice(0, 6).map((violation) => (
-                <div key={`${violation.ruleId}:${violation.from}:${violation.to}`} className="rounded-md border border-destructive/40 p-2 text-xs">
+                <div key={`${violation.ruleId}:${violation.from}:${violation.to}`} className="rounded-md border border-destructive/30 p-2 text-xs">
                   {violation.message}
                   <span className="text-muted-foreground"> · {violation.edges.length} 处</span>
                 </div>

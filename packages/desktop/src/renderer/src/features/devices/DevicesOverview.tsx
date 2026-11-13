@@ -115,7 +115,7 @@ export function DevicesButton() {
           data-state-level={control > 0 ? 'controlling' : online > 0 ? 'online' : 'idle'}
           meta={
             online > 0 && (
-              <span className={cn('relative shrink-0 rounded-full px-1.5 text-[11px] leading-4.5 tabular-nums', control > 0 ? 'bg-warning-soft text-warning' : 'bg-muted text-muted-foreground')} data-testid="devices-badge">
+              <span className={cn('relative shrink-0 rounded-full px-1.5 text-xs leading-4.5 tabular-nums', control > 0 ? 'bg-warning-soft text-warning' : 'bg-muted text-muted-foreground')} data-testid="devices-badge">
                 {online}
                 {pulse && <span aria-hidden className="absolute inset-0 animate-ping rounded-full ring-1 ring-warning" />}
               </span>
@@ -202,7 +202,7 @@ function DevicesPanel({ entries, recent }: { entries: DeviceEntry[]; recent(entr
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-sm">{entry.name}</span>
             {level && (
-              <span className={cn('shrink-0 rounded-md px-1.5 text-[10px] leading-4', canControl(level) ? 'bg-warning-soft text-warning' : 'bg-muted text-muted-foreground')} data-testid="device-level">
+              <span className={cn('shrink-0 rounded-md px-1.5 text-xs leading-4', canControl(level) ? 'bg-warning-soft text-warning' : 'bg-muted text-muted-foreground')} data-testid="device-level">
                 {REMOTE_LEVEL_LABELS[level]}
               </span>
             )}
@@ -211,7 +211,7 @@ function DevicesPanel({ entries, recent }: { entries: DeviceEntry[]; recent(entr
           {(watching.length > 0 || terminals > 0) && (
             <div className="mt-1 flex flex-wrap gap-1">
               {watching.length > 0 && (
-                <span className="flex max-w-full min-w-0 items-center gap-1 rounded-md bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground" data-testid="device-watching">
+                <span className="flex max-w-full min-w-0 items-center gap-1 rounded-md bg-muted px-1.5 text-xs leading-5 text-muted-foreground" data-testid="device-watching">
                   <Eye className="size-3 shrink-0" />
                   <span className="truncate">
                     正在看「{watching[0]}」{watching.length > 1 && ` 等 ${watching.length} 个`}
@@ -219,7 +219,7 @@ function DevicesPanel({ entries, recent }: { entries: DeviceEntry[]; recent(entr
                 </span>
               )}
               {terminals > 0 && (
-                <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 text-[11px] leading-5 text-muted-foreground">
+                <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 text-xs leading-5 text-muted-foreground">
                   <SquareTerminal className="size-3" />
                   {terminals} 个终端
                 </span>
@@ -248,9 +248,9 @@ function DevicesPanel({ entries, recent }: { entries: DeviceEntry[]; recent(entr
       {relayProblem && <p className="px-3 pb-1 text-xs text-warning">{relayProblem}</p>}
       <div className="min-h-0 overflow-y-auto pb-1.5">
         {entries.length === 0 && <p className="px-3 py-3 text-xs text-muted-foreground">还没有配对的设备。在「连接设置」里添加另一台电脑，或者允许别的电脑连接本机。</p>}
-        {incoming.length > 0 && <p className="px-3 pt-1.5 text-[11px] text-muted-foreground">连着本机 · {incoming.length}</p>}
+        {incoming.length > 0 && <p className="px-3 pt-1.5 text-xs text-muted-foreground">连着本机 · {incoming.length}</p>}
         {incoming.map(row)}
-        {outgoing.length > 0 && <p className="px-3 pt-1.5 text-[11px] text-muted-foreground">本机连接的 · {outgoing.length}</p>}
+        {outgoing.length > 0 && <p className="px-3 pt-1.5 text-xs text-muted-foreground">本机连接的 · {outgoing.length}</p>}
         {outgoing.map(row)}
       </div>
       <AlertDialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>

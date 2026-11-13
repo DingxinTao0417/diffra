@@ -16,7 +16,7 @@ export const priorityRank = (priority: TodoPriority | null | undefined) => prior
 
 export function PriorityBadge({ priority, className }: { priority: TodoPriority; className?: string }) {
   return (
-    <span className={cn('inline-flex shrink-0 items-center rounded px-1 text-[11px] leading-4 font-bold tabular-nums', PRIORITY_STYLES[priority], className)} data-testid="todo-priority">
+    <span className={cn('inline-flex shrink-0 items-center rounded-sm px-1 text-xs leading-4 font-bold tabular-nums', PRIORITY_STYLES[priority], className)} data-testid="todo-priority">
       {priorityLabel(priority)}
     </span>
   )

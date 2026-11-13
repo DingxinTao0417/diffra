@@ -71,7 +71,7 @@ export function ProposalDialog({ onClose }: { onClose(): void }) {
               if (items.length === 0) return null
               return (
                 <section key={area} className="space-y-1.5">
-                  <h3 className="text-sm font-semibold">{AREA_LABELS[area]}</h3>
+                  <h3 className="text-sm font-bold">{AREA_LABELS[area]}</h3>
                   {items.map((change) => (
                     <label key={change.key} className="flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent">
                       <Checkbox
@@ -86,9 +86,9 @@ export function ProposalDialog({ onClose }: { onClose(): void }) {
                           })
                         }
                       />
-                      <span className={cn('shrink-0 rounded px-1 text-xs', change.kind === 'removed' ? 'bg-destructive-soft' : change.kind === 'added' ? 'bg-muted' : 'bg-warning-soft')}>{KIND_LABELS[change.kind]}</span>
+                      <span className={cn('shrink-0 rounded-sm px-1 text-xs', change.kind === 'removed' ? 'bg-destructive-soft' : change.kind === 'added' ? 'bg-muted' : 'bg-warning-soft')}>{KIND_LABELS[change.kind]}</span>
                       <span className="min-w-0">
-                        <span className="font-medium">{change.title}</span>
+                        <span className="font-bold">{change.title}</span>
                         {change.detail && <span className="block text-xs text-muted-foreground">{change.detail}</span>}
                       </span>
                     </label>

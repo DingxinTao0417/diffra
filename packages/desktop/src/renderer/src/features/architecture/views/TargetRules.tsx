@@ -28,7 +28,7 @@ export function TargetRules() {
           任务改完时检查新增的 import，违反规则就打回重改（代码里写「diffra-allow architecture: 理由」可以放行一处）
         </label>
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">分层</h3>
+          <h3 className="text-sm font-bold">分层</h3>
           <label className="flex items-center gap-2">
             <Checkbox checked={Boolean(layersRule)} onCheckedChange={(checked) => setRules(checked ? [...current.rules, { id: newId('rule'), kind: 'layers', strict: false }] : current.rules.filter((rule) => rule.kind !== 'layers'))} />
             方块只能依赖同层或下层的方块
@@ -46,7 +46,7 @@ export function TargetRules() {
         </section>
         {(['forbid', 'allow'] as const).map((kind) => (
           <section key={kind} className="space-y-2">
-            <h3 className="text-sm font-semibold">{kind === 'forbid' ? '禁止的依赖' : '分层规则的例外（允许的依赖）'}</h3>
+            <h3 className="text-sm font-bold">{kind === 'forbid' ? '禁止的依赖' : '分层规则的例外（允许的依赖）'}</h3>
             {current.rules.map((rule) =>
               rule.kind === kind ? (
                 <div key={rule.id} className="flex items-center gap-2">
@@ -73,7 +73,7 @@ export function TargetRules() {
           </section>
         ))}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">外部包只许这些方块使用</h3>
+          <h3 className="text-sm font-bold">外部包只许这些方块使用</h3>
           {current.rules.map((rule) =>
             rule.kind === 'external' ? (
               <div key={rule.id} className="flex flex-wrap items-center gap-2">

@@ -132,7 +132,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
     <div className="flex h-full min-w-0 flex-col">
       <header className="app-drag flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
         {remote?.badge}
-        <span className="min-w-0 truncate" data-testid="task-title">
+        <span className="min-w-0 truncate font-bold" data-testid="task-title">
           {task.title}
         </span>
         {!remote && (
@@ -153,7 +153,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
         <StatusLabel status={status} />
         <div className="flex-1" />
         {/* 右侧面板互斥，做成一组，设计面板只有设计任务有；终端也在右侧栏（第 533 步），远程任务只有「完全控制」时有。远程任务没有浏览器和设计 */}
-        <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5">
           {PANEL_BUTTONS.filter(
             (item) => (item.panel !== 'design' || task.design) && !(remote && (item.panel === 'browser' || item.panel === 'design')) && !(item.panel === 'terminal' && remote && !remote.terminal),
           ).map((item) => (
@@ -367,7 +367,7 @@ function PanelButton({ label, shortcut, active, onClick, children }: { label: st
           aria-label={label}
           aria-pressed={active}
           onClick={onClick}
-          className={cn('rounded-sm', active ? 'bg-background text-foreground shadow-xs ring-1 ring-border hover:bg-background dark:bg-accent dark:hover:bg-accent' : 'text-muted-foreground hover:bg-transparent dark:hover:bg-transparent')}
+          className={cn('rounded-md', active ? 'bg-background text-foreground shadow-sm hover:bg-background dark:bg-accent dark:inset-ring dark:inset-ring-input dark:hover:bg-accent' : 'text-muted-foreground hover:bg-transparent dark:hover:bg-transparent')}
         >
           {children}
         </Button>

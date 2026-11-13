@@ -223,7 +223,8 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
                     </Tooltip>
                   </span>
                 }
-                className="bg-transparent py-0"
+                variant="plain"
+                className="py-0"
               >
                 <Button variant="outline" size="sm" onClick={() => void openExample()}>
                   打开 localhost:5173
@@ -242,7 +243,7 @@ function ExternalBody({ sessionId, name, connected, hasPage, frame }: { sessionI
   if (!connected) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <EmptyState icon={Globe} title={`${name} 里的 Diffra 扩展没有连上`} description={`在 ${name} 里装好并启用 Diffra 浏览器扩展，连上后智能体就能用你的 ${name}。`} className="bg-transparent py-0">
+        <EmptyState icon={Globe} title={`${name} 里的 Diffra 扩展没有连上`} description={`在 ${name} 里装好并启用 Diffra 浏览器扩展，连上后智能体就能用你的 ${name}。`} variant="plain" className="py-0">
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => openSettings('browser')}>
               去设置
@@ -262,7 +263,8 @@ function ExternalBody({ sessionId, name, connected, hasPage, frame }: { sessionI
           icon={Globe}
           title={hasPage ? '正在取画面…' : `智能体会在你的 ${name} 里操作`}
           description={hasPage ? undefined : `用到浏览器时，它会在 ${name} 里开一个「Diffra · 任务名」分组的标签页，这里显示那个标签页的画面。也可以在上面输入网址。`}
-          className="bg-transparent py-0"
+          variant="plain"
+          className="py-0"
         />
       </div>
     )

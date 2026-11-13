@@ -346,7 +346,7 @@ onUnmounted(() => {
           <div
             v-for="box in claimBoxes"
             :key="box.key"
-            class="absolute rounded-[3px] border border-dashed opacity-70"
+            class="absolute rounded-xs border border-dashed opacity-70"
             :style="{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px`, height: `${box.height}px`, borderColor: box.color }"
             data-testid="design-agent-claim"
             :data-agent="box.name"
@@ -354,7 +354,7 @@ onUnmounted(() => {
           <div
             v-for="box in flashBoxes"
             :key="box.key"
-            class="design-flash absolute rounded-[3px]"
+            class="design-flash absolute rounded-xs"
             :style="{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px`, height: `${box.height}px`, backgroundColor: box.color }"
             data-testid="design-agent-flash"
           />
@@ -362,7 +362,7 @@ onUnmounted(() => {
             <button
               v-if="cursor.edge"
               type="button"
-              class="pointer-events-auto absolute rounded-full px-2 text-[11px] leading-5 font-medium whitespace-nowrap text-white shadow-sm"
+              class="pointer-events-auto absolute rounded-full px-2 text-xs leading-5 font-medium whitespace-nowrap text-white shadow-sm"
               :style="{ left: `${cursor.edge.left}px`, top: `${cursor.edge.top}px`, backgroundColor: cursor.agent.color }"
               :title="`移到 ${cursor.agent.name} 正在动的图层`"
               data-testid="design-agent-edge"
@@ -373,7 +373,7 @@ onUnmounted(() => {
             </button>
             <template v-else>
               <div
-                class="absolute rounded-[3px] border-[1.5px] transition-[left,top,width,height] duration-[180ms] ease-out motion-reduce:transition-none"
+                class="absolute rounded-xs border-[1.5px] transition-[left,top,width,height] duration-[180ms] ease-out motion-reduce:transition-none"
                 :class="cursor.done && 'design-done'"
                 :style="{ left: `${cursor.x}px`, top: `${cursor.y}px`, width: `${cursor.width}px`, height: `${cursor.height}px`, borderColor: cursor.agent.color }"
               />
@@ -391,7 +391,7 @@ onUnmounted(() => {
                 </svg>
                 <button
                   type="button"
-                  class="pointer-events-auto mt-3 -ml-1 rounded-full px-1.5 text-[11px] leading-[18px] font-medium whitespace-nowrap text-white shadow-sm"
+                  class="pointer-events-auto mt-3 -ml-1 rounded-full px-1.5 text-xs leading-[18px] font-medium whitespace-nowrap text-white shadow-sm"
                   :style="{ backgroundColor: cursor.agent.color }"
                   :title="`移到 ${cursor.agent.name} 正在动的图层`"
                   @click="focusNode(cursor.nodeId)"
@@ -422,7 +422,7 @@ onUnmounted(() => {
           :key="item.id"
           type="button"
           role="menuitem"
-          class="flex w-full rounded px-2 py-1 text-left hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
+          class="flex w-full rounded-sm px-2 py-1 text-left hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
           :disabled="!enabled(item.id)"
           @click="runMenu(item.id)"
         >

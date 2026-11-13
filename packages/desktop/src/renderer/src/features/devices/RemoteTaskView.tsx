@@ -215,7 +215,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
       <div className="flex h-full min-h-0 flex-col" data-testid="remote-task">
         <header className="app-drag flex h-12 shrink-0 items-center gap-2 border-b border-border/70 pr-3 pl-5">
           {badge}
-          <span className="min-w-0 truncate" data-testid="task-title">
+          <span className="min-w-0 truncate font-bold" data-testid="task-title">
             {title}
           </span>
         </header>

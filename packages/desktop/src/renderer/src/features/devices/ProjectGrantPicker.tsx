@@ -1,6 +1,7 @@
-import { TriangleAlert } from 'lucide-react'
+import { FolderOpen, TriangleAlert } from 'lucide-react'
 import { canControl, REMOTE_LEVEL_LABELS, REMOTE_LEVELS, type RemoteLevel, type RemoteProjectGrant } from '../../../../shared/remote'
 import { Checkbox } from '@/components/ui/checkbox'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Segmented } from '@/components/ui/segmented'
 import { folderName } from '@/lib/format'
 import { useAppState } from '@/state/store'
@@ -26,7 +27,7 @@ export function ProjectGrantPicker({ value, onChange }: { value: RemoteProjectGr
   return (
     <div className="space-y-3">
       {projects.length === 0 ? (
-        <p className="rounded-lg border border-dashed px-3 py-4 text-center text-sm text-muted-foreground">还没有项目。先在首页选一个项目文件夹，再来授权。</p>
+        <EmptyState icon={FolderOpen} title="还没有项目" description="先在首页选一个项目文件夹，再来授权。" className="py-6" />
       ) : (
         <ul className="max-h-64 divide-y overflow-y-auto rounded-lg border" aria-label="开放的项目">
           {projects.map((path) => {

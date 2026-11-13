@@ -275,7 +275,7 @@ export function LanguageBadge({ path }: { path: string }) {
   return (
     <span
       aria-hidden="true"
-      className="flex size-3.5 shrink-0 items-center justify-center self-center rounded-[3px] font-sans text-[7px] leading-none font-bold tracking-tight"
+      className="flex size-3.5 shrink-0 items-center justify-center self-center rounded-xs font-sans text-[7px] leading-none font-bold tracking-tight"
       style={{ backgroundColor: language.color, color: language.dark ? '#1f1f1f' : '#fff' }}
     >
       {language.label}

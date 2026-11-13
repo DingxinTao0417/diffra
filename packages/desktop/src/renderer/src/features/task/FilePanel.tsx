@@ -249,7 +249,7 @@ export function FilePanel({ sessionId, changeVersion }: { sessionId: string; cha
         <span className="flex min-w-0 items-center gap-1 text-sm" title={preview.path}>
           <LanguageBadge path={preview.path} />
           {segments.map((segment, index) => (
-            <span key={index} className={cn('flex min-w-0 items-center gap-1', index < segments.length - 1 ? 'shrink text-muted-foreground' : 'shrink-0 font-medium')}>
+            <span key={index} className={cn('flex min-w-0 items-center gap-1', index < segments.length - 1 ? 'shrink text-muted-foreground' : 'shrink-0')}>
               <span className="truncate">{segment}</span>
               {index < segments.length - 1 && <ChevronRight className="size-3 shrink-0" />}
             </span>

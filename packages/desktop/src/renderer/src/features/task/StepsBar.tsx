@@ -30,7 +30,7 @@ export function StepsBar({ turns, running }: { turns: Turn[]; running: boolean }
         <span className="shrink-0 text-muted-foreground">
           步骤 {done}/{steps.length}
         </span>
-        {!open && <span className={cn('min-w-0 flex-1 truncate', finished ? 'text-muted-foreground' : 'text-foreground/90')}>{summary}</span>}
+        {!open && <span className={cn('min-w-0 flex-1 truncate', finished ? 'text-muted-foreground' : 'text-foreground')}>{summary}</span>}
         {open && <span className="flex-1" />}
         {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />}
       </button>

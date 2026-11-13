@@ -93,7 +93,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
         </Button>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate font-semibold" data-testid="architecture-title">
+            <h1 className="truncate font-bold" data-testid="architecture-title">
               {project?.name ?? '项目'}
             </h1>
             {stale && <Badge variant="warning">代码已变，建议重新分析</Badge>}
@@ -154,7 +154,6 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
           <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2">
             <Segmented<ArchitectureTab>
               label="架构视图"
-              size="sm"
               value={route.tab}
               options={TABS}
               onChange={(tab) => {
@@ -243,7 +242,7 @@ function Breadcrumb() {
           {at > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
           <button
             type="button"
-            className={at === crumbs.length - 1 ? 'rounded px-1 font-medium' : 'rounded px-1 text-muted-foreground hover:bg-accent hover:text-foreground'}
+            className={at === crumbs.length - 1 ? 'rounded-sm px-1' : 'rounded-sm px-1 text-muted-foreground hover:bg-accent hover:text-foreground'}
             aria-current={at === crumbs.length - 1 ? 'page' : undefined}
             onClick={() => go({ scope: crumb.scope, focus: null })}
           >

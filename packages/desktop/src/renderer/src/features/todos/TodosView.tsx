@@ -78,10 +78,10 @@ export function TodosView() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto" data-testid="todos-view">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-6 py-8">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-6 py-10 lg:py-12">
         <div className="flex flex-wrap items-center gap-3">
           <ListTodo className="size-5 text-muted-foreground" />
-          <h1 className="text-lg font-bold">待办</h1>
+          <h1 className="text-xl font-bold">待办</h1>
           <Segmented<'list' | 'calendar'>
             label="待办视图"
             size="sm"
@@ -169,7 +169,7 @@ export function TodosView() {
           </div>
         )}
         {todos !== null && todos.length === 0 && (
-          <EmptyState icon={ListTodo} title="突然有点子就记在这里" description="可以定个时间到点提醒，或者到点自动发给某个任务；也可以随时派给新任务或已有的任务。" className="mt-6 bg-transparent" />
+          <EmptyState icon={ListTodo} title="突然有点子就记在这里" description="可以定个时间到点提醒，或者到点自动发给某个任务；也可以随时派给新任务或已有的任务。" variant="plain" className="mt-6" />
         )}
         {view === 'calendar' && todos !== null && todos.length > 0 ? (
           <TodoCalendar key={calendarDay ? dayKey(calendarDay) : 'today'} todos={visible} now={now} rowProps={rowProps} initialDay={calendarDay ?? undefined} />
@@ -264,7 +264,7 @@ export function QuickTodo() {
     store.set((state) => ({ ...state, quickTodoOpen: false }))
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 pt-[18vh]" onMouseDown={(event) => event.target === event.currentTarget && close()} data-testid="quick-todo">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 dark:bg-black/50 pt-[18vh]" onMouseDown={(event) => event.target === event.currentTarget && close()} data-testid="quick-todo">
       <div className="flex w-full max-w-lg items-center gap-1 rounded-xl border bg-popover p-2 shadow-overlay">
         <input
           autoFocus

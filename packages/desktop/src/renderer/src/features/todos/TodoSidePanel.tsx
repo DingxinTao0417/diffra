@@ -32,7 +32,7 @@ export function TodoSidePanel({ todos, now, onPickDay }: { todos: Todo[]; now: D
         {counts.map((item) => (
           <div key={item.label} className="rounded-xl border bg-card px-3 py-2">
             <div className={cn('text-lg leading-tight font-bold tabular-nums', item.warn && item.value > 0 ? 'text-warning' : 'text-foreground')}>{item.value}</div>
-            <div className="text-[11px] text-muted-foreground">{item.label}</div>
+            <div className="text-xs text-muted-foreground">{item.label}</div>
           </div>
         ))}
       </div>
@@ -48,7 +48,7 @@ export function TodoSidePanel({ todos, now, onPickDay }: { todos: Todo[]; now: D
             <ChevronRight className="size-3.5" />
           </Button>
         </div>
-        <div className="grid grid-cols-7 text-center text-[11px] text-muted-foreground">
+        <div className="grid grid-cols-7 text-center text-xs text-muted-foreground">
           {WEEK_HEADER.map((day) => (
             <div key={day} className="py-1">
               {day}
@@ -65,7 +65,7 @@ export function TodoSidePanel({ todos, now, onPickDay }: { todos: Todo[]; now: D
                 aria-label={`${day.getMonth() + 1}月${day.getDate()}日${has ? '，有待办' : ''}`}
                 className={cn(
                   'relative mx-auto flex size-7 items-center justify-center rounded-full text-xs tabular-nums hover:bg-accent',
-                  day.getMonth() !== month.getMonth() ? 'text-muted-foreground/50' : 'text-foreground',
+                  day.getMonth() !== month.getMonth() ? 'text-muted-foreground' : 'text-foreground',
                   isToday && 'bg-foreground font-bold text-background hover:bg-foreground/85',
                 )}
                 onClick={() => onPickDay(startOfDay(day))}

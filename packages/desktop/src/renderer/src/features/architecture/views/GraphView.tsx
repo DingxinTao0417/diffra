@@ -289,7 +289,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 
 function Legend() {
   return (
-    <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border bg-card/90 px-2.5 py-2 text-[11px] text-muted-foreground">
+    <div className="pointer-events-none absolute bottom-3 left-3 flex flex-col gap-1 rounded-md border bg-card/90 px-2.5 py-2 text-xs text-muted-foreground">
       <span>箭头指向被依赖的一方 · 单击选中 · 双击进入</span>
       <span className="flex items-center gap-3">
         <span className="flex items-center gap-1">
@@ -327,7 +327,7 @@ const ArchNode = memo(function ArchNode({ data, selected }: NodeProps<ArchFlowNo
   return (
     <div
       className={cn(
-        'flex flex-col justify-center gap-0.5 overflow-hidden rounded-lg border bg-card px-3 text-left shadow-xs transition-opacity',
+        'flex flex-col justify-center gap-0.5 overflow-hidden rounded-lg border bg-card px-3 text-left transition-opacity',
         faint && 'border-dashed bg-muted/50 text-muted-foreground',
         node.kind === 'package' && 'border-foreground/30',
         selected && 'ring-2 ring-ring',
@@ -340,11 +340,11 @@ const ArchNode = memo(function ArchNode({ data, selected }: NodeProps<ArchFlowNo
       <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} className="!size-1 !min-h-0 !min-w-0 !border-0 !bg-transparent" />
       <div className="flex min-w-0 items-center gap-1.5">
         <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.label}</span>
+        <span className="min-w-0 flex-1 truncate text-sm">{node.label}</span>
         {node.inCycle && <CircleAlert className="size-3.5 shrink-0 text-warning" aria-label="在循环依赖里" />}
-        {violations > 0 && <span className="shrink-0 rounded bg-destructive px-1 text-[10px] font-medium text-white tabular-nums">{violations}</span>}
+        {violations > 0 && <span className="shrink-0 rounded-sm bg-destructive px-1 text-xs text-destructive-foreground tabular-nums">{violations}</span>}
       </div>
-      <div className="truncate text-[11px] text-muted-foreground">{node.role ? `${node.role} · ${detail}` : detail}</div>
+      <div className="truncate text-xs text-muted-foreground">{node.role ? `${node.role} · ${detail}` : detail}</div>
       {!faint && node.kind !== 'external-system' && (
         <div className="mt-0.5 h-0.5 overflow-hidden rounded-full bg-muted">
           <div className="h-full bg-foreground/30" style={{ width: `${Math.max(2, share * 100)}%` }} />
