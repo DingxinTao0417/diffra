@@ -215,7 +215,7 @@ export const SECRET_FORMATS: ReadonlyArray<{ name: string; pattern: RegExp }> = 
   { name: '私钥', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/ },
 ]
 
-export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+export const REASONING_EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
 
 export interface SessionModel {

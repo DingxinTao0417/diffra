@@ -1015,7 +1015,6 @@ function PermissionModeMenu({ mode, onChange }: { mode: PermissionMode; onChange
   )
 }
 
-const REASONING_LABELS: Record<ReasoningEffort, string> = { default: '默认', none: '关闭', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高' }
 // 模型多于这么多个时，列表上方出搜索框
 const SEARCH_THRESHOLD = 8
 
@@ -1139,7 +1138,7 @@ export function ModelMenu({
         {trigger ?? (
           <button
             type="button"
-            aria-label={supportsReasoning ? `模型 ${modelName}，思考程度${REASONING_LABELS[effort]}` : `模型 ${modelName}`}
+            aria-label={supportsReasoning ? `模型 ${modelName}，思考程度 ${effort}` : `模型 ${modelName}`}
             data-testid="model-menu"
             disabled={locked}
             title={locked ? '运行中不能切换模型' : undefined}
@@ -1149,7 +1148,7 @@ export function ModelMenu({
             <span className="truncate text-foreground">{modelName}</span>
             {label && supportsReasoning && (
               <span className="shrink-0" data-testid="reasoning-label">
-                {REASONING_LABELS[effort]}
+                {effort}
               </span>
             )}
             <ChevronUp className="size-3 shrink-0" />
@@ -1177,12 +1176,12 @@ export function ModelMenu({
           <DropdownMenuSub>
             <DropdownMenuSubTrigger className="gap-3" disabled={!supportsReasoning}>
               <span className="shrink-0">推理等级</span>
-              <span className="ml-auto truncate text-muted-foreground">{supportsReasoning ? REASONING_LABELS[effort] : '不支持'}</span>
+              <span className="ml-auto truncate text-muted-foreground">{supportsReasoning ? effort : '不支持'}</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-40" data-testid="reasoning-list">
               {efforts.map((item) => (
                 <DropdownMenuItem key={item} className="items-center" onSelect={() => chooseEffort(item)}>
-                  <span className="flex-1">{REASONING_LABELS[item]}</span>
+                  <span className="flex-1">{item}</span>
                   {/* primary-color-allow: 选中标记 */}
                   <Check className={cn('size-4 shrink-0 text-primary', item === effort ? 'visible' : 'invisible')} />
                 </DropdownMenuItem>

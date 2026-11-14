@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { REASONING_EFFORTS, type Protocol, type ReasoningEffort } from '@diffra/core/types'
+import type { Protocol, ReasoningEffort } from '@diffra/core/types'
 import { MAX_MODEL_ID_LENGTH, MAX_MODEL_DISPLAY_NAME_LENGTH, CONTEXT_WINDOW_OPTIONS, MAX_OUTPUT_OPTIONS, type ModelConfig } from '../../../../shared/settings'
-import { reasoningEffortsFor } from '../../../../shared/reasoning'
+import { REASONING_CHOICES, reasoningEffortsFor, supportsReasoningEffort } from '../../../../shared/reasoning'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -13,7 +13,6 @@ import { Field, ReadonlyField } from '@/components/ui/field'
 const DEFAULT_ENABLED_REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
 const AUTO_CONTEXT = 'auto'
 const CUSTOM_CONTEXT = 'custom'
-const EFFORT_LABELS: Record<ReasoningEffort, string> = { default: '默认', none: '关闭', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' }
 const CONTEXT_CHOICES = [
   { value: AUTO_CONTEXT, label: '自动' },
   ...CONTEXT_WINDOW_OPTIONS.map((size) => ({ value: String(size), label: formatTokens(size).replace(/m$/, 'M') })),
@@ -52,7 +51,7 @@ export function capabilitySummary(model: ModelConfig, protocol: Protocol): strin
 // idField：readonly 用于编辑已保存的模型；hidden 用于添加面板，模型 ID 已经在那一行上填
 export function ModelCapabilities({ model, protocol, onChange, index = 0, idField = 'editable' }: { model: ModelConfig; protocol: Protocol; onChange(model: ModelConfig): void; index?: number; idField?: 'editable' | 'readonly' | 'hidden' }) {
   const [customContext, setCustomContext] = useState(() => model.contextWindow !== null && !isPresetContext(model.contextWindow))
-  const supportsEffort = protocol === 'openai-compatible' || protocol === 'openai-responses'
+  const supportsEffort = supportsReasoningEffort(protocol)
   const efforts = reasoningEffortsFor({ protocol }, model).filter((value) => value !== 'default')
   const reasoningEnabled = efforts.length > 0
   const contextChoice = customContext ? CUSTOM_CONTEXT : model.contextWindow === null ? AUTO_CONTEXT : String(model.contextWindow)
@@ -117,21 +116,21 @@ export function ModelCapabilities({ model, protocol, onChange, index = 0, idFiel
         <div className="relative grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
           <Checkbox id={`${prefix}-reasoning`} aria-describedby={`${prefix}-reasoning-hint`} checked={reasoningEnabled} disabled={!supportsEffort} onCheckedChange={() => onChange({ ...model, reasoningEfforts: reasoningEnabled ? [] : [...DEFAULT_ENABLED_REASONING_EFFORTS] })} />
           <Label htmlFor={`${prefix}-reasoning`}>思考模式</Label>
-          <p id={`${prefix}-reasoning-hint`} className="col-start-2 text-xs text-muted-foreground">{supportsEffort ? '勾选后，输入框里可以调思考强度。' : '此协议暂不支持发送思考强度参数。'}</p>
+          <p id={`${prefix}-reasoning-hint`} className="col-start-2 text-xs text-muted-foreground">{!supportsEffort ? '此协议暂不支持发送思考强度参数。' : anthropicProtocol ? '勾选后，输入框里可以调思考强度；不勾时不指定，按服务商的默认强度思考。' : '勾选后，输入框里可以调思考强度。'}</p>
         </div>
       </fieldset>
       {supportsEffort && reasoningEnabled && <div role="group" aria-labelledby={`${prefix}-efforts`} className="space-y-2">
         <div className="flex h-6 items-center justify-between">
           <span id={`${prefix}-efforts`} className="text-sm leading-none">思考强度</span>
-          {model.reasoningEfforts !== undefined && <Button type="button" size="xs" variant="link" className="h-auto px-0" onClick={() => onChange({ ...model, reasoningEfforts: undefined })}>恢复自动识别</Button>}
+          {!anthropicProtocol && model.reasoningEfforts !== undefined && <Button type="button" size="xs" variant="link" className="h-auto px-0" onClick={() => onChange({ ...model, reasoningEfforts: undefined })}>恢复自动识别</Button>}
         </div>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {REASONING_EFFORTS.filter((value) => value !== 'default').map((effort) => {
+          {REASONING_CHOICES.map((effort) => {
             const checked = efforts.includes(effort)
             const id = `${prefix}-effort-${effort}`
             return <div key={effort} className="relative flex h-7 items-center gap-2">
               <Checkbox id={id} checked={checked} onCheckedChange={() => onChange({ ...model, reasoningEfforts: checked ? efforts.filter((value) => value !== effort) : [...efforts, effort] })} />
-              <Label htmlFor={id}>{EFFORT_LABELS[effort]}</Label>
+              <Label htmlFor={id}>{effort}</Label>
             </div>
           })}
         </div>

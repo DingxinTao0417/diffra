@@ -24,13 +24,22 @@ function openai(apiKey = GOOD_KEY): ModelEndpoint {
 }
 
 describe('思考程度', () => {
-  test.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'default'] as const)('兼容接口实际传递 %s 参数', async (effort) => {
+  test.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'default'] as const)('兼容接口实际传递 %s 参数', async (effort) => {
     await generateText({ model: createLanguageModel(openai(), 'mock-a', effort), prompt: 'OK', abortSignal: AbortSignal.timeout(5000), maxRetries: 0 })
     const request = mock.requests.findLast((item) => item.path === '/openai/v1/chat/completions')
     expect(request?.body).toBeDefined()
     const body: unknown = JSON.parse(request?.body ?? '{}')
     if (effort === 'default') expect(body).not.toHaveProperty('reasoning_effort')
     else expect(body).toHaveProperty('reasoning_effort', effort)
+  })
+
+  test.each(['low', 'medium', 'high', 'xhigh', 'max', 'default'] as const)('Anthropic 兼容接口按 output_config.effort 传递 %s', async (effort) => {
+    const endpoint: ModelEndpoint = { protocol: 'anthropic-compatible', baseUrl: `${mock.baseUrl}/anthropic/`, apiKey: GOOD_KEY }
+    await generateText({ model: createLanguageModel(endpoint, 'claude-mock', effort), prompt: 'OK', abortSignal: AbortSignal.timeout(5000), maxRetries: 0 })
+    const request = mock.requests.findLast((item) => item.path === '/anthropic/v1/messages')
+    const body: unknown = JSON.parse(request?.body ?? '{}')
+    if (effort === 'default') expect(body).not.toHaveProperty('output_config')
+    else expect(body).toHaveProperty('output_config', { effort })
   })
 
   test('会话配置拒绝未知档位', () => {

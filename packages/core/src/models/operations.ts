@@ -54,6 +54,10 @@ export function createLanguageModel(
     const provider = endpoint.protocol === 'openai-responses' ? 'openai' : 'openai-compatible'
     settings.providerOptions = { [provider]: { reasoningEffort } }
   }
+  // 发成 output_config.effort；不指定时 Claude 新模型按官方默认强度思考，不是不思考
+  if (reasoningEffort && reasoningEffort !== 'default' && (endpoint.protocol === 'anthropic' || endpoint.protocol === 'anthropic-compatible')) {
+    settings.providerOptions = { anthropic: { effort: reasoningEffort } }
+  }
   if (Object.keys(settings).length > 0) middleware.push(defaultSettingsMiddleware({ settings }))
   if (middleware.length === 0) return model
   return wrapLanguageModel({ model, middleware })
