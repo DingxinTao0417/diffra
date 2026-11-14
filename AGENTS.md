@@ -10,6 +10,10 @@
 - 发版提交固定写「chore: 发布 vX.Y.Z」，不要写成 `feat:`。
 - 打 tag 发版时 CI 检查这一版至少有一条日志、每条都是中文，有英文条目就失败。
 
+## 验证
+
+- 只跑改动所在包的测试，比如 `pnpm --filter @diffra/desktop test`、`pnpm --filter @diffra/core test`；不要在根目录跑 `pnpm test` 去验证单个包的改动。
+
 ## 发版
 
 - 流程见 `docs/decisions.md` 的「发布与更新」：改 `packages/desktop/package.json` 的版本号并提交，打 `vX.Y.Z` tag 推送，等 CI 通过，再运行 `publish:release` 和 `publish:website`。

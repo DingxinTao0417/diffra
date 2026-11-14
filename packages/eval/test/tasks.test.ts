@@ -8,7 +8,10 @@ import { DEEP_SCAN_DIR, loadDeepScanSamples, loadTasks, TASKS_DIR } from '../src
 // 回放题要解出整个仓库、跑 core 的全部测试，大项目和业务缺陷题要生成几千个文件或连跑并发测试：给足时间
 const SLOW = new Set(['replay', 'large'])
 // 题目和深度扫描样例只在本机，不进仓库：没有就不测（CI 上就是这样）
-for (const task of existsSync(TASKS_DIR) ? loadTasks() : []) {
+// 全部题目自检要几个小时，pnpm test 默认不跑（智能体在根目录跑 pnpm test 曾因此等了几个小时）；
+// 要跑设 DIFFRA_EVAL_SELFCHECK=1，或用 eval selfcheck
+const SELFCHECK = process.env.DIFFRA_EVAL_SELFCHECK === '1'
+for (const task of SELFCHECK && existsSync(TASKS_DIR) ? loadTasks() : []) {
   const slow = SLOW.has(task.category) || /^(k|g|p09)/.test(task.id)
   test(`题目 ${task.id} 自检通过`, async () => {
     const result = await selfCheck(task)
