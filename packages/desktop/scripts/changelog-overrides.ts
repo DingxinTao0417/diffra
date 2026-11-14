@@ -40,6 +40,7 @@ export const RELEASE_OVERRIDES: Record<string, Pick<ChangelogRelease, 'added' | 
       '修复禁写目录被 .gitignore 忽略时检查点和撤销用不了',
       '修复自动审批下用 node -e 或 heredoc 临时跑一段脚本，会因为脚本里的反引号被拦下来问',
       '修复自动审批下 npx --no-install 跑本地命令、清理项目里的 Python 缓存目录也要被拦下来问',
+      '修复 Windows 用户名较长时，智能体读命令输出、Skill 文件也要你确认',
     ],
   },
   '0.4.2': {

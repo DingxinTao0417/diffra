@@ -407,7 +407,8 @@ function searchPaths(program: 'grep' | 'rg', args: string[]): string[] {
 export const MAX_SCAN_ENTRIES = 10_000
 const SKIPPED_DIRS = new Set(['node_modules', '.git'])
 
-const isKnownPath = (arg: string) => !/[$~`]/.test(arg)
+// ~ 只在开头或 =、: 后面才会被 bash 展开；Windows 的 8.3 短路径（C:/Users/RUNNER~1）中间的 ~ 是普通字符
+const isKnownPath = (arg: string) => !/[$`]|(^|[=:])~/.test(arg)
 
 // 这个参数在 dir 下（递归时连同子目录）能碰到受保护文件吗
 function reachesProtected(dir: string | null, arg: string, recursive: boolean): boolean {

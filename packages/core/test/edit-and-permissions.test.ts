@@ -406,3 +406,17 @@ describe('自动审批少问：npx --no-install、清 Python 缓存目录（第 
     expect(classifyCommand('rm -rf stockhub/__pycache__', policy('ask'))).toEqual({ level: 'ask' })
   })
 })
+
+describe('8.3 短路径中间的 ~ 不算家目录（第 637 步）', () => {
+  const temp = 'C:/Users/RUNNER~1/AppData/Local/Temp'
+  const policy: CommandPolicy = { cwd: `${temp}/project`, trusted: [], alwaysAllowed: new Set(), readOnlyPaths: [], readRoots: [`${temp}/outputs`], mode: 'ask' }
+
+  test('读命令输出目录、项目里的短路径照常放行；开头或 = 后面的 ~ 还是要问', () => {
+    for (const command of [`sed -n '500,501p' '${temp}/outputs/output-1.txt'`, `cat ${temp}/project/src/a.ts`]) {
+      expect(classifyCommand(command, policy), command).toEqual({ level: 'allow' })
+    }
+    for (const command of ['cat ~/notes.md', 'cat ~', `cat ${temp}/other.txt`, 'cat a=~/x']) {
+      expect(classifyCommand(command, policy), command).toEqual({ level: 'ask' })
+    }
+  })
+})
