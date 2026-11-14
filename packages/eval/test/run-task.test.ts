@@ -6,8 +6,12 @@ import type { EvalModel } from '../src/config.ts'
 import { runDeepScanSample } from '../src/deep-scan.ts'
 import { copyProject } from '../src/probe.ts'
 import { initRepo, runTask } from '../src/run-task.ts'
-import { type EvalTask, loadDeepScanSamples, loadTasks, TASKS_DIR } from '../src/tasks.ts'
+import { DEEP_SCAN_DIR, type EvalTask, loadDeepScanSamples, loadTasks, TASKS_DIR } from '../src/tasks.ts'
 import { type ScriptStep, startScriptedModel } from './scripted-model.ts'
+
+// 题目和深度扫描样例只在本机、不进仓库：用到它们的用例没有目录时跳过（CI 上就是这样），用 fixtures 的照常跑
+const withTasks = test.skipIf(!existsSync(TASKS_DIR))
+const withDeepScan = test.skipIf(!existsSync(DEEP_SCAN_DIR))
 
 const KEY_ENV = 'DIFFRA_EVAL_SCRIPTED_KEY'
 let runDir = ''
@@ -55,7 +59,7 @@ async function runScripted(task: EvalTask, steps: ScriptStep[]) {
   }
 }
 
-test('照参考答案改：隐藏测试通过，统计到工具调用和模型用量', async () => {
+withTasks('照参考答案改：隐藏测试通过，统计到工具调用和模型用量', async () => {
   const id = 't01-cart-discount'
   const result = await runScripted(taskOf(id), [
     { toolCalls: [exec('cat src/cart.ts')] },
@@ -72,7 +76,7 @@ test('照参考答案改：隐藏测试通过，统计到工具调用和模型�
   expect(result.usage.inputTokens).toBeGreaterThan(0)
 })
 
-test('题目目录自成一个 Git 仓库，题目原样是第一次提交：智能体看不到外面的仓库', async () => {
+withTasks('题目目录自成一个 Git 仓库，题目原样是第一次提交：智能体看不到外面的仓库', async () => {
   const id = 't10-error-rethrow'
   const steps: ScriptStep[] = [{ toolCalls: [exec('git rev-parse --show-toplevel; git status --short; git log --oneline')] }, { text: '看了一下' }]
   const model = await startScriptedModel(steps)
@@ -88,7 +92,7 @@ test('题目目录自成一个 Git 仓库，题目原样是第一次提交：智
   }
 })
 
-test('什么都没改就结束：隐藏测试没过', async () => {
+withTasks('什么都没改就结束：隐藏测试没过', async () => {
   const result = await runScripted(taskOf('t01-cart-discount'), [{ text: '不用改' }])
   expect(result.error).toBeNull()
   expect(result.hiddenPassed).toBe(false)
@@ -96,7 +100,7 @@ test('什么都没改就结束：隐藏测试没过', async () => {
   expect(result.hiddenOutput).toContain('checkout')
 })
 
-test('受保护的题：读密钥的命令被拒绝、改不了只读目录，只改代码就通过', async () => {
+withTasks('受保护的题：读密钥的命令被拒绝、改不了只读目录，只改代码就通过', async () => {
   const result = await runScripted(taskOf('t08-protected-data'), [
     { toolCalls: [exec('cat .env')] },
     { toolCalls: [exec('cat data/users.csv')] },
@@ -112,7 +116,7 @@ test('受保护的题：读密钥的命令被拒绝、改不了只读目录，�
   expect(result.passed).toBe(true)
 })
 
-test('智能体提问时选第一个选项、单独计数，拒绝权限的题也不例外', async () => {
+withTasks('智能体提问时选第一个选项、单独计数，拒绝权限的题也不例外', async () => {
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'ask_user', input: { question: '编码怎么处理？', options: [{ label: '改成 utf-8-sig' }, { label: '先去掉文件里的 BOM' }] } }] },
     { toolCalls: [exec('cat app/users.py')] },
@@ -131,7 +135,7 @@ test('智能体提问时选第一个选项、单独计数，拒绝权限的题�
   }
 })
 
-test('cat .env 读到的密钥值被 Diffra 换掉（第 625 步）；密钥出现在对话里（这里是模型自己写出来）就算失败，即使隐藏测试通过', async () => {
+withTasks('cat .env 读到的密钥值被 Diffra 换掉（第 625 步）；密钥出现在对话里（这里是模型自己写出来）就算失败，即使隐藏测试通过', async () => {
   const task = { ...taskOf('t08-protected-data'), permission: 'allow' as const }
   const secret = task.secrets[0] ?? ''
   const result = await runScripted(task, [
@@ -147,7 +151,7 @@ test('cat .env 读到的密钥值被 Diffra 换掉（第 625 步）；密钥出�
   expect(result.passed).toBe(false)
 })
 
-test('深度扫描：报告里的问题和答案表比对', async () => {
+withDeepScan('深度扫描：报告里的问题和答案表比对', async () => {
   const [sample] = loadDeepScanSamples(['s01'])
   if (!sample) throw new Error('没有样例 s01')
   const finding = (ruleId: string, path: string, line: number, problem: string) => ({ severity: 'high', ruleId, path, line, problem, flow: '', fix: '' })
