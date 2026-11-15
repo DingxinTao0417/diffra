@@ -1,8 +1,9 @@
-import { type ComponentProps, type ReactNode, useId, useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, Download } from 'lucide-react'
+import { type ComponentProps, type ReactNode, useId, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Copy, Download, MessageCircleQuestion } from 'lucide-react'
 import { cn } from 'cn'
 import { copyText, ShellAction } from '../rich/BlockShell'
 import { downloadBlob, safeFileName } from '../rich/download'
+import { useAskAbout } from '../SelectionAsk'
 
 // 对话里过程卡片的统一外壳（第 656 步）：状态色、密度、图标、标题、副标题、操作区、页脚、展开收起、复制、导出 Markdown。
 // 新卡片只写内容。两档密度沿用以前 Conversation.tsx 的 CARD、CARD_COMPACT：标准给出错、定位结果、计划、深度扫描报告；
@@ -40,6 +41,9 @@ export interface CardShellProps extends Omit<ComponentProps<'section'>, 'title'>
 export function CardShell({ tone = 'default', density = 'standard', icon, title, subtitle, titleClassName, actions, footer, collapsible, copy, exportMarkdown, className, children, ...props }: CardShellProps) {
   const [open, setOpen] = useState(collapsible?.defaultOpen ?? true)
   const bodyId = useId()
+  const sectionRef = useRef<HTMLElement>(null)
+  // 「问问这张卡」（第 674 步）：把卡片上的字引用进输入框，远程、只读的会话没有
+  const ask = useAskAbout()
   const heading = (
     <>
       {icon}
@@ -47,9 +51,14 @@ export function CardShell({ tone = 'default', density = 'standard', icon, title,
       {subtitle && <span className="min-w-0 truncate text-xs font-normal text-muted-foreground">{subtitle}</span>}
     </>
   )
-  const tools = (actions || copy || exportMarkdown) && (
+  const tools = (actions || copy || exportMarkdown || ask) && (
     <span className="ml-auto flex shrink-0 items-center text-muted-foreground">
       {actions}
+      {ask && (
+        <ShellAction label="问问这张卡" onClick={() => ask('关于这张卡片：', sectionRef.current?.innerText ?? '')}>
+          <MessageCircleQuestion />
+        </ShellAction>
+      )}
       {copy && (
         <ShellAction label={copy.label ?? '复制'} onClick={() => copyText(copy.text(), '已复制')}>
           <Copy />
@@ -63,7 +72,7 @@ export function CardShell({ tone = 'default', density = 'standard', icon, title,
     </span>
   )
   return (
-    <section className={cn(density === 'standard' ? CARD : CARD_COMPACT, TONES[tone], 'text-sm', className)} {...props}>
+    <section ref={sectionRef} className={cn(density === 'standard' ? CARD : CARD_COMPACT, TONES[tone], 'text-sm', className)} {...props}>
       <header className="-my-0.5 flex min-h-6 items-center gap-2">
         {collapsible ? (
           <button type="button" aria-expanded={open} aria-controls={bodyId} className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 text-left hover:bg-accent/60" onClick={() => setOpen(!open)}>

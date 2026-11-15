@@ -1,4 +1,4 @@
-import { type ComponentProps, memo, useId, useMemo } from 'react'
+import { type ComponentProps, createContext, memo, useContext, useId, useMemo } from 'react'
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -88,6 +88,69 @@ function ListItem({ node, children, ...props }: ComponentProps<'li'> & ExtraProp
   return <li {...props}>{children}</li>
 }
 
+// 标题带上 id（按它在原文里的行号），长回答顶上的目录用它跳过去；导出的静态页里同样能跳
+function Heading({ node, children, ...props }: ComponentProps<'h2'> & ExtraProps) {
+  const prefix = useContext(HeadingPrefixContext)
+  const Tag = (node?.tagName ?? 'h2') as 'h1' | 'h2' | 'h3' | 'h4'
+  const line = node?.position?.start.line
+  return (
+    <Tag {...props} id={line ? `${prefix}h${line}` : undefined}>
+      {children}
+    </Tag>
+  )
+}
+
+const HeadingPrefixContext = createContext('')
+
+interface TocEntry {
+  level: number
+  text: string
+  line: number
+}
+
+// 长回答（第 674 步）：三个以上标题、正文够长时，顶上列出目录
+const TOC_MIN_HEADINGS = 3
+const TOC_MIN_CHARS = 1200
+
+function tocOf(text: string): TocEntry[] {
+  const entries: TocEntry[] = []
+  let fence: string | null = null
+  text.split('\n').forEach((line, index) => {
+    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+    if (marker) {
+      if (!fence) fence = marker[0]!
+      else if (marker[0] === fence) fence = null
+      return
+    }
+    if (fence) return
+    const heading = /^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/.exec(line)
+    if (!heading) return
+    const plain = heading[2]!
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_`~]/g, '')
+      .trim()
+    if (plain) entries.push({ level: heading[1]!.length, text: plain, line: index + 1 })
+  })
+  return entries
+}
+
+function AnswerToc({ entries, prefix }: { entries: TocEntry[]; prefix: string }) {
+  const top = Math.min(...entries.map((entry) => entry.level))
+  return (
+    // 放在 .markdown 外面：那里的列表编号、链接颜色不要；目录是导航，不用主色
+    <nav aria-label="目录" className="mb-3 rounded-lg border bg-muted/30 px-3 py-2 text-sm [&_a]:text-muted-foreground [&_a:hover]:text-foreground [&_a:hover]:underline" data-testid="answer-toc">
+      <p className="mb-1 text-xs text-muted-foreground">目录</p>
+      <ol className="space-y-0.5">
+        {entries.map((entry) => (
+          <li key={entry.line} className="truncate" style={{ paddingLeft: `${(entry.level - top) * 0.875}rem` }}>
+            <AnswerLink href={`#${prefix}h${entry.line}`}>{entry.text}</AnswerLink>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  )
+}
+
 function linksIn(node: Element): Element[] {
   return node.children.flatMap((child) => (child.type !== 'element' ? [] : child.tagName === 'a' ? [child] : linksIn(child)))
 }
@@ -102,6 +165,10 @@ const components: Components = {
   img: AnswerImage,
   p: Paragraph,
   li: ListItem,
+  h1: Heading,
+  h2: Heading,
+  h3: Heading,
+  h4: Heading,
 }
 
 const remarkPlugins = [remarkGfm, remarkMath, remarkCallouts]
@@ -113,13 +180,17 @@ export const Markdown = memo(function Markdown({ text, streaming = false }: { te
   const normalized = useMemo(() => normalizeMath(text), [text])
   const source = useMemo<MarkdownSource>(() => ({ text: normalized, streaming }), [normalized, streaming])
   const rehypeOptions = useMemo(() => ({ clobberPrefix: prefix, footnoteLabel: '来源与脚注', footnoteBackLabel: '回到正文', footnoteLabelProperties: { className: ['footnotes-label'] } }), [prefix])
+  const toc = useMemo(() => (streaming || normalized.length < TOC_MIN_CHARS ? [] : tocOf(normalized)), [normalized, streaming])
   return (
     <MarkdownSourceContext.Provider value={source}>
-      <div className="markdown">
-        <ReactMarkdown remarkPlugins={remarkPlugins} remarkRehypeOptions={rehypeOptions} components={components}>
-          {normalized}
-        </ReactMarkdown>
-      </div>
+      <HeadingPrefixContext.Provider value={prefix}>
+        {toc.length >= TOC_MIN_HEADINGS && <AnswerToc entries={toc} prefix={prefix} />}
+        <div className="markdown">
+          <ReactMarkdown remarkPlugins={remarkPlugins} remarkRehypeOptions={rehypeOptions} components={components}>
+            {normalized}
+          </ReactMarkdown>
+        </div>
+      </HeadingPrefixContext.Provider>
     </MarkdownSourceContext.Provider>
   )
 })
