@@ -148,6 +148,8 @@ const settingsSchema = z.object({
   }),
   projects: z.record(z.string(), projectSettingsSchema).default({}),
   lastProject: z.string().nullable().default(null),
+  // 从侧边栏归档的项目；第 700 步加的，旧设置文件里没有
+  archivedProjects: z.array(z.string().min(1)).default([]),
   // 第 11 步加的
   appearance: appearanceSchema.default(() => ({ ...DEFAULT_APPEARANCE })),
   // 第 263 步加的
@@ -192,6 +194,7 @@ const EMPTY_SETTINGS: Settings = {
   roles: { coder: null, planner: null, reviewer: null, fallback: null },
   projects: {},
   lastProject: null,
+  archivedProjects: [],
   appearance: DEFAULT_APPEARANCE,
   layout: DEFAULT_LAYOUT,
   browser: DEFAULT_BROWSER,

@@ -199,6 +199,8 @@ export interface Settings {
   // 按项目目录保存的检查命令，不往用户仓库里写文件
   projects: Record<string, ProjectSettings>
   lastProject: string | null
+  // 从侧边栏归档的项目目录；项目下的会话一起归档，恢复时一起取消归档
+  archivedProjects: string[]
   appearance: Appearance
   layout: Layout
   browser: BrowserSettings
@@ -232,6 +234,8 @@ export interface SettingsView {
   execution: ExecutionSettings
   mcpServers: McpServerConfig[]
   reasoningChoices: Settings['reasoningChoices']
+  // 从侧边栏归档的项目，在设置里可以恢复
+  archivedProjects: string[]
   // 无项目任务的保存位置，已经按默认值解析好
   defaultWorkspace: { path: string; isDefault: boolean }
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件

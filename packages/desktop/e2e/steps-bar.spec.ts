@@ -20,6 +20,10 @@ test('步骤条：在输入框上方，默认收起只写进度和正在做的�
   const model = await startScriptedModel([
     { toolCalls: [plan(['in_progress', 'pending', 'pending'])] },
     { toolCalls: [exec('ls')], delayMs: 1500 },
+    { toolCalls: [plan(['completed', 'in_progress', 'pending'])] },
+    { toolCalls: [exec('ls')], delayMs: 1500 },
+    { toolCalls: [plan(['completed', 'completed', 'in_progress'])] },
+    { toolCalls: [exec('ls')], delayMs: 1500 },
     { toolCalls: [plan(['completed', 'completed', 'completed'])] },
     { text: '做完了' },
     { text: '好的' },
@@ -35,14 +39,23 @@ test('步骤条：在输入框上方，默认收起只写进度和正在做的�
     await expect(bar).toContainText('步骤 0/3')
     await expect(bar).toContainText('看项目')
     await expect(bar.getByTestId('step')).toHaveCount(0)
+    await expect(bar).toContainText('步骤 1/3', { timeout: 10_000 })
+    await bar.getByRole('button', { name: /^步骤 1\/3/ }).click()
+    await expect(bar.getByTestId('step')).toHaveCount(3)
+    await expect(bar.getByTestId('step').nth(0)).toHaveAttribute('data-status', 'completed')
+    await expect(bar.getByTestId('step').nth(1)).toHaveAttribute('data-status', 'in_progress')
+    await expect(bar.getByTestId('step').nth(2)).toHaveAttribute('data-status', 'pending')
+    await expect(bar).toContainText('步骤 2/3', { timeout: 10_000 })
+    await expect(bar.getByTestId('step').nth(0)).toHaveAttribute('data-status', 'completed')
+    await expect(bar.getByTestId('step').nth(1)).toHaveAttribute('data-status', 'completed')
+    await expect(bar.getByTestId('step').nth(2)).toHaveAttribute('data-status', 'in_progress')
     await waitTaskDone(window)
     await expect(bar).toContainText('步骤 3/3')
-    await expect(bar).toContainText('已完成')
+    await expect(bar.getByRole('button', { name: /^步骤 3\/3/ })).toHaveAttribute('aria-label', '步骤 3/3，已完成')
     await expect(window.locator('[data-testid="tool-call"][data-kind="steps"]')).toHaveCount(0)
-    // 点开：全部步骤
-    await bar.getByRole('button', { name: /^步骤 3\/3/ }).click()
+    // 展开着的时候也跟着最后一次更新逐个打勾
     await expect(bar.getByTestId('step')).toHaveText(['看项目', '改代码', '跑测试'])
-    await expect(bar.getByTestId('step').first()).toHaveAttribute('data-status', 'completed')
+    for (const index of [0, 1, 2]) await expect(bar.getByTestId('step').nth(index)).toHaveAttribute('data-status', 'completed')
     // 下一轮没列步骤：步骤条没了
     await taskInput(window).fill('谢谢')
     await window.keyboard.press('Control+Enter')

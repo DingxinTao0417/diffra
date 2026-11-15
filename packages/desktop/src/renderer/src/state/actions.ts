@@ -9,6 +9,8 @@ import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { shrinkImage } from '../lib/images'
 import { errorMessage } from '../lib/errors'
+import { folderName } from '../lib/format'
+import { sameProjectPath } from '../lib/projects'
 import { hasWidePanel, isSidebarShown, type ExtensionsTab, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
 
 const TITLE_CHARS = 40
@@ -162,7 +164,15 @@ export async function refreshTasks(): Promise<void> {
   try {
     const tasks = await window.diffra.listSessions(null)
     // 无项目任务的文件夹不算项目，不进首页的项目下拉和侧栏的项目分组
-    store.set((state) => ({ ...state, tasks, projects: tasks.reduce((projects, task) => (task.noProject ? projects : addProject(projects, task.cwd)), state.projects) }))
+    store.set((state) => {
+      const archived = state.settings?.archivedProjects ?? []
+      const active = state.projects.filter((path) => !archived.some((item) => sameProjectPath(item, path)))
+      return {
+        ...state,
+        tasks,
+        projects: tasks.reduce((projects, task) => (task.noProject || archived.some((item) => sameProjectPath(item, task.cwd)) ? projects : addProject(projects, task.cwd)), active),
+      }
+    })
   } catch (error) {
     console.error('读取任务列表失败', error)
   }
@@ -177,7 +187,8 @@ export async function refreshSettings(): Promise<void> {
 export async function initialize(): Promise<void> {
   await refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))
   const last = await window.diffra.getLastProject().catch(() => null)
-  if (last) {
+  const archived = store.get().settings?.archivedProjects ?? []
+  if (last && !archived.some((path) => sameProjectPath(path, last.path))) {
     store.set((state) => ({ ...state, projects: addProject(state.projects, last.path) }))
     navigate({ name: 'home', project: last.path })
   }
@@ -914,6 +925,73 @@ export async function deleteTask(sessionId: string, trashFolder = false): Promis
 export async function pickProject(): Promise<string | null> {
   const picked = await window.diffra.pickProject()
   if (!picked) return null
-  store.set((state) => ({ ...state, projects: addProject(state.projects, picked.path) }))
+  const wasArchived = store.get().settings?.archivedProjects.some((path) => sameProjectPath(path, picked.path)) ?? false
+  if (wasArchived) await setProjectArchived(picked.path, false)
+  store.set((state) => ({
+    ...state,
+    projects: addProject(state.projects, picked.path),
+    settings: state.settings ? { ...state.settings, archivedProjects: state.settings.archivedProjects.filter((path) => !sameProjectPath(path, picked.path)) } : state.settings,
+  }))
   return picked.path
+}
+
+// 归档项目：项目下的会话由主进程一起归档。侧边栏立即隐藏，设置里的归档列表可以恢复
+export async function setProjectArchived(projectPath: string, archived: boolean): Promise<void> {
+  try {
+    await window.diffra.setProjectArchived(projectPath, archived)
+    const route = store.get().route
+    if (archived) {
+      if (route.name === 'task' && !store.get().live[route.sessionId]?.noProject && sameProjectPath(store.get().live[route.sessionId]?.project, projectPath)) {
+        const design = store.get().live[route.sessionId]?.design
+        if (design) openDesign(null)
+        else openHome(null)
+      } else if ((route.name === 'home' || route.name === 'design') && sameProjectPath(route.project, projectPath)) {
+        navigate({ name: route.name, project: null })
+      }
+    }
+    store.set((state) => ({
+      ...state,
+      projects: archived ? state.projects.filter((path) => !sameProjectPath(path, projectPath)) : addProject(state.projects, projectPath),
+      settings: state.settings
+        ? {
+            ...state.settings,
+            archivedProjects: archived
+              ? state.settings.archivedProjects.some((path) => sameProjectPath(path, projectPath))
+                ? state.settings.archivedProjects
+                : [...state.settings.archivedProjects, projectPath]
+              : state.settings.archivedProjects.filter((path) => !sameProjectPath(path, projectPath)),
+          }
+        : state.settings,
+    }))
+    await refreshTasks()
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
+// 删除项目：主进程删掉项目下的会话记录，项目文件夹留在磁盘上。界面同步移除项目和会话
+export async function deleteProject(projectPath: string): Promise<void> {
+  try {
+    const { sessionIds } = await window.diffra.deleteProject(projectPath)
+    const removed = new Set(sessionIds)
+    const route = store.get().route
+    if (route.name === 'task' && (removed.has(route.sessionId) || (!store.get().live[route.sessionId]?.noProject && sameProjectPath(store.get().live[route.sessionId]?.project, projectPath)))) {
+      const design = store.get().live[route.sessionId]?.design
+      if (design) openDesign(null)
+      else openHome(null)
+    } else if ((route.name === 'home' || route.name === 'design') && sameProjectPath(route.project, projectPath)) {
+      navigate({ name: route.name, project: null })
+    }
+    store.set((state) => ({
+      ...state,
+      projects: state.projects.filter((path) => !sameProjectPath(path, projectPath)),
+      tasks: state.tasks.filter((task) => task.noProject || !sameProjectPath(task.cwd, projectPath)),
+      live: Object.fromEntries(Object.entries(state.live).filter(([sessionId, task]) => !removed.has(sessionId) && (task.noProject || !sameProjectPath(task.project, projectPath)))),
+      settings: state.settings ? { ...state.settings, archivedProjects: state.settings.archivedProjects.filter((path) => !sameProjectPath(path, projectPath)) } : state.settings,
+    }))
+    await refreshTasks()
+    showToast(`已删除项目「${folderName(projectPath)}」的记录，项目文件夹保留在磁盘上`)
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
 }

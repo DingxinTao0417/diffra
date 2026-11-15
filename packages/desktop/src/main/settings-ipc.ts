@@ -87,7 +87,7 @@ function rememberReasoning(current: Settings, choice: { providerId: string; mode
 }
 
 export async function settingsView(settings: SettingsStore, secrets: SecretStore): Promise<SettingsView> {
-  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices } = settings.get()
+  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects } = settings.get()
   return {
     providers: await Promise.all(
       providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -101,6 +101,7 @@ export async function settingsView(settings: SettingsStore, secrets: SecretStore
     execution,
     mcpServers,
     reasoningChoices,
+    archivedProjects,
     defaultWorkspace: workspaceRoot(settings),
     loadError: settings.loadError ?? secrets.loadError,
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DESIGN_STYLES, type PromptImage, type StoredSessionSummary } from '@diffra/core/types'
-import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, LoaderCircle, Palette } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, FolderPlus, LoaderCircle, Palette } from 'lucide-react'
 import { decodeStartTaskError, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { withRememberedEffort } from '../../../../shared/reasoning'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
@@ -33,6 +33,16 @@ function parentPath(path: string): string {
   return path.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '')
 }
 
+// 没有项目时，用户在输入框里说「创建项目」之类的短句，先出现选文件夹的卡片，不把这句当成任务发给模型
+const CREATE_PROJECT_INTENT = [
+  /^(?:(?:请|帮我|麻烦你?|我想)\s*)*(?:创建|新建|建立|建|添加|选择|打开|选)\s*(?:一个|个)?\s*(?:项目文件夹|项目|文件夹)(?:吧|呢)?[。.!！?？]*$/i,
+  /^(?:please\s+)?(?:create|new|open|add|select)\s+(?:(?:a|an|new)\s+)*project(?:\s+folder)?[.!?]*$/i,
+]
+
+export function wantsCreateProject(text: string): boolean {
+  return CREATE_PROJECT_INTENT.some((pattern) => pattern.test(text.trim()))
+}
+
 type ListedTask = Pick<StoredSessionSummary, 'sessionId' | 'cwd' | 'title' | 'updatedAt' | 'design' | 'noProject'>
 
 // 设计首页列出全部未归档的设计任务；刚建的在 core 存盘之前也要列出来
@@ -63,10 +73,14 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const [model, setModel] = useState<ModelRef | null>(initialChoices.model)
   const [planMode, setPlanMode] = useState(initialChoices.planMode)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
+  const [projectPrompt, setProjectPrompt] = useState(false)
   // 设计任务的风格预设；null 是「自动」，由模型按题材定
   const [designStyle, setDesignStyle] = useState<string | null>(initialChoices.designStyle)
 
   useEffect(() => setError(null), [projectPath])
+  useEffect(() => {
+    if (projectPath || projects.length > 0) setProjectPrompt(false)
+  }, [projectPath, projects.length])
   useEffect(() => writeHomeChoices(choicesKey, { model, planMode, designStyle }), [choicesKey, model, planMode, designStyle])
 
   // 只有设计首页列任务（设计任务），普通首页不列
@@ -81,10 +95,16 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
   const workspacePath = settings?.defaultWorkspace.path
 
-  const choose = async () => {
+  const choose = async (fromProjectPrompt = false) => {
     try {
       const picked = await pickProject()
-      if (picked) openPage(picked)
+      if (!picked) {
+        if (fromProjectPrompt) showToast('没有选择文件夹，项目没有创建。你可以再选一次，或继续输入其他任务。')
+        return
+      }
+      setProjectPrompt(false)
+      openPage(picked)
+      if (fromProjectPrompt) showToast(`已加载项目「${folderName(picked)}」，可以继续输入要做的任务。`)
     } catch (caught) {
       showToast(errorMessage(caught))
     }
@@ -93,6 +113,11 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   // 没选项目时建无项目任务，主进程在默认保存位置下替它建文件夹
   const send = async (text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }) => {
     setError(null)
+    if (!design && !projectPath && projects.length === 0 && wantsCreateProject(text)) {
+      setProjectPrompt(true)
+      return false
+    }
+    setProjectPrompt(false)
     try {
       const designOptions = design ? { design: true, ...(designStyle ? { designStyle } : {}) } : {}
       await startTask(projectPath, text, { permissionMode, ...(chosenModel ? { model: chosenModel } : {}), ...designOptions }, { plan: planMode, ...extras })
@@ -188,6 +213,34 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
       </div>
 
       <div className="w-full max-w-[720px] space-y-3">
+        {projectPrompt && (
+          <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 text-sm sm:flex-row sm:items-start" data-testid="project-create-card">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                <FolderPlus className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">创建项目</div>
+                <p className="mt-0.5 text-xs text-muted-foreground">选择一个项目文件夹。选好后会立即加载到这个对话，并出现在侧边栏的项目列表里。</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 self-end sm:self-start">
+              <Button size="sm" onClick={() => void choose(true)}>
+                选择项目文件夹…
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setProjectPrompt(false)
+                  showToast('已取消创建项目，没有改动。你可以继续输入任务，或再说一次「创建项目」。')
+                }}
+              >
+                取消
+              </Button>
+            </div>
+          </div>
+        )}
         <Composer
           key={draftKey}
           size="large"

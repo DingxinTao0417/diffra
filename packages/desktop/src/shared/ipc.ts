@@ -74,6 +74,8 @@ export const IPC_CHANNELS = {
   projectPick: 'project:pick',
   projectLast: 'project:last',
   projectGet: 'project:get',
+  projectArchive: 'project:archive',
+  projectDelete: 'project:delete',
   projectDetectChecks: 'project:detect-checks',
   projectRunCheck: 'project:run-check',
   projectSave: 'project:save',
@@ -449,6 +451,10 @@ export interface DiffraApi {
   pickProject(): Promise<ProjectState | null>
   getLastProject(): Promise<ProjectState | null>
   getProject(path: string): Promise<ProjectState>
+  // 项目归档：项目下的会话一起归档；恢复时一起取消归档
+  setProjectArchived(projectPath: string, archived: boolean): Promise<void>
+  // 永久删除项目记录和项目下的会话记录，不动磁盘上的项目文件夹；返回删掉的会话 id
+  deleteProject(projectPath: string): Promise<{ sessionIds: string[] }>
   // 只读项目文件，识别可以用的检查命令；不保存
   detectChecks(path: string): Promise<CheckDetection>
   // 在项目目录试跑一条检查命令

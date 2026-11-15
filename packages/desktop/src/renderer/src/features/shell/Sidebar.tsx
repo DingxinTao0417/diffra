@@ -10,6 +10,7 @@ import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
+import { sameProjectPath } from '@/lib/projects'
 import { remPx } from '@/lib/shell'
 import { turnVerdict, type VerdictTone } from '@/lib/turn-verdict'
 import { isDue } from '@/lib/todo-time'
@@ -22,6 +23,7 @@ import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
 import { SidebarFooter } from './SidebarFooter'
 import { type SearchItem, searchItemKey, useSessionSearch } from './session-search'
+import { ProjectMenu } from './ProjectMenu'
 import { TaskMenu } from './TaskMenu'
 import { IS_MAC, MAC_CHROME_HEIGHT, MAC_SIDEBAR_MIN_PX, shortcutLabel } from '@/lib/platform'
 
@@ -37,6 +39,7 @@ interface SidebarTask {
 
 // 无项目任务都归到这一组；真实路径小写后不会是这个值
 const NO_PROJECT_KEY = '<no-project>'
+const NO_ARCHIVED_PROJECTS: readonly string[] = []
 
 // 侧栏宽度的上下限，右边主区至少留 MAIN_MIN_REM
 const SIDEBAR_MIN_REM = 13
@@ -45,12 +48,12 @@ const MAIN_MIN_REM = 30
 
 // 侧栏的项目分组：有任务的项目按最近更新排，只选过还没建任务的项目排在后面。
 // 无项目任务按标记归到「无项目」一组（path 为 null），和其他项目一起按最近更新排
-function groupTasks(projects: string[], tasks: StoredSessionSummary[], live: AppState['live']) {
+function groupTasks(projects: string[], tasks: StoredSessionSummary[], live: AppState['live'], archivedProjects: readonly string[]) {
   const all: SidebarTask[] = tasks.filter((task) => !task.archived)
   const known = new Set(tasks.map((task) => task.sessionId))
   // 刚建的任务在 core 存盘之前也要显示出来
   for (const task of Object.values(live)) {
-    if (!known.has(task.sessionId) && task.turns.length > 0) {
+    if (!known.has(task.sessionId) && task.turns.length > 0 && !archivedProjects.some((path) => sameProjectPath(path, task.project))) {
       all.push({ sessionId: task.sessionId, cwd: task.project, title: task.title, updatedAt: new Date().toISOString(), archived: false, design: task.design, noProject: task.noProject })
     }
   }
@@ -94,7 +97,8 @@ export function Sidebar() {
   const collapsed = useAppState((state) => state.collapsedProjects)
   const expanded = useAppState((state) => state.expandedProjects)
   const workspacePath = useAppState((state) => state.settings?.defaultWorkspace.path)
-  const groups = useMemo(() => groupTasks(projects, tasks, live), [projects, tasks, live])
+  const archivedProjects = useAppState((state) => state.settings?.archivedProjects ?? NO_ARCHIVED_PROJECTS)
+  const groups = useMemo(() => groupTasks(projects, tasks, live, archivedProjects), [projects, tasks, live, archivedProjects])
   const remoteGroups = useRemoteProjects()
   const activeSession = route.name === 'task' ? route.sessionId : null
   const todos = useAppState((state) => state.todos)
@@ -173,49 +177,59 @@ export function Sidebar() {
           const hiddenCount = group.tasks.length - recent.length
           const name = group.path === null ? '无项目' : folderName(group.path)
           const GroupIcon = group.path === null ? FolderDot : Folder
-          return (
-            <div key={group.key} className="space-y-px" data-testid="sidebar-project">
-              <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent" data-testid="sidebar-project-row">
-                <span className="relative size-4 shrink-0">
-                  <GroupIcon
+          const sessionIds = new Set(group.path === null ? [] : tasks.filter((task) => !task.noProject && sameProjectPath(task.cwd, group.path)).map((task) => task.sessionId))
+          if (group.path !== null) {
+            for (const task of Object.values(live)) if (sameProjectPath(task.project, group.path)) sessionIds.add(task.sessionId)
+          }
+          const running =
+            group.path !== null &&
+            (tasks.some((task) => task.running && sameProjectPath(task.cwd, group.path)) || Object.values(live).some((task) => task.running && sameProjectPath(task.project, group.path)))
+          const row = (
+            <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent" data-testid="sidebar-project-row">
+              <span className="relative size-4 shrink-0">
+                <GroupIcon
+                  className={cn(
+                    'size-4 transition-opacity',
+                    hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0',
+                  )}
+                />
+                {hasTasks && (
+                  <ChevronRight
                     className={cn(
-                      'size-4 transition-opacity',
-                      hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0',
+                      'absolute inset-0 size-4 text-muted-foreground opacity-0 transition-[opacity,rotate] group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100',
+                      !isCollapsed && 'rotate-90',
                     )}
                   />
-                  {hasTasks && (
-                    <ChevronRight
-                      className={cn(
-                        'absolute inset-0 size-4 text-muted-foreground opacity-0 transition-[opacity,rotate] group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100',
-                        !isCollapsed && 'rotate-90',
-                      )}
-                    />
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className={rowButtonClass}
-                  title={group.path ?? workspacePath}
-                  aria-expanded={hasTasks ? !isCollapsed : undefined}
-                  onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.key) : openHome(group.path))}
-                >
-                  <span className="truncate">{name}</span>
-                </button>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
-                      className={projectActionClass}
-                      data-testid="sidebar-project-action"
-                      onClick={() => openHome(group.path)}
-                    >
-                      <Plus className="size-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>{group.path === null ? '新建无项目任务' : '在这个项目新建任务'}</TooltipContent>
-                </Tooltip>
-              </div>
+                )}
+              </span>
+              <button
+                type="button"
+                className={rowButtonClass}
+                title={group.path ?? workspacePath}
+                aria-expanded={hasTasks ? !isCollapsed : undefined}
+                onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.key) : openHome(group.path))}
+              >
+                <span className="truncate">{name}</span>
+              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
+                    className={projectActionClass}
+                    data-testid="sidebar-project-action"
+                    onClick={() => openHome(group.path)}
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{group.path === null ? '新建无项目任务' : '在这个项目新建任务'}</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+          return (
+            <div key={group.key} className="space-y-px" data-testid="sidebar-project">
+              {group.path === null ? row : <ProjectMenu path={group.path} name={name} sessionCount={sessionIds.size} running={running}>{row}</ProjectMenu>}
               {!isCollapsed && (isExpanded ? group.tasks : recent).map((task) => <TaskRow key={task.sessionId} task={task} active={task.sessionId === activeSession} />)}
               {!isCollapsed && hiddenCount > 0 && (
                 <button

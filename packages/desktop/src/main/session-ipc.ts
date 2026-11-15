@@ -112,6 +112,10 @@ const mcpTargetSchema = z.union([
 
 const NO_CHECKS: SessionChecks = { afterEdit: null, beforeFinish: null }
 
+// Windows 路径不分大小写；末尾分隔符不影响是不是同一个项目
+const sameProjectPath = (a: string, b: string) =>
+  a.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === b.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
 interface PendingPermission {
   sessionId: string
   // 命令确认带的：选「这个项目里始终允许」时要记进项目设置的命令键
@@ -262,7 +266,13 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return roles.coder ? withRememberedEffort(roles.coder, providers, reasoningChoices) : null
   }
 
-  const rememberProject = (path: string) => settings.update((current) => ({ ...current, lastProject: path }))
+  // 用户又选了这个文件夹，或在这里开了任务：它不再算已归档。项目下的旧会话仍按各自的归档状态保留
+  const rememberProject = (path: string) =>
+    settings.update((current) => ({
+      ...current,
+      lastProject: path,
+      archivedProjects: current.archivedProjects.filter((item) => !sameProjectPath(item, path)),
+    }))
 
   ipcMain.handle(IPC_CHANNELS.projectPick, async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
@@ -603,6 +613,51 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     })
     deleting.set(sessionId, task)
     return task
+  })
+
+  // 项目归档：项目下的会话一起归档；取消归档时一起恢复。只改记录，不动项目文件夹
+  const projectSessions = async (path: string) => {
+    const sessions = await listSessions(await coreConnection(), path)
+    return sessions.filter((session) => !session.noProject && sameProjectPath(session.cwd, path))
+  }
+  ipcMain.handle(IPC_CHANNELS.projectArchive, async (_event, rawPath: unknown, rawArchived: unknown) => {
+    const path = parse(z.string().min(1), rawPath)
+    const archived = parse(z.boolean(), rawArchived)
+    const sessions = await projectSessions(path)
+    if (archived && sessions.some((session) => session.running)) throw new Error('项目里还有任务正在运行，等它结束后再归档')
+    for (const session of sessions) await updateSession(await coreConnection(), session.sessionId, { archived })
+    await settings.update((current) => ({
+      ...current,
+      archivedProjects: archived
+        ? current.archivedProjects.some((item) => sameProjectPath(item, path))
+          ? current.archivedProjects
+          : [...current.archivedProjects, path]
+        : current.archivedProjects.filter((item) => !sameProjectPath(item, path)),
+    }))
+    for (const session of sessions) emitSessionEvent({ type: 'changed', sessionId: session.sessionId })
+  })
+
+  // 永久删除项目记录和项目下的会话记录。和单个任务一样走 removeSession，项目任务不会动项目文件夹
+  ipcMain.handle(IPC_CHANNELS.projectDelete, async (_event, rawPath: unknown): Promise<{ sessionIds: string[] }> => {
+    const path = parse(z.string().min(1), rawPath)
+    const sessions = await projectSessions(path)
+    if (sessions.some((session) => session.running)) throw new Error('项目里还有任务正在运行，等它结束后再删除')
+    const sessionIds: string[] = []
+    for (const session of sessions) {
+      await removeSession(session.sessionId, false)
+      sessionIds.push(session.sessionId)
+      emitSessionEvent({ type: 'changed', sessionId: session.sessionId })
+    }
+    await settings.update((current) => {
+      const projects = Object.fromEntries(Object.entries(current.projects).filter(([key]) => !sameProjectPath(key, path)))
+      return {
+        ...current,
+        projects,
+        lastProject: current.lastProject !== null && sameProjectPath(current.lastProject, path) ? null : current.lastProject,
+        archivedProjects: current.archivedProjects.filter((item) => !sameProjectPath(item, path)),
+      }
+    })
+    return { sessionIds }
   })
 
   ipcMain.handle(IPC_CHANNELS.sessionPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawOptions: unknown) => {

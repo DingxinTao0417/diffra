@@ -45,10 +45,12 @@ const stepsCardId = (session: Session) => `steps-${session.turns.at(-1)?.id ?? s
 // 一轮一张步骤卡：同一轮里每次更新都发同一个 id，界面整张替换，不会越积越多
 async function showSteps(session: Session, steps: StepItem[], io: TurnIO): Promise<number> {
   const id = stepsCardId(session)
+  // 第一次是新卡片，之后是同一张卡片的更新；按 ACP 的约定用 tool_call_update，不能一直重复发 tool_call
+  const updating = session.stepList?.id === id
   session.stepList = { id, steps }
   const done = steps.filter((step) => step.status === 'completed').length
   await io.update({
-    sessionUpdate: 'tool_call',
+    sessionUpdate: updating ? 'tool_call_update' : 'tool_call',
     toolCallId: id,
     title: STEPS_CARD_TITLE,
     kind: 'think',

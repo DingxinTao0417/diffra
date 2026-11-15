@@ -105,7 +105,8 @@ describe('步骤清单和中途提问', () => {
   const plan = (statuses: Array<'pending' | 'in_progress' | 'completed'>, explanation?: string) => ({
     toolCalls: [{ name: 'update_plan', input: { ...(explanation ? { explanation } : {}), plan: statuses.map((status, index) => ({ step: `第 ${index + 1} 步`, status })) } }],
   })
-  const stepCards = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title === '步骤' ? [update] : []))
+  const stepCards = (io: { updates: SessionUpdate[] }) =>
+    io.updates.flatMap((update) => ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.title === '步骤' ? [update] : []))
   const cardText = (text: string) => [{ type: 'content', content: { type: 'text', text } }]
 
   test('update_plan：一轮一张步骤卡，每次更新整张替换；全部做完时卡片是完成；告诉模型做完了几步', async () => {
@@ -119,6 +120,7 @@ describe('步骤清单和中途提问', () => {
     expect(toolNames(model)).not.toContain('todo_write')
     const cards = stepCards(io)
     expect(cards.map((card) => card.toolCallId)).toEqual(['steps-turn-1', 'steps-turn-1', 'steps-turn-1'])
+    expect(cards.map((card) => card.sessionUpdate)).toEqual(['tool_call', 'tool_call_update', 'tool_call_update'])
     expect(cards.map((card) => card.status)).toEqual(['in_progress', 'in_progress', 'completed'])
     expect(cards[1]?.content).toEqual(cardText('[x] 第 1 步\n[>] 第 2 步'))
     expect(toolResults(session).map(resultText)).toEqual(['Plan updated: 0 of 2 done.', 'Plan updated: 1 of 2 done.', 'Plan updated: 2 of 2 done.'])

@@ -7,6 +7,7 @@ import {
   Bot,
   Check,
   Ellipsis,
+  Folder,
   Globe,
   HardDrive,
   Info,
@@ -60,11 +61,14 @@ import { DevicesSection } from '@/features/devices/DevicesSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatBytes, formatTime } from '@/lib/format'
+import { sameProjectPath } from '@/lib/projects'
 import { INSET_PANEL } from '@/lib/shell'
 import { PERMISSION_MODES } from '@/lib/permission-modes'
-import { leaveSettings, openSettings, setArchived } from '@/state/actions'
+import { leaveSettings, openSettings, setArchived, setProjectArchived } from '@/state/actions'
 import { type AppState, type SettingsSection, showToast, store, useAppState } from '@/state/store'
 import { IS_MAC, MAC_CHROME_HEIGHT, shortcutKeys } from '@/lib/platform'
+
+const NO_ARCHIVED_PROJECTS: readonly string[] = []
 
 const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: string; icon: LucideIcon; keywords: string }> }> = [
   {
@@ -584,8 +588,13 @@ function ExecutionSection() {
 
 function StorageSection() {
   const tasks = useAppState((state) => state.tasks)
+  const archivedProjects = useAppState((state) => state.settings?.archivedProjects ?? NO_ARCHIVED_PROJECTS)
   const [storage, setStorage] = useState<{ bytes: number; dir: string } | null>(null)
   const archived = useMemo(() => tasks.filter((task) => task.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [tasks])
+  const projectCount = useMemo(
+    () => (path: string) => tasks.filter((task) => !task.noProject && sameProjectPath(task.cwd, path)).length,
+    [tasks],
+  )
 
   useEffect(() => {
     window.diffra.sessionsStorage().then(setStorage, (error: unknown) => showToast(errorMessage(error)))
@@ -621,6 +630,27 @@ function StorageSection() {
           <EmptyState icon={Archive} title="没有已归档的任务" description="在任务菜单里选择「归档」后，任务会出现在这里。" variant="plain" className="py-8" />
         ) : (
           archived.map((task) => <ArchivedRow key={task.sessionId} task={task} />)
+        )}
+      </SettingsGroup>
+      <SettingsGroup title="已归档的项目">
+        {archivedProjects.length === 0 ? (
+          <EmptyState icon={Archive} title="没有已归档的项目" description="在侧边栏右键项目并选择「归档」后，项目和它下面的会话会出现在这里。" variant="plain" className="py-8" />
+        ) : (
+          archivedProjects.map((path) => (
+            <div key={path} className="flex items-center gap-3 px-4 py-2 text-sm" data-testid="archived-project">
+              <Folder className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{folderName(path)}</span>
+                <span className="block truncate font-mono text-xs text-muted-foreground" title={path}>
+                  {path}
+                </span>
+              </span>
+              <span className="shrink-0 text-xs text-muted-foreground">{projectCount(path)} 个会话</span>
+              <Button size="sm" variant="ghost" onClick={() => void setProjectArchived(path, false)}>
+                恢复项目
+              </Button>
+            </div>
+          ))
         )}
       </SettingsGroup>
     </>
