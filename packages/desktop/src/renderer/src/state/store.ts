@@ -84,13 +84,14 @@ export interface TerminalTab {
   devServer?: { sessionId: string; command: string; url: string | null }
 }
 
-export interface PinnedVisual {
-  sessionId: string
-  // 那张可视化卡片（工具调用）的 id；同一张卡片切到别的版本时固定的是当时看的那一版
-  id: string
-  title: string
-  code: string
-}
+// 固定到白板的东西（第 668 步起可视化，第 677 步起回答里的富块和过程卡片），按任务分。from 是「第 N 轮」，跨轮对比时看得出来自哪一轮
+export type PinnedItem =
+  // 可视化卡片（工具调用）的 id；同一张卡片切到别的版本时固定的是当时看的那一版
+  | { kind: 'visual'; sessionId: string; id: string; title: string; code: string; from?: string }
+  // 回答里的富块：存它的 Markdown 围栏，白板里照样渲染、照样能交互
+  | { kind: 'block'; sessionId: string; id: string; title: string; text: string; from?: string }
+  // 过程卡片：固定当时的样子（静态渲染去掉按钮后的 HTML，static-html.tsx 的 snapshotHtml）
+  | { kind: 'card'; sessionId: string; id: string; title: string; html: string; from?: string }
 
 export interface AppState {
   route: Route
@@ -134,8 +135,8 @@ export interface AppState {
   reviewFile: string | null
   // 右侧栏文件预览看的文件（回答里点了这个任务没改过的文件，第 536 步）：项目、相对项目的路径、要定位的行
   filePreview: { project: string; path: string; line: number | null } | null
-  // 固定到可视化白板的可视化（第 668 步），按任务分；只在内存里，退出应用就没了
-  pinnedVisuals: PinnedVisual[]
+  // 固定到白板的东西（第 668、677 步），按任务分；只在内存里，退出应用就没了
+  pinned: PinnedItem[]
   toast: { id: number; text: string } | null
   // 待办：启动时读一次，之后改了整份存回去；读到之前为 null
   todos: Todo[] | null
@@ -172,7 +173,7 @@ const initialState: AppState = {
   processes: {},
   reviewFile: null,
   filePreview: null,
-  pinnedVisuals: [],
+  pinned: [],
   toast: null,
   todos: null,
   quickTodoOpen: false,

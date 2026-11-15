@@ -57,7 +57,16 @@ async function settled(container: HTMLElement): Promise<void> {
   }
 }
 
+// 过程卡片固定到白板（第 677 步）：这张卡此刻的样子，按静态渲染一样去掉按钮、脚本
+export function snapshotHtml(element: HTMLElement): string {
+  return cleanCopy(element).outerHTML
+}
+
 function cleaned(container: HTMLElement): string {
+  return cleanCopy(container).innerHTML
+}
+
+function cleanCopy(container: HTMLElement): HTMLElement {
   const copy = container.cloneNode(true) as HTMLElement
   // 克隆不带画布上的像素：换成图片
   const canvases = [...container.querySelectorAll('canvas')]
@@ -72,7 +81,7 @@ function cleaned(container: HTMLElement): string {
   // 只有图标的按钮（复制、展开、另存为……）在静态页里点了没用；带字的留着当说明
   for (const button of copy.querySelectorAll('button')) if (!button.textContent?.trim()) button.remove()
   for (const element of copy.querySelectorAll('[tabindex]')) element.removeAttribute('tabindex')
-  return copy.innerHTML
+  return copy
 }
 
 function documentOf(title: string, body: string): string {

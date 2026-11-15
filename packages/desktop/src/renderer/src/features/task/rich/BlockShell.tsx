@@ -1,11 +1,12 @@
-import { type ReactNode, useState } from 'react'
-import { Maximize2 } from 'lucide-react'
+import { createContext, type ReactNode, useContext, useRef, useState } from 'react'
+import { Maximize2, Pin, PinOff } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { showToast } from '@/state/store'
+import { blockPinId, pinItem, pinnedFrom, unpinItem, usePinTarget } from '../pins'
 
 // 回答里富块（代码、改动、公式、流程图、图表……）共用的外壳：顶栏放图标、标题和操作，下面是内容。
 // code 是代码类的底色（和以前的代码块一样是 muted），card 是图表这类的卡片底色
@@ -26,8 +27,25 @@ export interface BlockShellProps {
   children: ReactNode
 }
 
+// 这一块在回答里的 Markdown 围栏（Markdown.tsx 的 FencedBlock 提供）：有了才能固定到白板（第 677 步）
+export const BlockSourceContext = createContext<{ language: string; code: string } | null>(null)
+
 export function BlockShell({ testId, kind, icon, title, meta, actions, expand, tone = 'code', bare = false, className, children }: BlockShellProps) {
   const [expanded, setExpanded] = useState(false)
+  const figure = useRef<HTMLElement>(null)
+  const source = useContext(BlockSourceContext)
+  // 代码里本身有 ``` 时围栏多一个反引号
+  const ticks = source && source.code.includes('```') ? '````' : '```'
+  const fence = source ? `${ticks}${source.language}\n${source.code}\n${ticks}` : null
+  const pinId = fence ? blockPinId(fence) : null
+  const pin = usePinTarget(pinId)
+  const togglePin =
+    pin && fence && pinId
+      ? () =>
+          pin.pinned
+            ? unpinItem(pin.sessionId, pinId)
+            : pinItem({ kind: 'block', sessionId: pin.sessionId, id: pinId, title: typeof title === 'string' ? title : source!.language, text: fence, ...pinnedFrom(pin.sessionId, figure.current) })
+      : null
   if (bare) {
     return (
       <div className={cn('min-w-0', className)} data-testid={testId} data-kind={kind}>
@@ -36,13 +54,18 @@ export function BlockShell({ testId, kind, icon, title, meta, actions, expand, t
     )
   }
   return (
-    <figure className={cn('min-w-0 overflow-hidden rounded-lg border', tone === 'code' ? 'bg-muted' : 'bg-card', className)} data-testid={testId} data-kind={kind}>
+    <figure ref={figure} className={cn('min-w-0 overflow-hidden rounded-lg border', tone === 'code' ? 'bg-muted' : 'bg-card', className)} data-testid={testId} data-kind={kind}>
       <figcaption className="flex h-7 items-center gap-1.5 border-b pr-1 pl-3 text-xs text-muted-foreground">
         {icon}
         <span className="min-w-0 truncate">{title}</span>
         {meta}
         <span className="ml-auto flex shrink-0 items-center">
           {actions}
+          {togglePin && (
+            <ShellAction label={pin?.pinned ? '从白板取下' : '固定到白板'} pressed={pin?.pinned} onClick={togglePin}>
+              {pin?.pinned ? <PinOff /> : <Pin />}
+            </ShellAction>
+          )}
           {expand && (
             <ShellAction label="放大" onClick={() => setExpanded(true)}>
               <Maximize2 />

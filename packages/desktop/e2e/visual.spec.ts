@@ -222,7 +222,7 @@ test('可视化的版本、白板和演示：同名的能切版本、和上一�
     await expect(board.getByTestId('pinned-visual').locator('iframe').contentFrame().locator('#v')).toHaveText('第二版')
     await board.screenshot({ path: 'test-results/visual-board.png' })
     await board.getByRole('button', { name: '从白板取下' }).click()
-    await expect(board).toContainText('还没有固定的可视化')
+    await expect(board).toContainText('还没有固定的内容')
     await window.getByRole('button', { name: '关闭面板' }).click()
 
     // 演示：铺满窗口，第一步之后的先藏着；→ 一步步出现，Esc 结束

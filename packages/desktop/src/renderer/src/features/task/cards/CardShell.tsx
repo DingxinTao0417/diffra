@@ -1,9 +1,11 @@
 import { type ComponentProps, type ReactNode, useId, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, Download, MessageCircleQuestion } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Download, MessageCircleQuestion, Pin } from 'lucide-react'
 import { cn } from 'cn'
 import { copyText, ShellAction } from '../rich/BlockShell'
 import { downloadBlob, safeFileName } from '../rich/download'
 import { useAskAbout } from '../SelectionAsk'
+import { pinItem, pinnedFrom, usePinTarget } from '../pins'
+import { snapshotHtml } from '../static-html'
 
 // 对话里过程卡片的统一外壳（第 656 步）：状态色、密度、图标、标题、副标题、操作区、页脚、展开收起、复制、导出 Markdown。
 // 新卡片只写内容。两档密度沿用以前 Conversation.tsx 的 CARD、CARD_COMPACT：标准给出错、定位结果、计划、深度扫描报告；
@@ -44,6 +46,14 @@ export function CardShell({ tone = 'default', density = 'standard', icon, title,
   const sectionRef = useRef<HTMLElement>(null)
   // 「问问这张卡」（第 674 步）：把卡片上的字引用进输入框，远程、只读的会话没有
   const ask = useAskAbout()
+  // 固定到白板（第 677 步）：固定这张卡此刻的样子，能固定几次，跨轮对比
+  const pin = usePinTarget(null)
+  const pinCard = () => {
+    const element = sectionRef.current
+    if (!pin || !element) return
+    const name = element.querySelector('header')?.textContent?.trim() || '卡片'
+    pinItem({ kind: 'card', sessionId: pin.sessionId, id: crypto.randomUUID(), title: name, html: snapshotHtml(element), ...pinnedFrom(pin.sessionId, element) })
+  }
   const heading = (
     <>
       {icon}
@@ -51,9 +61,14 @@ export function CardShell({ tone = 'default', density = 'standard', icon, title,
       {subtitle && <span className="min-w-0 truncate text-xs font-normal text-muted-foreground">{subtitle}</span>}
     </>
   )
-  const tools = (actions || copy || exportMarkdown || ask) && (
+  const tools = (actions || copy || exportMarkdown || ask || pin) && (
     <span className="ml-auto flex shrink-0 items-center text-muted-foreground">
       {actions}
+      {pin && (
+        <ShellAction label="固定到白板" onClick={pinCard}>
+          <Pin />
+        </ShellAction>
+      )}
       {ask && (
         <ShellAction label="问问这张卡" onClick={() => ask('关于这张卡片：', sectionRef.current?.innerText ?? '')}>
           <MessageCircleQuestion />

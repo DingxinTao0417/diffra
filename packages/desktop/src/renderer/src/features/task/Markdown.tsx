@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import { AnswerCode, AnswerLink, fileOfCode, fileOfHref } from './answer-links'
 import { AnswerImage, CompareImages, isBeforeAfter } from './rich/AnswerImage'
-import { BlockSkeleton } from './rich/BlockShell'
+import { BlockSkeleton, BlockSourceContext } from './rich/BlockShell'
 import { Blockquote } from './rich/Callout'
 import { CodeBlock } from './rich/CodeBlock'
 import { DiffBlock } from './rich/DiffBlock'
@@ -17,8 +17,17 @@ import { normalizeMath, remarkCallouts } from './rich/remark-rich'
 import { RichBlock, richKindOf } from './rich/RichBlock'
 import { RichTable } from './rich/RichTable'
 
-// 代码围栏按语言换成对应的富块；还在流式输出、没写完的富块先显示占位，不先闪一下代码（第 640 步）
-function FencedBlock({ node }: ComponentProps<'pre'> & ExtraProps) {
+// 代码围栏按语言换成对应的富块；还在流式输出、没写完的富块先显示占位，不先闪一下代码（第 640 步）。
+// 写完的块带上它的围栏，外壳据此能固定到白板（第 677 步）
+function FencedBlock(props: ComponentProps<'pre'> & ExtraProps) {
+  const source = useMarkdownSource()
+  const info = fenceInfo(props.node)
+  const closed = fenceClosed(source, props.node)
+  const block = <FencedBlockView {...props} />
+  return closed && !source.streaming ? <BlockSourceContext.Provider value={{ language: info.language, code: info.code }}>{block}</BlockSourceContext.Provider> : block
+}
+
+function FencedBlockView({ node }: ComponentProps<'pre'> & ExtraProps) {
   const source = useMarkdownSource()
   const info = fenceInfo(node)
   const closed = fenceClosed(source, node)

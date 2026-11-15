@@ -11,6 +11,7 @@ import { AnswerContext, findProjectFile, openFilePreview } from './answer-links'
 import { copyText } from './rich/BlockShell'
 import { useReadOnly } from './read-only'
 import { useStatic } from './static-context'
+import { pinnedFrom } from './pins'
 import { useThemeKey } from './rich/theme'
 import visualKit from './visual-kit.js?raw'
 import { VISUAL_SNAPSHOT_MAX_CHARS } from '@diffra/core/types'
@@ -190,7 +191,7 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
   const [index, setIndex] = useState(own)
   const current = versions[Math.min(index, versions.length - 1)] ?? { id, code, snapshot }
   const previous = index > 0 ? versions[index - 1] : null
-  const pinned = useAppState((state) => state.pinnedVisuals.some((item) => item.sessionId === sessionId && item.id === id))
+  const pinned = useAppState((state) => state.pinned.some((item) => item.sessionId === sessionId && item.id === id))
   // 远程会话里可视化的代码换成了占位，有快照就显示快照；静态渲染（导出、分享）不跑脚本，也用快照
   const isStatic = useStatic()
   const image = readOnly || isStatic ? current.snapshot : undefined
@@ -221,7 +222,7 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
   const togglePin = () =>
     store.set((state) => ({
       ...state,
-      pinnedVisuals: pinned ? state.pinnedVisuals.filter((item) => !(item.sessionId === sessionId && item.id === id)) : [...state.pinnedVisuals, { sessionId, id, title, code: current.code }],
+      pinned: pinned ? state.pinned.filter((item) => !(item.sessionId === sessionId && item.id === id)) : [...state.pinned, { kind: 'visual' as const, sessionId, id, title, code: current.code, ...pinnedFrom(sessionId, frame.current) }],
       panel: pinned ? state.panel : 'visuals',
     }))
 
