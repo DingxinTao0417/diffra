@@ -67,6 +67,10 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
     await refused.getByRole('button').click()
     await expect(bSteps).toContainText('a.txt is owned by worker "甲"')
     await expect(bSteps.getByRole('button', { name: '查看改动 b.txt' })).toBeVisible()
+    // 第 660 步：两个一起派出时卡片上面有组织图；结束后写着用时和步数，乙改了的文件列出来
+    await expect(window.getByTestId('agent-team').getByTestId('agent-team-member')).toHaveCount(2)
+    await expect(b.getByTestId('agent-stats')).toContainText('用时')
+    await expect(b.getByTestId('agent-edited')).toContainText('b.txt')
     // 工人的步骤不出现在主对话里
     await expect(window.getByTestId('turn').locator(':scope > [data-testid="tool-call"][data-kind="edit"]')).toHaveCount(0)
     // 任务监控：工人都交回了，改动文件标出是谁改的

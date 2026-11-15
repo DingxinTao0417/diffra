@@ -50,6 +50,10 @@ test('Enter 发送、Shift+Enter 换行；项目外读写分别申请，本会�
     await permission.getByRole('button', { name: '本会话允许此路径的同类操作' }).click()
     // 第二次读同一路径不再问；写入单独申请
     await expect(permission).toContainText('项目外写入')
+    // 确认卡上能看到会怎么改（第 659 步）
+    await expect(permission.getByTestId('permission-patch')).toContainText('会这样改')
+    await expect(permission.getByTestId('permission-patch')).toContainText('after')
+    await permission.screenshot({ path: 'test-results/permission-patch.png' })
     await permission.getByRole('button', { name: '拒绝', exact: true }).click()
     // 写入被拒、文件没动：纯回答，不要求验证
     await waitTaskStatus(window, 'done')

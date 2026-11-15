@@ -38,6 +38,8 @@ export interface ToolOutput {
   // 命令的完整输出（已截断），界面上可展开查看
   terminalOutput?: string
   commandSucceeded?: boolean
+  // 命令这次调用的用时（毫秒），界面写在输出顶上（第 659 步）
+  durationMs?: number
   // 要给模型看的图片（view_image），由主循环跟在工具结果后面发
   image?: PromptImage
 }

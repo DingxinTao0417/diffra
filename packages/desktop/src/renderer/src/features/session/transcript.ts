@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -22,6 +22,10 @@ export type TranscriptItem =
       verification?: FinishVerification
       // 收到开始的时刻，运行中的行据此显示已用时间。重放历史记录时不带，免得没跑完的旧调用从打开时开始计时
       startedAt?: number
+      // 命令这次调用的用时（第 659 步）；旧记录没有
+      durationMs?: number
+      // 上下文压缩卡：压缩前后估算的 token（第 659 步）；旧记录没有
+      compaction?: CompactionStats
       // 子智能体的卡片（主智能体的那次 delegate 调用）：名字、颜色、任务和认领的文件
       agentCard?: AgentCardMeta
       // 子智能体自己的工具调用：收进 parentId 那张卡片里，agent 是哪个工人
@@ -241,7 +245,21 @@ function agentFieldsOf(update: SessionUpdate): { agentCard?: AgentCardMeta; pare
   if (typeof parentId === 'string') return tag ? { parentId, agent: tag } : { parentId }
   const raw = diffra[AGENT_META_KEY] as Record<string, unknown> | undefined
   if (!tag || !raw || typeof raw.task !== 'string' || !isStrings(raw.files) || !isStrings(raw.nodes)) return {}
-  return { agentCard: { ...tag, task: raw.task, files: raw.files, nodes: raw.nodes } }
+  const number = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
+  const extra = { startedAt: number(raw.startedAt), endedAt: number(raw.endedAt), tokens: number(raw.tokens), edited: isStrings(raw.edited) ? raw.edited : undefined }
+  return { agentCard: { ...tag, task: raw.task, files: raw.files, nodes: raw.nodes, ...Object.fromEntries(Object.entries(extra).filter(([, value]) => value !== undefined)) } }
+}
+
+// 命令用时、压缩前后的对比（第 659 步）
+function statsOf(update: SessionUpdate): { durationMs?: number; compaction?: CompactionStats } {
+  const diffra = diffraMetaOf(update)
+  if (!diffra) return {}
+  const duration = diffra[COMMAND_DURATION_META_KEY]
+  const compaction = diffra[COMPACTION_META_KEY] as Partial<CompactionStats> | undefined
+  return {
+    ...(typeof duration === 'number' && Number.isFinite(duration) ? { durationMs: duration } : {}),
+    ...(typeof compaction?.before === 'number' ? { compaction: { before: compaction.before, after: typeof compaction.after === 'number' ? compaction.after : null, window: typeof compaction.window === 'number' ? compaction.window : null } } : {}),
+  }
 }
 
 function tokenCount(value: unknown): number | null {
@@ -328,6 +346,9 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS) ?? existing?.result,
         verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS) ?? existing?.verification,
         startedAt: existing?.startedAt ?? Date.now(),
+        ...(existing?.durationMs === undefined ? {} : { durationMs: existing.durationMs }),
+        ...(existing?.compaction ? { compaction: existing.compaction } : {}),
+        ...statsOf(update),
         ...agentFieldsKept(existing, agentFieldsOf(update)),
         ...(existing?.diagnosis ? { diagnosis: existing.diagnosis } : {}),
         ...(existing?.visual ? { visual: existing.visual } : {}),

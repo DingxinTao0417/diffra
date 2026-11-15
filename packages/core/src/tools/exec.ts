@@ -352,6 +352,7 @@ async function finishReport(context: ToolContext, entry: ExecProcess, started: n
     text: text + saved + hint,
     title,
     terminalOutput: `${header}\n${output.text.trim() || '(no output)'}`,
+    durationMs: Date.now() - started,
     // 我们结束的进程退出码不算命令失败（第 524 步：停服务不该在界面上变成「有 1 条命令失败」）
     ...(entry.exited && !entry.stopped ? { commandSucceeded: entry.exitCode === 0 } : {}),
   }

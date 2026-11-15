@@ -1,6 +1,9 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
-import { CircleHelp, ShieldAlert } from 'lucide-react'
-import { ASK_USER_SCOPE, type AskUserInput, DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
+import { CircleHelp, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { cn } from 'cn'
+import { ASK_USER_SCOPE, type AskUserInput, COMMAND_RISK_META_KEY, type CommandRisk, DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
+import type { DiffLine } from '@/lib/unified-diff'
+import { DiffLines } from './DiffLines'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { agentOfMeta } from './transcript'
@@ -21,6 +24,9 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
   const question = questionOf(request.toolCall.rawInput)
   // 子智能体发起的请求写明是哪一个
   const agent = agentOfMeta(request.toolCall._meta)
+  // 命令的风险等级和原因（第 659 步）；写项目外的文件时这个文件的那段补丁
+  const risk = riskOf(request.toolCall._meta)
+  const patch = external ? patchOf(request.toolCall.rawInput) : null
   const allowOnce = request.options.find((option) => option.kind === 'allow_once')
   const reject = request.options.find((option) => option.kind.startsWith('reject'))
   const allowOnceRef = useRef<HTMLButtonElement>(null)
@@ -83,6 +89,25 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
           {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
           {command ?? request.toolCall.title}
         </pre>
+      )}
+      {risk && risk.level !== 'low' && (
+        <div className={cn('flex items-start gap-2 rounded-md border px-3 py-2 text-xs', risk.level === 'high' ? 'border-destructive/30 bg-destructive-soft' : 'border-warning/30 bg-warning-soft')} data-testid="permission-risk" data-level={risk.level}>
+          <TriangleAlert className={cn('mt-0.5 size-3.5 shrink-0', risk.level === 'high' ? 'text-destructive' : 'text-warning')} aria-hidden="true" />
+          <div className="min-w-0">
+            <p className={cn('font-bold', risk.level === 'high' && 'text-destructive')}>{risk.level === 'high' ? '高风险，难以撤销' : '需要留意'}</p>
+            <ul className="list-disc pl-4">
+              {risk.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+      {patch && (
+        <div className="overflow-hidden rounded-md border" data-testid="permission-patch">
+          <p className="border-b bg-muted/50 px-3 py-1 text-xs text-muted-foreground">{patch.deleted ? '会删除这个文件' : patch.added ? '会新建这个文件' : '会这样改'}</p>
+          {patch.hunks.length > 0 && <DiffLines hunks={patch.hunks} className="max-h-64 overflow-y-auto bg-background" />}
+        </div>
       )}
       {justification && <p className="break-words text-xs text-muted-foreground" data-testid="permission-justification">{justification}</p>}
       {external && (
@@ -155,4 +180,33 @@ function commandOf(rawInput: unknown): string | null {
   return typeof rawInput === 'object' && rawInput !== null && 'command' in rawInput && typeof rawInput.command === 'string'
     ? rawInput.command
     : null
+}
+
+function riskOf(meta: unknown): CommandRisk | null {
+  const diffra = typeof meta === 'object' && meta !== null && 'diffra' in meta ? (meta as { diffra?: Record<string, unknown> }).diffra : undefined
+  const risk = diffra?.[COMMAND_RISK_META_KEY] as Partial<CommandRisk> | undefined
+  if (!risk || (risk.level !== 'high' && risk.level !== 'medium' && risk.level !== 'low') || !Array.isArray(risk.reasons)) return null
+  return { level: risk.level, reasons: risk.reasons.filter((reason): reason is string => typeof reason === 'string') }
+}
+
+// core 给的 apply_patch 分段：「*** Update File: 路径」后面是 @@ 分隔的几段 +/-/空格 开头的行（没有行号）
+function patchOf(rawInput: unknown): { added: boolean; deleted: boolean; hunks: DiffLine[][] } | null {
+  const patch = typeof rawInput === 'object' && rawInput !== null && 'patch' in rawInput && typeof rawInput.patch === 'string' ? rawInput.patch : null
+  if (!patch) return null
+  const [header = '', ...lines] = patch.split(/\r?\n/)
+  const hunks: DiffLine[][] = []
+  let hunk: DiffLine[] | null = null
+  for (const line of lines) {
+    if (line.startsWith('@@') || line.startsWith('*** Move to:') || line.startsWith('*** End of File')) {
+      hunk = null
+      continue
+    }
+    const kind = line.startsWith('+') ? 'add' : line.startsWith('-') ? 'remove' : 'context'
+    if (!hunk) {
+      hunk = []
+      hunks.push(hunk)
+    }
+    hunk.push({ kind, text: kind === 'context' ? line.replace(/^ /, '') : line.slice(1), oldLine: null, newLine: null })
+  }
+  return { added: header.startsWith('*** Add File'), deleted: header.startsWith('*** Delete File'), hunks: hunks.filter((lines) => lines.length > 0) }
 }

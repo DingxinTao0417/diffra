@@ -697,6 +697,11 @@ export interface AgentCardMeta extends AgentTag {
   files: string[]
   // 设计任务里负责的节点
   nodes: string[]
+  // 第 659 步起：开始、结束的时刻（毫秒时间戳），用掉的 token（输入加输出），实际改了的文件。旧记录没有
+  startedAt?: number
+  endedAt?: number
+  tokens?: number
+  edited?: string[]
 }
 
 // 用量记录的一行：一次模型调用。时间是调用结束时的 UTC 时刻；供应商没返回的数记成 null
@@ -837,6 +842,22 @@ export const PERMISSION_OPTIONS = {
   allowProject: 'allow_project',
   reject: 'reject',
 } as const
+// 命令确认请求的 _meta.diffra.commandRisk（第 659 步）：这条命令可能造成什么后果，确认卡上标出风险等级和原因。
+// high 是删目录、丢弃改动、强制推送这类难恢复的；medium 是联网、改依赖、推送、删文件这类要留意的；low 没有原因
+export const COMMAND_RISK_META_KEY = 'commandRisk'
+export interface CommandRisk {
+  level: 'high' | 'medium' | 'low'
+  reasons: string[]
+}
+// 命令跑完那次更新的 _meta.diffra.commandDurationMs（第 659 步）：这次调用等了多久（后台命令是这次查看的等待时长）
+export const COMMAND_DURATION_META_KEY = 'commandDurationMs'
+// 上下文压缩卡的 _meta.diffra.compaction（第 659 步）：压缩前后估算的上下文 token 和窗口大小，界面画成一条对比条
+export const COMPACTION_META_KEY = 'compaction'
+export interface CompactionStats {
+  before: number
+  after: number | null
+  window: number | null
+}
 // 命令确认请求的 _meta.diffra.projectCommands：选「这个项目里始终允许」时要存的命令键（如 pnpm test、git commit）和项目目录
 export const PROJECT_COMMANDS_META_KEY = 'projectCommands'
 export interface ProjectCommandsMeta {

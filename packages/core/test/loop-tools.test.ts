@@ -695,10 +695,11 @@ describe('等外面的事做完', () => {
     const startCard = finished.find((update) => update.toolCallId === 'call-0-0')
     const pollCard = finished.find((update) => update.toolCallId === 'call-1-0')
     expect(startCard?.content).toEqual([{ type: 'content', content: { type: 'text', text: `运行中（会话 ${id}）\n(no output)` } }])
-    expect(startCard?._meta?.diffra).toBeUndefined()
+    // 还在跑：没有成没成功，只有这次等了多久（第 659 步）
+    expect(startCard?._meta?.diffra).toEqual({ commandDurationMs: expect.any(Number) })
     expect(pollCard?.title).toBe('查看 sleep 1; echo "conclusion: success"')
     expect(pollCard?.content).toEqual([{ type: 'content', content: { type: 'text', text: 'Exit code: 0\nconclusion: success' } }])
-    expect(pollCard?._meta?.diffra).toEqual({ commandSucceeded: true })
+    expect(pollCard?._meta?.diffra).toEqual({ commandSucceeded: true, commandDurationMs: expect.any(Number) })
   }, 30_000)
 
   // 签名不算耗时和会话号之后，空轮询一个还没输出的进程每次结果都一样：这是在等它，不能当成原地打转

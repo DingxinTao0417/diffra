@@ -5,7 +5,7 @@ import { MODEL_CALL_HEADERS } from '../models/operations.js'
 import { streamParts } from '../models/stream.js'
 import { truncateForModel } from '../process.js'
 import { DEFAULT_CONTEXT_WINDOW, type ActiveModel, type TurnIO } from './loop.js'
-import type { StopReason, UsageCache } from '../protocol.js'
+import { COMPACTION_META_KEY, type CompactionStats, type StopReason, type UsageCache } from '../protocol.js'
 import { messagesChars, type Session } from './session.js'
 import { isWorldStateMessage } from './world-state.js'
 
@@ -119,6 +119,9 @@ function hasNewHistory(session: Session): boolean {
   return session.messages.slice(start).some((message) => message.role === 'assistant')
 }
 
+// 压缩卡上的前后对比（第 659 步）
+const compactionMeta = (stats: CompactionStats | undefined) => (stats ? { _meta: { diffra: { [COMPACTION_META_KEY]: stats } } } : {})
+
 // 每次调用编码模型前检查：估算超过触发点就压缩
 export async function compactIfNeeded(
   session: Session,
@@ -137,8 +140,8 @@ export async function compactIfNeeded(
   const percent = Math.round((estimate / window) * 100)
   const toolCallId = randomUUID()
   await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '上下文压缩', kind: 'other', status: 'in_progress' })
-  const finishCard = (status: 'completed' | 'failed', text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  const finishCard = (status: 'completed' | 'failed', text: string, stats?: CompactionStats) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], ...compactionMeta(stats) })
   const charsBefore = contextChars(session)
   const cut = session.messages.length
   try {
@@ -146,8 +149,8 @@ export async function compactIfNeeded(
     session.compaction = { upTo: cut, summary: summaryMessage(session, cut, summary) }
     // 压缩拖了一会儿才结束，界面上的上下文百分比这时就更新，不用等下一次模型调用
     await emitCompactedUsage(session, io, charsBefore, estimate, cacheUsageOf(session, latestUsage(session)))
-    await finishCard('completed', `上下文用到约 ${percent}%。之前的对话压缩成了下面的交接摘要，你说过的话原样保留。\n\n${summary}`)
     const after = estimateContextTokens(session)
+    await finishCard('completed', `上下文用到约 ${percent}%。之前的对话压缩成了下面的交接摘要，你说过的话原样保留。\n\n${summary}`, { before: estimate, after, window })
     return after !== null && after > window * HARD_STOP_RATIO ? { kind: 'too-large' } : { kind: 'compacted' }
   } catch (error) {
     if (signal.aborted) {
@@ -168,8 +171,8 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
   const timeoutSignal = AbortSignal.timeout(MANUAL_COMPACTION_TIMEOUT_MS)
   const signal = AbortSignal.any([controller.signal, timeoutSignal])
   const toolCallId = randomUUID()
-  const finishCard = (status: 'completed' | 'failed', text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }] })
+  const finishCard = (status: 'completed' | 'failed', text: string, stats?: CompactionStats) =>
+    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], ...compactionMeta(stats) })
   try {
     await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '上下文压缩', kind: 'other', status: 'in_progress' })
     // 压缩前后都按同一套字数估算；重启后 lastContext 为空时用存下来的最近一次用量
@@ -213,7 +216,8 @@ export async function compactManually(session: Session, io: TurnIO): Promise<Sto
     }
     session.compaction = { upTo: cut, summary: content }
     await emitCompactedUsage(session, io, beforeChars, beforeUsed, cacheUsageOf(session, previous))
-    await finishCard('completed', `已手动压缩上下文（对话约 ${before.toLocaleString()} → ${after.toLocaleString()} 字），你说过的话原样保留。历史记录不变。\n\n${summary}`)
+    const stats = beforeUsed === null ? undefined : { before: beforeUsed, after: estimateContextTokens(session), window: null }
+    await finishCard('completed', `已手动压缩上下文（对话约 ${before.toLocaleString()} → ${after.toLocaleString()} 字），你说过的话原样保留。历史记录不变。\n\n${summary}`, stats)
     return 'end_turn'
   } finally {
     session.activeTurn = null

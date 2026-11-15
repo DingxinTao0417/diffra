@@ -63,6 +63,8 @@ test('工具输出：测试汇总和修复提示词、搜索按文件分组能�
     await expect(test.getByTestId('test-summary')).toContainText('失败 1')
     await expect(test.getByTestId('test-failures')).toContainText('src/math.test.ts > adds numbers')
     await expect(test).toContainText('Exit code: 0')
+    // 命令的用时写在顶上（第 659 步）
+    await expect(test.getByTestId('command-duration')).toContainText('用时')
     await test.getByRole('button', { name: '填入修复提示词' }).click()
     await expect(taskInput(window)).toHaveValue(/- src\/math\.test\.ts > adds numbers/)
     await taskInput(window).fill('')
@@ -169,6 +171,12 @@ test('工具输出（二）：git 状态和提交和 diff、构建产物体积�
     for (let index = 0; index < 4; index++) {
       await expect(permission.or(done)).toBeVisible({ timeout: 20_000 })
       if (await done.isVisible()) break
+      // 第一个要确认的是 curl：确认卡写明「访问网络」（第 659 步）
+      if (index === 0) {
+        await expect(permission.getByTestId('permission-risk')).toHaveAttribute('data-level', 'medium')
+        await expect(permission.getByTestId('permission-risk')).toContainText('访问网络')
+        await permission.screenshot({ path: 'test-results/permission-risk.png' })
+      }
       await permission.getByRole('button', { name: '允许一次' }).click()
       await expect(permission).toHaveCount(0)
     }

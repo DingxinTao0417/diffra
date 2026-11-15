@@ -9,7 +9,7 @@ import { streamParts } from '../models/stream.js'
 import { devServerParamsSchema } from './config.js'
 import { newTaskState, TASK_STATE_META_KEY } from './task-state.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
-import { type CommandPolicy, commandKeys, classifyCommand, gitSubcommands, isReadOnlyCommand, MENTIONS_SECRET } from '../permissions.js'
+import { type CommandPolicy, commandKeys, commandRisk, classifyCommand, gitSubcommands, isReadOnlyCommand, MENTIONS_SECRET } from '../permissions.js'
 import { truncateForModel } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
@@ -30,6 +30,8 @@ import {
   TERMINAL_READ_PERMISSION_PREFIX,
   PERMISSION_OPTIONS,
   PROJECT_COMMANDS_META_KEY,
+  COMMAND_RISK_META_KEY,
+  COMMAND_DURATION_META_KEY,
   type ProjectCommandsMeta,
   type PromptImage,
   type SessionModel,
@@ -990,7 +992,7 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
           title: `项目外${access === 'read' ? '读取' : '写入'}：${path}`,
           kind: access === 'read' ? 'read' : 'edit',
           status: 'pending',
-          rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE },
+          rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE, ...externalPatchPreview(call, path, access) },
           _meta: LOCAL_ONLY_META,
         },
         [
@@ -1068,7 +1070,9 @@ export async function runToolCall(
       title: output.title ?? name,
       content: toolContent(session, output),
       // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
-      ...(output.commandSucceeded === undefined ? {} : { _meta: { diffra: { commandSucceeded: output.commandSucceeded } } }),
+      ...(output.commandSucceeded === undefined && output.durationMs === undefined
+        ? {}
+        : { _meta: { diffra: { ...(output.commandSucceeded === undefined ? {} : { commandSucceeded: output.commandSucceeded }), ...(output.durationMs === undefined ? {} : { [COMMAND_DURATION_META_KEY]: output.durationMs }) } } }),
     })
     // 项目外的文件（用户授权的临时脚本之类）不算本轮改动：不进结束门禁
     const edited = (output.edited ?? false) && (!output.diffs || output.diffs.some((diff) => insideProject(session, diff.path)))
@@ -1284,6 +1288,20 @@ function commandPolicy(session: Session, workdir?: string): CommandPolicy {
   }
 }
 
+// 写项目外的文件要确认时，确认卡上给出这个文件的那段补丁（第 659 步）：apply_patch 的「*** … File: 路径」分段里，路径和要写的文件对得上的那段
+const MAX_PATCH_PREVIEW_CHARS = 20_000
+function externalPatchPreview(call: StepToolCall, path: string, access: string): { patch?: string } {
+  const input = call.input as { input?: unknown } | null
+  if (access !== 'write' || call.toolName !== 'apply_patch' || typeof input?.input !== 'string') return {}
+  const target = path.replace(/\\/g, '/').toLowerCase()
+  const sections = input.input.split(/^(?=\*\*\* (?:Add|Update|Delete) File: )/m)
+  const section = sections.find((part) => {
+    const file = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/m.exec(part)?.[1]?.trim().replace(/\\/g, '/').toLowerCase()
+    return file !== undefined && (target === file || target.endsWith(`/${file.replace(/^\.\//, '')}`))
+  })
+  return section ? { patch: section.replace(/\*\*\* End Patch\s*$/, '').trimEnd().slice(0, MAX_PATCH_PREVIEW_CHARS) } : {}
+}
+
 // justification：模型写的「为什么要跑」，显示在确认卡上
 async function askCommandPermission(
   session: Session,
@@ -1309,7 +1327,7 @@ async function askCommandPermission(
       status: 'pending',
       rawInput: { command, ...(justification ? { justification } : {}) },
       ...(justification ? { content: [{ type: 'content', content: { type: 'text', text: justification } }] } : {}),
-      ...(projectWide ? { _meta: { diffra: { [PROJECT_COMMANDS_META_KEY]: { cwd: session.cwd, keys } satisfies ProjectCommandsMeta } } } : {}),
+      _meta: { diffra: { [COMMAND_RISK_META_KEY]: commandRisk(command), ...(projectWide ? { [PROJECT_COMMANDS_META_KEY]: { cwd: session.cwd, keys } satisfies ProjectCommandsMeta } : {}) } },
     },
     projectWide ? [...PERMISSION_CHOICES.slice(0, 2), { optionId: PERMISSION_OPTIONS.allowProject, name: '这个项目里始终允许同类命令', kind: 'allow_always' }, ...PERMISSION_CHOICES.slice(2)] : PERMISSION_CHOICES,
   )

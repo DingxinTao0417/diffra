@@ -1,7 +1,7 @@
 import { type Dirent, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { parse } from 'shell-quote'
-import type { PermissionMode } from './protocol.js'
+import type { CommandRisk, PermissionMode } from './protocol.js'
 import { isProtectedFile, isUnderReadOnly } from './tools/protected.js'
 import { fromMsysPath } from './tools/workspace.js'
 
@@ -476,6 +476,45 @@ function globMatches(pattern: string, name: string): boolean {
 }
 
 // 整条命令都是只读的（每一段都是只读命令，没有重定向、命令替换、后台执行）：只读的智能体只能跑这种（第 508 步）
+// 确认卡上的风险等级和原因（第 659 步）：只用来提示，放不放行仍由 classifyCommand 决定
+export function commandRisk(command: string): CommandRisk {
+  const segments = splitSegments(command.trim(), true)
+  if (segments === null) return { level: 'medium', reasons: ['命令里有拆不开的写法，看不清实际要执行什么'] }
+  const high = new Set<string>()
+  const medium = new Set<string>()
+  if (hasSubstitution(command)) medium.add('有命令替换，实际执行的内容要运行时才知道')
+  for (const argv of segments) {
+    const program = programName(argv[0] ?? '')
+    const args = argv.slice(1)
+    const sub = (args[0] ?? '').toLowerCase()
+    const has = (...flags: string[]) => args.some((arg) => flags.includes(arg))
+    if (program === 'sudo') high.add('以管理员身份运行')
+    else if (program === 'rm') {
+      if (args.some((arg) => arg === '--recursive' || /^-[a-zA-Z]*[rR]/.test(arg))) high.add('递归删除文件和目录')
+      else medium.add('删除文件')
+    } else if (program === 'rmdir') medium.add('删除目录')
+    else if (program === 'git') {
+      if (sub === 'push') {
+        if (args.some((arg) => arg === '-f' || arg.startsWith('--force') || /^\+/.test(arg))) high.add('强制推送，会覆盖远程的提交')
+        else medium.add('推送到远程仓库')
+      } else if (sub === 'reset') {
+        if (has('--hard')) high.add('丢弃未提交的改动')
+        else medium.add('移动分支指针')
+      } else if (sub === 'clean') high.add('删除没有纳入 git 的文件')
+      else if (sub === 'restore' || (sub === 'checkout' && has('--', '.'))) high.add('丢弃未提交的改动')
+      else if (sub === 'checkout' || sub === 'switch') medium.add('切换分支')
+      else if (sub === 'rebase') medium.add('改写提交历史')
+      else if (sub === 'branch' && has('-D', '-d', '--delete')) medium.add('删除分支')
+    } else if (PACKAGE_MANAGERS.has(program) && PACKAGE_CHANGES.has(sub)) medium.add('安装、卸载或升级依赖')
+    else if (program === 'npx' || program === 'bunx') medium.add('下载并运行包里的程序')
+    else if (NETWORK.has(program)) medium.add('访问网络')
+    if (killsByName(argv)) medium.add('按名字结束进程，可能连带结束你的其他程序')
+  }
+  if (high.size > 0) return { level: 'high', reasons: [...high, ...medium] }
+  if (medium.size > 0) return { level: 'medium', reasons: [...medium] }
+  return { level: 'low', reasons: [] }
+}
+
 export function isReadOnlyCommand(command: string): boolean {
   const trimmed = command.trim()
   if (hasSubstitution(trimmed)) return false

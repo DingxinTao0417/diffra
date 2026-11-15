@@ -502,7 +502,8 @@ describe('主循环', () => {
     const model = scriptedModel([run('node --version'), run('node -e "1"'), run('rm -f nothing.txt'), { text: '好了' }])
     await runTurn(await makeSession(model), { id: 't', text: '跑一下' }, answering('allow_project'))
     expect(asked[0]?.options).toEqual(['allow_once', 'allow_always', 'allow_project', 'reject'])
-    expect(asked[0]?.meta).toEqual({ diffra: { projectCommands: { cwd: project, keys: ['node'] } } })
+    // 第 659 步起确认请求还带风险等级：node --version 是普通命令
+    expect(asked[0]?.meta).toEqual({ diffra: { commandRisk: { level: 'low', reasons: [] }, projectCommands: { cwd: project, keys: ['node'] } } })
     // 第二条 node 命令没再问；rm 照旧问，而且没有「项目里始终允许」
     expect(asked).toHaveLength(2)
     expect(asked[1]?.options).toEqual(['allow_once', 'allow_always', 'reject'])
@@ -556,10 +557,11 @@ describe('主循环', () => {
       const update = io.updates.findLast((item) => item.sessionUpdate === 'tool_call_update' && item.toolCallId === toolCallId)
       return update?.sessionUpdate === 'tool_call_update' ? { status: update.status, meta: update._meta } : null
     }
-    expect(metaOf('call-0-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: true } } })
-    expect(metaOf('call-1-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: false } } })
+    // 第 659 步起命令还带这次调用的用时
+    expect(metaOf('call-0-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: true, commandDurationMs: expect.any(Number) } } })
+    expect(metaOf('call-1-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: false, commandDurationMs: expect.any(Number) } } })
     // 读不存在的文件也是命令，cat 退出码非 0
-    expect(metaOf('call-2-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: false } } })
+    expect(metaOf('call-2-0')).toEqual({ status: 'completed', meta: { diffra: { commandSucceeded: false, commandDurationMs: expect.any(Number) } } })
     // 不是命令的工具不带这个字段
     expect(metaOf('call-3-0')).toEqual({ status: 'completed', meta: undefined })
   })

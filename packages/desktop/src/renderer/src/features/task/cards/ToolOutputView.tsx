@@ -20,7 +20,7 @@ const MAX_SEARCH_HITS = 300
 
 // 工具步骤展开后的输出（第 655 步）：命令的退出状态和操作在顶上一行；测试结果先给汇总和失败的用例、搜索结果按文件分组、读文件按代码高亮，
 // 其余命令的输出保留 ANSI 颜色；不是命令、输出是 JSON 的显示成能折叠的树。认不出的照原样
-export function ToolOutputView({ command, output }: { command: string | null; output: string }) {
+export function ToolOutputView({ command, output, durationMs }: { command: string | null; output: string; durationMs?: number }) {
   const target = useContext(AnswerContext)
   const parsed = useMemo(() => (command ? splitCommandOutput(output) : { exitCode: null, state: null, body: output }), [command, output])
   const view = useMemo(() => {
@@ -60,6 +60,7 @@ export function ToolOutputView({ command, output }: { command: string | null; ou
       {command && (
         <div className="flex min-h-7 items-center gap-2 border-b pr-1 pl-2.5 text-xs">
           {header && <span className={cn('shrink-0 font-mono', parsed.exitCode !== null && parsed.exitCode !== 0 ? 'text-destructive' : 'text-muted-foreground')}>{header}</span>}
+          {durationMs !== undefined && <span className="shrink-0 text-muted-foreground tabular-nums" data-testid="command-duration">用时 {formatDuration(durationMs)}</span>}
           {view?.kind === 'test' && <TestBadges test={view.test} exitCode={parsed.exitCode} />}
           <span className="ml-auto flex shrink-0 items-center">
             {failedTests && fill && (

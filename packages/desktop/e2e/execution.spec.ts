@@ -75,6 +75,9 @@ test('任务执行设置：触发点 90% 时不压缩；改成 70% 后新任务�
     await expect(card).toHaveCount(1)
     await expect(card).toHaveAttribute('data-status', 'completed')
     await expect(card).toContainText('之前的对话压缩成了下面的交接摘要')
+    // 第 660 步：压缩前后的对比条
+    await expect(card.getByTestId('compaction-bar')).toContainText('压缩前')
+    await expect(card.getByTestId('compaction-bar')).toContainText('少了约')
     await expect(card).not.toContainText('搜了六种写法都没找到')
     await card.getByRole('button').click()
     await expect(card).toContainText('用户要找 TODO；搜了六种写法都没找到。')

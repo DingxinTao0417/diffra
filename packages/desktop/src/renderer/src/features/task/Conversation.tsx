@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
@@ -14,7 +14,7 @@ import { editKey, editMeta, type EditTexts, replayEdits } from '@/features/sessi
 import type { TranscriptItem, Turn } from '@/features/session/transcript'
 import { TodoAcceptanceCard } from '@/features/todos/TodoAcceptanceCard'
 import { errorMessage } from '@/lib/errors'
-import { formatDuration } from '@/lib/format'
+import { formatDuration, formatTokens } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
 import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel } from '@/state/actions'
@@ -28,6 +28,8 @@ import { useRemoteTask } from './remote-task'
 import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
+import { AgentTeam } from './cards/AgentTeam'
+import { CompactionBar } from './cards/CompactionBar'
 import { FINDING_PATTERN, levelStyle, ReviewFindings, SecurityFindings } from './cards/FindingLists'
 import { LocationLink } from './cards/LocationLink'
 import { ShellAction } from './rich/BlockShell'
@@ -129,6 +131,13 @@ function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architect
   if (CHECK_PREFIXES.some((prefix) => item.title.startsWith(prefix))) return 'check'
   if (item.content.some((content) => content.type === 'diff')) return 'edit'
   return null
+}
+
+// 从 start 开始连着的子智能体卡片
+function agentRun(blocks: Block[], start: number): ToolItem[] {
+  const run: ToolItem[] = []
+  for (let index = start; blocks[index]?.type === 'agent'; index++) run.push((blocks[index] as { item: ToolItem }).item)
+  return run
 }
 
 const isEdit = (item: ProcessItem): boolean => item.kind === 'tool' && toolBlockType(item) === 'edit'
@@ -568,16 +577,21 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           case 'verify':
             // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
             return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
-          case 'agent':
+          case 'agent': {
+            // 连着派出的几个子智能体：第一张卡片上面画一行组织图
+            const team = blocks[index - 1]?.type === 'agent' ? [] : agentRun(blocks, index)
             return (
+              <Fragment key={block.item.id}>
+                {team.length > 1 && <AgentTeam items={team} onJump={onLocate} />}
               <AgentCard
-                key={block.item.id}
                 item={block.item}
                 steps={agentSteps.get(block.item.id) ?? []}
                 projectPath={task.project}
                 onDiagnose={!readOnly && latestWork && !task.running && block.item.status === 'failed' ? () => void diagnose(task.sessionId, { turnId: turn.id, cardId: block.item.id, agent: block.item.agentCard!.name }) : undefined}
               />
+              </Fragment>
             )
+          }
           case 'diagnosis':
             return <DiagnosisCard key={block.item.id} item={block.item} task={task} onLocate={onLocate} />
           case 'wait':
@@ -882,7 +896,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
           <TaskLink source={item.taskLink} label="打开任务" />
         </div>
       )}
-      {expanded && output && <ToolOutputView command={item.toolKind === 'execute' && target ? target : null} output={output} />}
+      {expanded && output && <ToolOutputView command={item.toolKind === 'execute' && target ? target : null} output={output} durationMs={item.durationMs} />}
       {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
   )
@@ -946,10 +960,15 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
   const card = item.agentCard!
   const [open, setOpen] = useState(false)
   const running = item.status !== 'completed' && item.status !== 'failed'
-  const elapsed = useElapsed(item.startedAt, running)
+  // 第 659 步起卡片带开始时刻（排队等别的工人时还没有）；旧记录退回收到卡片的时刻
+  const elapsed = useElapsed(card.startedAt ?? item.startedAt, running)
   const current = steps.at(-1)
   const action = current ? splitTitle(current.title) : null
   const result = textOf(item)
+  const [showResult, setShowResult] = useState(false)
+  const longResult = result.split('\n').length > 6 || result.length > 600
+  const duration = card.startedAt !== undefined && card.endedAt !== undefined ? card.endedAt - card.startedAt : null
+  const queued = running && card.startedAt === undefined && card.tokens !== undefined
   return (
     <div
       className={cn(CARD_COMPACT, 'text-sm')}
@@ -971,17 +990,44 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
       </button>
       {running ? (
         <p className="flex min-w-0 items-center gap-1.5 pl-5.5 text-xs text-muted-foreground" data-testid="agent-progress">
-          <span className="shrink-0">第 {Math.max(steps.length, 1)} 步</span>
-          {action && (
-            <span className="min-w-0 truncate">
-              · {action.action}
-              {action.target ? ` ${action.target}` : ''}
-            </span>
+          {queued ? (
+            <span className="shrink-0">排队中，等前面的子智能体做完</span>
+          ) : (
+            <>
+              <span className="shrink-0">第 {Math.max(steps.length, 1)} 步</span>
+              {action && (
+                <span className="min-w-0 truncate">
+                  · {action.action}
+                  {action.target ? ` ${action.target}` : ''}
+                </span>
+              )}
+            </>
           )}
-          {elapsed !== null && <span className="ml-auto shrink-0 tabular-nums">{formatDuration(elapsed)}</span>}
+          {card.tokens !== undefined && card.tokens > 0 && <span className="shrink-0 tabular-nums">· {formatTokens(card.tokens)} token</span>}
+          {elapsed !== null && !queued && <span className="ml-auto shrink-0 tabular-nums">{formatDuration(elapsed)}</span>}
         </p>
       ) : (
-        result && <p className="pl-5.5 leading-relaxed break-words whitespace-pre-wrap text-foreground">{result}</p>
+        <>
+          {result && (
+            <div className="pl-5.5">
+              <p className={cn('leading-relaxed break-words whitespace-pre-wrap text-foreground', longResult && !showResult && 'line-clamp-6')} data-testid="agent-result">
+                {result}
+              </p>
+              {longResult && (
+                <button type="button" aria-expanded={showResult} className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowResult(!showResult)}>
+                  {showResult ? '收起结果' : '展开全部结果'}
+                </button>
+              )}
+            </div>
+          )}
+          {(duration !== null || card.tokens !== undefined) && (
+            <p className="flex flex-wrap gap-x-1.5 pl-5.5 text-xs text-muted-foreground tabular-nums" data-testid="agent-stats">
+              {duration !== null && <span>用时 {formatDuration(duration)}</span>}
+              <span>· {steps.length} 步</span>
+              {card.tokens !== undefined && card.tokens > 0 && <span>· {formatTokens(card.tokens)} token</span>}
+            </p>
+          )}
+        </>
       )}
       {onDiagnose && (
         <Button variant="outline" size="sm" className="ml-5.5 h-7 gap-1 self-start" onClick={onDiagnose}>
@@ -992,6 +1038,14 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
       {card.files.length > 0 && (
         <p className="truncate pl-5.5 text-xs text-muted-foreground" title={card.files.join('\n')}>
           认领：{card.files.join('、')}
+        </p>
+      )}
+      {card.edited && card.edited.length > 0 && (
+        <p className="flex flex-wrap items-baseline gap-x-1.5 pl-5.5 text-xs text-muted-foreground" data-testid="agent-edited">
+          改了：
+          {card.edited.map((path) => (
+            <LocationLink key={path} location={path} className="font-mono" />
+          ))}
         </p>
       )}
       {open && (
@@ -1289,7 +1343,8 @@ function CompactionRow({ item }: { item: ToolItem }) {
         <span className="min-w-0 text-muted-foreground">{item.status === 'completed' || item.status === 'failed' ? headline : '正在压缩…'}</span>
         {detail && (open ? <ChevronDown className="mt-1 size-3 shrink-0" /> : <ChevronRight className="mt-1 size-3 shrink-0" />)}
       </button>
-      {open && detail && <div className="mt-1.5 ml-5.5 max-h-96 overflow-auto rounded-md bg-muted p-2.5 leading-relaxed whitespace-pre-wrap">{detail}</div>}
+      {item.status === 'completed' && item.compaction && <CompactionBar stats={item.compaction} />}
+      {open && detail &&<div className="mt-1.5 ml-5.5 max-h-96 overflow-auto rounded-md bg-muted p-2.5 leading-relaxed whitespace-pre-wrap">{detail}</div>}
     </div>
   )
 }
@@ -1407,7 +1462,7 @@ function CheckRow({ item }: { item: ToolItem }) {
         {/* success-color-allow: 检查命令通过 */}
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
       </DisclosureRow>
-      {open && output && <ToolOutputView command={command} output={output} />}
+      {open && output && <ToolOutputView command={command} output={output} durationMs={item.durationMs} />}
       {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
   )

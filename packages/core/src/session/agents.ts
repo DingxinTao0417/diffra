@@ -193,6 +193,10 @@ interface Worker {
   type: AgentType | null
   // 最近几步里它说的话
   notes: string[]
+  // 卡片上的用时和用量（第 659 步）：排队等别的工人时还没开始
+  startedAt: number | null
+  endedAt: number | null
+  tokens: number
 }
 
 type WorkerOutcome =
@@ -203,7 +207,16 @@ type WorkerOutcome =
   | { kind: 'failed'; message: string }
 
 function cardMeta(team: Team, worker: Worker): AgentCardMeta {
-  return { ...worker.tag, task: worker.task, files: claimsOf(team, worker.tag.id), nodes: worker.nodes }
+  return {
+    ...worker.tag,
+    task: worker.task,
+    files: claimsOf(team, worker.tag.id),
+    nodes: worker.nodes,
+    ...(worker.startedAt === null ? {} : { startedAt: worker.startedAt }),
+    ...(worker.endedAt === null ? {} : { endedAt: worker.endedAt }),
+    tokens: worker.tokens,
+    edited: [...worker.edited],
+  }
 }
 
 function withAgentMeta<T extends { _meta?: { [key: string]: unknown } | null }>(value: T, worker: Worker): T {
@@ -236,7 +249,10 @@ function workerIO(io: TurnIO, worker: Worker, permissions: { chain: Promise<unkn
       permissions.chain = asked.catch(() => null)
       return asked
     },
-    recordUsage: (call) => io.recordUsage({ ...call, role: 'subagent' }),
+    recordUsage: (call) => {
+      worker.tokens += (call.usage.inputTokens ?? 0) + (call.usage.outputTokens ?? 0)
+      return io.recordUsage({ ...call, role: 'subagent' })
+    },
     // 设计页按调用的工人加节点锁、画光标
     ...(io.design ? { design: (tool, args, signal) => io.design!(tool, args, signal, worker.tag) } : {}),
   }
@@ -547,7 +563,7 @@ export async function runDelegates(
     team.count++
     // 只读的工人不认领文件和节点：它不改东西，认领了反而挡住别的工人
     const nodes = session.design && !type?.readOnly ? [...new Set(input.data.nodes ?? [])] : []
-    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, edited: new Set(), boundary: [], steps: 0, type, notes: [] }
+    const worker: Worker = { tag, task: input.data.task, nodes, cardId: call.toolCallId, edited: new Set(), boundary: [], steps: 0, type, notes: [], startedAt: null, endedAt: null, tokens: 0 }
     // 先把要认领的都认领下来；和正在跑的工人冲突就不派这个工人
     const refused: string[] = []
     for (const raw of type?.readOnly ? [] : (input.data.files ?? [])) {
@@ -587,6 +603,8 @@ export async function runDelegates(
       const job = jobs[next++]!
       const { worker } = job
       let outcome: WorkerOutcome
+      worker.startedAt = Date.now()
+      await io.update({ sessionUpdate: 'tool_call_update', toolCallId: worker.cardId, _meta: { diffra: { [AGENT_META_KEY]: cardMeta(team, worker) } } })
       try {
         outcome = await runWorker(session, team, worker, active, signal, io)
       } catch (error) {
@@ -594,6 +612,7 @@ export async function runDelegates(
         if (!signal.aborted) console.error(`[agents] 子智能体 ${worker.tag.name} 出错`, error)
       }
       const described = describeOutcome(worker, outcome)
+      worker.endedAt = Date.now()
       await io.update({
         sessionUpdate: 'tool_call_update',
         toolCallId: worker.cardId,
