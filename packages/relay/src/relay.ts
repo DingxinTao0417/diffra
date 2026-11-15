@@ -53,6 +53,8 @@ export const DEFAULT_LIMITS: RelayLimits = {
 export interface RelayOptions {
   host: string
   port: number
+  // 设备连接下线时仍监听（健康检查照常），但拒绝所有 WebSocket 升级；默认开启，入口按环境变量决定
+  enabled?: boolean
   // 在 nginx 后面时为 true：只认从本机来的连接带的 X-Real-IP
   trustProxy: boolean
   // 健康检查返回的版本标识，发布脚本据此确认新版本已经在跑
@@ -113,6 +115,7 @@ const HOUR_MS = 3_600_000
 
 export function createRelay(options: RelayOptions): Relay {
   const limits = { ...DEFAULT_LIMITS, ...options.limits }
+  const enabled = options.enabled ?? true
   const devices = new Map<string, Connection>()
   const pending = new Set<Connection>()
   const perIp = new Map<string, number>()
@@ -145,6 +148,10 @@ export function createRelay(options: RelayOptions): Relay {
   }
 
   server.on('upgrade', (request, socket, head) => {
+    if (!enabled) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+      return
+    }
     if (new URL(request.url ?? '/', 'http://relay').pathname !== RELAY_PATH) {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
       return

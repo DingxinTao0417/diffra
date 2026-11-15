@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Eye, MonitorSmartphone, ShieldAlert, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
-import { canControl, REMOTE_LEVEL_LABELS, type RemoteLevel, type RemoteView } from '../../../../shared/remote'
+import { canControl, REMOTE_DEVICE_CONNECTION_ENABLED, REMOTE_LEVEL_LABELS, type RemoteLevel, type RemoteView } from '../../../../shared/remote'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -58,8 +58,8 @@ export function controlling(entry: DeviceEntry): boolean {
 }
 
 function useDeviceEntries(): DeviceEntry[] {
-  const view = useAppState((state) => state.remote)
-  return useMemo(() => deviceEntries(view), [view])
+  const view = useAppState((state) => (REMOTE_DEVICE_CONNECTION_ENABLED ? state.remote : null))
+  return useMemo(() => (REMOTE_DEVICE_CONNECTION_ENABLED ? deviceEntries(view) : NO_ENTRIES), [view])
 }
 
 // 刚做过操作的设备：到点再画一次，把闪的效果收掉
@@ -99,6 +99,7 @@ function DeviceAvatar({ entry, pulse }: { entry: DeviceEntry; pulse: boolean }) 
 export function DevicesButton() {
   const entries = useDeviceEntries()
   const recent = useRecentAction(entries)
+  if (!REMOTE_DEVICE_CONNECTION_ENABLED) return null
   const online = entries.filter((entry) => entry.online).length
   const control = entries.filter(controlling).length
   const pulse = entries.some(recent)
@@ -135,6 +136,7 @@ export function DevicesButton() {
 export function RemoteControlIndicator({ compact = false }: { compact?: boolean }) {
   const entries = useDeviceEntries()
   const recent = useRecentAction(entries)
+  if (!REMOTE_DEVICE_CONNECTION_ENABLED) return null
   const active = entries.filter(controlling)
   if (active.length === 0) return null
   const full = active.some((entry) => entry.incoming?.level === 'full')

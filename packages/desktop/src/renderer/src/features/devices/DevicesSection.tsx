@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Copy, MonitorSmartphone, ShieldCheck } from 'lucide-react'
-import type { RemoteAuditEntry, RemoteDeviceView, RemoteGrantView, RemoteProjectGrant, RemoteRelayStatus, RemoteView } from '../../../../shared/remote'
+import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAuditEntry, type RemoteDeviceView, type RemoteGrantView, type RemoteProjectGrant, type RemoteRelayStatus, type RemoteView } from '../../../../shared/remote'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -31,7 +31,7 @@ const run = (action: () => Promise<unknown>) => action().catch((error: unknown) 
 export function DevicesSection() {
   const remote = useAppState((state) => state.remote)
   const [tab, setTab] = useState<Tab>('connect')
-  if (!remote) return null
+  if (!REMOTE_DEVICE_CONNECTION_ENABLED || !remote) return null
   return (
     <>
       <SettingsHeader

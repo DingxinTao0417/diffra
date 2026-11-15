@@ -20,12 +20,14 @@ try {
 const relay = createRelay({
   host: '127.0.0.1',
   port,
+  // 2026-11-15 起设备连接下线：默认拒绝所有连接，只有显式设置 RELAY_ENABLED=1 才对外开放
+  enabled: process.env.RELAY_ENABLED === '1',
   trustProxy: process.env.RELAY_TRUST_PROXY === '1',
   release,
   log: (line) => console.log(`${new Date().toISOString()} ${line}`),
 })
 await relay.listen()
-console.log(`${new Date().toISOString()} listening 127.0.0.1:${port} release ${release}`)
+console.log(`${new Date().toISOString()} listening 127.0.0.1:${port} release ${release} devices ${process.env.RELAY_ENABLED === '1' ? 'enabled' : 'disabled'}`)
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {

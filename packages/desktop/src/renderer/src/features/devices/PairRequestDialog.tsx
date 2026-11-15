@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { RemotePairRequest, RemoteProjectGrant } from '../../../../shared/remote'
+import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemotePairRequest, type RemoteProjectGrant } from '../../../../shared/remote'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { errorMessage } from '@/lib/errors'
@@ -9,7 +9,7 @@ import { describeGrants, ProjectGrantPicker } from './ProjectGrantPicker'
 // 有设备凭邀请串连上来：在哪个页面都弹出来，本机的人看着名称和指纹点允许或拒绝。默认一个项目都不开放
 export function PairRequestDialog() {
   const request = useAppState((state) => state.remote?.requests[0] ?? null)
-  if (!request) return null
+  if (!REMOTE_DEVICE_CONNECTION_ENABLED || !request) return null
   // 换了一个请求就重新挂载，选择从头开始
   return <RequestDialog key={request.deviceId} request={request} />
 }

@@ -1,6 +1,7 @@
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useState } from 'react'
 import { Search } from 'lucide-react'
 import { cn } from 'cn'
+import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { folderName, formatTime } from '@/lib/format'
@@ -37,7 +38,7 @@ function SearchBody({ onClose }: { onClose(): void }) {
   const pick = (item: SearchItem | undefined) => {
     if (!item) return
     onClose()
-    if (item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
+    if (REMOTE_DEVICE_CONNECTION_ENABLED && item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
     else void openTask(item)
   }
 

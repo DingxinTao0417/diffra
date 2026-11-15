@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Menu, PanelLeft } from 'lucide-react'
 import { cn } from 'cn'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { RemoteControlIndicator } from '@/features/devices/DevicesOverview'
 import { IS_MAC, MAC_CHROME_HEIGHT, shortcutLabel } from '@/lib/platform'
 import { moveHistory, toggleSidebar } from '@/state/actions'
@@ -57,7 +58,7 @@ export function TitleBar() {
           data-testid="title-bar"
         >
           {navButtons}
-          <RemoteControlIndicator compact />
+          {REMOTE_DEVICE_CONNECTION_ENABLED && <RemoteControlIndicator compact />}
         </div>
       </>
     )
@@ -70,7 +71,7 @@ export function TitleBar() {
       </BarButton>
       {navButtons}
       <div className="flex-1" />
-      <RemoteControlIndicator />
+      {REMOTE_DEVICE_CONNECTION_ENABLED && <RemoteControlIndicator />}
     </div>
   )
 }

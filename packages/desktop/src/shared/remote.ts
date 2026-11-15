@@ -6,6 +6,10 @@ import type { ModelRef } from './settings'
 // 设备连接（docs/decisions.md「设备连接」）：主进程和界面之间交换的状态。
 // 被连接端 = 数据所在、「允许连接本机」那台；连接端 = 「连接其他设备」那台
 
+// 2026-11-15 起整体下线：网络安全问题尚未彻底解决，代码保留但默认关闭。
+// 恢复时改回 true，并同时恢复官网隐私政策和快速开始的说明（docs/decisions.md「设备连接下线」）。
+export const REMOTE_DEVICE_CONNECTION_ENABLED = false
+
 // 被连接端在列表里报的设备连接接口版本：2 起认 session.details、session.diff 这些新请求（0.3.x 不报，按 1 算）。
 // 连接端按它决定发不发新请求：老版本被连接端收到不认识的请求会当成格式不对、断开通道
 export const REMOTE_API = 2

@@ -124,3 +124,24 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
     rmSync(project, { recursive: true, force: true })
   }
 })
+
+test('设备连接已下线：侧栏和设置里没有可见入口', async () => {
+  const userDataDir = makeUserDataDir()
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await expect(window.getByText('要做什么？')).toBeVisible()
+    await expect(window.getByTestId('devices-button')).toHaveCount(0)
+    await expect(window.getByTestId('sidebar-footer').getByRole('button', { name: /设备/ })).toHaveCount(0)
+    await expect(window.getByTestId('remote-control-indicator')).toHaveCount(0)
+    await expect(window.getByTestId('sidebar-remote-project')).toHaveCount(0)
+
+    await window.keyboard.press('ControlOrMeta+,')
+    await expect(settingsNav(window).getByRole('button', { name: '设备连接' })).toHaveCount(0)
+    await settingsNav(window).getByLabel('搜索设置').fill('设备')
+    await expect(settingsNav(window).getByText('没有匹配的设置')).toBeVisible()
+  } finally {
+    await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

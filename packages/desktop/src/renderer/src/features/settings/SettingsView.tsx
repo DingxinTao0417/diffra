@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import type { ChangelogRelease } from '../../../../shared/changelog'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
+import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import {
   type Appearance,
   COMPACT_AT_PERCENTS,
@@ -85,7 +86,9 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
   },
   {
     name: '连接',
-    items: [{ id: 'devices', label: '设备连接', icon: MonitorSmartphone, keywords: '远程 设备 配对 邀请串 互联网 中转 同步 会话 授权 指纹' }],
+    items: REMOTE_DEVICE_CONNECTION_ENABLED
+      ? [{ id: 'devices' as const, label: '设备连接', icon: MonitorSmartphone, keywords: '远程 设备 配对 邀请串 互联网 中转 同步 会话 授权 指纹' }]
+      : [],
   },
   {
     name: '数据',
@@ -168,7 +171,7 @@ function SectionBody({ section }: { section: SettingsSection }) {
     case 'browser':
       return <BrowserSection />
     case 'devices':
-      return <DevicesSection />
+      return REMOTE_DEVICE_CONNECTION_ENABLED ? <DevicesSection /> : <GeneralSection />
     case 'storage':
       return <StorageSection />
     case 'usage':

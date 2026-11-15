@@ -2,6 +2,7 @@ import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
 import { Blocks, ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
+import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -228,9 +229,10 @@ export function Sidebar() {
             </div>
           )
         })}
-        {remoteGroups.map((group) => (
-          <RemoteProject key={group.key} group={group} collapsed={collapsed.has(group.key)} expanded={expanded.has(group.key)} activeSession={route.name === 'remote-task' && route.deviceId === group.deviceId ? route.sessionId : null} />
-        ))}
+        {REMOTE_DEVICE_CONNECTION_ENABLED &&
+          remoteGroups.map((group) => (
+            <RemoteProject key={group.key} group={group} collapsed={collapsed.has(group.key)} expanded={expanded.has(group.key)} activeSession={route.name === 'remote-task' && route.deviceId === group.deviceId ? route.sessionId : null} />
+          ))}
       </div>
 
       {/* 左下角：设备、用量、设置（SidebarFooter） */}
@@ -278,7 +280,7 @@ function SidebarSearch() {
     if (!item) return
     setOpen(false)
     setQuery('')
-    if (item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
+    if (REMOTE_DEVICE_CONNECTION_ENABLED && item.remote) navigate({ name: 'remote-task', deviceId: item.remote.deviceId, sessionId: item.sessionId })
     else void openTask(item)
   }
 

@@ -322,4 +322,20 @@ describe('HTTP', () => {
     })
     expect(failed).toBe(true)
   })
+
+  test('没有显式开启时只保留健康检查，设备连接升级被拒', async () => {
+    relay = createRelay({ host: '127.0.0.1', port: 0, trustProxy: false, release: 'test-release', enabled: false, log: (line) => lines.push(line) })
+    const address = `127.0.0.1:${await relay.listen()}`
+    const health = await fetch(`http://${address}/health`)
+    expect(health.status).toBe(200)
+    expect(await health.json()).toEqual({ ok: true, release: 'test-release' })
+
+    const socket = new WebSocket(`ws://${address}${RELAY_PATH}`)
+    const failed = await new Promise<boolean>((resolve) => {
+      socket.addEventListener('error', () => resolve(true))
+      socket.addEventListener('open', () => resolve(false))
+    })
+    expect(failed).toBe(true)
+    socket.close()
+  })
 })

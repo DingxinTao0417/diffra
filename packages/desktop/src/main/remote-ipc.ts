@@ -7,7 +7,7 @@ import { askAnswersSchema, requestCallSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult } from '../shared/remote'
+import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult } from '../shared/remote'
 import { coreConnection } from './core-process'
 import { listBranches, switchBranch } from './project-branch'
 import { parse } from './ipc-input'
@@ -103,6 +103,8 @@ function inviteTtlMs(): number {
 }
 
 export function registerRemoteIpc(userDataDir: string): void {
+  // 设备连接已下线：不启动中转连接，也不注册任何远程 IPC 接口。恢复时见 shared/remote.ts 的开关
+  if (!REMOTE_DEVICE_CONNECTION_ENABLED) return
   const opening = RemoteService.open(userDataDir, {
     relayUrl: relayUrl(),
     appVersion: app.getVersion(),

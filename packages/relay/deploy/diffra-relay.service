@@ -14,6 +14,8 @@ WorkingDirectory=/opt/diffra-relay/current
 ExecStart=/usr/local/bin/node /opt/diffra-relay/current/src/main.ts
 Environment=RELAY_PORT=8787
 Environment=RELAY_TRUST_PROXY=1
+# 设备连接已下线：中转只保留健康检查，拒绝所有设备连接
+Environment=RELAY_ENABLED=0
 Environment=NODE_ENV=production
 # 只记连接、断开和错误，按行追加；留 14 天（logrotate.conf）
 StandardOutput=append:/var/log/diffra-relay/relay.log

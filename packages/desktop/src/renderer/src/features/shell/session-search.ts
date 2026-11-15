@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SessionSearchResult } from '@diffra/core/types'
+import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { useAppState } from '@/state/store'
 
 const RECENT_LIMIT = 8
@@ -23,7 +24,7 @@ interface Searched {
 // 别的设备授权给本机的会话只有列表在本机，按标题找，排在本机结果后面
 export function useSessionSearch(query: string) {
   const tasks = useAppState((state) => state.tasks)
-  const peers = useAppState((state) => state.remote?.peers ?? NO_PEERS)
+  const peers = useAppState((state) => (REMOTE_DEVICE_CONNECTION_ENABLED ? (state.remote?.peers ?? NO_PEERS) : NO_PEERS))
   const remoteLists = useAppState((state) => state.remoteLists)
   const [searched, setSearched] = useState<Searched | null>(null)
   const text = query.trim()
@@ -67,6 +68,7 @@ export function useSessionSearch(query: string) {
   }, [text])
 
   const remote = useMemo<SearchItem[]>(() => {
+    if (!REMOTE_DEVICE_CONNECTION_ENABLED) return []
     const needle = text.toLowerCase()
     if (!needle) return []
     return peers

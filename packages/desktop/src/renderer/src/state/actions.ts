@@ -1,7 +1,7 @@
 import { type AskAnswer, DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
-import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
+import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult, type RemoteTaskDetails } from '../../../shared/remote'
 import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
 import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withVisualSnapshot } from '../features/session/transcript'
@@ -268,13 +268,18 @@ export function wireCoreEvents(): () => void {
     if (store.get().live[sessionId]?.running) cancelTask(sessionId)
   })
   const offTasks = syncBridgeTasks()
-  // 设备连接：配对请求要在任何页面都能弹出来，状态放全局
-  window.diffra.getRemoteState().then(
-    (remote) => store.set((current) => ({ ...current, remote })),
-    (error: unknown) => console.error('[remote] 读取设备连接状态失败', error),
-  )
-  const offRemote = window.diffra.onRemoteState((remote) => store.set((current) => ({ ...current, remote })))
-  const offRemoteEvent = window.diffra.onRemoteEvent(applyRemoteEvent)
+  // 设备连接已下线：不读取状态、不订阅远程事件；恢复时见 shared/remote.ts 的开关
+  let offRemote: (() => void) | null = null
+  let offRemoteEvent: (() => void) | null = null
+  if (REMOTE_DEVICE_CONNECTION_ENABLED) {
+    // 配对请求要在任何页面都能弹出来，状态放全局
+    window.diffra.getRemoteState().then(
+      (remote) => store.set((current) => ({ ...current, remote })),
+      (error: unknown) => console.error('[remote] 读取设备连接状态失败', error),
+    )
+    offRemote = window.diffra.onRemoteState((remote) => store.set((current) => ({ ...current, remote })))
+    offRemoteEvent = window.diffra.onRemoteEvent(applyRemoteEvent)
+  }
   const offProcesses = window.diffra.onSessionProcesses(({ sessionId, processes }) => store.set((current) => ({ ...current, processes: { ...current.processes, [sessionId]: processes } })))
   return () => {
     offProcesses()
@@ -291,8 +296,8 @@ export function wireCoreEvents(): () => void {
     offBridge()
     offStopRequest()
     offTasks()
-    offRemote()
-    offRemoteEvent()
+    offRemote?.()
+    offRemoteEvent?.()
   }
 }
 
