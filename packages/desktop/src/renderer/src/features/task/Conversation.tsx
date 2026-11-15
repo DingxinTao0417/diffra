@@ -748,7 +748,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
             </ActionButton>
           )}
           {/* 导出这一轮（第 671、678 步）：Markdown、HTML、PDF、图片 */}
-          <ExportMenu onExport={(format) => void exportTurns(format, turnTitle(turn), [turn], () => <StaticTurns task={task} turns={[turn]} />)}>
+          <ExportMenu shareable={!remote} onExport={(format) => void exportTurns(format, turnTitle(turn), [turn], (turns) => <StaticTurns task={task} turns={turns} />, { sessionId: task.sessionId, turnIds: [turn.id] })}>
             <Button variant="ghost" size="icon-sm" aria-label="导出这一轮" title="导出这一轮">
               <Download className="size-4" />
             </Button>

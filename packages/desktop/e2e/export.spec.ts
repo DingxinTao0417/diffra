@@ -97,7 +97,7 @@ test('导出这一轮：单文件 HTML，没有脚本和操作按钮；高亮、
     await saveDownloadsTo(app, downloads)
 
     await window.getByTestId('turn-actions').getByRole('button', { name: '导出这一轮' }).click()
-    await window.getByRole('menuitem', { name: 'HTML' }).click()
+    await window.getByRole('menuitem', { name: 'HTML', exact: true }).click()
     const file = join(downloads, '画个图再总结.html')
     await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
     const html = readFileSync(file, 'utf8')
@@ -124,7 +124,7 @@ test('导出这一轮：单文件 HTML，没有脚本和操作按钮；高亮、
     await expect(window.locator('html')).toHaveClass(/dark/)
     rmSync(file)
     await window.getByTestId('turn-actions').getByRole('button', { name: '导出这一轮' }).click()
-    await window.getByRole('menuitem', { name: 'HTML' }).click()
+    await window.getByRole('menuitem', { name: 'HTML', exact: true }).click()
     await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
     expect(readFileSync(file, 'utf8')).toMatch(/<html[^>]* class="[^"]*dark/)
     const dark = await openExported(app, file, 'test-results/export-turn-dark.png')
@@ -162,7 +162,7 @@ test('导出：一轮存成 Markdown（提问、回答原文、可视化快照�
       }, file)
     const exportTurn = async (format: string) => {
       await window.getByTestId('turn-actions').last().getByRole('button', { name: '导出这一轮' }).click()
-      await window.getByRole('menuitem', { name: format }).click()
+      await window.getByRole('menuitem', { name: format, exact: true }).click()
     }
 
     // Markdown：标题、提问引用、回答原文（图表照样是围栏）
@@ -213,12 +213,55 @@ test('导出：一轮存成 Markdown（提问、回答原文、可视化快照�
     await waitTaskDone(window)
     await window.getByRole('main').getByRole('button', { name: '任务菜单' }).click()
     await window.getByRole('menuitem', { name: '导出整个任务' }).click()
-    await window.getByRole('menuitem', { name: 'HTML' }).click()
+    await window.getByRole('menuitem', { name: 'HTML', exact: true }).click()
     const taskFile = join(downloads, '总结一下.html')
     await expect.poll(() => existsSync(taskFile), { timeout: 20_000 }).toBe(true)
     const html = readFileSync(taskFile, 'utf8')
     expect(html.match(/data-testid="turn"/g)).toHaveLength(2)
     expect(html).toContain('第二轮的回答')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(downloads, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 679 步：分享版——按发给远程设备一样的规则脱敏的单文件 HTML，不上传
+test('分享版：一轮做成脱敏的单文件 HTML，密钥和本机路径换掉，开头写明脱敏了什么', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-share-'))
+  const downloads = mkdtempSync(join(tmpdir(), 'diffra-e2e-share-out-'))
+  // 假密钥在运行时拼出来，仓库里不出现完整的密钥格式
+  const secret = ['sk-proj-', 'a'.repeat(40)].join('')
+  const file = join(project, 'src', 'app.ts')
+  const model = await startScriptedModel([{ text: `配置里的 key 是 ${secret}，入口在 ${file}。` }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '看看配置')
+    await waitTaskDone(window)
+    await expect(window.getByTestId('agent-message').last()).toContainText(secret)
+    await saveDownloadsTo(app, downloads)
+
+    await window.getByTestId('turn-actions').last().getByRole('button', { name: '导出这一轮' }).click()
+    await window.getByRole('menuitem', { name: '分享版（脱敏 HTML）' }).click()
+    const shared = join(downloads, '看看配置（分享版）.html')
+    await expect.poll(() => existsSync(shared), { timeout: 20_000 }).toBe(true)
+    const html = readFileSync(shared, 'utf8')
+    expect(html).toContain('<title>看看配置（分享版）</title>')
+    expect(html).toContain('data-testid="share-banner"')
+    expect(html).toContain('[已脱敏：模型服务的 API Key]')
+    expect(html).not.toContain(secret)
+    expect(html).not.toContain(project)
+    expect(html).not.toContain(project.replace(/\\/g, '/'))
+    // 项目里的路径换成相对项目的（正文里分隔符照原样）
+    expect(html).toMatch(/入口在 src[\\/]app\.ts/)
+    expect(html).not.toMatch(/<script/i)
   } finally {
     await app.close()
     await model.close()
