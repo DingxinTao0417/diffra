@@ -124,8 +124,9 @@ interface MentionTarget {
   file?: ComposerFile
 }
 
-// 把草稿拆成普通文字和 @附件：附件只上色，不加边距，着色层和 textarea 的换行才一致
-function highlightDraft(text: string, mentions: MentionTarget[]): ReactNode[] {
+// 把草稿拆成普通文字和 @附件：附件只上色，不加边距，着色层和 textarea 的换行才一致。
+// 输入法组字时文字由 textarea 自己显示，这里只留附件的底色
+function highlightDraft(text: string, mentions: MentionTarget[], composing: boolean): ReactNode[] {
   const nodes: ReactNode[] = []
   let index = 0
   let key = 0
@@ -134,7 +135,7 @@ function highlightDraft(text: string, mentions: MentionTarget[]): ReactNode[] {
     if (target) {
       nodes.push(
         // primary-color-allow: @附件点击后打开预览，是可点的动作
-        <span key={`mention-${key++}`} className="rounded-sm bg-primary/10 text-primary">
+        <span key={`mention-${key++}`} className={cn('rounded-sm bg-primary/10', composing ? 'text-transparent' : 'text-primary')}>
           {target.token}
         </span>,
       )
@@ -157,7 +158,8 @@ export function Composer(props: ComposerProps) {
   // 远程任务（借用本机任务页）：Skill 和自定义命令向对方要；MCP 提示词、附文档、优化提示词要用本机的项目和模型，远程不做
   const remote = useRemoteTask()
   const large = size === 'large'
-  // 右侧给滚动条留固定宽度：textarea 是 pr-2.5 + 10px gutter，着色层用 pr-5，换行宽度才一致
+  // 右侧给滚动条留固定宽度：textarea 是 pr-2.5 加 10px 的滚动条位置，着色层直接留 0.625rem + 10px。
+  // 不能写成 pr-5：rem 跟着字号设置变，只有根字号 16px 时 1.25rem 才等于 0.625rem + 10px，差一点换行位置就错开
   const textLayout = large ? 'pl-4.5 pt-4 pb-2 text-base' : 'pl-3.5 pt-3 pb-1'
   const placeholder = COMPOSER_PLACEHOLDER
   const goalRounds = useAppState((state) => state.settings?.execution.goalMaxRounds ?? null)
@@ -175,7 +177,7 @@ export function Composer(props: ComposerProps) {
   const [addingAttachments, setAddingAttachments] = useState(false)
   const [preview, setPreview] = useState<PreviewTarget | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
-  // 输入法组字时把文字显示在 textarea 本身，着色层先藏起来，避免两份文字叠着
+  // 输入法组字时把文字显示在 textarea 本身，着色层的字先变透明（附件底色留着），避免两份文字叠着
   const [composing, setComposing] = useState(false)
   const mentionCounter = useRef(initialDraft?.images.reduce((max, image) => Math.max(max, Number(/(\d+)$/.exec(image.mention)?.[1] ?? 0)), 0) ?? 0)
   const attachmentBusy = useRef(false)
@@ -803,9 +805,9 @@ export function Composer(props: ComposerProps) {
       )}
       <div className="relative">
         {/* 着色层只画文字颜色和背景，不加内外边距，换行位置才和下面的 textarea 一致 */}
-        <div aria-hidden className={cn('pointer-events-none absolute inset-0 overflow-hidden', composing && 'invisible')}>
-          <div className={cn('composer-highlight w-full pr-5 whitespace-pre-wrap break-words', textLayout)} style={{ transform: `translateY(-${scrollTop}px)` }}>
-            {draft === '' ? <span className="text-muted-foreground">{placeholder}</span> : highlightDraft(draft, mentions)}
+        <div aria-hidden className={cn('pointer-events-none absolute inset-0 overflow-hidden', composing && 'text-transparent')}>
+          <div className={cn('composer-highlight w-full pr-[calc(0.625rem+10px)] whitespace-pre-wrap break-words', textLayout)} style={{ transform: `translateY(-${scrollTop}px)` }}>
+            {draft === '' ? !composing && <span className="text-muted-foreground">{placeholder}</span> : highlightDraft(draft, mentions, composing)}
           </div>
         </div>
         <textarea

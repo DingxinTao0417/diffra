@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { DESIGN_STYLES, type PromptImage, type StoredSessionSummary } from '@diffra/core/types'
 import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, LoaderCircle, Palette } from 'lucide-react'
 import { decodeStartTaskError, type StartTaskErrorCode } from '../../../../shared/ipc'
@@ -20,6 +20,7 @@ import { useProject } from '@/features/project/useProject'
 import { BranchMenu } from '@/features/task/BranchMenu'
 import { Composer } from '@/features/task/Composer'
 import { composerDraftKey } from '@/features/task/composer-drafts'
+import { homeChoicesKey, readHomeChoices, writeHomeChoices } from './home-choices'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTime } from '@/lib/format'
 import { openDesign, openHome, openSettings, openTask, pickProject, setPermissionMode, startTask } from '@/state/actions'
@@ -56,13 +57,17 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const tasks = useAppState((state) => state.tasks)
   const live = useAppState((state) => (design ? state.live : null))
   const { branch, setBranch } = useProject(projectPath)
-  const [model, setModel] = useState<ModelRef | null>(null)
-  const [planMode, setPlanMode] = useState(false)
+  // 选过的模型、出计划、设计风格存在模块里的表中，切页面回来接着用；换项目不换
+  const choicesKey = homeChoicesKey(design)
+  const initialChoices = useRef(readHomeChoices(choicesKey)).current
+  const [model, setModel] = useState<ModelRef | null>(initialChoices.model)
+  const [planMode, setPlanMode] = useState(initialChoices.planMode)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
   // 设计任务的风格预设；null 是「自动」，由模型按题材定
-  const [designStyle, setDesignStyle] = useState<string | null>(null)
+  const [designStyle, setDesignStyle] = useState<string | null>(initialChoices.designStyle)
 
   useEffect(() => setError(null), [projectPath])
+  useEffect(() => writeHomeChoices(choicesKey, { model, planMode, designStyle }), [choicesKey, model, planMode, designStyle])
 
   // 只有设计首页列任务（设计任务），普通首页不列
   const listed = useMemo(() => (live ? designTasksOf(tasks, live) : []), [tasks, live])
@@ -70,7 +75,9 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const draftKey = design ? composerDraftKey.design(projectPath) : composerDraftKey.home(projectPath)
   // 没选过模型时用编码角色的模型，思考程度用输入框里给它选过的（第 531 步）
   const coder = useMemo(() => (settings?.roles.coder ? withRememberedEffort(settings.roles.coder, settings.providers, settings.reasoningChoices) : null), [settings])
-  const modelLabel = modelLabelOf(settings, model ?? coder)
+  // 选过的模型后来被删掉或停用了，就当没选过，用编码角色的模型
+  const chosenModel = modelLabelOf(settings, model) ? model : null
+  const modelLabel = modelLabelOf(settings, chosenModel ?? coder)
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
   const workspacePath = settings?.defaultWorkspace.path
 
@@ -88,7 +95,11 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
     setError(null)
     try {
       const designOptions = design ? { design: true, ...(designStyle ? { designStyle } : {}) } : {}
-      await startTask(projectPath, text, { permissionMode, ...(model ? { model } : {}), ...designOptions }, { plan: planMode, ...extras })
+      await startTask(projectPath, text, { permissionMode, ...(chosenModel ? { model: chosenModel } : {}), ...designOptions }, { plan: planMode, ...extras })
+      // 出计划和输入框里的目标、Skill 标签一样只管这一次；模型和风格留着给下一个任务。
+      // 发出后已经跳到任务页、这个组件卸载了，直接写进表里
+      setPlanMode(false)
+      writeHomeChoices(choicesKey, { model, planMode: false, designStyle })
       return true
     } catch (caught) {
       setError(decodeStartTaskError(errorMessage(caught)))
@@ -187,7 +198,7 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
           permissionMode={permissionMode}
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
-          modelRef={model ?? coder ?? undefined}
+          modelRef={chosenModel ?? coder ?? undefined}
           onModelChange={setModel}
           planMode={planMode}
           onPlanModeChange={setPlanMode}
