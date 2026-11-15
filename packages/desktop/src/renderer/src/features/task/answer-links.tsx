@@ -176,6 +176,11 @@ export function AnswerCode({ children, className }: { children?: ReactNode; clas
   return <FileReference path={file.path} line={file.line} label={text} code />
 }
 
+// 不在 React 组件里的查法（可视化里 diffra.openFile 要先确认是项目里的文件，第 666 步）
+export function findProjectFile(target: AnswerTarget, path: string): Promise<ProjectFile | null> {
+  return lookup(target.project, candidatePath(target, path))
+}
+
 // 回答里提到的路径是不是项目里的文件：查到了是文件，不是或还没查完是 null；本机任务以外（远程、只读）一直是 null
 export function useProjectFile(path: string | null): ProjectFile | null {
   const target = useContext(AnswerContext)

@@ -841,6 +841,14 @@ v2：
   - 可视化里的按钮可以把一段话填进输入框（`diffra.fill` / `sendPrompt`），只填不发，发不发由用户决定。
 - 配色通过 CSS 变量传进去（`--bg`、`--fg`、`--primary` 等），跟着亮暗主题走。
 - 可以放大看、看代码、存成 HTML 或 PNG。PNG 由主进程截 iframe 所在区域。
+- 工具箱（第 666 步，`features/task/visual-kit.js`，按 `?raw` 读成文字跟在运行时后面写进 iframe，不联网、版本固定）：
+  - `diffra.chart(type, data, options)`：柱状、折线、面积、饼、环、散点，自己画 SVG（不把 ECharts 塞进每张可视化），颜色取 `--chart-1..4`，坐标轴和网格用 `--muted`、`--border`；点图例切换系列，悬停看数值。
+  - `diffra.ui.card / stat / badge / tabs / progress / grid / table`：返回元素，样式只用主题变量。字符串按文字放，不当 HTML。
+  - 交给主界面的动作仍是白名单：`fill` / `ask`（填进输入框，不发）、`copy`（最多 10 万字）、`openFile(path, line)`（主进程查过在项目里才开，远程和只读会话里没有）、`openBrowser(url)`（和点链接一样先在卡片下面问）。
+- 预设（第 667 步）：`show_visual` 可以给 `preset` 加 `data` 代替 `code`：compare、timeline、chart、mockup、flow、cards。core 按每种预设的 schema 校验（AI SDK 用同一份 schema 先校验，不合法时模型拿到哪个字段不对、能填什么），生成 `<script>diffra.preset(名字, 数据)</script>` 存成 code（数据里的 `<` 换成 `<`），之后的看代码、另存、远程占位都不变。工具说明改成先用预设。
+- 第 666–667 步顺带修的：
+  - 主题变化看真正生效的主题（`rich/theme.ts` 的 `useThemeKey`），不看设置里的 appearance 对象。以前跟随系统切深色时可视化不换色；存别的设置（开关侧栏会存布局）时可视化无故重载、状态丢掉。
+  - 高度按 body 自己的高度报、盯 body 的大小：以前报 html 的 scrollHeight（不会小于 iframe 当前高度，内容变矮后留空白），也只盯视口大小（内容后来变高不再报，出滚动条）。iframe 里一直留滚动条槽位，免得出不出滚动条让按宽度缩放的 SVG 高度来回变。
 
 ## 对话里的富内容（第 640 步起）
 

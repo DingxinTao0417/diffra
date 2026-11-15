@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { Code, Download, ExternalLink, Image as ImageIcon, Maximize2, Minimize2, Sparkles, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { fillComposer } from '@/state/actions'
+import { AnswerContext, findProjectFile, openFilePreview } from './answer-links'
+import { copyText } from './rich/BlockShell'
 import { useReadOnly } from './read-only'
-import { showToast, store, useAppState } from '@/state/store'
+import { useThemeKey } from './rich/theme'
+import visualKit from './visual-kit.js?raw'
+import { showToast, store } from '@/state/store'
 
 // 主题令牌：按应用当前的深浅色和配色取值，给模型写的代码用（名字在 show_visual 的说明里）
 const TOKENS: Array<[string, string]> = [
@@ -27,6 +31,11 @@ const TOKENS: Array<[string, string]> = [
   ['--success', '--success'],
   ['--font-sans', '--font-sans'],
   ['--font-mono', '--font-mono'],
+  // 图表的四种颜色（diffra.chart 和模型自己画图都用），和对话里的图表块同一套
+  ['--chart-1', '--chart-1'],
+  ['--chart-2', '--chart-2'],
+  ['--chart-3', '--chart-3'],
+  ['--chart-4', '--chart-4'],
 ]
 const MAX_HEIGHT = 4000
 const MAX_FILL = 4000
@@ -35,14 +44,17 @@ function themeCss(): string {
   const style = getComputedStyle(document.documentElement)
   const vars = TOKENS.map(([name, source]) => `${name}:${style.getPropertyValue(source).trim()};`).join('')
   const dark = document.documentElement.classList.contains('dark')
-  return `:root{${vars}color-scheme:${dark ? 'dark' : 'light'}}html,body{margin:0;background:transparent}body{padding:4px 2px;color:var(--fg);font:14px/1.6 var(--font-sans)}*{box-sizing:border-box}`
+  // 滚动条槽位一直留着：不然出不出滚动条会让内容宽度来回变，按宽度缩放的图（SVG）高度跟着变，高度报告和滚动条互相触发
+  return `:root{${vars}color-scheme:${dark ? 'dark' : 'light'}}html{scrollbar-gutter:stable}html,body{margin:0;background:transparent}body{padding:4px 2px;color:var(--fg);font:14px/1.6 var(--font-sans)}*{box-sizing:border-box}`
 }
 
-// 在容器页里跑的那段：报内容高度、diffra.fill 把文字交给输入框、点链接先交给主界面确认。放在最前面，用户代码一开始就能用
+// 在容器页里跑的那段：报内容高度、diffra.fill 把文字交给输入框、点链接先交给主界面确认。放在最前面，用户代码一开始就能用。
+// 高度按 body 自己的高度报（第 667 步）：以前报 html 的 scrollHeight，它不会小于 iframe 当前的高度，内容变矮后卡片留着一大块空白；
+// 也只盯 html 的大小（就是视口），内容后来变高（字体加载、脚本加的元素）不再报，里面出滚动条。内容超出 body（绝对定位的）时仍按 scrollHeight
 const RUNTIME = `<script>(function(){
 var send=function(message){parent.postMessage(message,'*')};
-var report=function(){send({type:'diffra-visual-height',height:Math.ceil(document.documentElement.scrollHeight)})};
-new ResizeObserver(report).observe(document.documentElement);window.addEventListener('load',report);
+var report=function(){var body=document.body,style=getComputedStyle(body),own=body.getBoundingClientRect().height+(parseFloat(style.marginTop)||0)+(parseFloat(style.marginBottom)||0),root=document.documentElement;send({type:'diffra-visual-height',height:Math.ceil(root.scrollHeight>root.clientHeight+1?Math.max(own,root.scrollHeight):own)})};
+new ResizeObserver(report).observe(document.body);new ResizeObserver(report).observe(document.documentElement);window.addEventListener('load',report);
 window.diffra={fill:function(text){send({type:'diffra-visual-fill',text:String(text)})}};
 window.sendPrompt=window.diffra.fill;
 document.addEventListener('click',function(event){var link=event.target&&event.target.closest&&event.target.closest('a[href]');if(!link)return;event.preventDefault();if(/^https?:/i.test(link.href))send({type:'diffra-visual-link',href:link.href})},true);
@@ -51,8 +63,10 @@ window.open=function(url){if(url&&/^https?:/i.test(String(url)))send({type:'diff
 
 export function visualDocument(title: string, code: string, css = themeCss()): string {
   const escaped = title.replace(/[<&]/g, (char) => (char === '<' ? '&lt;' : '&amp;'))
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escaped}</title><style>${css}</style></head><body>${RUNTIME}${code}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escaped}</title><style>${css}</style></head><body>${RUNTIME}<script>${visualKit}</script>${code}</body></html>`
 }
+
+const MAX_COPY = 100_000
 
 // 对话里的可视化：模型写的 HTML 在沙箱 iframe 里的容器页跑（能联网、能跑脚本，没有同源权限，碰不到应用的接口）。
 // 高度跟着内容走；可以放大、另存为 HTML 或 PNG、看代码；里面的按钮能把文字填进输入框，链接要先确认
@@ -64,25 +78,37 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
   const [link, setLink] = useState<string | null>(null)
   // 远程会话里不填本机的输入框、不开链接（会话 id 是对方的）；内容本来就换成了占位
   const readOnly = useReadOnly()
-  // 主题、配色变了就重新渲染一次，令牌跟着换
-  const appearance = useAppState((state) => state.settings?.appearance)
+  // 本机任务才有：diffra.openFile 在这个项目里找文件
+  const answer = useContext(AnswerContext)
+  // 真正生效的主题（深浅色、配色、字号）变了才重新渲染一次，令牌跟着换。以前看设置里的 appearance 对象：
+  // 跟随系统时系统切深色它不变，可视化不换色；存别的设置（开关侧栏会存布局）时它换了个对象，可视化无故重载、里面的状态丢掉（第 666 步）
+  const theme = useThemeKey()
   const [version, setVersion] = useState(0)
-  useEffect(() => setVersion((current) => current + 1), [appearance])
+  useEffect(() => setVersion((current) => current + 1), [theme])
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const target = frame.current?.contentWindow
       if (!target || event.source !== target) return
-      const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown } | null
+      const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown; path?: unknown; line?: unknown } | null
       if (data?.type === 'diffra-visual-ready') target.postMessage({ type: 'diffra-visual', html: visualDocument(title, code) }, '*')
       else if (data?.type === 'diffra-visual-height' && typeof data.height === 'number') setHeight(Math.min(Math.max(Math.ceil(data.height), 40), MAX_HEIGHT))
       else if (readOnly) return
       else if (data?.type === 'diffra-visual-fill' && typeof data.text === 'string' && data.text.trim()) fillComposer(sessionId, data.text.slice(0, MAX_FILL))
       else if (data?.type === 'diffra-visual-link' && typeof data.href === 'string' && /^https?:\/\//i.test(data.href)) setLink(data.href)
+      else if (data?.type === 'diffra-visual-copy' && typeof data.text === 'string') copyText(data.text.slice(0, MAX_COPY), '已复制')
+      else if (data?.type === 'diffra-visual-open-file' && typeof data.path === 'string' && answer) {
+        // 只开项目里的文件：主进程查过在项目目录里才算
+        const line = typeof data.line === 'number' && data.line > 0 ? Math.floor(data.line) : null
+        findProjectFile(answer, data.path).then(
+          (file) => (file ? openFilePreview(answer.project, file.relative, line) : showToast(`项目里没有这个文件：${String(data.path).slice(0, 200)}`)),
+          (error: unknown) => showToast(errorMessage(error)),
+        )
+      }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [title, code, sessionId, readOnly])
+  }, [title, code, sessionId, readOnly, answer])
 
   useEffect(() => {
     if (!expanded) return

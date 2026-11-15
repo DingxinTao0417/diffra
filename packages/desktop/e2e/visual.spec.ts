@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
+import { captureClipboard, lastCopied } from './clipboard'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
@@ -88,6 +89,88 @@ test('对话里的可视化：脚本能跑、能从网上加载脚本和图片�
     await app.close()
     await model.close()
     await new Promise<void>((resolve) => cdn.close(() => resolve()))
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 666–667 步：可视化的工具箱（diffra.chart、diffra.ui、打开文件、复制）和预设（模型只给数据）
+test('可视化的预设和工具箱：对比和流程图按模板画，图表和指标卡跟着主题；能打开项目里的文件、复制；预设数据不对时模型拿到原因', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-visual-kit-'))
+  mkdirSync(join(project, 'src'))
+  writeFileSync(join(project, 'src', 'a.ts'), 'export const a = 1\nexport const target = 2\n')
+  const kitCode = [
+    '<div id="c"></div>',
+    "<button id=\"open\" onclick=\"diffra.openFile('src/a.ts', 2)\">打开</button>",
+    "<button id=\"copy\" onclick=\"diffra.copy('复制的字')\">复制</button>",
+    '<script>',
+    "diffra.chart('bar', [{ label: '安装', value: 3 }, { label: '构建', value: 5 }], { title: '耗时', unit: 's', into: '#c' })",
+    "document.body.append(diffra.ui.stat({ label: '用例', value: 120, delta: -3, better: 'up' }))",
+    '</script>',
+  ].join('\n')
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'show_visual', input: { title: '方案对比', preset: 'compare', data: { options: [{ name: '方案 A', pros: ['改动小'] }, { name: '方案 B', summary: '重写缓存', recommended: true }] } } }] },
+    { toolCalls: [{ name: 'show_visual', input: { title: '构建指标', code: kitCode } }] },
+    { toolCalls: [{ name: 'show_visual', input: { title: '发布流程', preset: 'flow', data: { nodes: [{ id: 'a', label: '开始', kind: 'start' }, { id: 'b', label: '判断', kind: 'decision' }, { id: 'c', label: '结束', kind: 'end' }], edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'c', label: '是' }] } } }] },
+    { toolCalls: [{ name: 'show_visual', input: { title: '坏的', preset: 'chart', data: { type: 'donut3', data: [] } } }] },
+    { text: '画完了' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await captureClipboard(window)
+    await startTask(window, '画几个图')
+    await waitTaskDone(window)
+    const visuals = window.getByTestId('visual')
+    await expect(visuals).toHaveCount(3)
+
+    // 对比预设：两个方案，推荐的有标记；「选这个」填进输入框
+    const compare = visuals.nth(0).locator('iframe').contentFrame()
+    await expect(compare.locator('.dk-option')).toHaveCount(2)
+    await expect(compare.locator('.dk-option').nth(1)).toContainText('推荐')
+    await compare.locator('.dk-option').nth(1).getByRole('button', { name: '选这个' }).click()
+    await expect(taskInput(window)).toHaveValue('选「方案 B」')
+    await taskInput(window).fill('')
+
+    // 工具箱：两根柱子、变差的指标标出来；打开项目里的文件到那一行；复制
+    const kit = visuals.nth(1).locator('iframe').contentFrame()
+    await expect(kit.locator('.dk-chart svg rect')).toHaveCount(2)
+    await expect(kit.locator('.dk-chart-title')).toHaveText('耗时')
+    await expect(kit.locator('.dk-stat')).toContainText('120')
+    await expect(kit.locator('.dk-stat-delta')).toHaveClass(/dk-worse/)
+    // 先复制再打开文件：打开、关上侧栏会让可视化重新排版，紧接着点里面的按钮可能点偏
+    await kit.locator('#copy').click()
+    await expect.poll(() => lastCopied(window)).toBe('复制的字')
+    await kit.locator('#open').click()
+    await expect(window.getByTestId('file-panel').locator('.cm-target-line')).toHaveText('export const target = 2')
+    await window.getByRole('button', { name: '关闭面板' }).click()
+
+    // 流程图预设：三个节点
+    const flow = visuals.nth(2).locator('iframe').contentFrame()
+    await expect(flow.locator('.dk-flow svg text').filter({ hasText: '判断' })).toHaveCount(1)
+    // 预设数据不对：没画出来，模型拿到哪个字段不对
+    // （AI SDK 按同一份 schema 先校验，按预设查的数据也在里面：写明是 data.type、能选哪些）
+    const lastTool = (JSON.parse(model.bodies().at(-1)!) as { messages: Array<{ role: string; content: unknown }> }).messages.filter((message) => message.role === 'tool').at(-1)
+    expect(String(lastTool?.content)).toContain('Invalid input for tool show_visual')
+    expect(String(lastTool?.content)).toMatch(/"data",\s*"type"/)
+    expect(String(lastTool?.content)).toMatch(/expected one of .*bar.*donut.*scatter/)
+
+    for (const scheme of ['light', 'dark'] as const) {
+      await window.emulateMedia({ colorScheme: scheme })
+      for (const [index, name] of ['compare', 'kit', 'flow'].entries()) {
+        // 刚滚进视口的沙箱 iframe 要等它画一帧，不然截到空白（只影响截图，内容上面已经断言过）
+        await visuals.nth(index).scrollIntoViewIfNeeded()
+        await window.waitForTimeout(300)
+        await visuals.nth(index).screenshot({ path: `test-results/visual-${name}-${scheme}.png` })
+      }
+    }
+  } finally {
+    await app.close()
+    await model.close()
     rmSync(project, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
   }
