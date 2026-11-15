@@ -15,6 +15,9 @@ const EXTENSION_DIR = join(desktopDir, 'out', 'browser-extension')
 const POPUP_URL = `chrome-extension://${EXTENSION_IDS.development}/popup.html`
 const TEST_HOST = 'dev.diffra.browser_test'
 
+// Windows 上外部 Chrome / Electron 退出后文件句柄偶尔还开着，删临时目录时等一会儿再试
+const removeTempDir = (path: string) => rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>扩展测试页</title></head><body>
 <label for="name">名字</label><input id="name">
 <button onclick="document.getElementById('out').textContent = '你好，' + document.getElementById('name').value">打招呼</button>
@@ -208,9 +211,9 @@ test('用户自己的浏览器：设置成 Chrome 后，智能体经扩展在浏
     removeTestHost()
     await model.close()
     site.server.close()
-    rmSync(project, { recursive: true, force: true })
-    rmSync(profile, { recursive: true, force: true })
-    rmSync(userDataDir, { recursive: true, force: true })
+    removeTempDir(project)
+    removeTempDir(profile)
+    removeTempDir(userDataDir)
   }
 })
 
@@ -281,9 +284,9 @@ test('用户自己的浏览器：智能体开的第二个标签页、别的窗�
     removeTestHost()
     await model.close()
     site.server.close()
-    rmSync(project, { recursive: true, force: true })
-    rmSync(profile, { recursive: true, force: true })
-    rmSync(userDataDir, { recursive: true, force: true })
+    removeTempDir(project)
+    removeTempDir(profile)
+    removeTempDir(userDataDir)
   }
 })
 
@@ -336,8 +339,8 @@ test('用户自己的浏览器：默认是内置浏览器时，智能体按指�
     removeTestHost()
     await model.close()
     site.server.close()
-    rmSync(project, { recursive: true, force: true })
-    rmSync(profile, { recursive: true, force: true })
-    rmSync(userDataDir, { recursive: true, force: true })
+    removeTempDir(project)
+    removeTempDir(profile)
+    removeTempDir(userDataDir)
   }
 })

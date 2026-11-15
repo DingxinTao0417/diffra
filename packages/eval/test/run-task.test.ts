@@ -118,7 +118,7 @@ withTasks('受保护的题：读密钥的命令被拒绝、改不了只读目录
 
 withTasks('智能体提问时选第一个选项、单独计数，拒绝权限的题也不例外', async () => {
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'ask_user', input: { question: '编码怎么处理？', options: [{ label: '改成 utf-8-sig' }, { label: '先去掉文件里的 BOM' }] } }] },
+    { toolCalls: [{ name: 'ask_user', input: { questions: [{ question: '编码怎么处理？', options: [{ label: '改成 utf-8-sig' }, { label: '先去掉文件里的 BOM' }] }] } }] },
     { toolCalls: [exec('cat app/users.py')] },
     { toolCalls: [replaceIn('t08-protected-data', 'app/users.py', "encoding='utf-8', newline=''", "encoding='utf-8-sig', newline=''")] },
     { text: '改用 utf-8-sig 读' },
@@ -276,7 +276,7 @@ test('多轮对话：第一轮中途停止，第二轮接着说；提问按指�
   })
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'exec_command', input: { cmd: 'sleep 30', yield_time_ms: 60_000 } }] },
-    { toolCalls: [{ name: 'ask_user', input: { question: '用哪个方案？', options: [{ label: '方案 A' }, { label: '方案 B' }] } }] },
+    { toolCalls: [{ name: 'ask_user', input: { questions: [{ question: '用哪个方案？', options: [{ label: '方案 A' }, { label: '方案 B' }] }] } }] },
     { text: '按方案 B 来' },
   ])
   try {
