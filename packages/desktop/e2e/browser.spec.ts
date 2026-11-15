@@ -134,6 +134,12 @@ test('内置浏览器：智能体打开本地页面、读页面、输入、点�
     await taskInput(window).fill('截个图')
     await window.getByRole('button', { name: '发送', exact: true }).click()
     await waitTaskDone(window, 30_000)
+    // 第 662 步：浏览器操作那一组下面带最近一张截图和当前网址，收着也看得到
+    const browserSummary = window.getByTestId('browser-summary').last()
+    await expect(browserSummary.getByTestId('browser-shot')).toBeVisible()
+    await expect(browserSummary).toContainText('/layout')
+    await expect(browserSummary).toContainText('浏览器操作 5 步')
+    await browserSummary.screenshot({ path: 'test-results/browser-summary.png' })
     const visionBodies = model.bodies()
     expect(visionBodies[8]).toContain('browser_screenshot with width 1280 and with width 375')
     expect(visionBodies[10]).toContain('data:image/jpeg;base64,')

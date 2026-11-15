@@ -64,6 +64,10 @@ test('工具输出：测试汇总和修复提示词、搜索按文件分组能�
     await expect(test).toContainText('Exit code: 0')
     // 命令的用时写在顶上（第 659 步）
     await expect(test.getByTestId('command-duration')).toContainText('用时')
+    // 「在终端里运行」：打进这个项目的终端，不按回车（第 662 步）
+    await test.getByRole('button', { name: '在终端里运行（打进去，不按回车）' }).click()
+    await expect(window.getByTestId('terminal-host')).toContainText('cat vitest.log', { timeout: 20_000 })
+    await window.getByRole('button', { name: '关闭面板' }).click()
     await test.getByRole('button', { name: '填入修复提示词' }).click()
     await expect(taskInput(window)).toHaveValue(/- src\/math\.test\.ts > adds numbers/)
     await taskInput(window).fill('')

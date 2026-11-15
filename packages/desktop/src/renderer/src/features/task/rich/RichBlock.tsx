@@ -8,6 +8,7 @@ import type { FenceInfo } from './fence'
 import { FileTreeBlock } from './FileTreeBlock'
 import { JsonTree } from './JsonBlock'
 import { LogBlock } from './LogBlock'
+import { TodosBlock } from './TodosBlock'
 
 // 图表用 ECharts，按需加载：回答里第一次出现 ```chart 时才取
 const ChartBlock = lazy(() => import('./ChartBlock'))
@@ -28,6 +29,7 @@ const RENDERERS: { [K in RichBlockKind]: RichRenderer<K> } = {
   compare: CompareBlock,
   filetree: FileTreeBlock,
   keyvalue: KeyValueBlock,
+  todos: TodosBlock,
   json: ({ data, info }) => <JsonTree value={data.value} source={info.code} />,
   log: LogBlock,
 }
@@ -41,6 +43,7 @@ const NAMES: Record<RichBlockKind, string> = {
   compare: '方案对比',
   filetree: '文件树',
   keyvalue: '键值表',
+  todos: '后续事项',
   json: 'JSON',
   log: '日志',
 }

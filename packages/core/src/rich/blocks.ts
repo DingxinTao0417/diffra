@@ -20,6 +20,7 @@ export const RICH_LIMITS = {
   // 时间线、步骤、键值对的条数
   items: 200,
   compareOptions: 6,
+  todos: 50,
   treeEntries: 1_000,
   logLines: 5_000,
   // 字段里的一段文字
@@ -266,6 +267,22 @@ function parseKeyValue(input: unknown): KeyValueData {
   return { items: entries.map(([key, value]) => ({ key, value })) }
 }
 
+// ---- todos ----
+
+// 回答里列出的后续事项（第 664 步）：界面上每条能加进待办、勾掉、改期、派给任务，和侧栏的待办是同一份
+const todoItem = z.union([label, z.object({ text: label, note: text.optional(), priority: z.number().int().min(0).max(3).optional() })])
+const todosInput = z.union([
+  z.object({ v: version, title: label.optional(), items: z.array(todoItem).min(1).max(RICH_LIMITS.todos) }),
+  z.array(todoItem).min(1).max(RICH_LIMITS.todos),
+])
+export type TodosData = { title?: string; items: Array<{ text: string; note?: string; priority?: 0 | 1 | 2 | 3 }> }
+
+function parseTodos(input: unknown): TodosData {
+  const raw = todosInput.parse(input)
+  const { title, items } = Array.isArray(raw) ? { title: undefined, items: raw } : raw
+  return { title, items: items.map((item) => (typeof item === 'string' ? { text: item } : { ...item, priority: item.priority as 0 | 1 | 2 | 3 | undefined })) }
+}
+
 // ---- log ----
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug'
@@ -302,6 +319,7 @@ export interface RichBlockMap {
   compare: CompareData
   filetree: FileTreeData
   keyvalue: KeyValueData
+  todos: TodosData
   json: { value: unknown }
   log: LogData
 }
@@ -318,6 +336,7 @@ const REGISTRY: { [K in RichBlockKind]: { format: 'json' | 'text'; parse(input: 
   compare: { format: 'json', parse: parseCompare },
   filetree: { format: 'json', parse: parseFileTree },
   keyvalue: { format: 'json', parse: parseKeyValue },
+  todos: { format: 'json', parse: parseTodos },
   json: { format: 'json', parse: (value) => ({ value }) },
   log: { format: 'text', parse: (value) => parseLog(String(value)) },
 }

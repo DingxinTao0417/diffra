@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -26,6 +26,8 @@ export type TranscriptItem =
       durationMs?: number
       // 上下文压缩卡：压缩前后估算的 token（第 659 步）；旧记录没有
       compaction?: CompactionStats
+      // 浏览器截图那一步的缩略图（第 662 步）；远程会话里图片换成了占位，是 omitted
+      browserShot?: { mimeType: string; data: string } | 'omitted'
       // 子智能体的卡片（主智能体的那次 delegate 调用）：名字、颜色、任务和认领的文件
       agentCard?: AgentCardMeta
       // 子智能体自己的工具调用：收进 parentId 那张卡片里，agent 是哪个工人
@@ -251,13 +253,15 @@ function agentFieldsOf(update: SessionUpdate): { agentCard?: AgentCardMeta; pare
 }
 
 // 命令用时、压缩前后的对比（第 659 步）
-function statsOf(update: SessionUpdate): { durationMs?: number; compaction?: CompactionStats } {
+function statsOf(update: SessionUpdate): { durationMs?: number; compaction?: CompactionStats; browserShot?: { mimeType: string; data: string } | 'omitted' } {
   const diffra = diffraMetaOf(update)
   if (!diffra) return {}
   const duration = diffra[COMMAND_DURATION_META_KEY]
+  const shot = diffra[BROWSER_SHOT_META_KEY] as { type?: unknown; mimeType?: unknown; data?: unknown } | undefined
   const compaction = diffra[COMPACTION_META_KEY] as Partial<CompactionStats> | undefined
   return {
     ...(typeof duration === 'number' && Number.isFinite(duration) ? { durationMs: duration } : {}),
+    ...(shot?.type === 'image' && typeof shot.mimeType === 'string' && typeof shot.data === 'string' ? { browserShot: { mimeType: shot.mimeType, data: shot.data } } : shot ? { browserShot: 'omitted' as const } : {}),
     ...(typeof compaction?.before === 'number' ? { compaction: { before: compaction.before, after: typeof compaction.after === 'number' ? compaction.after : null, window: typeof compaction.window === 'number' ? compaction.window : null } } : {}),
   }
 }
@@ -348,6 +352,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         startedAt: existing?.startedAt ?? Date.now(),
         ...(existing?.durationMs === undefined ? {} : { durationMs: existing.durationMs }),
         ...(existing?.compaction ? { compaction: existing.compaction } : {}),
+        ...(existing?.browserShot ? { browserShot: existing.browserShot } : {}),
         ...statsOf(update),
         ...agentFieldsKept(existing, agentFieldsOf(update)),
         ...(existing?.diagnosis ? { diagnosis: existing.diagnosis } : {}),

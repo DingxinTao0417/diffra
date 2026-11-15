@@ -29,7 +29,9 @@ import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
 import { AgentTeam } from './cards/AgentTeam'
+import { BrowserSummary, isBrowserStep } from './cards/BrowserSummary'
 import { CompactionBar } from './cards/CompactionBar'
+import { PlanSteps } from './cards/PlanSteps'
 import { FINDING_PATTERN, levelStyle, ReviewFindings, SecurityFindings } from './cards/FindingLists'
 import { LocationLink } from './cards/LocationLink'
 import { ShellAction } from './rich/BlockShell'
@@ -848,7 +850,16 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
     if (!isEdit(item)) return <ToolStep key={item.id} item={item} />
     return <EditBlock key={item.id} item={item} projectPath={projectPath} expanded={showEditDetails} toggle={single ? toggle : undefined} />
   }
-  if (items.length === 1 && last) return step(last, true)
+  // 只有一步时不套组；是浏览器操作就在下面带上截图和网址（第 662 步）
+  if (items.length === 1 && last) {
+    if (!isBrowserStep(last)) return step(last, true)
+    return (
+      <div className="flex flex-col gap-1.5">
+        {step(last, true)}
+        <BrowserSummary items={[last]} />
+      </div>
+    )
+  }
   const tools = items.filter((item): item is ToolItem => item.kind === 'tool')
   const running = tools.find((item) => item.status !== 'completed' && item.status !== 'failed')
   const failed = tools.filter((item) => item.status === 'failed').length
@@ -879,6 +890,7 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
         </DisclosureRow>
         {toggle && open && <span className="ml-auto flex pr-1">{toggle}</span>}
       </div>
+      <BrowserSummary items={tools} />
       <div hidden={!open} className="flex flex-col gap-0.5 pl-5">
         {items.map((item) => step(item, false))}
       </div>
@@ -1306,6 +1318,9 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
   const [text, setText] = useState(original)
   const readOnly = useReadOnly()
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
+  // 步骤视图里点「从第 N 步开始执行」（第 663 步）：勾掉的步骤写明已经做完
+  const runFrom = (step: number, done: number[]) =>
+    void sendMessage(task.sessionId, `按下面的计划完成任务，从第 ${step} 步开始${done.length > 0 ? `（第 ${done.join('、')} 步已经做完，不用再做）` : ''}。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
     <CardShell
       data-testid="tool-call"
@@ -1316,6 +1331,7 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
       copy={{ label: '复制计划', text: () => text }}
       exportMarkdown={{ name: '计划', text: () => `# 计划\n\n${text}` }}
     >
+      <PlanSteps text={text} readOnly={readOnly} running={task.running} onChange={setText} onRunFrom={runFrom} />
       <textarea
         aria-label="计划内容"
         readOnly={readOnly}

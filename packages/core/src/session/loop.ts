@@ -31,6 +31,7 @@ import {
   PERMISSION_OPTIONS,
   PROJECT_COMMANDS_META_KEY,
   COMMAND_RISK_META_KEY,
+  BROWSER_SHOT_META_KEY,
   COMMAND_DURATION_META_KEY,
   type ProjectCommandsMeta,
   type PromptImage,
@@ -1155,6 +1156,7 @@ async function runBrowserToolCall(
       toolCallId: call.toolCallId,
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: output.image ? `${output.text}\n（截图已发给模型）` : output.text } }],
+      ...(output.thumbnail ? { _meta: { diffra: { [BROWSER_SHOT_META_KEY]: { type: 'image', mimeType: output.thumbnail.mimeType, data: output.thumbnail.data } } } } : {}),
     })
     const text = truncateForModel(output.image ? `${output.text}\nThe screenshot is attached in the next message.` : output.text).text
     return { result: textResult(call, text), edited: false, images: output.image ? [output.image] : [] }

@@ -143,6 +143,7 @@ const ANSWER_FORMAT_LINES = [
   '  steps: {"current":2,"items":["Install deps",{"title":"Run migration","command":"pnpm db:migrate"}]}',
   '  compare: {"criteria":["Speed"],"options":[{"name":"A","summary":"…","pros":["…"],"cons":["…"],"scores":{"Speed":"fast"},"recommended":true}]}',
   '  filetree: {"items":[{"path":"src/app.ts","status":"added|modified|deleted","note":"…"}]}; keyvalue: {"Port":3000,"Mode":"dev"}; log: raw log lines.',
+  '  todos: {"items":["Add tests for the parser",{"text":"Rotate the API key","note":"…"}]} for follow-ups left for later; the user can add each one to their todo list.',
   '- Pick by content: a chart only for trends or distributions with more than a handful of numbers (three numbers are a sentence, not a pie chart); metrics for 2-8 headline numbers; steps for a procedure the user will follow; timeline for events in order; compare for choosing between 2-6 options; filetree for a set of files.',
   '- Use show_visual only when none of these fits, such as a custom layout or an interactive demo.',
 ]

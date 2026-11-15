@@ -476,11 +476,15 @@ export type BrowserAction =
 
 export type BrowserActionParams = BrowserAction & { sessionId: string }
 
-// text 给模型看；截图时带 image
+// text 给模型看；截图时带 image，另带一张给对话里看的小图 thumbnail（第 662 步）
 export interface BrowserActionResult {
   text: string
   image: PromptImage | null
+  thumbnail?: PromptImage | null
 }
+// 浏览器截图那一步的 _meta.diffra.browserShot：缩略图，按 ACP 的图片内容 { type: 'image', mimeType, data } 存，
+// 同步给远程设备时和别的图片一样换成占位（packages/remote 的 redact）
+export const BROWSER_SHOT_META_KEY = 'browserShot'
 
 // 开发服务器在客户端的终端里跑，用户看得见、能停；一个任务最多一个
 export type DevServerParams =

@@ -7,7 +7,7 @@ const json = (value: unknown) => JSON.stringify(value)
 
 describe('回答里的结构化富块（第 650 步）', () => {
   test('注册表认得的种类', () => {
-    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'json', 'log'])
+    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'json', 'log'])
     expect(isRichBlockKind('chart')).toBe(true)
     expect(isRichBlockKind('ts')).toBe(false)
     expect(isRichBlockKind('toString')).toBe(false)
@@ -84,6 +84,12 @@ describe('回答里的结构化富块（第 650 步）', () => {
     for (const kind of RICH_BLOCK_KINDS.filter((kind) => kind !== 'json')) expect(main).toMatch(new RegExp(`\\b${kind}:`))
     const worker = await buildSystemPrompt(null, options, [], { skills: [], frontend: null, worker: true })
     expect(worker).not.toContain('## Formatting your answer')
+  })
+
+  test('todos：字符串和对象都行，优先级只认 0–3', () => {
+    const result = parseRichBlock('todos', json(['写测试', { text: '换密钥', note: '旧的泄露过', priority: 0 }]))
+    expect(result.ok && result.data.items).toEqual([{ text: '写测试' }, { text: '换密钥', note: '旧的泄露过', priority: 0 }])
+    expect(parseRichBlock('todos', json([{ text: 'x', priority: 5 }])).ok).toBe(false)
   })
 
   test('log：认出级别和源码位置，超过上限的行截掉并记下条数', () => {

@@ -129,6 +129,19 @@ export async function newTerminal(cwd: string): Promise<void> {
   }
 }
 
+// 把一条命令打进这个项目的终端（第 662 步，对话里命令输出的「在终端里运行」）：有开着的就用它，没有就新开一个。
+// 不按回车：智能体的命令是 bash 写法，终端可能是别的 shell，跑不跑由用户看过再定
+export async function typeIntoTerminal(cwd: string, text: string): Promise<void> {
+  let id = store.get().terminals.find((item) => item.cwd === cwd && item.exitCode === null)?.id
+  if (!id) {
+    await newTerminal(cwd)
+    id = store.get().terminals.findLast((item) => item.cwd === cwd)?.id
+  }
+  if (!id) return
+  showTerminal(id)
+  window.diffra.writeTerminal(id, text)
+}
+
 export function showTerminal(id: string): void {
   store.set((state) => ({ ...state, panel: 'terminal', activeTerminal: id }))
 }

@@ -37,6 +37,7 @@ const MAX_NETWORK_URL_CHARS = 200
 const MAX_EVALUATE_CHARS = 10_000
 const EVALUATE_TIMEOUT_MS = 10_000
 const SCREENSHOT_WIDTH = 1280
+const THUMBNAIL_WIDTH = 480
 // 整页截图缩到 1280 宽后最多这么高，再长的截掉后面（看图的接口对图片边长有上限）
 const FULL_PAGE_MAX_HEIGHT = 8_000
 // 布局检查和指定宽度截图用的视口；比 MOBILE_MAX_WIDTH 窄的按手机模拟（遵守页面的 viewport 标签）
@@ -804,7 +805,13 @@ export class PageAgent {
     }
     const note = cropped ? `，页面太长，只截了前 ${FULL_PAGE_MAX_HEIGHT} 像素` : ''
     const coordinates = width === null && !fullPage ? '。按坐标点击时用这张图里的像素坐标' : ''
-    return { text: `截图 ${size.width}x${size.height}（${source}${note}）${coordinates}`, image: { mimeType: 'image/jpeg', data: image.toJPEG(80).toString('base64') } }
+    // 对话里浏览器操作卡用的小图（第 662 步）：存进会话记录，所以压小
+    const thumbnail = size.width > THUMBNAIL_WIDTH ? image.resize({ width: THUMBNAIL_WIDTH }) : image
+    return {
+      text: `截图 ${size.width}x${size.height}（${source}${note}）${coordinates}`,
+      image: { mimeType: 'image/jpeg', data: image.toJPEG(80).toString('base64') },
+      thumbnail: { mimeType: 'image/jpeg', data: thumbnail.toJPEG(60).toString('base64') },
+    }
   }
 
   // 按手机和桌面两种宽度各跑一遍页面里的检查脚本。面板没显示也能查，只是靠脚本响应宽度变化的页面可能没来得及重排

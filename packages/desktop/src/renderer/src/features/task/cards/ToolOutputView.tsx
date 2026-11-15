@@ -1,5 +1,6 @@
 import { type ReactNode, useContext, useMemo, useState } from 'react'
-import { ClipboardCopy, Copy, FlaskConical, PanelRight, RotateCw, Wrench } from 'lucide-react'
+import { ClipboardCopy, Copy, FlaskConical, PanelRight, RotateCw, SquareTerminal, Wrench } from 'lucide-react'
+import { typeIntoTerminal } from '@/features/terminal/terminals'
 import { cn } from 'cn'
 import { fillComposer } from '@/state/actions'
 import { formatDuration } from '@/lib/format'
@@ -12,6 +13,7 @@ import { parseAnsi, stripAnsi } from './ansi'
 import { isGitDiff, looksLikeLog, parseBuildAssets, parseGitLog, parseGitPush, parseGitStatus, parseHttp, parseQueryTable } from './more-parsers'
 import { type FileRead, parseRead, parseSearch, parseTestSummary, type SearchResults, splitCommandOutput, type TestSummary } from './output-parsers'
 import { BuildView, GitDiffView, GitLogView, GitPushView, GitStatusView, HttpView, LogView, QueryView } from './OutputViews'
+import { FlameGraph, LighthouseView, parsePerf } from './PerfViews'
 
 // 输出超过这么多行只画最后这么多（报错一般在最后）
 const MAX_LINES = 2000
@@ -25,10 +27,14 @@ export function ToolOutputView({ command, output, durationMs }: { command: strin
   const parsed = useMemo(() => (command ? splitCommandOutput(output) : { exitCode: null, state: null, body: output }), [command, output])
   const view = useMemo(() => {
     if (!command) {
+      const perf = parsePerf(output)
+      if (perf) return { kind: 'perf', perf } as const
       const json = jsonOf(output)
       return json === undefined ? null : ({ kind: 'json', value: json } as const)
     }
     const body = parsed.body
+    const perf = parsePerf(body)
+    if (perf) return { kind: 'perf', perf } as const
     const test = parseTestSummary(body)
     if (test) return { kind: 'test', test } as const
     if (isGitDiff(command, body)) return { kind: 'git-diff' } as const
@@ -73,6 +79,11 @@ export function ToolOutputView({ command, output, durationMs }: { command: strin
                 <RotateCw />
               </ShellAction>
             )}
+            {target && (
+              <ShellAction label="在终端里运行（打进去，不按回车）" onClick={() => void typeIntoTerminal(target.project, command)}>
+                <SquareTerminal />
+              </ShellAction>
+            )}
             <ShellAction label="复制命令" onClick={() => copyText(command, '已复制命令')}>
               <Copy />
             </ShellAction>
@@ -90,6 +101,7 @@ export function ToolOutputView({ command, output, durationMs }: { command: strin
           <JsonTree value={view.value} source={output} bare />
         </div>
       )}
+      {view?.kind === 'perf' && (view.perf.kind === 'lighthouse' ? <LighthouseView report={view.perf.report} /> : <FlameGraph root={view.perf.root} duration={view.perf.duration} />)}
       {view?.kind === 'git-diff' && <GitDiffView diff={parsed.body} />}
       {view?.kind === 'git-status' && <GitStatusView status={view.status} />}
       {view?.kind === 'git-log' && <GitLogView commits={view.commits} />}
