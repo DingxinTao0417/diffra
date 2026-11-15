@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -34,6 +34,8 @@ import { FINDING_PATTERN, levelStyle, ReviewFindings, SecurityFindings } from '.
 import { LocationLink } from './cards/LocationLink'
 import { ShellAction } from './rich/BlockShell'
 import { ToolOutputView } from './cards/ToolOutputView'
+import { TurnReport, type TurnReportData } from './cards/TurnReport'
+import { parseTestSummary, splitCommandOutput } from './cards/output-parsers'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
@@ -526,6 +528,10 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   const turnFiles = useMemo(() => filesOf(turn.items, edits), [turn.items, edits])
   const showFiles = turnFiles.length > 0 && !turn.restoredAt
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
+  // 本轮报告（第 661 步）：点了才拼，执行轮跑完才有
+  const [showReport, setShowReport] = useState(false)
+  const canReport = !active && (turn.kind === 'prompt' || turn.kind === 'goal')
+  const report = useMemo(() => (showReport && canReport ? turnReport(turn, turnFiles, task.project) : null), [showReport, canReport, turn, turnFiles, task.project])
   const readOnly = useReadOnly()
   // 远程任务页只读（作用于本机的按钮都不显示），但对方开放了「可查看和操作」时撤销、重新生成经对方做
   const remote = useRemoteTask()
@@ -644,6 +650,11 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
               <RefreshCw className="size-4" />
             </ActionButton>
           )}
+          {canReport && (
+            <ActionButton label={showReport ? '收起本轮报告' : '本轮报告'} onClick={() => setShowReport(!showReport)}>
+              <FileText className="size-4" />
+            </ActionButton>
+          )}
           {canRestore && (
             <>
               <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
@@ -667,6 +678,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           {turn.startedAt && turn.endedAt && <span className={cn('text-xs tabular-nums', !showFiles && 'ml-auto')}>用时 {formatDuration(turn.endedAt - turn.startedAt)}</span>}
         </div>
       )}
+      {report && <TurnReport data={report} />}
     </section>
   )
 })
@@ -1693,6 +1705,44 @@ function editCounts(content: { oldText?: string | null; newText: string }): { ad
   return counts
 }
 
+// 本轮报告的数据（第 661 步）：只看主智能体自己的步骤，子智能体的收在它的卡片里
+function turnReport(turn: Turn, files: ChangedFile[], project: string): TurnReportData {
+  const tools = turn.items.filter((item): item is ToolItem => item.kind === 'tool' && !item.parentId)
+  const checks = tools
+    .filter((item) => ['check', 'review', 'architecture', 'security'].includes(toolBlockType(item) ?? '') && (item.status === 'completed' || item.status === 'failed'))
+    .map((item) => ({ name: checkName(item), state: checkPassed(item) ? ('passed' as const) : item.status === 'failed' || item.result === 'failed' ? ('failed' as const) : ('attention' as const) }))
+  const commands = tools.filter((item) => item.toolKind === 'execute' && toolBlockType(item) === null)
+  const failed = commands.filter((item) => item.succeeded === false).map((item) => splitTitle(item.title).target || item.title)
+  const tests = commands.flatMap((item) => {
+    const summary = parseTestSummary(splitCommandOutput(textOf(item)).body)
+    return summary ? [{ command: splitTitle(item.title).target, passed: summary.passed, failed: summary.failed, skipped: summary.skipped }] : []
+  })
+  const verification = turn.outcome?.finish ?? null
+  const risks: string[] = []
+  const stop = stopSummary(turn)
+  if (stop) risks.push(stop.text)
+  if (verification === 'unverified' && files.length > 0) risks.push('改动没有经过自动验证')
+  for (const check of checks) if (check.state !== 'passed') risks.push(`${check.name}${check.state === 'failed' ? '没通过' : '有需要留意的地方'}`)
+  for (const test of tests) if (test.failed > 0) risks.push(`测试 ${test.command} 有 ${test.failed} 个失败`)
+  if (failed.length > 0) risks.push(`${failed.length} 条命令失败：${failed.slice(0, 3).join('；')}${failed.length > 3 ? ' …' : ''}`)
+  const next: string[] = []
+  if (checks.some((check) => check.state === 'failed') || tests.some((test) => test.failed > 0)) next.push('修好没通过的检查和测试')
+  if (verification === 'unverified' && files.length > 0) next.push('运行项目的测试或检查命令，确认改动没问题')
+  if (checks.some((check) => check.state === 'attention')) next.push('看一下检查里需要留意的地方')
+  if (files.length > 0) next.push('在审阅面板里看一遍改动')
+  return {
+    request: turn.prompt,
+    files: files.map((file) => ({ path: relativePath(file.path, project), added: file.added, removed: file.removed })),
+    checks,
+    tests,
+    commands: { total: commands.length, failed },
+    verification,
+    risks,
+    next,
+    durationMs: turn.startedAt && turn.endedAt ? turn.endedAt - turn.startedAt : null,
+  }
+}
+
 // 每个文件按第一次改之前和最后一次改之后的全文算净改动（edits 是 replayEdits 还原的全文）
 function filesOf(items: TranscriptItem[], edits: Map<string, EditTexts>): ChangedFile[] {
   const files = new Map<string, { oldText: string | null; newText: string }>()
@@ -1709,6 +1759,24 @@ function filesOf(items: TranscriptItem[], edits: Map<string, EditTexts>): Change
   return [...files].map(([path, content]) => ({ path, ...diffStats(content.oldText, content.newText) }))
 }
 
+// 时间线悬停时的一句话：改了几个文件、净增删、结论。已经结束的轮次不变，按轮次对象缓存，流式输出时不重算
+const turnSummaries = new WeakMap<Turn, string>()
+function turnSummary(turn: Turn): string {
+  const cached = turnSummaries.get(turn)
+  if (cached) return cached
+  const files = filesOf(turn.items, replayEdits(turn.items))
+  const added = files.reduce((total, file) => total + file.added, 0)
+  const removed = files.reduce((total, file) => total + file.removed, 0)
+  const parts = [files.length > 0 ? `${files.length} 个文件 +${added} −${removed}` : '没有改文件']
+  if (turn.restoredAt) parts.push('已撤销')
+  else if (turn.outcome?.finish === 'verified') parts.push('已验证')
+  else if (turn.outcome?.finish === 'unverified' && files.length > 0) parts.push('未验证')
+  if (turn.error) parts.push('出错')
+  const summary = parts.join(' · ')
+  turnSummaries.set(turn, summary)
+  return summary
+}
+
 function Timeline({ turns, activeTurn, onJump }: { turns: Turn[]; activeTurn: string | null; onJump(turnId: string): void }) {
   return (
     <nav aria-label="对话时间线" className="absolute top-7 right-5 flex max-h-[70%] flex-col gap-1 overflow-hidden">
@@ -1719,8 +1787,10 @@ function Timeline({ turns, activeTurn, onJump }: { turns: Turn[]; activeTurn: st
               <span className={cn('h-0.5 rounded-full', turn.id === activeTurn ? 'w-3 bg-foreground' : 'w-2 bg-muted-foreground/50')} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="left" className="max-w-64 truncate">
-            {turn.prompt.split(/\r?\n/)[0]}
+          <TooltipContent side="left" className="flex max-w-64 flex-col items-start gap-0.5" data-testid="timeline-tooltip">
+            <span className="max-w-full truncate">{turn.prompt.split(/\r?\n/)[0]}</span>
+            {/* 检查点时间线（第 661 步）：这一轮改了什么、结论是什么 */}
+            <span className="tabular-nums">{turnSummary(turn)}</span>
           </TooltipContent>
         </Tooltip>
       ))}
