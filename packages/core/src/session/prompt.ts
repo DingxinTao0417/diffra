@@ -146,6 +146,7 @@ const ANSWER_FORMAT_LINES = [
   '  compare: {"criteria":["Speed"],"options":[{"name":"A","summary":"…","pros":["…"],"cons":["…"],"scores":{"Speed":"fast"},"recommended":true}]}',
   '  filetree: {"items":[{"path":"src/app.ts","status":"added|modified|deleted","note":"…"}]}; keyvalue: {"Port":3000,"Mode":"dev"}; log: raw log lines.',
   '  todos: {"items":["Add tests for the parser",{"text":"Rotate the API key","note":"…"}]} for follow-ups left for later; the user can add each one to their todo list.',
+  '  annotate: {"image":"@图片1","size":[1280,800],"marks":[{"shape":"box|circle","x":40,"y":60,"w":200,"h":48,"note":"…"},{"shape":"arrow","x":10,"y":10,"x2":40,"y2":60},{"shape":"pin","x":300,"y":90}]} points at spots on a screenshot: image is a project image path or an image the user attached (@图片1 is the first one); coordinates are pixels when "size" gives the image size, otherwise 0-1 fractions.',
   '- Pick by content: a chart only for trends or distributions with more than a handful of numbers (three numbers are a sentence, not a pie chart); metrics for 2-8 headline numbers; steps for a procedure the user will follow; timeline for events in order; compare for choosing between 2-6 options; filetree for a set of files.',
   '- Use show_visual only when none of these fits, such as a custom layout or an interactive demo.',
 ]

@@ -1,12 +1,16 @@
 import { type ComponentProps, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import type { ExtraProps } from 'react-markdown'
-import { ChevronLeft, ChevronRight, Globe, ImageOff, Minus, Plus, RotateCcw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Globe, ImageOff, Minus, PenLine, Plus, RotateCcw } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Slider } from '@/components/ui/slider'
 import { errorMessage } from '@/lib/errors'
+import { fillComposer } from '@/state/actions'
 import { AnswerContext, AnswerLink } from '../answer-links'
+import { StaticProjectContext, useStatic } from '../static-context'
+import { marksText } from './annotations'
+import { ImageAnnotator } from './ImageAnnotator'
 
 const isWeb = (src: string) => /^https?:\/\//i.test(src)
 const isData = (src: string) => /^data:image\//i.test(src)
@@ -14,16 +18,19 @@ const isData = (src: string) => /^data:image\//i.test(src)
 // 项目里的图片读成 data: 地址（主窗口的 CSP 只放行 data:）；同一张只读一次
 const projectImages = new Map<string, Promise<string>>()
 
-function useImageSource(src: string | undefined): { url: string | null; error: string | null } {
-  const target = useContext(AnswerContext)
+export function useImageSource(src: string | undefined): { url: string | null; error: string | null } {
+  const answer = useContext(AnswerContext)
+  const staticProject = useContext(StaticProjectContext)
+  const isStatic = useStatic()
+  const project = answer?.project ?? staticProject
   const [state, setState] = useState<{ src: string; url: string | null; error: string | null } | null>(null)
   const local = src && !isWeb(src) && !isData(src) ? src.replace(/^file:\/\/\/?/i, '') : null
   useEffect(() => {
-    if (!local || !target) return
-    const key = `${target.project}\n${local}`
+    if (!local || !project) return
+    const key = `${project}\n${local}`
     let pending = projectImages.get(key)
     if (!pending) {
-      pending = window.diffra.readImage(target.project, decodeURIComponent(local)).then(({ mimeType, data }) => `data:${mimeType};base64,${data}`)
+      pending = window.diffra.readImage(project, decodeURIComponent(local)).then(({ mimeType, data }) => `data:${mimeType};base64,${data}`)
       projectImages.set(key, pending)
       pending.catch(() => projectImages.delete(key))
     }
@@ -35,11 +42,11 @@ function useImageSource(src: string | undefined): { url: string | null; error: s
     return () => {
       stale = true
     }
-  }, [local, target])
+  }, [local, project])
   if (!src) return { url: null, error: '没有图片地址' }
   if (isData(src)) return { url: src, error: null }
   if (!local) return { url: null, error: null }
-  if (!target) return { url: null, error: '远程任务的图片在对方电脑上' }
+  if (!project) return { url: null, error: isStatic ? '分享版和远程任务的导出不带项目里的图片' : '远程任务的图片在对方电脑上' }
   return state?.src === local ? { url: state.url, error: state.error } : { url: null, error: null }
 }
 
@@ -48,6 +55,10 @@ function useImageSource(src: string | undefined): { url: string | null; error: s
 export function AnswerImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
   const { url, error } = useImageSource(src)
   const [open, setOpen] = useState(false)
+  // 在图上标注（第 685 步）：本机任务才有，标完连图带说明填进输入框
+  const target = useContext(AnswerContext)
+  const isStatic = useStatic()
+  const [annotating, setAnnotating] = useState<{ url: string; alt: string } | null>(null)
   if (src && isWeb(src)) {
     return (
       <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 align-middle text-sm" data-testid="web-image">
@@ -70,7 +81,32 @@ export function AnswerImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
       <button type="button" className="inline-block max-w-full overflow-hidden rounded-lg border align-top hover:opacity-90" aria-label={`查看大图：${alt || '图片'}`} onClick={() => setOpen(true)}>
         <img src={url} alt={alt ?? ''} className="max-h-80 max-w-full object-contain" data-testid="answer-image" data-answer-image="" loading="lazy" />
       </button>
-      {open && <Lightbox start={url} onClose={() => setOpen(false)} />}
+      {open && (
+        <Lightbox
+          start={url}
+          onClose={() => setOpen(false)}
+          onAnnotate={
+            target && !isStatic
+              ? (image) => {
+                  setOpen(false)
+                  setAnnotating(image)
+                }
+              : undefined
+          }
+        />
+      )}
+      {annotating && target && (
+        <ImageAnnotator
+          src={annotating.url}
+          title={annotating.alt || '标注图片'}
+          doneLabel="填进输入框"
+          onClose={() => setAnnotating(null)}
+          onDone={({ image, marks }) => {
+            setAnnotating(null)
+            fillComposer(target.sessionId, marksText(marks, '我在这张图上'), { images: [image], files: [] })
+          }}
+        />
+      )}
     </>
   )
 }
@@ -87,7 +123,7 @@ const MIN_ZOOM = 1
 const MAX_ZOOM = 6
 
 // 大图：同一段回答里的图片都能左右切换；滚轮、+/- 缩放，放大后拖动平移；Esc 关
-function Lightbox({ start, onClose }: { start: string; onClose(): void }) {
+function Lightbox({ start, onClose, onAnnotate }: { start: string; onClose(): void; onAnnotate?(image: { url: string; alt: string }): void }) {
   const [images, setImages] = useState<Array<{ url: string; alt: string }>>([{ url: start, alt: '' }])
   const [index, setIndex] = useState(0)
   const [zoom, setZoom] = useState(1)
@@ -172,6 +208,12 @@ function Lightbox({ start, onClose }: { start: string; onClose(): void }) {
             <Button variant="ghost" size="icon-sm" aria-label="还原大小" disabled={zoom === 1} onClick={reset}>
               <RotateCcw />
             </Button>
+            {onAnnotate && (
+              <Button variant="ghost" size="sm" onClick={() => onAnnotate(image)}>
+                <PenLine />
+                标注
+              </Button>
+            )}
             {images.length > 1 && (
               <Button variant="ghost" size="icon-sm" aria-label="下一张" onClick={() => go(1)}>
                 <ChevronRight />

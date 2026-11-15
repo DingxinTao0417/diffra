@@ -1,11 +1,12 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type CommandInfo, type PermissionMode, type PromptImage, type PromptQuestion, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, ChevronUp, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, ChevronUp, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, PenLine, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../../shared/attachments'
 import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
 import { reasoningEffortsFor, withRememberedEffort } from '../../../../shared/reasoning'
 import { cn } from 'cn'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -34,6 +35,8 @@ import { ArgumentsDialog, type ArgumentsRequest } from './ArgumentsDialog'
 import { QuestionBar } from './QuestionBar'
 import { clearComposerDraft, type ComposerDraft, type ComposerFile, type ComposerImage, readComposerDraft, writeComposerDraft } from './composer-drafts'
 import { useRemoteTask } from './remote-task'
+import { marksText } from './rich/annotations'
+import { ImageAnnotator } from './rich/ImageAnnotator'
 import { showToast, store, useAppState } from '@/state/store'
 
 // 斜杠菜单里由页面提供的命令，比如任务页的深度扫描
@@ -176,6 +179,8 @@ export function Composer(props: ComposerProps) {
   const [dragging, setDragging] = useState(false)
   const [addingAttachments, setAddingAttachments] = useState(false)
   const [preview, setPreview] = useState<PreviewTarget | null>(null)
+  // 在附件图片上标注（第 685 步）：标完换掉这张图，说明接在输入框的文字后面
+  const [annotating, setAnnotating] = useState<ComposerImage | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   // 输入法组字时把文字显示在 textarea 本身，着色层的字先变透明（附件底色留着），避免两份文字叠着
   const [composing, setComposing] = useState(false)
@@ -926,13 +931,34 @@ export function Composer(props: ComposerProps) {
           </Tooltip>
         )}
       </div>
-      <AttachmentPreview preview={preview} onClose={() => setPreview(null)} />
+      <AttachmentPreview
+        preview={preview}
+        onClose={() => setPreview(null)}
+        onAnnotate={(image) => {
+          setPreview(null)
+          setAnnotating(image)
+        }}
+      />
+      {annotating && (
+        <ImageAnnotator
+          src={imageUrl(annotating)}
+          title={`标注${annotating.mention}`}
+          doneLabel="换成标注后的图"
+          onClose={() => setAnnotating(null)}
+          onDone={({ image, marks }) => {
+            setImages((current) => current.map((item) => (item.id === annotating.id ? { ...item, ...image } : item)))
+            setDraft((current) => `${current}${current && !current.endsWith('\n') ? '\n' : ''}${marksText(marks, `${annotating.mention} 上`)}\n`)
+            setAnnotating(null)
+            textareaRef.current?.focus()
+          }}
+        />
+      )}
     </div>
   )
 }
 
 // 输入框里的附件缩略图、文件标签和 @token 点开后看大图或路径
-function AttachmentPreview({ preview, onClose }: { preview: PreviewTarget | null; onClose(): void }) {
+function AttachmentPreview({ preview, onClose, onAnnotate }: { preview: PreviewTarget | null; onClose(): void; onAnnotate(image: ComposerImage): void }) {
   return (
     <Dialog open={preview !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className={cn(preview?.kind === 'image' && 'max-w-[90vw] sm:max-w-[90vw]')}>
@@ -941,6 +967,10 @@ function AttachmentPreview({ preview, onClose }: { preview: PreviewTarget | null
             <DialogTitle>图片预览</DialogTitle>
             <img src={imageUrl(preview.image)} alt="附件图片" className="max-h-[75vh] w-auto max-w-full self-center rounded-lg object-contain" data-testid="composer-image-preview" />
             <DialogDescription className="text-center">{preview.image.mention}</DialogDescription>
+            <Button variant="outline" size="sm" className="self-center" onClick={() => onAnnotate(preview.image)}>
+              <PenLine />
+              在图上标注
+            </Button>
           </>
         )}
         {preview?.kind === 'file' && (

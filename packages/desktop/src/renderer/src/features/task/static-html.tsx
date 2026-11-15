@@ -80,8 +80,8 @@ function cleanCopy(container: HTMLElement): HTMLElement {
     canvas.replaceWith(image)
   })
   for (const element of copy.querySelectorAll('iframe, script, [data-static-omit]')) element.remove()
-  // 只有图标的按钮（复制、展开、另存为……）在静态页里点了没用；带字的留着当说明
-  for (const button of copy.querySelectorAll('button')) if (!button.textContent?.trim()) button.remove()
+  // 只有图标的按钮（复制、展开、另存为……）在静态页里点了没用；带字的留着当说明，包着图片的（回答里的图点开看大图）留着图
+  for (const button of copy.querySelectorAll('button')) if (!button.textContent?.trim() && !button.querySelector('img')) button.remove()
   for (const element of copy.querySelectorAll('[tabindex]')) element.removeAttribute('tabindex')
   // 图表按导出时的宽度画成了固定宽高：补上 viewBox，窄屏（手机上看分享版）时跟着容器等比缩小（第 684 步）
   for (const svg of copy.querySelectorAll('svg')) {

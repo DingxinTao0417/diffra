@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { StoredTurn } from '@diffra/core/types'
 import { FileCode, FileImage, FileText, FileType, Share2 } from 'lucide-react'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { type Turn, turnFromStored } from '@/features/session/transcript'
@@ -52,8 +53,8 @@ export function turnsMarkdown(title: string, turns: Turn[]): string {
   return `${lines.join('\n').trimEnd()}\n`
 }
 
-// render 把这几轮画成静态页（StaticTurns），HTML、PDF、图片、分享版用；share 给出分享哪个任务的哪几轮（null 是整个任务）
-export async function exportTurns(format: ExportFormat, title: string, turns: Turn[], render: (turns: Turn[]) => ReactNode, share?: { sessionId: string; turnIds: string[] | null }): Promise<void> {
+// render 把这几轮画成静态页（StaticTurns），HTML、PDF、图片、分享版用，第二个参数说明是不是分享版；share 给出分享哪个任务的哪几轮（null 是整个任务）
+export async function exportTurns(format: ExportFormat, title: string, turns: Turn[], render: (turns: Turn[], shared: boolean) => ReactNode, share?: { sessionId: string; turnIds: string[] | null }): Promise<void> {
   const name = safeFileName(title)
   try {
     if (format === 'markdown') return downloadBlob(new Blob([turnsMarkdown(title, turns)], { type: 'text/markdown' }), `${name}.md`)
@@ -63,13 +64,19 @@ export async function exportTurns(format: ExportFormat, title: string, turns: Tu
       const page = await renderStaticHtml(
         <>
           <ShareBanner />
-          {render(redacted.turns.map(turnFromStored))}
+          {render(
+            redacted.turns.map((turn) => {
+              const omitted = (turn as StoredTurn & { omittedImages?: number }).omittedImages
+              return { ...turnFromStored(turn), ...(omitted ? { omittedImages: omitted } : {}) }
+            }),
+            true,
+          )}
         </>,
         `${redacted.title}（分享版）`,
       )
       return downloadBlob(new Blob([page], { type: 'text/html' }), `${name}（分享版）.html`)
     }
-    const html = await renderStaticHtml(render(turns), title)
+    const html = await renderStaticHtml(render(turns, false), title)
     if (format === 'html') return downloadBlob(new Blob([html], { type: 'text/html' }), `${name}.html`)
     const result = await window.diffra.exportDocument(html, format, name)
     if (result.saved && result.truncated) showToast('太长了，图片只存了前面一部分；完整的请导出 PDF')

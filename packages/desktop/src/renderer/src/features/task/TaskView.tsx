@@ -147,7 +147,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
             archived={archived}
             // 无项目任务的文件夹不是用户的项目，不给它存项目设置
             onProjectSettings={task.noProject ? undefined : () => setEditingProject(true)}
-            onExport={task.turns.length > 0 ? (format) => void exportTurns(format, task.title || 'Diffra 任务', task.turns, (turns) => <StaticTurns task={task} turns={turns} />, { sessionId: task.sessionId, turnIds: null }) : undefined}
+            onExport={task.turns.length > 0 ? (format) => void exportTurns(format, task.title || 'Diffra 任务', task.turns, (turns, shared) => <StaticTurns task={task} turns={turns} projectImages={!shared && !remote} />, { sessionId: task.sessionId, turnIds: null }) : undefined}
           >
             <Button variant="ghost" size="icon-sm" aria-label="任务菜单" className="text-muted-foreground">
               <Ellipsis className="size-4" />

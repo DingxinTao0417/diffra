@@ -25,13 +25,14 @@ import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
-import { useStatic } from './static-context'
+import { StaticProjectContext, useStatic } from './static-context'
 import { SelectionAsk } from './SelectionAsk'
 import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
 import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
 import { TurnReplay } from './TurnReplay'
+import { PromptImagesContext } from './rich/annotations'
 import { PluginBlocksContext, useSessionPluginBlocks } from './rich/PluginBlock'
 import { McpAppCard } from './McpAppCard'
 import { useFullOutput } from './tool-output'
@@ -502,20 +503,23 @@ function visualHistoryOf(turns: Turn[]): Map<string, VisualVersion[]> {
 
 const noop = () => undefined
 
-// 静态渲染用（第 671 步）：这几轮按只读会话的样子、用同一套组件画；没有滚动、时间线和操作栏
-export function StaticTurns({ task, turns }: { task: TurnTask; turns: Turn[] }) {
+// 静态渲染用（第 671 步）：这几轮按只读会话的样子、用同一套组件画；没有滚动、时间线和操作栏。
+// projectImages：回答里项目的图片读进来（本机任务的导出）；分享版、远程任务不读
+export function StaticTurns({ task, turns, projectImages }: { task: TurnTask; turns: Turn[]; projectImages: boolean }) {
   const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
   const turnTask = useMemo<TurnTask>(() => ({ ...task, running: false, permission: null }), [task])
   const pluginBlocks = useSessionPluginBlocks(task.sessionId, true)
   return (
     <ReadOnlyContext.Provider value={true}>
-      <VisualHistoryContext.Provider value={visualHistory}>
-        <PluginBlocksContext.Provider value={pluginBlocks}>
-          {turns.map((turn, index) => (
-            <TurnView key={turn.id} turn={turn} task={turnTask} active={false} last={index === turns.length - 1} latestWork={false} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} />
-          ))}
-        </PluginBlocksContext.Provider>
-      </VisualHistoryContext.Provider>
+      <StaticProjectContext.Provider value={projectImages ? task.project : null}>
+        <VisualHistoryContext.Provider value={visualHistory}>
+          <PluginBlocksContext.Provider value={pluginBlocks}>
+            {turns.map((turn, index) => (
+              <TurnView key={turn.id} turn={turn} task={turnTask} active={false} last={index === turns.length - 1} latestWork={false} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} />
+            ))}
+          </PluginBlocksContext.Provider>
+        </VisualHistoryContext.Provider>
+      </StaticProjectContext.Provider>
     </ReadOnlyContext.Provider>
   )
 }
@@ -786,7 +790,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
             </ActionButton>
           )}
           {/* 导出这一轮（第 671、678 步）：Markdown、HTML、PDF、图片 */}
-          <ExportMenu shareable={!remote} onExport={(format) => void exportTurns(format, turnTitle(turn), [turn], (turns) => <StaticTurns task={task} turns={turns} />, { sessionId: task.sessionId, turnIds: [turn.id] })}>
+          <ExportMenu shareable={!remote} onExport={(format) => void exportTurns(format, turnTitle(turn), [turn], (turns, shared) => <StaticTurns task={task} turns={turns} projectImages={!shared && !remote} />, { sessionId: task.sessionId, turnIds: [turn.id] })}>
             <Button variant="ghost" size="icon-sm" aria-label="导出这一轮" title="导出这一轮">
               <Download className="size-4" />
             </Button>
@@ -870,6 +874,7 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
 // goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
 // imageNote：远程会话里还没过来、没同步的图片说明；streaming：这段回复还在流式输出（富块没写完时先占位）
 function ItemView({ item, goal, skills, images, imageNote, streaming }: { item: Exclude<TranscriptItem, ProcessItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null; streaming: boolean }) {
+  const promptImages = useMemo(() => ({ images, omitted: imageNote !== null }), [images, imageNote])
   switch (item.kind) {
     case 'user':
       if (!goal && skills.length === 0 && images.length === 0 && !imageNote) {
@@ -911,7 +916,9 @@ function ItemView({ item, goal, skills, images, imageNote, streaming }: { item: 
     case 'agent':
       return (
         <div data-testid="agent-message">
-          <Markdown text={item.text} streaming={streaming} />
+          <PromptImagesContext.Provider value={promptImages}>
+            <Markdown text={item.text} streaming={streaming} />
+          </PromptImagesContext.Provider>
         </div>
       )
     case 'notice':

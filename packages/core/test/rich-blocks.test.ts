@@ -7,7 +7,7 @@ const json = (value: unknown) => JSON.stringify(value)
 
 describe('回答里的结构化富块（第 650 步）', () => {
   test('注册表认得的种类', () => {
-    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'json', 'log'])
+    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'annotate', 'json', 'log'])
     expect(isRichBlockKind('chart')).toBe(true)
     expect(isRichBlockKind('ts')).toBe(false)
     expect(isRichBlockKind('toString')).toBe(false)
@@ -90,6 +90,32 @@ describe('回答里的结构化富块（第 650 步）', () => {
     const result = parseRichBlock('todos', json(['写测试', { text: '换密钥', note: '旧的泄露过', priority: 0 }]))
     expect(result.ok && result.data.items).toEqual([{ text: '写测试' }, { text: '换密钥', note: '旧的泄露过', priority: 0 }])
     expect(parseRichBlock('todos', json([{ text: 'x', priority: 5 }])).ok).toBe(false)
+  })
+
+  // 第 685 步
+  test('annotate：写了 size 按像素换成比例，没写就是 0–1；超出图片、箭头没终点、框没宽高、网络图片都不认', () => {
+    const pixels = parseRichBlock('annotate', json({ image: 'shots/a.png', size: [200, 100], marks: [{ shape: 'box', x: 20, y: 10, w: 100, h: 50, note: ' 这里 ' }, { shape: 'arrow', x: 0, y: 0, x2: 200, y2: 100 }] }))
+    expect(pixels.ok && pixels.data).toEqual({
+      image: 'shots/a.png',
+      title: undefined,
+      marks: [
+        { shape: 'box', x: 0.1, y: 0.1, w: 0.5, h: 0.5, note: '这里' },
+        { shape: 'arrow', x: 0, y: 0, x2: 1, y2: 1, note: undefined },
+      ],
+    })
+    const fractions = parseRichBlock('annotate', json({ image: '@图片1', marks: [{ shape: 'pin', x: 0.5, y: 0.25 }] }))
+    expect(fractions.ok && fractions.data.marks).toEqual([{ shape: 'pin', x: 0.5, y: 0.25, note: undefined }])
+
+    const errorOf = (value: unknown) => {
+      const result = parseRichBlock('annotate', json(value))
+      return result.ok ? null : result.error
+    }
+    expect(errorOf({ image: 'a.png', marks: [{ shape: 'pin', x: 300, y: 0.5 }] })).toBe('marks.0.x：超出了图片范围（没写 size 时坐标是 0–1 的比例）')
+    expect(errorOf({ image: 'a.png', size: [100, 100], marks: [{ shape: 'box', x: 50, y: 50, w: 80, h: 10 }] })).toBe('marks.0.w：超出了图片范围')
+    expect(errorOf({ image: 'a.png', marks: [{ shape: 'arrow', x: 0.1, y: 0.1 }] })).toBe('marks.0：箭头要写 x2、y2（指向的位置）')
+    expect(errorOf({ image: 'a.png', marks: [{ shape: 'circle', x: 0.1, y: 0.1, w: 0 }] })).toBe('marks.0：圈要写正的 w、h（宽和高）')
+    expect(errorOf({ image: 'http://x.test/a.png', marks: [{ shape: 'pin', x: 0, y: 0 }] })).toContain('网络图片不加载')
+    expect(errorOf({ image: 'a.png', marks: Array.from({ length: RICH_LIMITS.annotateMarks + 1 }, () => ({ shape: 'pin', x: 0, y: 0 })) })).not.toBeNull()
   })
 
   test('log：认出级别和源码位置，超过上限的行截掉并记下条数', () => {

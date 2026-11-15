@@ -1,5 +1,9 @@
 import type { RichBlockKind } from '../../src/rich/blocks.js'
 
+// 160×90 的示意截图（浅灰底、深色标题栏、中间一个按钮），给 annotate 的样例用
+const SAMPLE_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAKAAAABaCAIAAACwpMoFAAAAv0lEQVR42u3asREAEBREQRWpQSSWKULjgl+EGowIO/MquE0vldr0cMkEgAVYgAVYgAVYgAELsAALsADrCDhi6uEAAxZgARZgARZgAQYswAIswAIswAIMWIAFWIAFWIAFWIABC7AA75dHvy7AgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGDAgAEDBgwYMGCXHQEWYMACLMACLMACLMCABViABViABViAAQuwAAuwAAuwAAswYAEWYAEWYAEW4O9aYgFSn3wmhYgAAAAASUVORK5CYII='
+
 // 每种内置富块的样例（第 684 步的质量门槛）：core 的 rich-gate.test.ts 和桌面端的 e2e/rich-gate.spec.ts 共用。
 // 类型是 Record<RichBlockKind, …>：新加一种块却没给样例，类型检查就过不去。invalid 是数据不对的写法（log 是原文，没有不对的写法，为 null）
 export const RICH_SAMPLES: Record<RichBlockKind, { valid: unknown; invalid: string | null }> = {
@@ -12,6 +16,20 @@ export const RICH_SAMPLES: Record<RichBlockKind, { valid: unknown; invalid: stri
   filetree: { valid: { items: [{ path: 'src/app.ts', status: 'modified' }, { path: 'src/new.ts', status: 'added', note: '新的入口' }] }, invalid: '{"items":[{"status":"added"}]}' },
   keyvalue: { valid: { 端口: 3000, 模式: 'development', 入口: 'src/app.ts' }, invalid: '["不是对象"]' },
   todos: { valid: { items: ['补上解析器的测试', { text: '换掉过期的密钥', note: '下周前' }] }, invalid: '{"items":[{"note":"没有内容"}]}' },
+  annotate: {
+    valid: {
+      title: '按钮被挡住了',
+      image: `data:image/png;base64,${SAMPLE_PNG}`,
+      size: [160, 90],
+      marks: [
+        { shape: 'box', x: 50, y: 40, w: 60, h: 18, note: '按钮在这里' },
+        { shape: 'arrow', x: 20, y: 80, x2: 48, y2: 56, note: '点不到' },
+        { shape: 'circle', x: 0, y: 0, w: 160, h: 14 },
+        { shape: 'pin', x: 140, y: 70, note: '空白太多' },
+      ],
+    },
+    invalid: '{"image":"https://example.com/a.png","marks":[{"shape":"pin","x":0.5,"y":0.5}]}',
+  },
   json: { valid: { name: 'diffra', scripts: { build: 'vite build' }, nested: { deep: { target: 'found-me' } } }, invalid: '{ 不是 JSON' },
   log: { valid: ['INFO 服务启动', 'WARN 慢查询 1200ms', 'ERROR 连接被拒绝', '    at connect (src/app.ts:3:5)'].join('\n'), invalid: null },
 }

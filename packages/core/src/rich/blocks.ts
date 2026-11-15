@@ -23,6 +23,7 @@ export const RICH_LIMITS = {
   todos: 50,
   treeEntries: 1_000,
   logLines: 5_000,
+  annotateMarks: 30,
   // 字段里的一段文字
   text: 2_000,
 } as const
@@ -308,6 +309,53 @@ function parseLog(text: string): LogData {
   return { lines, truncated: Math.max(0, all.length - RICH_LIMITS.logLines) }
 }
 
+// ---- annotate ----
+
+// 图上标注（第 685 步）：image 是项目里的图片路径、data: 地址，或这一轮提问里的图片（@图片1）。
+// 坐标默认是占图片宽、高的比例（0–1）；写了 size（图片的像素宽高）就按像素。框和圈的 x、y 是左上角，圈是框里内切的椭圆；箭头从 x、y 指向 x2、y2
+export type AnnotateShape = 'box' | 'circle' | 'arrow' | 'pin'
+export type AnnotateMark =
+  | { shape: 'box' | 'circle'; x: number; y: number; w: number; h: number; note?: string }
+  | { shape: 'arrow'; x: number; y: number; x2: number; y2: number; note?: string }
+  | { shape: 'pin'; x: number; y: number; note?: string }
+export type AnnotateData = { image: string; title?: string; marks: AnnotateMark[] }
+
+const annotateInput = z.object({
+  v: version,
+  image: z.string().trim().min(1),
+  title: label.optional(),
+  size: z.tuple([finite.positive(), finite.positive()]).optional(),
+  marks: z
+    .array(z.object({ shape: z.enum(['box', 'circle', 'arrow', 'pin']), x: finite, y: finite, w: finite.optional(), h: finite.optional(), x2: finite.optional(), y2: finite.optional(), note: text.optional() }))
+    .min(1)
+    .max(RICH_LIMITS.annotateMarks),
+})
+
+function parseAnnotate(input: unknown): AnnotateData {
+  const raw = annotateInput.parse(input)
+  if (/^https?:\/\//i.test(raw.image)) throw new Error('网络图片不加载：image 要是项目里的图片、data: 地址或这一轮提问里的图片（@图片1）')
+  const [width, height] = raw.size ?? [1, 1]
+  const ratio = (value: number, total: number, where: string) => {
+    const result = value / total
+    if (result < 0 || result > 1) throw new Error(`${where}：超出了图片范围${raw.size ? '' : '（没写 size 时坐标是 0–1 的比例）'}`)
+    return result
+  }
+  const marks = raw.marks.map((mark, index): AnnotateMark => {
+    const at = `marks.${index}`
+    const x = ratio(mark.x, width, `${at}.x`)
+    const y = ratio(mark.y, height, `${at}.y`)
+    const note = mark.note?.trim() || undefined
+    if (mark.shape === 'pin') return { shape: 'pin', x, y, note }
+    if (mark.shape === 'arrow') {
+      if (mark.x2 === undefined || mark.y2 === undefined) throw new Error(`${at}：箭头要写 x2、y2（指向的位置）`)
+      return { shape: 'arrow', x, y, x2: ratio(mark.x2, width, `${at}.x2`), y2: ratio(mark.y2, height, `${at}.y2`), note }
+    }
+    if (!mark.w || !mark.h || mark.w < 0 || mark.h < 0) throw new Error(`${at}：${mark.shape === 'box' ? '框' : '圈'}要写正的 w、h（宽和高）`)
+    return { shape: mark.shape, x, y, w: ratio(mark.x + mark.w, width, `${at}.w`) - x, h: ratio(mark.y + mark.h, height, `${at}.h`) - y, note }
+  })
+  return { image: raw.image, title: raw.title, marks }
+}
+
 // ---- 注册表 ----
 
 export interface RichBlockMap {
@@ -320,6 +368,7 @@ export interface RichBlockMap {
   filetree: FileTreeData
   keyvalue: KeyValueData
   todos: TodosData
+  annotate: AnnotateData
   json: { value: unknown }
   log: LogData
 }
@@ -337,6 +386,7 @@ const REGISTRY: { [K in RichBlockKind]: { format: 'json' | 'text'; parse(input: 
   filetree: { format: 'json', parse: parseFileTree },
   keyvalue: { format: 'json', parse: parseKeyValue },
   todos: { format: 'json', parse: parseTodos },
+  annotate: { format: 'json', parse: parseAnnotate },
   json: { format: 'json', parse: (value) => ({ value }) },
   log: { format: 'text', parse: (value) => parseLog(String(value)) },
 }

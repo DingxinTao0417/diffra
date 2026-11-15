@@ -1,5 +1,6 @@
 import { type ComponentType, lazy, Suspense, useMemo } from 'react'
 import { isRichBlockKind, parseRichBlock, type RichBlockKind, type RichBlockMap } from '@diffra/core/rich'
+import { AnnotateBlock } from './AnnotateBlock'
 import { BlockSkeleton } from './BlockShell'
 import { CodeBlock } from './CodeBlock'
 import { CompareBlock, KeyValueBlock, MetricsBlock, StepsBlock, TimelineBlock } from './DataBlocks'
@@ -30,6 +31,7 @@ const RENDERERS: { [K in RichBlockKind]: RichRenderer<K> } = {
   filetree: FileTreeBlock,
   keyvalue: KeyValueBlock,
   todos: TodosBlock,
+  annotate: AnnotateBlock,
   json: ({ data, info }) => <JsonTree value={data.value} source={info.code} />,
   log: LogBlock,
 }
@@ -44,6 +46,7 @@ const NAMES: Record<RichBlockKind, string> = {
   filetree: '文件树',
   keyvalue: '键值表',
   todos: '后续事项',
+  annotate: '图上标注',
   json: 'JSON',
   log: '日志',
 }
