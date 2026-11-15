@@ -4,7 +4,7 @@ import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
 import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
 import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
-import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withVisualSnapshot } from '../features/session/transcript'
+import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withVisualSnapshot } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { shrinkImage } from '../lib/images'
@@ -756,17 +756,51 @@ export async function regenerate(sessionId: string, turnId: string): Promise<voi
   // 深度扫描和出计划的那一轮没有「重新生成」，要重来就再发起一次
   if (!task || !turn || task.running || (turn.kind !== 'prompt' && turn.kind !== 'goal')) return
   try {
-    const { filesRestored } = await window.diffra.rewindSession(sessionId, turnId)
+    const { filesRestored, edited } = await window.diffra.rewindSession(sessionId, turnId)
     if (!filesRestored) showToast('这一轮没有检查点，文件改动没有撤销，只重新生成了回答')
     updateLive(sessionId, (current) => ({
       ...current,
       changeVersion: current.changeVersion + 1,
       turns: current.turns.slice(0, current.turns.findIndex((item) => item.id === turnId)),
     }))
-    await sendMessage(sessionId, turn.prompt, { goal: turn.kind === 'goal', skills: turn.skills, images: turn.images })
+    // 撤掉的这一轮留成「上一次」（第 676 步），挂到马上开始的那一轮上（core 记录里也挂了，重新打开时从记录读）
+    const { versions: earlier, ...replaced } = turn
+    const versions = [...(earlier ?? []), { turn: replaced, edited }]
+    const sending = sendMessage(sessionId, turn.prompt, { goal: turn.kind === 'goal', skills: turn.skills, images: turn.images })
+    updateLive(sessionId, (current) => {
+      const last = current.turns.at(-1)
+      return last && last.id !== turnId && last.prompt === turn.prompt && !last.versions ? { ...current, turns: [...current.turns.slice(0, -1), { ...last, versions }] } : current
+    })
+    await sending
   } catch (error) {
     showToast(`重新生成失败：${errorMessage(error)}`)
   }
+}
+
+// 换回重新生成之前的那一次（第 676 步）：core 换好后界面照样换，不重新载入任务（重新载入会重建 core 里的会话，本会话的授权这些就没了）
+export async function switchTurnVersion(sessionId: string, turnId: string, index: number): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  try {
+    const { filesRestored } = await window.diffra.useTurnVersion(sessionId, turnId, index)
+    updateLive(sessionId, (current) => ({
+      ...current,
+      changeVersion: current.changeVersion + 1,
+      turns: current.turns.map((turn) => (turn.id === turnId ? swapVersion(turn, index, filesRestored) : turn)),
+    }))
+    showToast(filesRestored ? '换回了那一次，这一次改的文件已经撤销' : '换回了那一次')
+  } catch (error) {
+    showToast(`切换失败：${errorMessage(error)}`)
+  }
+}
+
+function swapVersion(turn: Turn, index: number, filesRestored: boolean): Turn {
+  const chosen = turn.versions?.[index]
+  if (!chosen) return turn
+  const { versions: _versions, ...current } = turn
+  const edited = filesRestored || current.items.some((item) => item.kind === 'tool' && item.content.some((content) => content.type === 'diff'))
+  const versions = [...turn.versions!.filter((_, position) => position !== index), { turn: current, edited }].sort((a, b) => (a.turn.startedAt ?? 0) - (b.turn.startedAt ?? 0))
+  return { ...chosen.turn, id: turn.id, versions }
 }
 
 export async function setPermissionMode(sessionId: string | null, mode: PermissionMode): Promise<void> {

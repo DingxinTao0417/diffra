@@ -115,6 +115,10 @@ const recordSchema = z.object({
       from: z.object({ sessionId: z.string(), title: z.string() }).optional(),
       // 第 360 步加的，旧记录没有
       remote: z.object({ deviceId: z.string(), name: z.string() }).optional(),
+      // 第 676 步加的：重新生成之前的那几次，和这一轮的更新一起存在轮次文件里
+      versions: z
+        .array(z.object({ startedAt: z.string(), endedAt: z.string().nullable(), stopReason: z.string().nullable(), updates: z.array(z.unknown()), edited: z.boolean(), messages: z.array(z.unknown()).optional() }))
+        .optional(),
     }),
   ),
   messages: z.array(z.unknown()),
@@ -128,6 +132,7 @@ const sameDir = (a: string, b: string) => (process.platform === 'win32' ? a.toLo
 interface WrittenTurn {
   length: number
   last: unknown
+  versions: number
 }
 
 export class SessionStore {
@@ -148,9 +153,11 @@ export class SessionStore {
       for (const turn of record.turns) {
         const before = turns.get(turn.id)
         const last = turn.updates.at(-1)
-        if (before && before.length === turn.updates.length && before.last === last) continue
-        await this.writeAtomic(join(turnDir, turnFileName(turn.id)), turn.updates)
-        turns.set(turn.id, { length: turn.updates.length, last })
+        const versions = turn.versions?.length ?? 0
+        if (before && before.length === turn.updates.length && before.last === last && before.versions === versions) continue
+        // 有重新生成之前的版本时文件是 { updates, versions }，没有时照旧只是更新的数组
+        await this.writeAtomic(join(turnDir, turnFileName(turn.id)), versions > 0 ? { updates: turn.updates, versions: turn.versions } : turn.updates)
+        turns.set(turn.id, { length: turn.updates.length, last, versions })
       }
       // 重新生成撤掉的轮次
       const live = new Set(record.turns.map((turn) => turn.id))
@@ -160,7 +167,7 @@ export class SessionStore {
         turns.delete(id)
       }
       this.written.set(record.id, turns)
-      await this.writeAtomic(this.fileOf(record.id), { ...record, version: 2, turns: record.turns.map(({ updates: _updates, ...turn }) => turn) })
+      await this.writeAtomic(this.fileOf(record.id), { ...record, version: 2, turns: record.turns.map(({ updates: _updates, versions: _versions, ...turn }) => turn) })
       const index = await this.readIndex()
       const entry = toEntry(record)
       await this.writeIndex([entry, ...index.filter((item) => item.id !== record.id)])
@@ -175,12 +182,12 @@ export class SessionStore {
     const raw = JSON.parse(text) as { version?: unknown; turns?: unknown }
     const split = raw.version === 2 && Array.isArray(raw.turns)
     // 新格式：把每轮的更新从轮次文件里读回来，拼成和旧格式一样的完整记录再校验
-    const turns = split ? await Promise.all((raw.turns as Array<Record<string, unknown>>).map(async (turn) => ({ ...turn, updates: await this.readTurn(id, turn.id) }))) : raw.turns
+    const turns = split ? await Promise.all((raw.turns as Array<Record<string, unknown>>).map(async (turn) => ({ ...turn, ...(await this.readTurn(id, turn.id)) }))) : raw.turns
     const parsed = recordSchema.safeParse(split ? { ...raw, version: 1, turns } : raw)
     if (!parsed.success) throw new Error(`会话记录 ${id} 已损坏，无法打开`)
     const record = parsed.data as SessionRecord
     // 读出来的就是磁盘上的样子；这个进程里已经在写的会话不覆盖，它记的是内存里那份对象
-    if (split && !this.written.has(id)) this.written.set(id, new Map(record.turns.map((turn) => [turn.id, { length: turn.updates.length, last: turn.updates.at(-1) }])))
+    if (split && !this.written.has(id)) this.written.set(id, new Map(record.turns.map((turn) => [turn.id, { length: turn.updates.length, last: turn.updates.at(-1), versions: turn.versions?.length ?? 0 }])))
     return record
   }
 
@@ -245,16 +252,19 @@ export class SessionStore {
   }
 
   // 某一轮的更新；文件没了或坏了只丢这一轮的显示，会话照样能打开
-  private async readTurn(id: string, turnId: unknown): Promise<unknown[]> {
-    if (typeof turnId !== 'string') return []
+  private async readTurn(id: string, turnId: unknown): Promise<{ updates: unknown[]; versions?: unknown[] }> {
+    if (typeof turnId !== 'string') return { updates: [] }
     try {
-      const updates: unknown = JSON.parse(await readFile(join(this.turnDirOf(id), turnFileName(turnId)), 'utf8'))
-      if (Array.isArray(updates)) return updates
+      const content: unknown = JSON.parse(await readFile(join(this.turnDirOf(id), turnFileName(turnId)), 'utf8'))
+      if (Array.isArray(content)) return { updates: content }
+      // 带重新生成之前的版本（第 676 步）
+      const { updates, versions } = (content ?? {}) as { updates?: unknown; versions?: unknown }
+      if (Array.isArray(updates)) return { updates, ...(Array.isArray(versions) ? { versions } : {}) }
       console.error(`[sessions] 会话 ${id} 第 ${turnId} 轮的记录格式不对，这一轮不显示`)
     } catch (error) {
       console.error(`[sessions] 会话 ${id} 第 ${turnId} 轮的记录读不了，这一轮不显示`, error)
     }
-    return []
+    return { updates: [] }
   }
 
   // 旧格式（所有更新在一个文件里）第一次转成新格式前，原文件复制一份留着；已经有备份或不是旧格式就不动

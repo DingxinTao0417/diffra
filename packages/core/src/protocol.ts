@@ -617,6 +617,21 @@ export interface StoredTurn {
   from?: TaskSource
   // 这一轮的提问是配对的远程设备发来的；第 360 步加的，旧记录没有
   remote?: RemoteSource
+  // 重新生成之前的那几次（第 676 步），按先后排
+  versions?: TurnVersion[]
+}
+
+// 重新生成之前的那一次（第 676 步）：重新生成时旧的这一轮留成只读的「上一次」，挂在新的这一轮上，界面能切换着看、并排对比；
+// 没改过文件的那一次能「用这一次」换回来（SESSION_EXT_METHODS.useTurnVersion），模型接着那一次往下做。
+// messages 是那一次模型的对话，只在 core 里用（换回来时放回上下文），发给界面前去掉（compactTurns），远程设备不发 versions
+export interface TurnVersion {
+  startedAt: string
+  endedAt: string | null
+  stopReason: StopReason | null
+  updates: SessionUpdate[]
+  // 那一次改没改过文件（有检查点时按检查点算，没有时看有没有改动卡片）
+  edited: boolean
+  messages?: unknown[]
 }
 
 // session/load 响应的 _meta.diffra
@@ -807,6 +822,8 @@ export const SESSION_EXT_METHODS = {
   retryStep: '_diffra/session/retry-step',
   // 界面截好的可视化快照记回会话（第 670 步）
   visualSnapshot: '_diffra/visual/snapshot',
+  // 重新生成之前的那一次换回来（第 676 步）
+  useTurnVersion: '_diffra/session/use-version',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
   // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）

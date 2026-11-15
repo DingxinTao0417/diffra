@@ -8,6 +8,7 @@ import {
   enhancePrompt,
   retryStep,
   recordVisualSnapshot,
+  useTurnVersion,
   stopProcess,
   processOutput,
   configureSession,
@@ -424,6 +425,12 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
   )
+  ipcMain.handle(IPC_CHANNELS.sessionUseVersion, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawIndex: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const result = await useTurnVersion(await coreConnection(), sessionId, parse(z.string().min(1), rawTurnId), parse(z.number().int().nonnegative(), rawIndex))
+    emitSessionEvent({ type: 'reset', sessionId })
+    return result
+  })
   ipcMain.handle(IPC_CHANNELS.sessionVisualSnapshot, async (_event, rawSessionId: unknown, rawToolCallId: unknown, rawImage: unknown) =>
     recordVisualSnapshot(await coreConnection(), {
       sessionId: parse(z.string().min(1), rawSessionId),

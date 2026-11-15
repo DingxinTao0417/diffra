@@ -57,8 +57,9 @@ export function redactToolCall<T extends object>(toolCall: T): T {
 }
 
 // 提问带的图片不发，记下有几张
+// 重新生成之前的版本（第 676 步）不同步：远程只看当前这一次
 export function redactTurn(turn: StoredTurn): StoredTurn & { omittedImages?: number } {
-  const { images, ...rest } = turn
+  const { images, versions: _versions, ...rest } = turn
   const redacted = walk(rest, false) as Omit<StoredTurn, 'images'>
   return { ...redacted, updates: withinSnapshotBudget(redacted.updates), images: [], ...(images.length > 0 ? { omittedImages: images.length } : {}) }
 }

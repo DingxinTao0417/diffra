@@ -117,6 +117,7 @@ export const IPC_CHANNELS = {
   sessionPlan: 'session:plan',
   sessionRetryStep: 'session:retry-step',
   sessionVisualSnapshot: 'session:visual-snapshot',
+  sessionUseVersion: 'session:use-version',
   sessionProcesses: 'session:processes',
   sessionProcessStop: 'session:process-stop',
   sessionProcessOutput: 'session:process-output',
@@ -448,7 +449,8 @@ export interface DiffraApi {
   createSession(projectPath: string | null, options?: SessionOptions): Promise<SessionHandle>
   // 返回新的模型名（换了模型时）
   configureSession(sessionId: string, options: SessionOptions): Promise<{ modelLabel: string | null }>
-  rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean }>
+  // edited：撤掉的这一轮改没改过文件（重新生成后它留成「上一次」，改过的换不回来）
+  rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean; edited: boolean }>
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
   // 本地分支和当前分支；切换前检查有没有任务在跑、工作区有没有未提交的改动
@@ -515,6 +517,8 @@ export interface DiffraApi {
   saveVisualPng(rect: { x: number; y: number; width: number; height: number }, title: string): Promise<void>
   // 可视化的快照（第 670 步）：截主窗口里 rect 这块成 PNG；窗口没显示出来、截到空图时是 null
   captureVisual(rect: { x: number; y: number; width: number; height: number }): Promise<PromptImage | null>
+  // 换回重新生成之前的那一次（第 676 步）：index 是这一轮 versions 里的位置
+  useTurnVersion(sessionId: string, turnId: string, index: number): Promise<{ filesRestored: boolean }>
   // 压好的快照记回会话那张可视化卡（toolCallId）；已经有了的不记
   recordVisualSnapshot(sessionId: string, toolCallId: string, image: PromptImage): Promise<{ recorded: boolean }>
   // 待办：整份读、整份存

@@ -17,7 +17,7 @@ import { errorMessage } from '@/lib/errors'
 import { formatDuration, formatTokens } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
-import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel } from '@/state/actions'
+import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel, switchTurnVersion } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
 import { AnswerContext, type AnswerTarget } from './answer-links'
@@ -27,6 +27,7 @@ import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
 import { useStatic } from './static-context'
 import { SelectionAsk } from './SelectionAsk'
+import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
 import { renderStaticHtml } from './static-html'
 import { downloadBlob, safeFileName } from './rich/download'
@@ -476,6 +477,14 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   )
 }
 
+// 并排对比：正在看的那一次（看的是现在这一次时，取它前面最近的一次）和现在这一次
+function CompareVersions({ versions, current, viewing }: { versions: NonNullable<Turn['versions']>; current: Turn; viewing: number | null }) {
+  const order = versionOrder(versions, current)
+  const now = order.indexOf(null)
+  const other = viewing ?? order[now - 1] ?? order[now + 1] ?? 0
+  return <VersionCompare older={versions[other]!.turn} olderLabel={`第 ${order.indexOf(other) + 1} 次`} current={current} currentLabel={`第 ${now + 1} 次（现在）`} />
+}
+
 function visualHistoryOf(turns: Turn[]): Map<string, VisualVersion[]> {
   const history = new Map<string, VisualVersion[]>()
   for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code, snapshot: item.visualSnapshot }])
@@ -552,27 +561,36 @@ export function lastWorkIndex(turns: Turn[]): number {
 const TurnView = memo(function TurnView({ turn, task, active, last, deferred = false, latestWork, locate, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
   const onRestore = useCallback(() => restoreTurn(turn.id), [restoreTurn, turn.id])
   const onRegenerate = useCallback(() => regenerateTurn(turn.id), [regenerateTurn, turn.id])
+  // 重新生成过的一轮（第 676 步）：正在看哪一次（versions 里的位置，null 是现在这一次）、是不是在并排对比
+  const versions = turn.versions ?? []
+  const [viewing, setViewing] = useState<number | null>(null)
+  const [comparing, setComparing] = useState(false)
+  const [confirmingUse, setConfirmingUse] = useState(false)
+  const viewed = viewing !== null ? versions[viewing]?.turn : undefined
+  const items = viewed?.items ?? turn.items
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
-  const blocks = useMemo(() => toBlocks(pendingToolId ? turn.items.filter((item) => item.id !== pendingToolId) : turn.items), [turn.items, pendingToolId])
+  const blocks = useMemo(() => toBlocks(pendingToolId ? items.filter((item) => item.id !== pendingToolId) : items), [items, pendingToolId])
   const [showEditDetails, setShowEditDetails] = useState(false)
   // 远程会话：对方正在跑的这一轮带的图片跑完才过来；超出额度、对方压不了的只有张数
   const imageNote = turn.pendingImages ? `（带了 ${turn.pendingImages} 张图片，这一轮跑完后显示）` : turn.omittedImages ? `（${turn.omittedImages} 张图片没有同步过来）` : null
   // 这一轮每次改动前后的全文（改动卡片只带变化的那段，按顺序重放还原），算改了哪些文件、净增删多少行
-  const edits = useMemo(() => replayEdits(turn.items), [turn.items])
+  const edits = useMemo(() => replayEdits(items), [items])
   // 每张子智能体卡片里的工具调用，按发生顺序
   const agentSteps = useMemo(() => {
     const steps = new Map<string, ToolItem[]>()
-    for (const item of turn.items) {
+    for (const item of items) {
       if (item.kind !== 'tool' || !item.parentId) continue
       steps.set(item.parentId, [...(steps.get(item.parentId) ?? []), item])
     }
     return steps
-  }, [turn.items])
+  }, [items])
   // 整轮的「展开代码详情」只挂在第一个有改动的过程组上，一轮里不会出现两个同名按钮
   const editToggleId = blocks.flatMap((block) => (block.type === 'process' && block.items.some(isEdit) ? [block.id] : []))[0]
   // 这一轮改了哪些文件、净增删多少行：写在这一轮底部，点开审阅（第 526 步起不再有完成卡）
-  const turnFiles = useMemo(() => filesOf(turn.items, edits), [turn.items, edits])
+  // 改了哪些文件总是说现在这一次（看着重新生成之前的那一次时 edits 是那一次的）
+  const currentEdits = useMemo(() => (viewed ? replayEdits(turn.items) : edits), [viewed, turn.items, edits])
+  const turnFiles = useMemo(() => filesOf(turn.items, currentEdits), [turn.items, currentEdits])
   const showFiles = turnFiles.length > 0 && !turn.restoredAt
   const openReview = () => store.set((state) => ({ ...state, panel: 'review' }))
   // 本轮报告（第 661 步）：点了才拼，执行轮跑完才有
@@ -611,9 +629,35 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
       {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
       {turn.remote && <RemoteSourceTag source={turn.remote} />}
       {blocks.map((block, index) => {
+        // 并排对比时只留提问，回答换成对比
+        if (comparing && versions.length > 0 && !(block.type === 'item' && block.item.kind === 'user')) return null
         switch (block.type) {
-          case 'item':
-            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} streaming={active && index === blocks.length - 1} />
+          case 'item': {
+            const view = <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} streaming={active && index === blocks.length - 1} />
+            if (block.item.kind !== 'user' || versions.length === 0 || isStatic || active) return view
+            return (
+              <Fragment key={block.item.id}>
+                {view}
+                <TurnVersions
+                  versions={versions}
+                  current={turn}
+                  viewing={viewing}
+                  onView={(next) => {
+                    setViewing(next)
+                    setConfirmingUse(false)
+                  }}
+                  comparing={comparing}
+                  onCompare={setComparing}
+                  canUse={last && !task.running && !readOnly && !remote}
+                  currentFiles={turnFiles.length}
+                  onUse={(position) => void switchTurnVersion(task.sessionId, turn.id, position).then(() => (setViewing(null), setConfirmingUse(false)))}
+                  confirming={confirmingUse}
+                  onConfirm={setConfirmingUse}
+                />
+                {comparing && <CompareVersions versions={versions} current={turn} viewing={viewing} />}
+              </Fragment>
+            )
+          }
           case 'process':
             return (
               <ProcessGroup
@@ -693,7 +737,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
         </CardShell>
       )}
       {/* 只有最后一轮的操作栏常驻，其余轮悬停或键盘聚焦时才出现；用透明度隐藏，不占用也不改变布局 */}
-      {!active && !isStatic && (
+      {!active && !isStatic && viewing === null && !comparing && (
         <div
           className={cn('flex items-center gap-1 text-muted-foreground transition-opacity', !last && 'opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100')}
           data-testid="turn-actions"

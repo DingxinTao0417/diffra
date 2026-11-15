@@ -72,6 +72,8 @@ export interface Turn {
   // pendingImages 是对方正在跑的这一轮带的张数，跑完重新取快照时才过来
   omittedImages?: number
   pendingImages?: number
+  // 重新生成之前的那几次（第 676 步），按先后排；edited 是那一次改没改过文件（改过的换不回来）
+  versions?: Array<{ turn: Turn; edited: boolean }>
 }
 
 export interface Usage {
@@ -115,6 +117,14 @@ export function turnFromStored(turn: StoredTurn): Turn {
       const change = modelSilenceOf(update)
       return change ? applySilence(silence, change) : silence
     }, {} as Turn['silence']),
+    ...(turn.versions?.length
+      ? {
+          versions: turn.versions.map((version) => ({
+            turn: turnFromStored({ ...turn, startedAt: version.startedAt, endedAt: version.endedAt, stopReason: version.stopReason, updates: version.updates, versions: undefined }),
+            edited: version.edited,
+          })),
+        }
+      : {}),
   }
 }
 

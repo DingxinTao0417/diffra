@@ -9,7 +9,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -156,6 +156,8 @@ export class Session {
   unresolvedCheck: UnresolvedCheck | null = null
   // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到
   readonly consumedChecks = new Map<string, UnresolvedCheck>()
+  // 重新生成（第 676 步）：撤掉的那一轮留成版本，等同样提问的下一轮开始时挂上去
+  private regenerated: { prompt: string; versions: TurnVersion[] } | null = null
   taskState: TaskState = newTaskState()
   activeTurn: AbortController | null = null
   // 请求到了、这一轮还没开始（还在读 Skill、存盘）时点的停止：记下来开始时补上，不然这次停止会被吞掉
@@ -264,7 +266,9 @@ export class Session {
     }
     this.messageStarts.set(id, this.messages.length)
     this.editedTexts.clear()
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}), ...(remote ? { remote } : {}) })
+    const versions = this.regenerated?.prompt === prompt ? this.regenerated.versions : null
+    this.regenerated = null
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}), ...(remote ? { remote } : {}), ...(versions ? { versions } : {}) })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
@@ -392,17 +396,27 @@ export class Session {
     return this.checkpoints && base ? this.checkpoints.diffSince(base) : null
   }
 
-  // 重新生成：把这一轮及之后的文件改动和对话一起撤掉，调用方再用同样的提问发一轮
-  async rewind(turnId: string): Promise<{ filesRestored: boolean }> {
+  // 重新生成：把这一轮及之后的文件改动和对话一起撤掉，调用方再用同样的提问发一轮。edited 是撤掉的这一轮改没改过文件（界面据此标出能不能换回来）
+  async rewind(turnId: string): Promise<{ filesRestored: boolean; edited: boolean }> {
     if (this.running) throw new Error('任务还在进行中，先停止再重新生成')
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const start = this.messageStarts.get(turnId)
     if (index < 0 || start === undefined) throw new Error('这一轮不能重新生成')
     const base = await this.changeBase(turnId)
     let filesRestored = false
+    let changes: CheckpointChange[] | null = null
     if (this.checkpoints && base) {
-      await this.checkpoints.restore(base, await this.checkpoints.changesSince(base))
+      changes = await this.checkpoints.changesSince(base)
+      await this.checkpoints.restore(base, changes)
       filesRestored = true
+    }
+    // 撤掉的这一轮留成版本（第 676 步），重新生成出来的那一轮挂上它；跟在后面的定位轮不留
+    const turn = this.turns[index]!
+    const edited = changes ? changes.length > 0 : hasEdits(turn.updates)
+    if (turn.kind === 'prompt' || turn.kind === 'goal') {
+      const end = this.messageStarts.get(this.turns[index + 1]?.id ?? '') ?? this.messages.length
+      const version: TurnVersion = { startedAt: turn.startedAt, endedAt: turn.endedAt, stopReason: turn.stopReason, updates: turn.updates, edited, messages: this.messages.slice(start, end) }
+      this.regenerated = { prompt: turn.prompt, versions: [...(turn.versions ?? []), version] }
     }
     // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
     const before = taskStateBefore(this.turns, index)
@@ -418,7 +432,33 @@ export class Session {
       this.consumedChecks.delete(turn.id)
     }
     this.taskState = { ...newTaskState(), needsVerification }
-    return { filesRestored }
+    return { filesRestored, edited }
+  }
+
+  // 换回重新生成之前的那一次（第 676 步）：只限最后一轮、那一次没改过文件。这一次的文件改动按检查点撤掉（没有检查点又改过文件时不能换），
+  // 模型的对话换成那一次的，这一次留成版本
+  async useVersion(turnId: string, index: number): Promise<{ filesRestored: boolean }> {
+    if (this.running) throw new Error('任务还在进行中，先停止再切换')
+    const position = this.turns.findIndex((turn) => turn.id === turnId)
+    const turn = this.turns[position]
+    const start = this.messageStarts.get(turnId)
+    const version = turn?.versions?.[index]
+    if (!turn || !version || start === undefined || position !== this.turns.length - 1) throw new Error('只能在最后一轮切换重新生成之前的那一次')
+    if (version.edited) throw new Error('那一次改过文件，换不回来；要用它请重新生成')
+    const base = await this.changeBase(turnId)
+    const changes = this.checkpoints && base ? await this.checkpoints.changesSince(base) : null
+    const edited = changes ? changes.length > 0 : hasEdits(turn.updates)
+    if (edited && !changes) throw new Error('这一轮改过文件又没有检查点，撤不回去，不能切换')
+    if (changes && changes.length > 0) await this.checkpoints!.restore(base!, changes)
+    const current: TurnVersion = { startedAt: turn.startedAt, endedAt: turn.endedAt, stopReason: turn.stopReason, updates: turn.updates, edited, messages: this.messages.slice(start) }
+    this.messages.splice(start, this.messages.length - start, ...((version.messages ?? []) as ModelMessage[]))
+    if (this.compaction && this.compaction.upTo > start) this.compaction = null
+    const versions = [...turn.versions!.filter((_, position) => position !== index), current].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    this.turns[position] = { ...turn, startedAt: version.startedAt, endedAt: version.endedAt, stopReason: version.stopReason, updates: version.updates, versions }
+    // 文件回到这一轮开始时（那一次没改文件），待验证取那时的值，和重新生成一样
+    this.taskState = { ...newTaskState(), needsVerification: taskStateBefore(this.turns, position).needsVerification }
+    this.unresolvedCheck = null
+    return { filesRestored: Boolean(changes && changes.length > 0) }
   }
 
   async checkpointChanges(turnId: string): Promise<CheckpointChange[]> {
@@ -455,6 +495,11 @@ export class Session {
     }
     return changes
   }
+}
+
+// 没有检查点时看这一轮有没有改动卡片
+function hasEdits(updates: SessionUpdate[]): boolean {
+  return updates.some((update) => (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && Boolean(update.content?.some((content) => content.type === 'diff')))
 }
 
 // 从记录恢复任务状态：只有最后一轮没写结束时间才是中途退出；其余 running 是还没跑过任务或撤销后的初始值

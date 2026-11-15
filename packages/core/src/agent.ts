@@ -712,6 +712,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       await notify(taskStateUpdate(session))
       return result
     })
+    .onRequest(SESSION_EXT_METHODS.useTurnVersion, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), index: z.number().int().nonnegative() }), async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      const notify = notifier(client, session.id)
+      const result = await session.useVersion(params.turnId, params.index)
+      await persist(session, notify)
+      await notify(taskStateUpdate(session))
+      return result
+    })
     .onRequest(SESSION_EXT_METHODS.checkpointDiff, checkpointParams, ({ params }) =>
       sessionOf(params.sessionId).checkpointDiff(params.turnId),
     )

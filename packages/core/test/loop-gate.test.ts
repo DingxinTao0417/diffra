@@ -416,20 +416,20 @@ describe('主循环', () => {
     await expect(runTurn(session, { id: 'turn-1', text: '写 a.txt' }, recordingInto(session))).resolves.toBe('max_turn_requests')
     session.endTurn('max_turn_requests')
     expect(session.taskState.needsVerification).toBe(true)
-    await expect(session.rewind('turn-1')).resolves.toEqual({ filesRestored: false })
+    await expect(session.rewind('turn-1')).resolves.toEqual({ filesRestored: false, edited: true })
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('a\n')
     expect(session.taskState).toEqual({ status: 'running', needsVerification: true, reason: null })
   })
 
   test('有检查点时重新生成：文件回到这一轮开始前，待验证取这一轮开始时的值', async () => {
     const session = await twoUnverifiedTurns()
-    await expect(session.rewind('turn-2')).resolves.toEqual({ filesRestored: true })
+    await expect(session.rewind('turn-2')).resolves.toEqual({ filesRestored: true, edited: true })
     expect(existsSync(join(project, 'b.txt'))).toBe(false)
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('a\n')
     // 第二轮开始时带着第一轮没验证的改动
     expect(session.taskState).toEqual({ status: 'running', needsVerification: true, reason: null })
 
-    await expect(session.rewind('turn-1')).resolves.toEqual({ filesRestored: true })
+    await expect(session.rewind('turn-1')).resolves.toEqual({ filesRestored: true, edited: true })
     expect(existsSync(join(project, 'a.txt'))).toBe(false)
     expect(session.taskState).toEqual({ status: 'running', needsVerification: false, reason: null })
   }, 30_000)

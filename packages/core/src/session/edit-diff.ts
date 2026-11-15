@@ -31,7 +31,9 @@ function isCompact(content: DiffContent): boolean {
 
 // 旧记录里的改动卡片带整份文件：发给界面前按同样的规则压缩（不改记录本身）
 export function compactTurns(turns: StoredTurn[]): StoredTurn[] {
-  return turns.map((turn) => {
+  return turns.map((stored) => {
+    // 重新生成之前的版本（第 676 步）：那一次模型的对话只在 core 里用，界面要的是更新
+    const turn = stored.versions?.length ? { ...stored, versions: stored.versions.map(({ messages: _messages, ...version }) => version) } : stored
     const known = new Map<string, string>()
     let changed = false
     const updates = turn.updates.map((update): SessionUpdate => {

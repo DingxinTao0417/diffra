@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -34,6 +34,7 @@ import {
   searchSessions,
   sendPrompt,
   updateSession,
+  useTurnVersion,
 } from '../src/client.js'
 import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS } from '../src/protocol.js'
 import { type SessionRecord, SessionStore } from '../src/session/store.js'
@@ -634,7 +635,7 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(diff).toContain('+++ b/c.txt')
 
     notifications = []
-    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true, edited: true })
     expect(lastTaskState(sessionId)).toEqual({ status: 'running', reason: null, requirements: [], needsVerification: false })
     expect(existsSync(join(project, 'c.txt'))).toBe(false)
     expect(readFileSync(join(project, 'b.txt'), 'utf8')).toBe('first\n')
@@ -654,6 +655,48 @@ describe('重新生成、切换模型、整段 diff', () => {
     }
     const [summary] = await listSessions(core)
     expect(summary?.turnCount).toBe(2)
+  })
+
+  // 第 676 步：重新生成之前的那一次留成版本，能换回来
+  test('重新生成后上一次留成版本（存在轮次文件里，重启还在，发给界面不带模型对话）；没改文件的那一次能换回来，模型接着那一次；改过文件的换不回来', async () => {
+    server = await startScriptedServer([{ text: '第一次的回答' }, { text: '第二次的回答' }, { text: '接着第一次' }, { toolCalls: [addFile('v.txt', 'x')] }, { text: '写好了' }, { text: '重写的回答' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '写个标题')
+    await rewindSession(first, sessionId, 'turn-1')
+    await sendPrompt(first, sessionId, 'turn-1b', '写个标题')
+
+    const second = await startCore()
+    const loaded = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns).toHaveLength(1)
+    const [turn] = loaded.turns
+    expect(JSON.stringify(turn?.updates)).toContain('第二次的回答')
+    expect(turn?.versions).toHaveLength(1)
+    expect(turn?.versions?.[0]).toMatchObject({ edited: false, stopReason: 'end_turn' })
+    expect(JSON.stringify(turn?.versions?.[0]?.updates)).toContain('第一次的回答')
+    expect(turn?.versions?.[0]).not.toHaveProperty('messages')
+    const turnFile = readdirSync(join(dataDir, 'sessions', sessionId)).map((name) => readFileSync(join(dataDir, 'sessions', sessionId, name), 'utf8')).join('')
+    expect(turnFile).toContain('"versions"')
+    expect(readFileSync(join(dataDir, 'sessions', `${sessionId}.json`), 'utf8')).not.toContain('"versions"')
+
+    // 换回第一次：这一轮显示第一次的回答，第二次留成版本；模型下一轮看到的是第一次
+    expect(await useTurnVersion(second, sessionId, 'turn-1b', 0)).toEqual({ filesRestored: false })
+    const swapped = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(JSON.stringify(swapped.turns[0]?.updates)).toContain('第一次的回答')
+    expect(JSON.stringify(swapped.turns[0]?.versions)).toContain('第二次的回答')
+    await sendPrompt(second, sessionId, 'turn-2', '接着写')
+    expect(server.bodies[2]).toContain('第一次的回答')
+    expect(server.bodies[2]).not.toContain('第二次的回答')
+
+    // 改过文件的一轮重新生成：那一次标成改过文件，换不回来；只能在最后一轮换
+    await sendPrompt(second, sessionId, 'turn-3', '写 v.txt')
+    await rewindSession(second, sessionId, 'turn-3')
+    expect(existsSync(join(project, 'v.txt'))).toBe(false)
+    await sendPrompt(second, sessionId, 'turn-3b', '写 v.txt')
+    const last = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(last.turns.at(-1)?.versions?.[0]).toMatchObject({ edited: true })
+    await expect(useTurnVersion(second, sessionId, 'turn-3b', 0)).rejects.toThrow('那一次改过文件')
+    await expect(useTurnVersion(second, sessionId, 'turn-1b', 0)).rejects.toThrow('只能在最后一轮')
   })
 
   test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字也会在停下时跑门禁', async () => {
@@ -677,7 +720,7 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
 
     notifications = []
-    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true })
+    expect(await rewindSession(core, sessionId, 'turn-2')).toEqual({ filesRestored: true, edited: true })
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'running', needsVerification: true })
     expect(existsSync(join(project, 'b.txt'))).toBe(false)
 

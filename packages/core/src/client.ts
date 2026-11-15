@@ -197,6 +197,11 @@ export function retryStep(connection: acp.ClientConnection, sessionId: string, a
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
 }
 
+// 换回重新生成之前的那一次（第 676 步）；这一次的文件改动按检查点撤掉时 filesRestored 为 true
+export function useTurnVersion(connection: acp.ClientConnection, sessionId: string, turnId: string, index: number): Promise<{ filesRestored: boolean }> {
+  return requestOf(connection)<{ filesRestored: boolean }, { sessionId: string; turnId: string; index: number }>(SESSION_EXT_METHODS.useTurnVersion, { sessionId, turnId, index }, extRequestOptions())
+}
+
 // 界面截好的可视化快照记回会话（第 670 步）；不是可视化的卡、已经有快照的不记
 export function recordVisualSnapshot(connection: acp.ClientConnection, params: { sessionId: string; toolCallId: string; image: { mimeType: string; data: string } }): Promise<{ recorded: boolean }> {
   return requestOf(connection)<{ recorded: boolean }, typeof params>(SESSION_EXT_METHODS.visualSnapshot, params, extRequestOptions())
@@ -347,8 +352,8 @@ export async function configureSession(
   await requestOf(connection)(SESSION_EXT_METHODS.sessionConfigure, { sessionId, ...change }, extRequestOptions())
 }
 
-export function rewindSession(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<{ filesRestored: boolean }> {
-  return requestOf(connection)<{ filesRestored: boolean }, { sessionId: string; turnId: string }>(
+export function rewindSession(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<{ filesRestored: boolean; edited: boolean }> {
+  return requestOf(connection)<{ filesRestored: boolean; edited: boolean }, { sessionId: string; turnId: string }>(
     SESSION_EXT_METHODS.sessionRewind,
     { sessionId, turnId },
     extRequestOptions(),
