@@ -27,6 +27,8 @@ import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
 import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
+import { CARD_COMPACT, CardShell } from './cards/CardShell'
+import { ToolOutputView } from './cards/ToolOutputView'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
 
@@ -44,9 +46,6 @@ const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' &&
 // 这几种块在跑的时候自己会转圈（StatusIcon、LoaderCircle）；步骤清单、计划、可视化、定位结果、深度扫描报告不转
 const SPINNING_BLOCKS = new Set<Block['type']>(['edit', 'agent', 'task', 'compaction', 'verify', 'wait'])
 
-// 对话里的卡片只有两档：标准给出错、定位结果、计划、深度扫描报告；紧凑给提醒、子智能体、规范审查打回、安全检查有发现（可视化卡同紧凑档）
-const CARD = 'flex flex-col gap-2.5 rounded-xl border px-3.5 py-3'
-const CARD_COMPACT = 'flex flex-col gap-1.5 rounded-xl border px-3 py-2.5'
 
 // 这一轮最后一块已经在显示进度时（过程组在跑、思考中、工具调用在跑），下面不再多一行「进行中…」，免得两个圈一起转（第 496 步）。
 // 运行中的过程组标题行一直在转；只有一项时是那一行自己：思考在转，工具调用跑完就不转了
@@ -596,18 +595,22 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
       {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} />}
       {!active && <StopSummary turn={turn} task={task} actionable={!readOnly && latestWork && !task.running} />}
       {turn.error && (
-        <div className={cn(CARD, 'border-destructive/30 bg-destructive-soft text-sm')} role="alert" data-testid="turn-error">
-          <div className="flex items-center gap-2 font-bold text-destructive">
-            <CircleAlert className="size-4 shrink-0" />
-            这一轮出错了
-          </div>
+        <CardShell
+          tone="danger"
+          role="alert"
+          data-testid="turn-error"
+          icon={<CircleAlert className="size-4 shrink-0 text-destructive" />}
+          title="这一轮出错了"
+          titleClassName="text-destructive"
+          copy={{ label: '复制错误', text: () => turn.error ?? '' }}
+        >
           <p className="leading-relaxed break-words whitespace-pre-wrap">{turn.error}</p>
           {canRegenerate && (
             <Button variant="outline" size="sm" className="self-start" disabled={task.running} onClick={onRegenerate}>
               重试
             </Button>
           )}
-        </div>
+        </CardShell>
       )}
       {/* 只有最后一轮的操作栏常驻，其余轮悬停或键盘聚焦时才出现；用透明度隐藏，不占用也不改变布局 */}
       {!active && (
@@ -748,19 +751,16 @@ function ItemView({ item, goal, skills, images, imageNote, streaming }: { item: 
       )
     case 'notice':
       return (
-        <div
+        <CardShell
           data-testid="notice"
           role={item.severity === 'error' ? 'alert' : undefined}
-          className={cn(
-            CARD_COMPACT,
-            'text-sm',
-            item.severity === 'error' && 'border-destructive/30 bg-destructive-soft text-destructive',
-            item.severity === 'warning' && 'border-warning/30 bg-warning-soft',
-          )}
+          density="compact"
+          tone={item.severity === 'error' ? 'danger' : item.severity === 'warning' ? 'warning' : 'default'}
+          title={item.title}
+          titleClassName={item.severity === 'error' ? 'text-destructive' : undefined}
         >
-          <div className="font-bold">{item.title}</div>
           {item.description && <div className="whitespace-pre-wrap text-muted-foreground">{item.description}</div>}
-        </div>
+        </CardShell>
       )
   }
 }
@@ -879,7 +879,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
           <TaskLink source={item.taskLink} label="打开任务" />
         </div>
       )}
-      {expanded && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      {expanded && output && <ToolOutputView command={item.toolKind === 'execute' && target ? target : null} output={output} />}
       {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
   )
@@ -1129,12 +1129,14 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
   const { target } = diagnosis
   const readOnly = useReadOnly()
   return (
-    <div className={cn(CARD, 'text-sm')} data-testid="diagnosis">
-      <div className="flex items-center gap-2 font-bold">
-        <SearchCheck className="size-4 text-muted-foreground" />
-        定位结果
-        {diagnosis.fallback && <span className="text-xs font-normal text-muted-foreground">模型没有给出结论，这是按记录拼的通用版本</span>}
-      </div>
+    <CardShell
+      data-testid="diagnosis"
+      icon={<SearchCheck className="size-4 shrink-0 text-muted-foreground" />}
+      title="定位结果"
+      subtitle={diagnosis.fallback ? '模型没有给出结论，这是按记录拼的通用版本' : undefined}
+      copy={{ label: '复制定位结果', text: () => diagnosisMarkdown(diagnosis, prompt) }}
+      exportMarkdown={{ name: '定位结果', text: () => diagnosisMarkdown(diagnosis, prompt) }}
+    >
       <p className="leading-relaxed" data-testid="diagnosis-cause">
         {diagnosis.cause}
       </p>
@@ -1202,8 +1204,25 @@ function DiagnosisCard({ item, task, onLocate }: { item: ToolItem; task: TurnTas
         </Button>
       </div>
       )}
-    </div>
+    </CardShell>
   )
+}
+
+// 定位结果整理成 Markdown：复制、导出用
+function diagnosisMarkdown(diagnosis: NonNullable<ToolItem['diagnosis']>, prompt: string): string {
+  const list = (title: string, lines: string[]) => (lines.length > 0 ? [`## ${title}`, ...lines.map((line) => `- ${line}`), ''] : [])
+  return [
+    '# 定位结果',
+    '',
+    diagnosis.cause,
+    '',
+    ...list('证据', diagnosis.evidence.map((evidence) => `${evidence.title}：${evidence.note}`)),
+    ...list('已经完成', diagnosis.done),
+    ...list('还没完成', diagnosis.remaining),
+    '## 修复提示词',
+    '',
+    prompt,
+  ].join('\n')
 }
 
 // 计划：可以直接改文字；点「按计划执行」，把这一轮的需求和改过的计划作为新的一轮发给编码模型
@@ -1213,11 +1232,15 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
   const readOnly = useReadOnly()
   const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
   return (
-    <div className={CARD} data-testid="tool-call" data-kind="plan" data-status={item.status}>
-      <div className="flex items-center gap-2 font-bold">
-        <ListChecks className="size-4 text-muted-foreground" />
-        计划
-      </div>
+    <CardShell
+      data-testid="tool-call"
+      data-kind="plan"
+      data-status={item.status}
+      icon={<ListChecks className="size-4 shrink-0 text-muted-foreground" />}
+      title="计划"
+      copy={{ label: '复制计划', text: () => text }}
+      exportMarkdown={{ name: '计划', text: () => `# 计划\n\n${text}` }}
+    >
       <textarea
         aria-label="计划内容"
         readOnly={readOnly}
@@ -1239,7 +1262,7 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
         <span className="text-xs text-muted-foreground">可以先改计划再执行；不满意就在下面接着说。</span>
       </div>
       )}
-    </div>
+    </CardShell>
   )
 }
 
@@ -1375,7 +1398,7 @@ function CheckRow({ item }: { item: ToolItem }) {
         {/* success-color-allow: 检查命令通过 */}
         <span className={cn('shrink-0', item.status === 'completed' && 'text-success', item.status === 'failed' && 'text-destructive')}>{result}</span>
       </DisclosureRow>
-      {open && output && <pre className="mt-1.5 ml-5 max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{output}</pre>}
+      {open && output && <ToolOutputView command={command} output={output} />}
       {full.note && <OutputNote note={full.note} retry={full.retry} />}
     </div>
   )
@@ -1424,11 +1447,15 @@ function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
   const findings = lines.map((line) => FINDING_PATTERN.exec(line))
   const count = findings.filter(Boolean).length
   return (
-    <div {...common} className={cn(CARD_COMPACT, 'border-destructive/30 bg-destructive-soft text-sm')}>
-      <div className="flex items-center gap-2 font-bold text-destructive">
-        <X className="size-3.5" strokeWidth={2.6} />
-        {count > 0 ? `${label} · ${count} 处问题，已打回` : label}
-      </div>
+    <CardShell
+      {...common}
+      density="compact"
+      tone="danger"
+      icon={<X className="size-3.5 shrink-0 text-destructive" strokeWidth={2.6} />}
+      title={count > 0 ? `${label} · ${count} 处问题，已打回` : label}
+      titleClassName="text-destructive"
+      copy={{ label: '复制问题', text: () => text }}
+    >
       {lines.map((line, index) => {
         const match = findings[index]
         if (!match) return <div key={index} className="leading-relaxed">{line}</div>
@@ -1440,7 +1467,7 @@ function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
           </div>
         )
       })}
-    </div>
+    </CardShell>
   )
 }
 
@@ -1487,18 +1514,15 @@ function SecurityBlock({ item }: { item: ToolItem }) {
   }
   const high = findings.filter((row) => row.match?.[1] === '高危').length
   return (
-    <div
+    <CardShell
       {...common}
-      className={cn(
-        CARD_COMPACT,
-        'text-sm',
-        high > 0 ? 'border-destructive/30 bg-destructive-soft' : 'border-warning/30 bg-warning-soft',
-      )}
+      density="compact"
+      tone={high > 0 ? 'danger' : 'warning'}
+      icon={high > 0 ? <X className="size-3.5 shrink-0 text-destructive" strokeWidth={2.6} /> : <CircleAlert className="size-3.5 shrink-0 text-warning" />}
+      title={high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
+      titleClassName={high > 0 ? 'text-destructive' : undefined}
+      copy={{ label: '复制发现', text: () => text }}
     >
-      <div className={cn('flex items-center gap-2 font-bold', high > 0 && 'text-destructive')}>
-        {high > 0 ? <X className="size-3.5" strokeWidth={2.6} /> : <CircleAlert className="size-3.5 text-warning" />}
-        {high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
-      </div>
       {rows.map(({ line, match }, index) =>
         match ? (
           <div key={index} className="flex flex-wrap items-baseline gap-x-2.5 leading-relaxed" data-testid="security-finding">
@@ -1513,7 +1537,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
           </div>
         ),
       )}
-    </div>
+    </CardShell>
   )
 }
 
@@ -1568,8 +1592,14 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
   }
 
   return (
-    <div className={cn(CARD, 'text-sm')} data-testid="tool-call" data-kind="deep-scan" data-status={item.status}>
-      <div className="font-bold">深度扫描报告</div>
+    <CardShell
+      data-testid="tool-call"
+      data-kind="deep-scan"
+      data-status={item.status}
+      title="深度扫描报告"
+      copy={{ label: '复制报告', text: () => textOf(item) }}
+      exportMarkdown={{ name: '深度扫描报告', text: () => `# 深度扫描报告\n\n${textOf(item)}` }}
+    >
       <p className="text-muted-foreground">{summary}</p>
       {findings.length === 0 && <p>没有发现可以确认的安全问题。</p>}
       {findings.map((finding, index) => (
@@ -1592,7 +1622,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
           {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
         </Button>
       )}
-    </div>
+    </CardShell>
   )
 }
 

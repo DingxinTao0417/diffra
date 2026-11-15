@@ -52,6 +52,9 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     await expect(content).toHaveValue(/1\. 新建 README\.md/)
     await expect(content).toHaveValue(/风险和需要确认的问题：\n- 项目名还没定/)
     await content.fill(`${await content.inputValue()}\n额外：标题用 demo`)
+    // 卡片外壳的「复制计划」复制的是改过的计划（第 656 步）
+    await planCard.getByRole('button', { name: '复制计划' }).click()
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toContain('额外：标题用 demo')
     await window.screenshot({ path: 'test-results/plan-card.png' })
     await planCard.getByRole('button', { name: '按计划执行' }).click()
     // 按计划执行的那一轮改了文件：做完后这一轮底部写着改了哪些文件（第 526 步起没有完成卡）
