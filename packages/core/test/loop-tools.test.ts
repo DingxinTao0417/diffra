@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, relative, sep } from 'node:path'
 import type { PermissionOption, SessionUpdate, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { APICallError, type ToolResultPart } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -786,4 +786,32 @@ describe('git 历史里的密钥文件（第 629 步）', () => {
     expect(results[1]).toContain('-CITY=Shanghai')
     expect(JSON.stringify(model.doStreamCalls)).not.toContain('wk_live_0a1b2c3d4e5f')
   }, 30_000)
+})
+
+describe('项目外写入的确认', () => {
+  test('确认卡带上要写的那段补丁：补丁里写的路径经过目录联接（符号链接）、写成相对路径或 Git Bash 写法时也对得上', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'diffra-outside-'))
+    const link = `${outside}-link`
+    symlinkSync(outside, link, 'junction')
+    const file = join(outside, 'note.txt')
+    writeFileSync(file, 'before\n')
+    const written = [join(link, 'note.txt'), relative(project, file)]
+    if (process.platform === 'win32') written.push(`/${file[0]!.toLowerCase()}${file.slice(2).split(sep).join('/')}`)
+    try {
+      for (const path of written) {
+        const rawInputs: unknown[] = []
+        const io = recordingIO()
+        io.requestPermission = async (toolCall: ToolCallUpdate) => {
+          rawInputs.push(toolCall.rawInput)
+          return null
+        }
+        await runTurn(await makeSession(scriptedModel([{ toolCalls: [replaceLines(path, 'before', 'after')] }, { text: '没改' }])), { id: 't', text: '改外面的文件' }, io)
+        expect(rawInputs, path).toEqual([expect.objectContaining({ scope: 'exact-path', access: 'write', patch: expect.stringContaining('+after') })])
+        expect(readFileSync(file, 'utf8')).toBe('before\n')
+      }
+    } finally {
+      rmSync(link, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
 })

@@ -78,7 +78,7 @@ function isInside(relativePath: string): boolean {
 }
 
 // 目标可能还不存在（新建文件），就解析最近一个存在的上级目录
-async function realpathOfExisting(path: string): Promise<string> {
+export async function realpathOfExisting(path: string): Promise<string> {
   let current = path
   for (;;) {
     try {

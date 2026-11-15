@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PermissionOption, SessionUpdate, StopReason, ToolCallContent, ToolCallUpdate } from '@agentclientprotocol/sdk'
 import { type LanguageModel, type ModelMessage, RetryError, streamText, type ToolChoice, type ToolResultPart, type ToolSet } from 'ai'
@@ -75,7 +75,7 @@ import {
   reviewRulePacks,
 } from '../rules/review.js'
 import { runShell } from '../tools/command.js'
-import { resolveToolPath } from '../tools/workspace.js'
+import { fromMsysPath, realpathOfExisting, resolveToolPath } from '../tools/workspace.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 import { staticScan } from '../security/static.js'
 import { type ArchitectureFinding, checkArchitecture } from '../architecture/check.js'
@@ -993,7 +993,7 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
           title: `项目外${access === 'read' ? '读取' : '写入'}：${path}`,
           kind: access === 'read' ? 'read' : 'edit',
           status: 'pending',
-          rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE, ...externalPatchPreview(call, path, access) },
+          rawInput: { path, access, scope: EXTERNAL_ACCESS_SCOPE, ...(await externalPatchPreview(call, session.cwd, path, access)) },
           _meta: LOCAL_ONLY_META,
         },
         [
@@ -1292,16 +1292,19 @@ function commandPolicy(session: Session, workdir?: string): CommandPolicy {
 
 // 写项目外的文件要确认时，确认卡上给出这个文件的那段补丁（第 659 步）：apply_patch 的「*** … File: 路径」分段里，路径和要写的文件对得上的那段
 const MAX_PATCH_PREVIEW_CHARS = 20_000
-function externalPatchPreview(call: StepToolCall, path: string, access: string): { patch?: string } {
+// 要写的文件（path）是 resolveToolPath 解析过真实路径的，补丁里写的可能经过目录联接、符号链接，或是相对路径、Git Bash 写法，
+// 照样解析之后再比；以前直接比字符串，这几种都对不上，确认卡上没有补丁
+async function externalPatchPreview(call: StepToolCall, cwd: string, path: string, access: string): Promise<{ patch?: string }> {
   const input = call.input as { input?: unknown } | null
   if (access !== 'write' || call.toolName !== 'apply_patch' || typeof input?.input !== 'string') return {}
-  const target = path.replace(/\\/g, '/').toLowerCase()
-  const sections = input.input.split(/^(?=\*\*\* (?:Add|Update|Delete) File: )/m)
-  const section = sections.find((part) => {
-    const file = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/m.exec(part)?.[1]?.trim().replace(/\\/g, '/').toLowerCase()
-    return file !== undefined && (target === file || target.endsWith(`/${file.replace(/^\.\//, '')}`))
-  })
-  return section ? { patch: section.replace(/\*\*\* End Patch\s*$/, '').trimEnd().slice(0, MAX_PATCH_PREVIEW_CHARS) } : {}
+  const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
+  for (const section of input.input.split(/^(?=\*\*\* (?:Add|Update|Delete) File: )/m)) {
+    const file = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/m.exec(section)?.[1]?.trim()
+    if (!file) continue
+    const resolved = await realpathOfExisting(resolve(cwd, fromMsysPath(file))).catch(() => null)
+    if (resolved !== null && same(resolved, path)) return { patch: section.replace(/\*\*\* End Patch\s*$/, '').trimEnd().slice(0, MAX_PATCH_PREVIEW_CHARS) }
+  }
+  return {}
 }
 
 // justification：模型写的「为什么要跑」，显示在确认卡上
