@@ -2,7 +2,8 @@ import { DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type P
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
-import { normalizeTodoTags, type Todo, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
+import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
+import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
@@ -569,7 +570,7 @@ export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void
 
 // 记一条待办；不传 project 时带上所在页面当前的项目，at 有值时到时提醒
 // body：对话框里写的正文（可以是空字符串，表示按新格式存、不再从标题里拆）；快速记不带
-export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[]; body?: string; priority?: TodoPriority | null } = {}): Promise<void> {
+export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[]; body?: string; priority?: TodoPriority | null; images?: string[]; files?: FileReference[] } = {}): Promise<void> {
   const todo: Todo = {
     id: crypto.randomUUID(),
     text: text.trim(),
@@ -581,12 +582,14 @@ export function addTodo(text: string, at?: Date, options: { project?: string | n
     done: false,
     sentTo: null,
     ...(at ? { schedule: { at: at.toISOString(), action: { kind: 'remind' as const }, result: null } } : {}),
+    ...(options.images?.length ? { images: options.images } : {}),
+    ...(options.files?.length ? { files: options.files } : {}),
   }
   return saveTodos((todos) => [todo, ...todos])
 }
 
-// 对话框里改一条待办：标题、正文、优先级、标签、项目、时间
-export function updateTodo(id: string, change: Pick<Todo, 'text' | 'body' | 'priority' | 'tags' | 'project'> & { schedule: TodoSchedule | null }): Promise<void> {
+// 对话框里改一条待办：标题、正文、优先级、标签、项目、时间、附件
+export function updateTodo(id: string, change: Pick<Todo, 'text' | 'body' | 'priority' | 'tags' | 'project' | 'images' | 'files'> & { schedule: TodoSchedule | null }): Promise<void> {
   return saveTodos((todos) => todos.map((todo) => (todo.id === id ? { ...todo, ...change, text: change.text.trim(), body: change.body?.trim(), tags: normalizeTodoTags(change.tags) } : todo)))
 }
 
@@ -603,27 +606,50 @@ export async function dispatchTodos(
   target: { kind: 'new'; project: string | null; design: boolean } | { kind: 'existing'; sessionId: string; cwd: string; mode: 'send' | 'fill' },
 ): Promise<void> {
   let sessionId: string
-  if (target.kind === 'new') {
+  const todos = (store.get().todos ?? []).filter((todo) => ids.includes(todo.id))
+  if (target.kind === 'existing' && target.mode === 'fill') {
+    const { images, files } = todoAttachments(todos)
+    checkTodoAttachments(images, files)
+    const pictures = await Promise.all(images.map((id) => window.diffra.readTodoImage(id)))
+    await openTask({ sessionId: target.sessionId, cwd: target.cwd })
+    if (!store.get().live[target.sessionId]) return
+    sessionId = target.sessionId
+    fillComposer(sessionId, text, { images: pictures, files })
+  } else if (target.kind === 'new') {
+    const message = await todoMessageWithAttachments(todos, text)
     // 模型和权限模式按设置里的默认来，和首页没选时一样
-    await startTask(target.project, text, target.design ? { design: true } : {})
+    await startTask(target.project, message.text, target.design ? { design: true } : {}, { images: message.images })
     const route = store.get().route
     if (route.name !== 'task') return
     sessionId = route.sessionId
   } else {
+    const message = await todoMessageWithAttachments(todos, text)
     await openTask({ sessionId: target.sessionId, cwd: target.cwd })
     if (!store.get().live[target.sessionId]) return
     sessionId = target.sessionId
-    if (target.mode === 'fill') fillComposer(sessionId, text)
-    else await sendMessage(sessionId, text)
+    await sendMessage(sessionId, message.text, { images: message.images })
   }
   const title = store.get().live[sessionId]?.title ?? ''
   const at = new Date().toISOString()
   await saveTodos((todos) => todos.map((todo) => (ids.includes(todo.id) ? { ...todo, sentTo: { sessionId, title, at } } : todo)))
 }
 
-// 把一段话填进这个任务的输入框：空着就直接填，有字就空一行接在后面；输入框上有「撤销」恢复原来的草稿
-export function fillComposer(sessionId: string, text: string): void {
-  store.set((state) => ({ ...state, composerInsert: { target: sessionId, text, mode: 'fill' } }))
+// 待办附件超出一条消息能带的数量就不发，免得悄悄少发
+function checkTodoAttachments(images: string[], files: FileReference[]): void {
+  if (images.length > TODO_MAX_IMAGES) throw new Error(`一条消息最多带 ${TODO_MAX_IMAGES} 张图片，这几条待办一共 ${images.length} 张`)
+  if (files.length > MAX_PROMPT_FILE_REFERENCES) throw new Error(`一条消息最多引用 ${MAX_PROMPT_FILE_REFERENCES} 个文件或文件夹，这几条待办一共 ${files.length} 个`)
+}
+
+// 派给任务的消息带上待办的附件：图片作为提问图片，文件和输入框里加的一样写成路径引用
+export async function todoMessageWithAttachments(todos: readonly Pick<Todo, 'images' | 'files'>[], text: string): Promise<{ text: string; images: PromptImage[] }> {
+  const { images, files } = todoAttachments(todos)
+  checkTodoAttachments(images, files)
+  return { text: promptWithFileReferences(text, files), images: await Promise.all(images.map((id) => window.diffra.readTodoImage(id))) }
+}
+
+// 把一段话填进这个任务的输入框：空着就直接填，有字就空一行接在后面；输入框上有「撤销」恢复原来的草稿。附件加在输入框的附件里
+export function fillComposer(sessionId: string, text: string, attachments?: { images: PromptImage[]; files: FileReference[] }): void {
+  store.set((state) => ({ ...state, composerInsert: { target: sessionId, text, mode: 'fill', ...(attachments ? attachments : {}) } }))
 }
 
 // 定位问题：停下的那一轮，或者其中一个子智能体（cardId 是它的卡片）。在界面上也是一轮，只读地查，不改文件

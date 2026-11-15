@@ -123,6 +123,8 @@ export const IPC_CHANNELS = {
   todosSave: 'todos:save',
   todosNotify: 'todos:notify',
   todosFocus: 'todos:focus',
+  todosSaveImage: 'todos:save-image',
+  todosReadImage: 'todos:read-image',
   architectureList: 'architecture:list',
   architectureAdd: 'architecture:add',
   architecturePick: 'architecture:pick',
@@ -508,6 +510,9 @@ export interface DiffraApi {
   // 待办到时间的系统通知；点通知把窗口调到前面，onTodoFocus 收到这条待办的 id
   notifyTodo(notice: { todoId: string; title: string; body: string }): Promise<void>
   onTodoFocus(listener: (todoId: string) => void): () => void
+  // 待办附件里的图片：存成数据目录里的文件，返回 id；按 id 读回来显示或派给任务
+  saveTodoImage(image: PromptImage): Promise<string>
+  readTodoImage(id: string): Promise<PromptImage>
   // 架构：项目列表、后台分析（进度和结束走 onArchitectureEvent）、读结果、模型解读（用「规划」角色，没配用「编码」）、目标架构
   listArchitectureProjects(): Promise<ArchitectureProjectSummary[]>
   addArchitectureProject(path: string): Promise<ArchitectureProject>

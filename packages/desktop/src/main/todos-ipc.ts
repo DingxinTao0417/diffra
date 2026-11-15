@@ -1,10 +1,19 @@
-import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { type Todo, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT } from '../shared/todos'
+import { MAX_ATTACHMENT_PATH_LENGTH, MAX_PROMPT_FILE_REFERENCES } from '../shared/attachments'
+import { type Todo, TODO_MAX_IMAGES, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT } from '../shared/todos'
 import { parse } from './ipc-input'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
+
+const IMAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+// 和输入框里的图片（lib/images.ts）同一个上限
+const MAX_IMAGE_CHARS = 4_000_000
+// 存了图片还没存待办（对话框开着）时不能当成没人用删掉；超过这么久还没被哪条待办用上的才清掉
+const ORPHAN_IMAGE_MS = 24 * 60 * 60 * 1000
 
 const todoSchema = z.object({
   id: z.string().min(1).max(64),
@@ -39,6 +48,11 @@ const todoSchema = z.object({
     })
     .nullable()
     .optional(),
+  images: z.array(z.string().regex(IMAGE_ID)).max(TODO_MAX_IMAGES).optional(),
+  files: z
+    .array(z.object({ path: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH).refine(isAbsolute, '必须是本地绝对路径'), name: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH), kind: z.enum(['file', 'directory']) }))
+    .max(MAX_PROMPT_FILE_REFERENCES)
+    .optional(),
 }) satisfies z.ZodType<Todo>
 
 const fileSchema = z.object({ version: z.literal(1), todos: z.array(todoSchema) })
@@ -46,6 +60,8 @@ const fileSchema = z.object({ version: z.literal(1), todos: z.array(todoSchema) 
 // 待办：存在数据目录的 todos.json，整份读写。条数有上限，一份文件不会大到拖慢
 export function registerTodosIpc(userDataDir: string): void {
   const path = join(userDataDir, 'todos.json')
+  const imageDir = join(userDataDir, 'todo-attachments')
+  const imagePath = (id: string) => join(imageDir, `${id}.webp`)
   const queue = new WriteQueue()
   let cache: Todo[] | null = null
   const shown = new Set<Notification>()
@@ -85,6 +101,30 @@ export function registerTodosIpc(userDataDir: string): void {
     notification.show()
   })
 
+  // 删掉的待办、移除的图片留下的文件：没有哪条待办用、又放了一天以上的才删
+  const removeOrphanImages = async (todos: Todo[]) => {
+    const used = new Set(todos.flatMap((todo) => todo.images ?? []))
+    const names = await readdir(imageDir).catch(() => [])
+    for (const name of names) {
+      const id = name.replace(/.webp$/, '')
+      if (!IMAGE_ID.test(id) || name !== `${id}.webp` || used.has(id)) continue
+      const info = await stat(imagePath(id))
+      if (Date.now() - info.mtimeMs > ORPHAN_IMAGE_MS) await rm(imagePath(id), { force: true })
+    }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.todosSaveImage, async (_event, raw: unknown) => {
+    const image = parse(z.object({ mimeType: z.literal('image/webp'), data: z.string().min(1).max(MAX_IMAGE_CHARS).regex(/^[A-Za-z0-9+/]+=*$/) }), raw)
+    const id = randomUUID()
+    await mkdir(imageDir, { recursive: true })
+    await writeFile(imagePath(id), Buffer.from(image.data, 'base64'))
+    return id
+  })
+  ipcMain.handle(IPC_CHANNELS.todosReadImage, async (_event, raw: unknown) => {
+    const id = parse(z.string().regex(IMAGE_ID), raw)
+    return { mimeType: 'image/webp', data: (await readFile(imagePath(id))).toString('base64') }
+  })
+
   ipcMain.handle(IPC_CHANNELS.todosList, () => load())
   ipcMain.handle(IPC_CHANNELS.todosSave, (_event, raw: unknown) => {
     const todos = parse(z.array(todoSchema).max(TODO_MAX_ITEMS, `待办最多 ${TODO_MAX_ITEMS} 条，先删掉一些已完成的`), raw)
@@ -92,6 +132,7 @@ export function registerTodosIpc(userDataDir: string): void {
     return queue.run(async () => {
       await writeJsonFileAtomic(path, { version: 1, todos })
       cache = todos
+      await removeOrphanImages(todos).catch((error: unknown) => console.error('[todos] 清理没用的附件图片失败', error))
       return todos
     }).finally(() => pending--)
   })

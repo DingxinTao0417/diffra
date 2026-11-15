@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { PromptQuestion } from '@diffra/core/types'
 import { LoaderCircle, PenTool, Search, WandSparkles } from 'lucide-react'
-import { type Todo, todoMessage, todoParts } from '../../../../shared/todos'
+import { type Todo, todoAttachments, todoMessage, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -39,6 +39,8 @@ export function SendTodosDialog({ todos, scheduleAt, onClose }: { todos: Todo[];
   const [query, setQuery] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(planned?.target.kind === 'existing' ? planned.target.sessionId : null)
   const [text, setText] = useState(() => planned?.text ?? todosMessage(todos))
+  const attached = todoAttachments(todos)
+  const attachedNote = [attached.images.length > 0 ? `${attached.images.length} 张图片` : '', attached.files.length > 0 ? `${attached.files.length} 个文件` : ''].filter(Boolean).join('、')
   const [original, setOriginal] = useState<string | null>(null)
   const [questions, setQuestions] = useState<{ key: number; items: PromptQuestion[] }>({ key: 0, items: [] })
   const [enhancing, setEnhancing] = useState(false)
@@ -101,7 +103,7 @@ export function SendTodosDialog({ todos, scheduleAt, onClose }: { todos: Todo[];
         <DialogHeader>
           <DialogTitle>{scheduleAt ? '定时发给任务' : todos.length > 1 ? `把 ${todos.length} 条待办派给任务` : '把待办派给任务'}</DialogTitle>
           <DialogDescription>
-            {scheduleAt ? `${formatDue(scheduleAt.toISOString(), new Date())} 在后台发出，Diffra 那时要开着。` : ''}发之前可以改，也可以先优化成更具体的说法。
+            {scheduleAt ? `${formatDue(scheduleAt.toISOString(), new Date())} 在后台发出，Diffra 那时要开着。` : ''}发之前可以改，也可以先优化成更具体的说法。{attachedNote ? `待办里的 ${attachedNote}会一起发过去。` : ''}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">

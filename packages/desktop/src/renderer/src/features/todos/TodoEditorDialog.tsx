@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { AlarmClock, Bell, Send, X } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { AlarmClock, Bell, Paperclip, Send, X } from 'lucide-react'
+import type { FileReference } from '../../../../shared/attachments'
 import { type Todo, type TodoPriority, TODO_MAX_TEXT, TODO_MAX_TITLE, TODO_PRIORITIES, type TodoSchedule, todoParts } from '../../../../shared/todos'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -10,6 +11,7 @@ import { useNow } from '@/lib/use-now'
 import { addTodo, updateTodo } from '@/state/actions'
 import { showToast } from '@/state/store'
 import { SchedulePicker } from './SchedulePicker'
+import { TodoAttachmentList, useTodoAttachments } from './TodoAttachments'
 import { TodoProjectPicker } from './TodoInput'
 import { priorityLabel } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
@@ -21,9 +23,11 @@ export interface TodoDraft {
   project: string | null
   tags: string[]
   at: Date | null
+  images?: string[]
+  files?: FileReference[]
 }
 
-// 添加、编辑一条待办：标题（必填）、正文、优先级、标签、项目、提醒时间。todo 有值时是编辑，draft 是从快速记那一行带过来的。
+// 添加、编辑一条待办：标题（必填）、正文、优先级、标签、项目、提醒时间、附件（按钮、粘贴或拖进来）。todo 有值时是编辑，draft 是从快速记那一行带过来的。
 // 新设「定时发送」还是在列表那一行上做；编辑已经定时发送的待办时，这里只改时间或取消，发给谁不变
 export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?: TodoDraft; onClose(saved: boolean): void }) {
   const parts = todo ? todoParts(todo) : null
@@ -35,18 +39,20 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
   const original = todo?.schedule ?? null
   const [at, setAt] = useState<Date | null>(original ? new Date(original.at) : (draft?.at ?? null))
   const [busy, setBusy] = useState(false)
+  const attachments = useTodoAttachments({ images: todo?.images ?? draft?.images ?? [], files: todo?.files ?? draft?.files ?? [] })
+  const picker = useRef<HTMLInputElement>(null)
   const now = useNow()
   const sending = original?.action.kind === 'send'
 
   const save = async () => {
-    if (!title.trim() || busy) return
+    if (!title.trim() || busy || attachments.busy) return
     setBusy(true)
     const chosen = priority === 'none' ? null : (Number(priority) as TodoPriority)
     try {
       if (todo) {
-        await updateTodo(todo.id, { text: title, body, priority: chosen, tags, project, schedule: nextSchedule(original, at) })
+        await updateTodo(todo.id, { text: title, body, priority: chosen, tags, project, schedule: nextSchedule(original, at), images: attachments.images, files: attachments.files })
       } else {
-        await addTodo(title, at ?? undefined, { project, tags, body, priority: chosen })
+        await addTodo(title, at ?? undefined, { project, tags, body, priority: chosen, images: attachments.images, files: attachments.files })
       }
       onClose(true)
     } catch {
@@ -60,10 +66,11 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
       <DialogContent className="sm:max-w-xl" data-testid="todo-editor">
         <DialogHeader>
           <DialogTitle>{todo ? '编辑待办' : '添加待办'}</DialogTitle>
-          <DialogDescription>标题必填，其余都可以不填。Ctrl+Enter 保存。</DialogDescription>
+          <DialogDescription>标题必填，其余都可以不填。图片和文件可以直接粘贴或拖进来。Ctrl+Enter 保存。</DialogDescription>
         </DialogHeader>
         <div
           className="flex flex-col gap-3 text-sm"
+          {...attachments.handlers}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
               event.preventDefault()
@@ -113,12 +120,35 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
               </Button>
             )}
           </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-1 w-12 shrink-0 text-xs text-muted-foreground">附件</span>
+            <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
+              <TodoAttachmentList images={attachments.images} files={attachments.files} onRemoveImage={attachments.removeImage} onRemoveFile={attachments.removeFile} className="pt-1.5 pr-1.5" />
+              <Button variant="outline" size="xs" className="text-muted-foreground" disabled={attachments.busy} onClick={() => picker.current?.click()}>
+                <Paperclip className="size-3" />
+                添加图片或文件
+              </Button>
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                hidden
+                aria-label="选择附件"
+                data-testid="todo-attachment-input"
+                onChange={(event) => {
+                  const picked = [...(event.target.files ?? [])]
+                  event.target.value = ''
+                  void attachments.add(picked)
+                }}
+              />
+            </div>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onClose(false)}>
             取消
           </Button>
-          <Button disabled={!title.trim() || busy} onClick={() => void save()}>
+          <Button disabled={!title.trim() || busy || attachments.busy} onClick={() => void save()}>
             保存
           </Button>
         </DialogFooter>

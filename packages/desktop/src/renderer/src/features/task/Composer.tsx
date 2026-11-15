@@ -224,8 +224,31 @@ export function Composer(props: ComposerProps) {
       textareaRef.current?.focus()
       return
     }
+    // 派待办时带的附件：加进输入框的附件，提到它们的 @ 接在填入的文字后面；超出一条消息的上限就不加
+    const addedImages: ComposerImage[] = (insert.images ?? [])
+      .slice(0, Math.max(0, MAX_PROMPT_IMAGES - images.length))
+      .map((image) => ({ ...image, id: crypto.randomUUID(), mention: `@图片${++mentionCounter.current}` }))
+    let limited = addedImages.length < (insert.images?.length ?? 0)
+    const taken = new Set([...fileReferences.map((file) => file.mention), ...images.map((image) => image.mention)])
+    const addedFiles: ComposerFile[] = []
+    for (const file of insert.files ?? []) {
+      if (fileReferences.some((entry) => entry.path === file.path) || addedFiles.some((entry) => entry.path === file.path)) continue
+      if (fileReferences.length + addedFiles.length >= MAX_PROMPT_FILE_REFERENCES) {
+        limited = true
+        break
+      }
+      let mention = `@${file.name}`
+      for (let suffix = 2; taken.has(mention); suffix++) mention = `@${file.name}(${suffix})`
+      taken.add(mention)
+      addedFiles.push({ ...file, mention })
+    }
+    if (limited) showToast('输入框里的附件到上限了，有的没有加')
+    const mentions = [...addedImages, ...addedFiles].map((item) => item.mention).join(' ')
+    const text = mentions ? `${insert.text}\n\n${mentions} ` : insert.text
+    if (addedImages.length > 0) setImages((current) => [...current, ...addedImages])
+    if (addedFiles.length > 0) setFileReferences((current) => [...current, ...addedFiles])
     const current = draftRef.current
-    replaceDraft(current.trim() === '' ? insert.text : `${current.trimEnd()}\n\n${insert.text}`, '撤销填入')
+    replaceDraft(current.trim() === '' ? text : `${current.trimEnd()}\n\n${text}`, '撤销填入')
   }, [insert, props.mcpTarget])
   // 优化提示词：一次调用拿到改写稿和问题，改写稿直接替换草稿（可撤销），问题放在输入框上方的问题条里
   const [enhancing, setEnhancing] = useState(false)

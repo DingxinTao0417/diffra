@@ -11,6 +11,7 @@ import { useNow } from '@/lib/use-now'
 import { addTodo, pickProject } from '@/state/actions'
 import { showToast, useAppState } from '@/state/store'
 import { SchedulePicker } from './SchedulePicker'
+import { TodoAttachmentList, useTodoAttachments } from './TodoAttachments'
 import { TodoEditorDialog, type TodoDraft } from './TodoEditorDialog'
 import { PriorityBadge } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
@@ -18,7 +19,8 @@ import { TodoTagEditor } from './TodoTagEditor'
 const PROJECT_MENU = 'flex h-7 max-w-48 items-center gap-1 rounded-md border bg-background px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground'
 
 // 记待办的输入框：回车保存；开头写 p0–p3 加空格设优先级。旁边的闹钟先定个提醒时间（定时发送在记下以后从那一条上设），
-// 再旁边的按钮打开添加对话框（标题、正文、优先级都能填），已经输入的字和选好的项目、标签、时间带过去。defaultAt 是日历里选中的那天
+// 再旁边的按钮打开添加对话框（标题、正文、优先级都能填），已经输入的字和选好的项目、标签、时间、附件带过去。图片和文件可以粘贴或拖进输入框。
+// defaultAt 是日历里选中的那天
 export function TodoInput({
   autoFocus = false,
   placeholder = '记下一个点子，回车保存',
@@ -38,6 +40,7 @@ export function TodoInput({
   const [project, setProject] = useState<string | null>(null)
   const [tags, setTags] = useState<string[]>([])
   const [detail, setDetail] = useState<TodoDraft | null>(null)
+  const attachments = useTodoAttachments({ images: [], files: [] })
   const now = useNow()
   const due = at ?? defaultAt ?? null
   const quick = parseTodoPriority(draft)
@@ -45,15 +48,16 @@ export function TodoInput({
     setDraft('')
     setAt(null)
     setTags([])
+    attachments.clear()
   }
   const submit = () => {
-    if (!quick.text.trim()) return
-    addTodo(quick.text, due ?? undefined, { project, tags, priority: quick.priority }).catch(() => showToast('保存待办失败，请重试'))
+    if (!quick.text.trim() || attachments.busy) return
+    addTodo(quick.text, due ?? undefined, { project, tags, priority: quick.priority, images: attachments.images, files: attachments.files }).catch(() => showToast('保存待办失败，请重试'))
     reset()
   }
   return (
     <div className="flex w-full flex-col gap-2">
-      <div className={cn('flex h-11 w-full items-center gap-1 rounded-xl border bg-background pr-1.5 pl-4 focus-within:border-ring/60', className)}>
+      <div className={cn('flex h-11 w-full items-center gap-1 rounded-xl border bg-background pr-1.5 pl-4 focus-within:border-ring/60', className)} {...attachments.handlers}>
         <input
           aria-label="新待办"
           value={draft}
@@ -81,10 +85,11 @@ export function TodoInput({
             <AlarmClock className="size-4" />
           </Button>
         </SchedulePicker>
-        <Button variant="ghost" size="icon-sm" aria-label="详细添加" title="详细添加：标题、正文、优先级" className="text-muted-foreground" onClick={() => setDetail({ title: draft, project, tags, at: due })}>
+        <Button variant="ghost" size="icon-sm" aria-label="详细添加" title="详细添加：标题、正文、优先级" className="text-muted-foreground" onClick={() => setDetail({ title: draft, project, tags, at: due, images: attachments.images, files: attachments.files })}>
           <SquarePen className="size-4" />
         </Button>
       </div>
+      <TodoAttachmentList images={attachments.images} files={attachments.files} onRemoveImage={attachments.removeImage} onRemoveFile={attachments.removeFile} className="px-1 pt-1.5" />
       {detail && <TodoEditorDialog draft={detail} onClose={(saved) => (setDetail(null), saved && reset())} />}
       {showMeta && (
         <div className="flex flex-wrap items-center gap-2 px-1 text-xs">

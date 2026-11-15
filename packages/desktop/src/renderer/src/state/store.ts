@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { DiagramKind } from '@diffra/core/architecture'
 import type { BackgroundProcess, PermissionMode, PromptImage, RemoteSource, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
+import type { FileReference } from '../../../shared/attachments'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { RemoteView } from '../../../shared/remote'
 import type { RemoteListState, RemoteTask } from '@/features/devices/remote-tasks'
@@ -115,7 +116,8 @@ export interface AppState {
   searchOpen: boolean
   panel: SidePanel
   // 往输入框塞文字：target 是任务 id 或 home。append 接在末尾（附加终端内容）；fill 空着就填、有字就空一行接上，带撤销（定位结果的「填入输入框」）
-  composerInsert?: { target: string; text: string; mode: 'append' | 'fill' }
+  // images、files：派待办时填入输入框带上的附件
+  composerInsert?: { target: string; text: string; mode: 'append' | 'fill'; images?: PromptImage[]; files?: FileReference[] }
   terminals: TerminalTab[]
   activeTerminal: string | null
   // 各任务转到后台的命令（内核推来的整份列表），只在内存里

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlarmClock, Bell, CircleCheck, Pencil, Send, Tags, Trash2 } from 'lucide-react'
+import { AlarmClock, Bell, CircleCheck, Paperclip, Pencil, Send, Tags, Trash2 } from 'lucide-react'
 import { type Todo, type TodoSendTarget, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { acceptTodos, openTask, saveTodos, setTodoSchedule } from '@/state/actio
 import { showToast, store, useAppState } from '@/state/store'
 import { sendScheduleNow } from '@/state/todo-scheduler'
 import { SchedulePicker } from './SchedulePicker'
+import { TodoAttachmentList } from './TodoAttachments'
 import { taskFinishedForTodo } from './todo-acceptance'
 import { TodoEditorDialog } from './TodoEditorDialog'
 import { PriorityBadge } from './TodoPriority'
@@ -42,6 +43,7 @@ export function TodoRow({
 }) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const attachmentCount = (todo.images?.length ?? 0) + (todo.files?.length ?? 0)
   const [editingTags, setEditingTags] = useState(false)
   const { title, body } = todoParts(todo)
   const row = useRef<HTMLLIElement>(null)
@@ -118,7 +120,14 @@ export function TodoRow({
             </span>
           )}
         </button>
+        {expanded && <TodoAttachmentList images={todo.images ?? []} files={todo.files ?? []} className="mt-2" />}
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {attachmentCount > 0 && !expanded && (
+            <span className="flex items-center gap-0.5" title="点开这条看附件" data-testid="todo-attachment-count">
+              <Paperclip className="size-3" />
+              {attachmentCount}
+            </span>
+          )}
           {todo.tags.map((tag) => (
             <button
               key={tag}

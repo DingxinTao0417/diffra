@@ -1,6 +1,6 @@
 import { type Todo, todoMessage, todoParts, type TodoSchedule } from '../../../shared/todos'
 import { errorMessage } from '@/lib/errors'
-import { saveTodos, sendInBackground, startInBackground } from './actions'
+import { saveTodos, sendInBackground, startInBackground, todoMessageWithAttachments } from './actions'
 import { showToast, store } from './store'
 
 // 最多隔这么久查一次：电脑睡眠、改了系统时间后计时器可能不准，靠定期查兜底
@@ -58,7 +58,7 @@ export function startTodoScheduler(): () => void {
       return
     }
     try {
-      const sentTo = await sendScheduled(schedule.action)
+      const sentTo = await sendScheduled(todo, schedule.action)
       await record(todo.id, schedule.at, { kind: 'sent', at: new Date().toISOString() }, sentTo)
       await window.diffra.notifyTodo({ todoId: todo.id, title: `已按时发给任务「${sentTo.title}」`, body: todoParts(todo).title })
     } catch (error) {
@@ -86,14 +86,15 @@ export function startTodoScheduler(): () => void {
   }
 }
 
-// 把定时发送的内容发出去，返回派给了哪个任务
-export async function sendScheduled(action: Extract<TodoSchedule['action'], { kind: 'send' }>): Promise<NonNullable<Todo['sentTo']>> {
+// 把定时发送的内容发出去，返回派给了哪个任务；带上待办发送时的附件
+export async function sendScheduled(todo: Pick<Todo, 'images' | 'files'>, action: Extract<TodoSchedule['action'], { kind: 'send' }>): Promise<NonNullable<Todo['sentTo']>> {
   const at = new Date().toISOString()
+  const message = await todoMessageWithAttachments([todo], action.text)
   if (action.target.kind === 'new') {
-    const created = await startInBackground(action.target.project, action.text, { design: action.target.design })
+    const created = await startInBackground(action.target.project, message.text, { design: action.target.design }, { images: message.images })
     return { sessionId: created.sessionId, title: created.title, at }
   }
-  const sent = await sendInBackground(action.target.sessionId, action.text)
+  const sent = await sendInBackground(action.target.sessionId, message.text, { images: message.images })
   if (!sent) throw new Error(`任务「${action.target.title}」已经不在了`)
   return { sessionId: action.target.sessionId, title: sent.title, at }
 }
@@ -103,7 +104,7 @@ export async function sendScheduleNow(todo: Todo): Promise<void> {
   const schedule = todo.schedule
   if (schedule?.action.kind !== 'send') return
   try {
-    const sentTo = await sendScheduled(schedule.action)
+    const sentTo = await sendScheduled(todo, schedule.action)
     await saveTodos((todos) => todos.map((item) => (item.id === todo.id ? { ...item, sentTo, schedule: { ...schedule, result: { kind: 'sent', at: new Date().toISOString() } } } : item)))
   } catch (error) {
     showToast(`发送失败：${errorMessage(error)}`)

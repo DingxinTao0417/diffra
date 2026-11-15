@@ -1,3 +1,5 @@
+import type { FileReference } from './attachments'
+
 // 待办：侧栏「待办」页记的点子。project 是记下时所在的项目，无项目为 null；
 // sentTo 是最近一次派给哪个任务（发送或填入输入框），没派过为 null
 export interface Todo {
@@ -18,6 +20,19 @@ export interface Todo {
   acceptedAt?: string | null
   // 定了时间的待办；旧数据没有这个字段
   schedule?: TodoSchedule | null
+  // 附件（第 638 步），派给任务时一起发；旧数据没有这两个字段。图片存在数据目录的 todo-attachments 里，这里只记 id；
+  // 文件和输入框里加的一样只记路径，不复制内容
+  images?: string[]
+  files?: FileReference[]
+}
+
+export const TODO_MAX_IMAGES = 6
+
+// 几条待办的附件合在一起：图片按 id、文件按路径去重
+export function todoAttachments(todos: readonly Pick<Todo, 'images' | 'files'>[]): { images: string[]; files: FileReference[] } {
+  const images = [...new Set(todos.flatMap((todo) => todo.images ?? []))]
+  const files = todos.flatMap((todo) => todo.files ?? []).filter((file, index, all) => all.findIndex((item) => item.path === file.path) === index)
+  return { images, files }
 }
 
 // 到时发给哪个任务：新任务（项目、是否设计任务）或已有任务
