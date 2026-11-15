@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { cards, chooseProject, startTask, waitTaskDone } from './flows'
+import { captureClipboard, lastCopied } from './clipboard'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { addFile, exec, replaceLines, type ScriptStep, startScriptedModel } from './scripted-model'
@@ -40,6 +41,7 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     await expect(window.getByRole('button', { name: '移除计划', exact: true })).toBeVisible()
     await startTask(window, '给项目加个 README')
 
+    await captureClipboard(window)
     const planCard = cards(window, 'plan')
     await expect(planCard).toHaveCount(1, { timeout: 20_000 })
     await expect(window.getByTestId('task-status')).toContainText('已完成')
@@ -54,7 +56,7 @@ test('计划通过斜杠菜单启用，改了计划再执行，编码模型按�
     await content.fill(`${await content.inputValue()}\n额外：标题用 demo`)
     // 卡片外壳的「复制计划」复制的是改过的计划（第 656 步）
     await planCard.getByRole('button', { name: '复制计划' }).click()
-    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toContain('额外：标题用 demo')
+    await expect.poll(() => lastCopied(window)).toContain('额外：标题用 demo')
     await window.screenshot({ path: 'test-results/plan-card.png' })
     await planCard.getByRole('button', { name: '按计划执行' }).click()
     // 按计划执行的那一轮改了文件：做完后这一轮底部写着改了哪些文件（第 526 步起没有完成卡）

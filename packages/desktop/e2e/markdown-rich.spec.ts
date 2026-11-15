@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, type Locator, type Page, test } from '@playwright/test'
+import { captureClipboard, lastCopied } from './clipboard'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
@@ -87,10 +88,6 @@ const ANSWER = [
 // 第二轮流式输出到一半：流程图围栏还没写完
 const STREAMING = ['先看流程：', '', `${fence}mermaid`, 'flowchart TD', '  A[第一步] --> B[第二步]', fence, '', '画完了。'].join('\n')
 
-// Windows 的剪贴板把换行存成 \r\n，比较前统一成 \n
-async function clipboard(app: ElectronApplication): Promise<string> {
-  return (await app.evaluate(({ clipboard }) => clipboard.readText())).replace(/\r\n/g, '\n')
-}
 
 // 富块的右边不超出回答这一栏、回答本身不横向溢出
 async function expectNoOverflow(answer: Locator) {
@@ -124,6 +121,7 @@ test('回答里的富文档：代码高亮和行号、diff、callout、表格、
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
+    await captureClipboard(window)
     await startTask(window, '讲讲改动')
     await waitTaskDone(window)
     const answer = window.getByTestId('agent-message').last()
@@ -137,7 +135,7 @@ test('回答里的富文档：代码高亮和行号、diff、callout、表格、
     await expect(code.locator('.code-line-mark')).toHaveCount(1)
     await expect(code.locator('.code-line-mark')).toContainText('return a + b')
     await code.getByRole('button', { name: '复制代码' }).click()
-    await expect.poll(() => clipboard(app)).toBe('export function add(a, b) {\n  return a + b // 这一行高亮\n}\nconst text = "字符串"')
+    await expect.poll(() => lastCopied(window)).toBe('export function add(a, b) {\n  return a + b // 这一行高亮\n}\nconst text = "字符串"')
     await code.getByRole('button', { name: '在文件面板打开' }).click()
     await expect(window.getByTestId('file-panel').locator('.cm-target-line')).toHaveText('// util 第 10 行')
 
@@ -173,7 +171,8 @@ test('回答里的富文档：代码高亮和行号、diff、callout、表格、
     await expect(table.locator('tbody tr:visible')).toHaveCount(30)
     await table.hover()
     await table.getByRole('button', { name: '复制为 CSV' }).click()
-    await expect.poll(() => clipboard(app)).toContain('项目,数值\n第 1 项,0\n')
+    // CSV 按惯例用 \r\n 换行
+    await expect.poll(() => lastCopied(window)).toContain('项目,数值\r\n第 1 项,0\r\n')
 
     // 公式：行内和块级用 KaTeX 排版；$PATH 和 $HOME 不是公式，照原样
     await expect(answer.getByTestId('math-inline').locator('.katex')).toHaveCount(1)

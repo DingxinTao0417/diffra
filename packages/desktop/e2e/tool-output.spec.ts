@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { type ElectronApplication, expect, test } from '@playwright/test'
+import { captureClipboard, lastCopied } from './clipboard'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
@@ -24,9 +25,6 @@ const VITEST_LOG = [
 
 const SERVER_LOG = [`${ESC}[90m10:00:01${ESC}[39m ${ESC}[32mINFO${ESC}[39m 启动`, `${ESC}[90m10:00:02${ESC}[39m ${ESC}[31mERROR${ESC}[39m 连接被拒绝`].join('\n')
 
-async function clipboard(app: ElectronApplication): Promise<string> {
-  return (await app.evaluate(({ clipboard }) => clipboard.readText())).replace(/\r\n/g, '\n')
-}
 
 // 第 655 步：工具步骤展开后，测试结果有汇总和失败的用例、搜索结果按文件分组能跳到那一行、读文件按代码高亮、终端颜色保留
 test('工具输出：测试汇总和修复提示词、搜索按文件分组能跳转、读文件高亮带行号、ANSI 颜色；复制输出不带颜色码', async () => {
@@ -50,6 +48,7 @@ test('工具输出：测试汇总和修复提示词、搜索按文件分组能�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
+    await captureClipboard(window)
     await startTask(window, '看看测试和代码')
     await waitTaskDone(window)
     await window.getByTestId('tool-group').getByRole('button').first().click()
@@ -97,7 +96,7 @@ test('工具输出：测试汇总和修复提示词、搜索按文件分组能�
     await expect(log).toHaveAttribute('data-view', 'text')
     await expect(log.locator('.text-destructive')).toHaveText('ERROR')
     await log.getByRole('button', { name: '复制输出' }).click()
-    await expect.poll(() => clipboard(app)).toBe('10:00:01 INFO 启动\n10:00:02 ERROR 连接被拒绝')
+    await expect.poll(() => lastCopied(window)).toBe('10:00:01 INFO 启动\n10:00:02 ERROR 连接被拒绝')
 
     for (const scheme of ['light', 'dark'] as const) {
       await window.emulateMedia({ colorScheme: scheme })
@@ -164,6 +163,7 @@ test('工具输出（二）：git 状态和提交和 diff、构建产物体积�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
+    await captureClipboard(window)
     await startTask(window, '看看项目状态')
     // 访问网络、不认识的命令要确认：都允许一次
     const permission = window.getByTestId('permission-card')

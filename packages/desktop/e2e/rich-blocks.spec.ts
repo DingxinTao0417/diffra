@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, type Locator, type Page, test } from '@playwright/test'
+import { captureClipboard, lastCopied } from './clipboard'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
@@ -34,9 +35,6 @@ const ANSWER = [
   block('metrics', { v: 2, items: [{ label: '新格式', value: 1 }] }),
 ].join('\n')
 
-async function clipboard(app: ElectronApplication): Promise<string> {
-  return (await app.evaluate(({ clipboard }) => clipboard.readText())).replace(/\r\n/g, '\n')
-}
 
 async function setWidth(app: ElectronApplication, window: Page, width: number) {
   await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setSize(size, 900), width)
@@ -68,6 +66,7 @@ test('回答里的结构化富块：每种块的关键操作、非法数据和�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
+    await captureClipboard(window)
     await startTask(window, '分析一下构建')
     await waitTaskDone(window)
     // 系统提示词里告诉了模型这些写法
@@ -102,7 +101,7 @@ test('回答里的结构化富块：每种块的关键操作、非法数据和�
     await table.getByLabel('筛选表格').fill('module-c')
     await expect(table.getByTestId('rich-table-row')).toHaveCount(1)
     await table.getByRole('button', { name: '复制为 CSV' }).click()
-    await expect.poll(() => clipboard(app)).toBe('模块,体积（KB）\nmodule-c,74')
+    await expect.poll(() => lastCopied(window)).toBe('模块,体积（KB）\r\nmodule-c,74')
 
     // 时间线：失败的一步标红
     await expect(answer.getByTestId('rich-timeline-item')).toHaveCount(3)
@@ -143,7 +142,7 @@ test('回答里的结构化富块：每种块的关键操作、非法数据和�
     await json.getByLabel('搜索 JSON').fill('found')
     await expect(json.getByText('"found-me"')).toBeVisible()
     await json.getByRole('button', { name: '"target"' }).click()
-    await expect.poll(() => clipboard(app)).toBe('$.nested.deep.target')
+    await expect.poll(() => lastCopied(window)).toBe('$.nested.deep.target')
     await json.getByRole('button', { name: '按代码查看' }).click()
     await expect(answer.locator('[data-testid="code-block"] [data-language="json"]')).toBeVisible()
 

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
+import { captureClipboard, lastCopied } from './clipboard'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
@@ -26,6 +27,7 @@ test('本轮报告：按记录列出改动、检查、测试和风险，能复�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
+    await captureClipboard(window)
     await startTask(window, '加一个 add 函数')
     await expect(window.getByTestId('agent-message').last()).toContainText('测试还有一个没过', { timeout: 30_000 })
     await expect(window.getByTestId('task-status')).not.toHaveAttribute('data-tone', 'running', { timeout: 30_000 })
@@ -41,7 +43,7 @@ test('本轮报告：按记录列出改动、检查、测试和风险，能复�
     await expect(report.getByTestId('turn-report-risks')).toContainText('有 1 个失败')
     await expect(report).toContainText('修好没通过的检查和测试')
     await report.getByRole('button', { name: '复制报告' }).click()
-    await expect.poll(async () => (await app.evaluate(({ clipboard }) => clipboard.readText())).replace(/\r\n/g, '\n')).toMatch(/^# 本轮报告\n\n## 要求\n\n加一个 add 函数/)
+    await expect.poll(() => lastCopied(window)).toMatch(/^# 本轮报告\n\n## 要求\n\n加一个 add 函数/)
     for (const scheme of ['light', 'dark'] as const) {
       await window.emulateMedia({ colorScheme: scheme })
       await report.screenshot({ path: `test-results/turn-report-${scheme}.png` })
