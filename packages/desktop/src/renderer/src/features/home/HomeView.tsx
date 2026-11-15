@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DESIGN_STYLES, type PromptImage, type StoredSessionSummary } from '@diffra/core/types'
-import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, GitBranch, LoaderCircle, Palette } from 'lucide-react'
+import { Check, ChevronDown, CircleAlert, Folder, FolderDot, FolderOpen, LoaderCircle, Palette } from 'lucide-react'
 import { decodeStartTaskError, type StartTaskErrorCode } from '../../../../shared/ipc'
 import { withRememberedEffort } from '../../../../shared/reasoning'
 import { modelDisplayName, type ModelRef, type SettingsView } from '../../../../shared/settings'
@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useProject } from '@/features/project/useProject'
+import { BranchMenu } from '@/features/task/BranchMenu'
 import { Composer } from '@/features/task/Composer'
 import { composerDraftKey } from '@/features/task/composer-drafts'
 import { errorMessage } from '@/lib/errors'
@@ -54,7 +55,7 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const projects = useAppState((state) => state.projects)
   const tasks = useAppState((state) => state.tasks)
   const live = useAppState((state) => (design ? state.live : null))
-  const { branch } = useProject(projectPath)
+  const { branch, setBranch } = useProject(projectPath)
   const [model, setModel] = useState<ModelRef | null>(null)
   const [planMode, setPlanMode] = useState(false)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
@@ -102,12 +103,6 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
           <button type="button" data-testid="project-path" title={projectPath} className={clickableChipClass}>
             <Folder className="size-3.5 shrink-0" />
             <span className="truncate">{folderName(projectPath)}</span>
-            {branch && (
-              <>
-                <GitBranch className="ml-1 size-3.5 shrink-0" />
-                <span className="max-w-40 truncate">{branch}</span>
-              </>
-            )}
             <ChevronDown className="size-3 shrink-0" />
           </button>
         ) : (
@@ -217,6 +212,18 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
         {(projectPath || design) && (
           <div className="flex flex-wrap items-center gap-1 px-2.5 text-sm">
             {projectPath && projectMenu}
+            {/* 新任务在当前分支上开：先在这里切好分支（第 639 步）；切不了的原因照实提示，和任务页底栏一样 */}
+            {projectPath && branch && (
+              <BranchMenu
+                branch={branch}
+                className={clickableChipClass}
+                load={() => window.diffra.projectBranches(projectPath)}
+                onSwitch={async (next) => {
+                  await window.diffra.switchProjectBranch(projectPath, next)
+                  setBranch(next)
+                }}
+              />
+            )}
             {design && <DesignStyleMenu value={designStyle} onChange={setDesignStyle} />}
           </div>
         )}
