@@ -10,6 +10,7 @@ import { EXT_METHODS } from './models/types.js'
 import {
   type BrowserActionParams,
   type BrowserActionResult,
+  ASK_ANSWERS_META_KEY,
   CLIENT_EXT_METHODS,
   CLIENT_EXT_NOTIFICATIONS,
   type DesignActionParams,
@@ -173,6 +174,25 @@ function clientErrorMessage(error: unknown): string {
 function withSeq(update: acp.SessionUpdate, seq: number): acp.SessionUpdate {
   const diffra = update._meta?.diffra
   return { ...update, _meta: { ...update._meta, diffra: { ...(typeof diffra === 'object' && diffra !== null ? diffra : {}), [UPDATE_SEQ_META_KEY]: seq } } }
+}
+
+// 确认请求：选中的 optionId，提问还带回答案（_meta.diffra.askAnswers）；取消、出错是 null
+async function askClient(session: Session, client: acp.AgentContext, toolCall: acp.ToolCallUpdate, options: acp.PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null> {
+  try {
+    const response = await client.request(
+      acp.methods.client.session.requestPermission,
+      { sessionId: session.id, toolCall, options },
+      // 用户点「停止」时不再等确认结果
+      session.activeTurn ? { cancellationSignal: session.activeTurn.signal, stopWaitingOnCancel: true } : undefined,
+    )
+    if (response.outcome.outcome !== 'selected') return null
+    const diffra = response._meta?.diffra
+    const answers = typeof diffra === 'object' && diffra !== null ? (diffra as Record<string, unknown>)[ASK_ANSWERS_META_KEY] : undefined
+    return { optionId: response.outcome.optionId, ...(answers === undefined ? {} : { answers }) }
+  } catch (error) {
+    console.error('[session] 权限请求失败', error)
+    return null
+  }
 }
 
 // 从 before 往前取，最多 maxTurns 轮、压缩后最多 maxChars 字；一轮就超过时也给这一轮。
@@ -347,20 +367,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
           await notify(update)
           if (update.sessionUpdate === 'session_info_update' && update._meta && 'diffra' in update._meta) await persist(session, notify)
         },
-        requestPermission: async (toolCall, options) => {
-          try {
-            const response = await client.request(
-              acp.methods.client.session.requestPermission,
-              { sessionId: session.id, toolCall, options },
-              // 用户点「停止」时不再等确认结果
-              session.activeTurn ? { cancellationSignal: session.activeTurn.signal, stopWaitingOnCancel: true } : undefined,
-            )
-            return response.outcome.outcome === 'selected' ? response.outcome.optionId : null
-          } catch (error) {
-            console.error('[session] 权限请求失败', error)
-            return null
-          }
-        },
+        requestPermission: async (toolCall, options) => (await askClient(session, client, toolCall, options))?.optionId ?? null,
+        requestAnswers: (toolCall, options) => askClient(session, client, toolCall, options),
         browser: (action, signal) =>
           client
             .request<BrowserActionResult, BrowserActionParams>(

@@ -318,15 +318,32 @@ export function parseSteps(text: string): StepItem[] {
   })
 }
 
-// 智能体中途问用户的选择题（第 442 步，工具 ask_user）：走确认请求，rawInput.scope 是它，界面按它画成提问卡。
-// 选项的 optionId 是 ASK_USER_OPTION_PREFIX 加序号；用户不想选时是 ASK_USER_SKIP
+// 智能体中途问用户（第 442 步，工具 ask_user）：走确认请求，rawInput 是 { scope: ASK_USER_SCOPE, questions }，界面按它画成提问卡。
+// 第 673 步起一次最多 4 个问题（界面分成选项卡），每个是选择（单选或多选，选项可以带项目里的预览图）、滑块或选项目里的文件。
+// 只有一个单选问题时点选项直接答，optionId 是 ASK_USER_OPTION_PREFIX 加序号；其余填好后「提交」（ASK_USER_SUBMIT），
+// 答案按问题的顺序放在回复的 _meta.diffra.askAnswers（ASK_ANSWERS_META_KEY），core 按问题逐个校验。用户不想答时是 ASK_USER_SKIP
 export const ASK_USER_SCOPE = 'ask-user'
 export const ASK_USER_OPTION_PREFIX = 'ask-user-option-'
+export const ASK_USER_SUBMIT = 'ask-user-submit'
 export const ASK_USER_SKIP = 'ask-user-skip'
-export interface AskUserInput {
-  question: string
-  options: Array<{ label: string; description?: string }>
+export const ASK_ANSWERS_META_KEY = 'askAnswers'
+export interface AskOption {
+  label: string
+  description?: string
+  // core 读好的项目图片
+  image?: PromptImage
+  // 发给远程设备的提问里预览图不同步，只标出这一项有图
+  imageOmitted?: boolean
 }
+export type AskQuestion =
+  | { type: 'choice'; question: string; header?: string; multiSelect: boolean; options: AskOption[] }
+  | { type: 'slider'; question: string; header?: string; min: number; max: number; step: number; unit?: string; default?: number }
+  | { type: 'file'; question: string; header?: string; multiSelect: boolean }
+export interface AskUserInput {
+  questions: AskQuestion[]
+}
+// choice 是选项的序号；files 是项目里的相对路径
+export type AskAnswer = { choice: number[] } | { value: number } | { files: string[] }
 
 // 撤销提示：core 记进被撤销的那一轮，客户端撤销时本地追加同样的一条，重新打开任务时按记录重放
 export function restoreNotice(changes: CheckpointChange[]): { title: string; description: string | null } {

@@ -22,6 +22,7 @@ import {
   terminalOpenedSchema,
   toolOutputSchema,
 } from '@diffra/remote/messages'
+import type { AskAnswer } from '@diffra/core/types'
 import type { z } from 'zod'
 import type { RemoteSyncEvent } from '../../shared/remote'
 import { logRemote } from '../app-log'
@@ -118,8 +119,9 @@ export class GuestSync {
     await this.request(deviceId, { method: 'session.cancel', sessionId }, okSchema)
   }
 
-  async respondPermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void> {
-    await this.request(deviceId, { method: 'permission.respond', requestId, optionId }, okSchema)
+  // 提问（ask_user）的选项、提交、不答也走这里，提交时带答案
+  async respondPermission(deviceId: string, requestId: string, optionId: string, answers?: AskAnswer[]): Promise<void> {
+    await this.request(deviceId, { method: 'permission.respond', requestId, optionId, ...(answers ? { answers } : {}) }, okSchema)
   }
 
   async forget(deviceId: string): Promise<void> {

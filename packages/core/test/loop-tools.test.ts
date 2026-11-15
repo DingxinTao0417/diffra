@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import type { PermissionOption, SessionUpdate, ToolCallUpdate } from '@agentclientprotocol/sdk'
@@ -158,7 +158,7 @@ describe('步骤清单和中途提问', () => {
   })
 
   test('ask_user：选项作为确认请求问用户，选了哪个告诉模型，这一轮接着跑；都不选时让它用文字说明后停下', async () => {
-    const ask = { toolCalls: [{ name: 'ask_user', input: { question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] } }] }
+    const ask = { toolCalls: [{ name: 'ask_user', input: { questions: [{ question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] }] } }] }
     const requests: Array<{ title: string; rawInput: unknown; options: string[] }> = []
     const answering = (pick: string | null) => {
       const io = recordingIO()
@@ -172,7 +172,7 @@ describe('步骤清单和中途提问', () => {
     const model = scriptedModel([ask, { text: '按方案 B 做' }])
     const io = answering('ask-user-option-1')
     await expect(runTurn(await makeSession(model), { id: 't', text: '做一下' }, io)).resolves.toBe('end_turn')
-    expect(requests[0]).toMatchObject({ title: '用哪种方案？', rawInput: { scope: 'ask-user', question: '用哪种方案？' } })
+    expect(requests[0]).toMatchObject({ title: '用哪种方案？', rawInput: { scope: 'ask-user', questions: [{ type: 'choice', question: '用哪种方案？', multiSelect: false }] } })
     expect(requests[0]?.options).toEqual(['ask-user-option-0:方案 A', 'ask-user-option-1:方案 B', 'ask-user-skip:都不选，我来说'])
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('The user chose: 方案 B')
     expect(JSON.stringify(io.updates)).toContain('选了：方案 B')
@@ -180,7 +180,78 @@ describe('步骤清单和中途提问', () => {
 
     const skipped = scriptedModel([ask, { text: '你想要哪种？' }])
     await runTurn(await makeSession(skipped), { id: 't', text: '做一下' }, answering('ask-user-skip'))
-    expect(JSON.stringify(skipped.doStreamCalls[1]?.prompt)).toContain('The user did not pick any option')
+    expect(JSON.stringify(skipped.doStreamCalls[1]?.prompt)).toContain('The user did not answer')
+  })
+
+  // 第 673 步：一次问几个问题（选项卡），多选、滑块、选文件、预览图；答案按问题逐个校验
+  test('ask_user 一次问几个：多选、滑块、选文件、预览图都交给界面，提交的答案逐个校验后告诉模型；答案不对当没答', async () => {
+    mkdirSync(join(project, 'designs'), { recursive: true })
+    writeFileSync(join(project, 'designs', 'a.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+    writeFileSync(join(project, 'src.ts'), 'export {}\n')
+    const input = {
+      questions: [
+        { question: '要哪些页面？', header: '页面', multiSelect: true, options: [{ label: '首页', image: 'designs/a.png' }, { label: '设置' }, { label: '关于' }] },
+        { question: '每页多少条？', header: '分页', type: 'slider', min: 10, max: 100, step: 10, unit: '条', default: 20 },
+        { question: '改哪个文件？', header: '文件', type: 'file' },
+      ],
+    }
+    const asking = (respond: (toolCall: ToolCallUpdate, options: PermissionOption[]) => { optionId: string; answers?: unknown } | null) => {
+      const io = recordingIO()
+      const requests: Array<{ rawInput: unknown; options: string[] }> = []
+      io.requestAnswers = async (toolCall: ToolCallUpdate, options: PermissionOption[]) => {
+        requests.push({ rawInput: toolCall.rawInput, options: options.map((option) => option.optionId) })
+        return respond(toolCall, options)
+      }
+      return { io, requests }
+    }
+
+    const model = scriptedModel([{ toolCalls: [{ name: 'ask_user', input }] }, { text: '好' }])
+    const { io, requests } = asking(() => ({ optionId: 'ask-user-submit', answers: [{ choice: [2, 0, 0] }, { value: 30 }, { files: ['./src.ts'] }] }))
+    await runTurn(await makeSession(model), { id: 't', text: '做一下' }, io)
+    expect(requests[0]?.options).toEqual(['ask-user-submit', 'ask-user-skip'])
+    const questions = (requests[0]?.rawInput as { questions: Array<Record<string, unknown>> }).questions
+    expect(questions.map((question) => question.type)).toEqual(['choice', 'slider', 'file'])
+    expect(questions[0]).toMatchObject({ multiSelect: true, options: [{ label: '首页', image: { mimeType: 'image/png' } }, { label: '设置' }, { label: '关于' }] })
+    expect(questions[1]).toEqual({ type: 'slider', question: '每页多少条？', header: '分页', min: 10, max: 100, step: 10, unit: '条', default: 20 })
+    const prompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    expect(prompt).toContain('The user answered:')
+    expect(prompt).toContain('要哪些页面？ 首页、关于')
+    expect(prompt).toContain('每页多少条？ 30 条')
+    expect(prompt).toContain('改哪个文件？ src.ts')
+    expect(JSON.stringify(io.updates)).toContain('页面：首页、关于')
+
+    // 不合规的答案：多选一个没选、滑块不在刻度上、超出范围、文件在项目外或不存在、少一个——都当没答
+    for (const answers of [
+      [{ choice: [] }, { value: 30 }, { files: ['src.ts'] }],
+      [{ choice: [0] }, { value: 35 }, { files: ['src.ts'] }],
+      [{ choice: [0] }, { value: 110 }, { files: ['src.ts'] }],
+      [{ choice: [0] }, { value: 30 }, { files: ['../outside.ts'] }],
+      [{ choice: [0] }, { value: 30 }, { files: ['missing.ts'] }],
+      [{ choice: [0] }, { value: 30 }],
+    ]) {
+      const bad = scriptedModel([{ toolCalls: [{ name: 'ask_user', input }] }, { text: '你要什么？' }])
+      await runTurn(await makeSession(bad), { id: 't', text: '做一下' }, asking(() => ({ optionId: 'ask-user-submit', answers })).io)
+      expect(JSON.stringify(bad.doStreamCalls[1]?.prompt), JSON.stringify(answers)).toContain('The user did not answer')
+    }
+  })
+
+  test('ask_user 的参数不对时不问：选择题没有选项、滑块范围反了或刻度太多、预览图不在项目里、太大或不是图片', async () => {
+    writeFileSync(join(project, 'big.png'), Buffer.alloc(500_000))
+    writeFileSync(join(project, 'note.txt'), 'x')
+    for (const [question, reason] of [
+      [{ question: '选哪个？' }, 'needs 2-6 options'],
+      [{ question: '多少？', type: 'slider', min: 5, max: 1 }, 'min < max'],
+      [{ question: '多少？', type: 'slider', min: 0, max: 100000, step: 1 }, 'at most 1000 steps'],
+      [{ question: '哪个？', options: [{ label: 'A', image: '../x.png' }, { label: 'B' }] }, 'outside the project'],
+      [{ question: '哪个？', options: [{ label: 'A', image: 'big.png' }, { label: 'B' }] }, 'larger than 400 KB'],
+      [{ question: '哪个？', options: [{ label: 'A', image: 'note.txt' }, { label: 'B' }] }, 'PNG, JPEG, WebP or GIF'],
+    ] as const) {
+      const model = scriptedModel([{ toolCalls: [{ name: 'ask_user', input: { questions: [question] } }] }, { text: '好' }])
+      const io = recordingIO()
+      await runTurn(await makeSession(model), { id: 't', text: '做一下' }, io)
+      expect(io.permissionRequests, reason).toBe(0)
+      expect(JSON.stringify(model.doStreamCalls[1]?.prompt), reason).toContain(reason)
+    }
   })
 })
 

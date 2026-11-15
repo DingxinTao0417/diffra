@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { isAbsolute, relative } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
-import { LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PermissionMode, type PromptImage, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
+import { ASK_USER_SCOPE, ASK_USER_SKIP, type AskQuestion, type AskUserInput, LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PermissionMode, type PromptImage, type RemoteSnapshot, type SessionUpdate, type StoredSessionSummary, type StoredTurn, UPDATE_SEQ_META_KEY } from '@diffra/core/types'
 import { REMOTE_IMAGE_MAX_CHARS, type RemoteEvent, type RemoteSessionDetails, type RemoteSnapshotPage, type RemoteToolOutput, type RequestCall, requestSchema, sessionDetailsSchema, type SessionList } from '@diffra/remote/messages'
 import { hidePaths, type PathRoots, previewTurn, redactDiff, redactText, redactToolCall, redactTurn, redactUpdate } from '@diffra/remote/redact'
 import { canControl, REMOTE_API, type RemoteAction, type RemoteActionResult, type RemoteProjectGrant, type RemoteTaskCall, type RemoteTaskDetails } from '../../shared/remote'
@@ -60,8 +60,8 @@ export interface HostSyncDeps {
   act(action: RemoteAction): Promise<RemoteActionResult>
   // 任务相关的读和操作也交给本机界面（它载入任务、用本机的逻辑）
   ask(call: RemoteTaskCall): Promise<unknown>
-  // 替本机的人回答权限请求；已经有人答过了返回 false
-  answerPermission(requestId: string, optionId: string): boolean
+  // 替本机的人回答权限请求（提问还带答案）；已经有人答过了返回 false
+  answerPermission(requestId: string, optionId: string, answers?: unknown[]): boolean
   audit(deviceId: string, name: string, action: string): void
   // 提问图片压缩成发给远程的小图（本机界面做，主进程解不了 WebP）；压不了的是 null
   compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
@@ -168,16 +168,25 @@ function merged(entries: Array<{ seq: number; update: SessionUpdate }>): Array<{
   return result
 }
 
-// 本机在等确认的权限请求里远程能答的部分；core 标了只在本机确认的（项目外的文件、本机终端、别的任务、用户自己的浏览器）、没有远程能选的选项时不发
+// 本机在等确认的权限请求里远程能答的部分；core 标了只在本机确认的（项目外的文件、本机终端、别的任务、用户自己的浏览器）、没有远程能选的选项时不发。
+// 提问（ask_user，第 673 步起）发全部选项；预览图不同步（和工具输出里的图片一样），只标出有图
 function remotePermission(event: Extract<SessionEvent, { type: 'permission' }>, roots: PathRoots): PermissionRequest | null {
   const diffra = event.toolCall._meta?.diffra
   if (typeof diffra === 'object' && diffra !== null && (diffra as Record<string, unknown>)[LOCAL_ONLY_META_KEY] === true) return null
+  const input = event.toolCall.rawInput as Partial<AskUserInput & { scope: string }> | undefined
+  const ask = input?.scope === ASK_USER_SCOPE && Array.isArray(input.questions)
   const options = event.options.flatMap((option) =>
-    option.optionId === PERMISSION_OPTIONS.allowOnce || option.optionId === PERMISSION_OPTIONS.reject ? [{ optionId: option.optionId, name: option.name.slice(0, 200) }] : [],
+    ask || option.optionId === PERMISSION_OPTIONS.allowOnce || option.optionId === PERMISSION_OPTIONS.reject ? [{ optionId: option.optionId, name: option.name.slice(0, 200) }] : [],
   )
   if (options.length === 0) return null
-  const toolCall = hidePaths(redactToolCall({ ...event.toolCall, title: event.toolCall.title?.slice(0, 2000) }), roots)
+  const rawInput = ask ? { ...input, questions: input.questions!.map(withoutImages) } : event.toolCall.rawInput
+  const toolCall = hidePaths(redactToolCall({ ...event.toolCall, rawInput, title: event.toolCall.title?.slice(0, 2000) }), roots)
   return { type: 'event', event: 'permission.request', requestId: event.requestId, sessionId: event.sessionId, toolCall, options }
+}
+
+function withoutImages(question: AskQuestion): AskQuestion {
+  if (question.type !== 'choice') return question
+  return { ...question, options: question.options.map(({ image, ...option }) => (image ? { ...option, imageOmitted: true } : option)) }
 }
 
 export class HostSync {
@@ -414,12 +423,14 @@ export class HostSync {
         const pending = this.permissions.get(call.requestId)
         if (!pending?.sentTo.has(deviceId)) throw new Error('这个确认已经处理过了')
         const { project } = await this.operable(grant, pending.sessionId)
-        // 关掉确认卡片不答也算拒绝，和本机一样
-        const optionId = call.optionId ?? PERMISSION_OPTIONS.reject
+        // 关掉确认卡片不答也算拒绝（提问是不答），和本机一样
+        const ask = pending.request.options.some((option) => option.optionId === ASK_USER_SKIP)
+        const optionId = call.optionId ?? (ask ? ASK_USER_SKIP : PERMISSION_OPTIONS.reject)
         if (!pending.request.options.some((option) => option.optionId === optionId)) throw new Error('这个确认没有这个选项')
         this.charge(deviceId, false)
-        if (!this.deps.answerPermission(call.requestId, optionId)) throw new Error('这个确认已经处理过了')
-        this.deps.audit(deviceId, grant.name, `远程${optionId === PERMISSION_OPTIONS.reject ? '拒绝' : '允许一次'}：${folderName(project.path)}「${pending.request.toolCall.title ?? ''}」`)
+        if (!this.deps.answerPermission(call.requestId, optionId, call.answers)) throw new Error('这个确认已经处理过了')
+        const verb = ask ? (optionId === ASK_USER_SKIP ? '没回答提问' : '回答了提问') : optionId === PERMISSION_OPTIONS.reject ? '拒绝' : '允许一次'
+        this.deps.audit(deviceId, grant.name, `远程${verb}：${folderName(project.path)}「${pending.request.toolCall.title ?? ''}」`)
         return { value: {} }
       }
     }

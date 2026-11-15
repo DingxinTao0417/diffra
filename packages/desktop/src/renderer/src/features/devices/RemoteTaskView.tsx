@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { PermissionMode, SessionChecks, SessionInfo } from '@diffra/core/types'
+import { ASK_USER_SKIP, ASK_USER_SUBMIT, type PermissionMode, type SessionChecks, type SessionInfo } from '@diffra/core/types'
 import { Archive, Eye, MousePointerClick, ShieldAlert, WifiOff } from 'lucide-react'
 import type { PermissionRequestEvent, ProjectState } from '../../../../shared/ipc'
 import { REMOTE_API } from '../../../../shared/remote'
@@ -46,13 +46,14 @@ const REMOTE_INFO: SessionInfo = { bashPath: null, checkpoints: false, rulePacks
 // 订阅失败后自动重试：隔 2、4、8 秒各一次
 const AUTO_RETRIES = 3
 
-// 对方发来的确认换成本机确认卡片的格式：远程只有「允许一次」「拒绝」
+// 对方发来的确认换成本机确认卡片的格式：确认只有「允许一次」「拒绝」；提问（第 673 步）是它的选项、提交和不答
 function permissionEventOf(sessionId: string, permission: RemotePermission): PermissionRequestEvent {
+  const kindOf = (optionId: string) => (optionId === 'allow_once' || optionId === ASK_USER_SUBMIT ? 'allow_once' : optionId === 'reject' || optionId === ASK_USER_SKIP ? 'reject_once' : 'allow_always')
   return {
     requestId: permission.requestId,
     sessionId,
     toolCall: permission.toolCall as PermissionRequestEvent['toolCall'],
-    options: permission.options.map((option) => ({ optionId: option.optionId, name: option.name, kind: option.optionId === 'allow_once' ? 'allow_once' : 'reject_once' })),
+    options: permission.options.map((option) => ({ optionId: option.optionId, name: option.name, kind: kindOf(option.optionId) })),
   }
 }
 
@@ -231,7 +232,12 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
     <>
       {permission && (
         <div className="[&_pre]:max-h-40">
-          <PermissionCard request={permission} onRespond={(optionId) => answerRemotePermission(key, optionId === 'allow_once' ? 'allow_once' : 'reject')} />
+          <PermissionCard
+            request={permission}
+            onRespond={(optionId, answers) =>
+              optionId?.startsWith('ask-user-') ? answerRemotePermission(key, optionId, answers) : answerRemotePermission(key, optionId === 'allow_once' ? 'allow_once' : 'reject')
+            }
+          />
         </div>
       )}
       {operable ? (

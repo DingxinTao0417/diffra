@@ -224,7 +224,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
                   {/* 固定在输入框上方，用户往上翻着看改动时也能看到；多行命令只让命令区滚动，否则卡片会把对话挤没，按钮也不能随之滚出视野 */}
                   {task.permission && (
                     <div className="[&_pre]:max-h-40">
-                      <PermissionCard request={task.permission} onRespond={(optionId) => respondPermission(task.sessionId, optionId)} />
+                      <PermissionCard request={task.permission} project={task.project} onRespond={(optionId, answers) => respondPermission(task.sessionId, optionId, answers)} />
                     </div>
                   )}
                   {task.queue.map((item) => (

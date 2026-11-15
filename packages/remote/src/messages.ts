@@ -21,7 +21,12 @@ const key32 = z.base64().refine((value) => value.length === 44 && value.endsWith
 const skills = z.array(z.string().min(1).max(100)).max(20)
 const promptText = z.string().trim().min(1).max(100_000)
 // 远程只能「允许一次」或「拒绝」，不给「始终允许」
-const remotePermissionOption = z.enum([PERMISSION_OPTIONS.allowOnce, PERMISSION_OPTIONS.reject])
+// 确认里远程能选的：允许一次、拒绝；提问（ask_user，第 673 步起可操作的设备也能答）的选项、提交、不答
+const remotePermissionOption = z.union([z.enum([PERMISSION_OPTIONS.allowOnce, PERMISSION_OPTIONS.reject]), z.string().regex(/^ask-user-(?:option-\d{1,2}|submit|skip)$/)])
+// 提问的答案：这里只限形状和大小，内容由 core 按问题逐个校验
+export const askAnswersSchema = z
+  .array(z.union([z.object({ choice: z.array(z.number().int().nonnegative().max(99)).max(10) }), z.object({ value: z.number().finite() }), z.object({ files: z.array(z.string().min(1).max(1000)).max(20) })]))
+  .max(4)
 const turnId = z.string().min(1).max(128)
 const terminalId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
 const terminalSize = { cols: z.number().int().min(2).max(1000), rows: z.number().int().min(1).max(500) }
@@ -100,7 +105,7 @@ export const requestCallSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('session.prompt'), sessionId, text: promptText, skills, plan: z.boolean().optional(), goal: z.boolean().optional(), images: z.array(promptImage).max(6).optional() }),
   z.object({ method: z.literal('session.create'), projectId, text: promptText, skills }),
   z.object({ method: z.literal('session.cancel'), sessionId }),
-  z.object({ method: z.literal('permission.respond'), requestId, optionId: remotePermissionOption.nullable() }),
+  z.object({ method: z.literal('permission.respond'), requestId, optionId: remotePermissionOption.nullable(), answers: askAnswersSchema.optional() }),
   // 连接端删除了这台设备：请被连接端也撤销对它的授权（只会收紧，照办）
   z.object({ method: z.literal('device.forget') }),
 ])
@@ -209,8 +214,8 @@ export const eventSchema = z.discriminatedUnion('event', [
     requestId,
     sessionId,
     toolCall: z.looseObject({ toolCallId: z.string().max(128), title: z.string().max(2000).optional() }),
-    // 本机给的选项里远程能选的那几个（允许一次、拒绝），名字照本机的
-    options: z.array(z.object({ optionId: remotePermissionOption, name: z.string().max(200) })).min(1).max(2),
+    // 本机给的选项里远程能选的那几个（允许一次、拒绝；提问的选项、提交、不答），名字照本机的
+    options: z.array(z.object({ optionId: remotePermissionOption, name: z.string().max(200) })).min(1).max(8),
   }),
   z.object({ type: z.literal('event'), event: z.literal('permission.settled'), requestId }),
   // 远程终端的输出（攒一小会儿一批）、结束（对方结束、通道断了、降级时 exitCode 是 null）

@@ -1,4 +1,4 @@
-import { DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
+import { type AskAnswer, DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
@@ -713,11 +713,11 @@ export function cancelTask(sessionId: string): void {
   window.diffra.cancelSession(sessionId).catch((error: unknown) => showToast(errorMessage(error)))
 }
 
-export function respondPermission(sessionId: string, optionId: string | null): void {
+export function respondPermission(sessionId: string, optionId: string | null, answers?: AskAnswer[]): void {
   const request = store.get().live[sessionId]?.permission
   if (!request) return
   updateLive(sessionId, (task) => ({ ...task, permission: null }))
-  window.diffra.respondPermission(request.requestId, optionId).catch((error: unknown) => showToast(errorMessage(error)))
+  window.diffra.respondPermission(request.requestId, optionId, answers).catch((error: unknown) => showToast(errorMessage(error)))
 }
 
 export async function restoreTurn(sessionId: string, turnId: string): Promise<void> {

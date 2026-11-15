@@ -144,6 +144,8 @@ export interface TurnIO {
   update(update: SessionUpdate): Promise<void>
   // 返回用户选中的 optionId；取消或出错返回 null
   requestPermission(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<string | null>
+  // 提问（ask_user）用：除了 optionId 还带回答案（回复的 _meta.diffra.askAnswers）；没有时只能点选项
+  requestAnswers?(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null>
   // 每次模型调用结束后记一次用量；记录失败由实现方处理，不影响任务
   recordUsage(call: ModelCallUsage): Promise<void>
   // 操作客户端的内置浏览器；客户端没有浏览器时不提供
@@ -1025,7 +1027,7 @@ export async function runToolCall(
   if (name === SHOW_VISUAL_TOOL) return runShowVisual(call, io)
   // 步骤清单和提问只给主智能体：子智能体的进度看它的卡片，它也不能替主智能体去问用户
   if (name === TODO_TOOL && !scope) return runTodoWrite(session, call, io)
-  if (name === ASK_USER_TOOL && !scope) return runAskUser(call, signal, io)
+  if (name === ASK_USER_TOOL && !scope) return runAskUser(session, call, signal, io)
   if (isTaskTool(name) && !scope && !call.invalid) return runTaskTool(session, { ...call, toolName: name }, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'

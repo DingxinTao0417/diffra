@@ -37,7 +37,8 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES, ASK_ANSWERS_META_KEY } from '@diffra/core/types'
+import { askAnswersSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -111,7 +112,7 @@ interface PendingPermission {
   sessionId: string
   // 命令确认带的：选「这个项目里始终允许」时要记进项目设置的命令键
   projectCommands?: ProjectCommandsMeta
-  resolve(optionId: string | null): void
+  resolve(optionId: string | null, answers?: unknown[]): void
 }
 
 function projectCommandsOf(meta: unknown): ProjectCommandsMeta | undefined {
@@ -154,8 +155,9 @@ export const coreClientHandlers: CoreClientHandlers = {
       pendingPermissions.set(requestId, {
         sessionId: request.sessionId,
         projectCommands: projectCommandsOf(request.toolCall._meta),
-        resolve: (optionId) =>
-          resolve({ outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' } }),
+        // 提问的答案（第 673 步）放在回复的 _meta 里，core 逐个校验
+        resolve: (optionId, answers) =>
+          resolve({ outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' }, ...(optionId && answers ? { _meta: { diffra: { [ASK_ANSWERS_META_KEY]: answers } } } : {}) }),
       })
       const event: PermissionRequestEvent = {
         requestId,
@@ -189,11 +191,11 @@ export const coreClientHandlers: CoreClientHandlers = {
 }
 
 // 本机界面、远程设备谁先答算谁的；已经答过的返回 false。答完告诉界面收起确认卡片（可能是远程答的）
-export function settlePermission(requestId: string, optionId: string | null): boolean {
+export function settlePermission(requestId: string, optionId: string | null, answers?: unknown[]): boolean {
   const pending = pendingPermissions.get(requestId)
   if (!pending) return false
   pendingPermissions.delete(requestId)
-  pending.resolve(optionId)
+  pending.resolve(optionId, answers)
   broadcast(IPC_CHANNELS.sessionPermissionSettled, { requestId, sessionId: pending.sessionId })
   emitSessionEvent({ type: 'permission-settled', requestId, sessionId: pending.sessionId })
   return true
@@ -715,9 +717,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     )
   })
 
-  ipcMain.handle(IPC_CHANNELS.sessionPermissionRespond, async (_event, rawRequestId: unknown, rawOptionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.sessionPermissionRespond, async (_event, rawRequestId: unknown, rawOptionId: unknown, rawAnswers: unknown) => {
     const requestId = parse(z.string().min(1), rawRequestId)
     const optionId = parse(z.string().min(1).nullable(), rawOptionId)
+    const answers = parse(askAnswersSchema.optional(), rawAnswers)
     // 「这个项目里始终允许同类命令」（第 445 步）：把这条命令的命令键记进项目设置，以后这个项目的任务不再问。
     // 只有本机界面能选这一项；存不上只记日志，这一次照样放行
     const remembered = optionId === PERMISSION_OPTIONS.allowProject ? pendingPermissions.get(requestId)?.projectCommands : undefined
@@ -726,7 +729,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         console.error('[sessions] 保存项目里始终允许的命令失败', error),
       )
     }
-    settlePermission(requestId, optionId)
+    settlePermission(requestId, optionId, answers)
   })
 
   ipcMain.handle(IPC_CHANNELS.checkpointPreview, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>

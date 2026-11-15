@@ -15,7 +15,7 @@ test('命令失败不显示感叹号；提问卡片和等待确认是普通配�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-neutral-'))
   const model = await startScriptedModel([
     { toolCalls: [exec('ls no-such-dir'), exec('echo ok')] },
-    { toolCalls: [{ name: 'ask_user', input: { question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] } }] },
+    { toolCalls: [{ name: 'ask_user', input: { questions: [{ question: '用哪种方案？', options: [{ label: '方案 A', description: '改得少' }, { label: '方案 B' }] }] } }] },
     { text: '按方案 A 做完了' },
   ])
   const app = await launchApp(userDataDir)

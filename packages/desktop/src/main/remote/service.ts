@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { PromptImage, RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
+import type { AskAnswer, PromptImage, RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { fingerprintOf, InviteError } from '@diffra/remote'
 import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
@@ -29,8 +29,8 @@ export interface RemoteServiceOptions {
   act(action: RemoteAction): Promise<RemoteActionResult>
   // 授权的设备要读、做的任务相关的事，交给本机界面做
   ask(call: RemoteTaskCall): Promise<unknown>
-  // 替本机的人回答权限请求；已经有人答过了返回 false
-  answerPermission(requestId: string, optionId: string): boolean
+  // 替本机的人回答权限请求（提问还带答案）；已经有人答过了返回 false
+  answerPermission(requestId: string, optionId: string, answers?: unknown[]): boolean
   // 提问图片压缩成发给远程的小图，压不了的是 null
   compressImages(images: PromptImage[]): Promise<Array<PromptImage | null>>
   branches(cwd: string): Promise<{ current: string | null; branches: string[] }>
@@ -68,7 +68,7 @@ export class RemoteService {
       snapshot: (params) => options.snapshot(params),
       act: (action) => options.act(action),
       ask: (call) => options.ask(call),
-      answerPermission: (requestId, optionId) => options.answerPermission(requestId, optionId),
+      answerPermission: (requestId, optionId, answers) => options.answerPermission(requestId, optionId, answers),
       audit: (deviceId, name, action) => void this.audit.append({ deviceId, name, action }),
       forget: (deviceId) => void this.revoke(deviceId, '对方删除了本机，撤销授权'),
       activityChanged: () => this.changed(),
@@ -136,9 +136,9 @@ export class RemoteService {
     return this.guestSync.cancel(deviceId, sessionId)
   }
 
-  remoteRespondPermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void> {
+  remoteRespondPermission(deviceId: string, requestId: string, optionId: string, answers?: AskAnswer[]): Promise<void> {
     this.requirePeer(deviceId)
-    return this.guestSync.respondPermission(deviceId, requestId, optionId)
+    return this.guestSync.respondPermission(deviceId, requestId, optionId, answers)
   }
 
   private requirePeer(deviceId: string): void {

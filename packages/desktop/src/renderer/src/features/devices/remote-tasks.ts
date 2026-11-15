@@ -1,4 +1,4 @@
-import type { CheckpointChange, CommandInfo, PermissionMode, PromptImage, SessionUpdate, SkillInfo, StoredTurn, TaskProgressView, ToolCallContent } from '@diffra/core/types'
+import type { AskAnswer, CheckpointChange, CommandInfo, PermissionMode, PromptImage, SessionUpdate, SkillInfo, StoredTurn, TaskProgressView, ToolCallContent } from '@diffra/core/types'
 import type { RemoteEvent, RemoteSessionDetails, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteSyncEvent } from '../../../../shared/remote'
 import type { ModelRef, ProviderView } from '../../../../shared/settings'
@@ -379,12 +379,13 @@ export function stopRemote(key: string): void {
   window.diffra.cancelRemoteSession(task.deviceId, task.sessionId).catch((error: unknown) => showToast(errorMessage(error)))
 }
 
-export function answerRemotePermission(key: string, optionId: 'allow_once' | 'reject'): void {
+// 确认只有「允许一次」「拒绝」；提问（第 673 步）是选项、提交（带答案）或不答
+export function answerRemotePermission(key: string, optionId: string, answers?: AskAnswer[]): void {
   const task = store.get().remoteTasks[key]
   const permission = task?.permission
   if (!task || !permission) return
   updateTask(key, (current) => ({ ...current, permission: null }))
-  window.diffra.respondRemotePermission(task.deviceId, permission.requestId, optionId).catch((error: unknown) => showToast(errorMessage(error)))
+  window.diffra.respondRemotePermission(task.deviceId, permission.requestId, optionId, answers).catch((error: unknown) => showToast(errorMessage(error)))
 }
 
 // 在对方开放的项目里新建任务；建好返回会话 id

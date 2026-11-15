@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
@@ -776,6 +776,66 @@ function randomHan(seed: number, length: number): string {
 }
 // 一条消息要切成一整片加一小片（整片加上直发种类、中转帧头曾经比中转的单帧上限多 1 字节）
 const BIG_REPLY = randomHan(1, 60_000)
+
+// 第 673 步：可操作的设备也能回答提问
+test('设备连接：可操作的设备能回答提问——几个问题的提问卡照样显示（预览图不同步，只标出有图），在连接端提交后本机的卡收起，答案交给模型', async () => {
+  test.setTimeout(120_000)
+  const { relay, port } = await startRelay()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-ask-'))
+  mkdirSync(join(project, 'designs'))
+  writeFileSync(join(project, 'designs', 'home.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+  const questions = [
+    { question: '要做哪些页面？', header: '页面', multiSelect: true, options: [{ label: '首页', image: 'designs/home.png' }, { label: '设置' }] },
+    { question: '每页多少条？', header: '分页', type: 'slider', min: 10, max: 50, step: 10, unit: '条' },
+  ]
+  const model = await startScriptedModel([{ text: '任务建好了' }, { toolCalls: [{ name: 'ask_user', input: { questions } }] }, { text: '收到远程的回答' }])
+  const host = await launchDevice(port)
+  const guest = await launchDevice(port)
+  try {
+    await configureCoderModel(host.window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(host.app, host.window, project)
+    await startTask(host.window, '远程提问的任务')
+    await waitTaskDone(host.window)
+    await pair(host, guest, [], [project])
+    await guest.window.getByTestId('sidebar').getByTestId('sidebar-remote-task').click()
+    const remoteTask = guest.window.getByTestId('remote-task')
+    await expect(remoteTask.getByTestId('remote-task-level')).toHaveText('可操作')
+    const composer = remoteTask.getByLabel('任务', { exact: true })
+    await composer.fill('先问我几个问题')
+    await composer.press('Control+Enter')
+
+    const local = host.window.getByTestId('permission-card')
+    const card = remoteTask.getByTestId('permission-card')
+    await expect(local).toContainText('要做哪些页面？')
+    await expect(card).toContainText('要做哪些页面？')
+    await expect(card.getByTestId('ask-tab')).toHaveText(['页面', '分页'])
+    // 预览图在本机有，连接端只说有图
+    await expect(local.getByRole('img', { name: '首页' })).toBeVisible()
+    await expect(card.getByRole('img', { name: '首页' })).toHaveCount(0)
+    await expect(card.getByTestId('ask-option').first()).toContainText('预览图在对方电脑上')
+    await card.getByTestId('ask-option').nth(0).click()
+    await card.getByTestId('ask-option').nth(1).click()
+    await card.getByTestId('ask-tab').nth(1).click()
+    await card.getByTestId('ask-slider').focus()
+    await guest.window.keyboard.press('ArrowRight')
+    await expect(card.getByTestId('ask-slider-value')).toHaveText('20 条')
+    await guest.window.screenshot({ path: 'test-results/devices-remote-ask.png' })
+    await card.getByTestId('ask-submit').click()
+
+    await expect(card).toHaveCount(0)
+    await expect(local).toHaveCount(0)
+    await waitTaskDone(host.window)
+    await expect(host.window.getByTestId('turn').last()).toContainText('收到远程的回答')
+    const body = model.bodies()[2]!
+    expect(body).toContain('要做哪些页面？ 首页、设置')
+    expect(body).toContain('每页多少条？ 20 条')
+  } finally {
+    await close([host, guest])
+    await relay.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+  }
+})
 
 test('设备连接：会话一页压缩后超过一片（约 64 KB）也能看完整，中转不把被连接端断开；对方不在中转上时建通道马上失败、说清原因，不干等 10 秒', async () => {
   test.setTimeout(120_000)

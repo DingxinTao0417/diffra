@@ -6,6 +6,7 @@ import type {
   ListModelsResult,
   McpServerStatus,
   PromptEnhancement,
+  AskAnswer,
   PromptImage,
   ReasoningEffort,
   PermissionMode,
@@ -100,6 +101,7 @@ export const IPC_CHANNELS = {
   terminalOpened: 'terminal:opened',
   terminalUrl: 'terminal:url',
   fileResolve: 'file:resolve',
+  filePick: 'file:pick',
   fileRead: 'file:read',
   fileReadImage: 'file:read-image',
   fileWrite: 'file:write',
@@ -472,6 +474,8 @@ export interface DiffraApi {
   onTerminalUrl(listener: (event: { id: string; url: string }) => void): () => void
   // 回答里提到的文件：哪些在项目里（不在的是 null）、读出来（最多 1 MB）、用默认应用打开、在资源管理器里显示
   resolveFiles(project: string, paths: string[]): Promise<Record<string, ProjectFile | null>>
+  // 提问里的「选文件」（第 673 步）：系统选择框，只收项目里的文件（相对路径），项目外的只给个数
+  pickProjectFiles(project: string, multiple: boolean): Promise<{ files: string[]; outside: number }>
   readFile(project: string, path: string): Promise<{ text: string; binary: boolean; truncated: boolean; version: string }>
   // 回答里引用的项目图片（主窗口的 CSP 只放行 data:，按 base64 取）：只认常见图片扩展名，最大 8 MB
   readImage(project: string, path: string): Promise<{ mimeType: string; data: string }>
@@ -617,7 +621,8 @@ export interface DiffraApi {
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void
-  respondPermission(requestId: string, optionId: string | null): Promise<void>
+  // answers：提问（ask_user）提交的答案，按问题的顺序（第 673 步）
+  respondPermission(requestId: string, optionId: string | null, answers?: AskAnswer[]): Promise<void>
   // 权限请求答完了（可能是远程设备答的）：界面收起这张确认卡片
   onPermissionSettled(listener: (event: { requestId: string; sessionId: string }) => void): () => void
   onTaskAction(listener: (event: TaskActionEvent) => void): () => void
@@ -654,7 +659,8 @@ export interface DiffraApi {
   promptRemoteSession(deviceId: string, sessionId: string, text: string): Promise<{ queued: boolean }>
   createRemoteSession(deviceId: string, projectId: string, text: string): Promise<{ sessionId: string }>
   cancelRemoteSession(deviceId: string, sessionId: string): Promise<void>
-  respondRemotePermission(deviceId: string, requestId: string, optionId: 'allow_once' | 'reject'): Promise<void>
+  // 提问（ask_user）的选项、提交、不答也走这里，提交时带答案
+  respondRemotePermission(deviceId: string, requestId: string, optionId: string, answers?: AskAnswer[]): Promise<void>
   // 本机是被连接端：远程设备的操作交给界面做（同任务互通），做完回结果
   onRemoteAction(listener: (event: { requestId: string; action: RemoteAction }) => void): () => void
   respondRemoteAction(requestId: string, result: RemoteActionResult): Promise<void>

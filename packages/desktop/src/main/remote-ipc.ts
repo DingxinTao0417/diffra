@@ -3,7 +3,7 @@ import { hostname } from 'node:os'
 import { listSessions, remoteSnapshot } from '@diffra/core'
 import { type PromptImage, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
 import { RELAY_HOST, RELAY_PATH } from '@diffra/relay/protocol'
-import { requestCallSchema } from '@diffra/remote/messages'
+import { askAnswersSchema, requestCallSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
@@ -171,8 +171,13 @@ export function registerRemoteIpc(userDataDir: string): void {
     (await service()).remoteCreate(parse(deviceId, rawId), parse(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), rawProject), parse(promptText, rawText)),
   )
   ipcMain.handle(IPC_CHANNELS.remoteCancel, async (_event, rawId: unknown, rawSession: unknown) => (await service()).remoteCancel(parse(deviceId, rawId), parse(sessionId, rawSession)))
-  ipcMain.handle(IPC_CHANNELS.remotePermission, async (_event, rawId: unknown, rawRequest: unknown, rawOption: unknown) =>
-    (await service()).remoteRespondPermission(parse(deviceId, rawId), parse(z.string().regex(/^[A-Za-z0-9-]{1,64}$/), rawRequest), parse(z.enum(['allow_once', 'reject']), rawOption)),
+  ipcMain.handle(IPC_CHANNELS.remotePermission, async (_event, rawId: unknown, rawRequest: unknown, rawOption: unknown, rawAnswers: unknown) =>
+    (await service()).remoteRespondPermission(
+      parse(deviceId, rawId),
+      parse(z.string().regex(/^[A-Za-z0-9-]{1,64}$/), rawRequest),
+      parse(z.union([z.enum(['allow_once', 'reject']), z.string().regex(/^ask-user-(?:option-\d{1,2}|submit|skip)$/)]), rawOption),
+      parse(askAnswersSchema.optional(), rawAnswers),
+    ),
   )
   ipcMain.handle(IPC_CHANNELS.remoteCompressRespond, (_event, rawRequestId: unknown, rawResult: unknown) => {
     const requestId = parse(z.string().min(1), rawRequestId)

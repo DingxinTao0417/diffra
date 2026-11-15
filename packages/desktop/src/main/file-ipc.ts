@@ -1,6 +1,6 @@
 import { open, readFile, stat, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, normalize, relative } from 'node:path'
-import { ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS, type ProjectFile } from '../shared/ipc'
 import { parse } from './ipc-input'
@@ -54,6 +54,17 @@ async function requireFile(project: string, path: string): Promise<string> {
 const versionOf = (info: { mtimeMs: number; size: number }) => `${info.mtimeMs}:${info.size}`
 
 export function registerFileIpc(): void {
+  // 提问里的「选文件」（第 673 步）：系统选择框从项目目录开始，只收项目里的文件，回相对路径；项目外的只数个数
+  ipcMain.handle(IPC_CHANNELS.filePick, async (event, rawProject: unknown, rawMultiple: unknown) => {
+    const project = parse(projectSchema, rawProject)
+    const multiple = parse(z.boolean(), rawMultiple)
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = { defaultPath: project, properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'] }
+    const picked = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    const files = picked.canceled ? [] : await Promise.all(picked.filePaths.map((path) => resolveFile(project, path)))
+    return { files: files.flatMap((file) => (file ? [file.relative] : [])), outside: files.filter((file) => !file).length }
+  })
+
   ipcMain.handle(IPC_CHANNELS.fileResolve, async (_event, rawProject: unknown, rawPaths: unknown) => {
     const project = parse(projectSchema, rawProject)
     const paths = parse(z.array(pathSchema).max(MAX_PATHS), rawPaths)

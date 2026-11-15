@@ -1,27 +1,35 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
-import { CircleHelp, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { ShieldAlert, TriangleAlert } from 'lucide-react'
 import { cn } from 'cn'
-import { ASK_USER_SCOPE, type AskUserInput, COMMAND_RISK_META_KEY, type CommandRisk, DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
+import { ASK_USER_SCOPE, type AskAnswer, type AskUserInput, COMMAND_RISK_META_KEY, type CommandRisk, DEEP_SCAN_ASK_SCOPE, EXTERNAL_ACCESS_SCOPE } from '@diffra/core/types'
 import type { DiffLine } from '@/lib/unified-diff'
 import { DiffLines } from './DiffLines'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { agentOfMeta } from './transcript'
+import { AskCard } from './AskCard'
 
 interface PermissionCardProps {
   request: PermissionRequestEvent
-  onRespond(optionId: string | null): void
+  // 提问里选文件用：本机任务的项目目录，远程任务不给
+  project?: string | null
+  onRespond(optionId: string | null, answers?: AskAnswer[]): void
 }
 
 const EXTERNAL_ACCESS_NOTE = '授权仅适用于上方确切路径和读/写操作；目录读取会包含子目录。本会话授权不会保留到重启后。项目外的修改不包含在项目检查点撤销中。'
 
-export function PermissionCard({ request, onRespond }: PermissionCardProps) {
+export function PermissionCard({ request, project = null, onRespond }: PermissionCardProps) {
+  const question = questionOf(request.toolCall.rawInput)
+  if (question) return <AskCard request={request} input={question} project={project} onRespond={onRespond} />
+  return <ConfirmCard request={request} onRespond={onRespond} />
+}
+
+function ConfirmCard({ request, onRespond }: PermissionCardProps) {
   const command = commandOf(request.toolCall.rawInput)
   // 智能体写的「为什么要跑这条命令」
   const justification = justificationOf(request.toolCall.rawInput)
   const external = isExternalAccess(request.toolCall.rawInput)
   const deepScanAsk = scopeOf(request.toolCall.rawInput) === DEEP_SCAN_ASK_SCOPE
-  const question = questionOf(request.toolCall.rawInput)
   // 子智能体发起的请求写明是哪一个
   const agent = agentOfMeta(request.toolCall._meta)
   // 命令的风险等级和原因（第 659 步）；写项目外的文件时这个文件的那段补丁
@@ -60,8 +68,8 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
       onKeyDown={onKeyDown}
     >
       <div className="flex items-center gap-2 font-bold">
-        {question ? <CircleHelp className="size-4 text-muted-foreground" /> : <ShieldAlert className="size-4 text-muted-foreground" />}
-        {question ? '智能体想先问你一下' : deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
+        <ShieldAlert className="size-4 text-muted-foreground" />
+        {deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
         {agent && (
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground" data-testid="permission-agent">
             <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: agent.color }} aria-hidden="true" />
@@ -69,27 +77,10 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
           </span>
         )}
       </div>
-      {question ? (
-        // 智能体中途的提问（ask_user）：问题和每个选项的说明，按钮就是选项
-        <div className="space-y-2" data-testid="ask-user">
-          <p className="break-words whitespace-pre-wrap">{question.question}</p>
-          {question.options.some((option) => option.description) && (
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {question.options.map((option) => (
-                <li key={option.label} className="break-words">
-                  <span className="font-bold text-foreground">{option.label}</span>
-                  {option.description ? `：${option.description}` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : (
-        <pre className="overflow-auto rounded-md border bg-background/60 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-words">
-          {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
-          {command ?? request.toolCall.title}
-        </pre>
-      )}
+      <pre className="overflow-auto rounded-md border bg-background/60 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-words">
+        {command !== null && <span className="text-muted-foreground select-none">{'$ '}</span>}
+        {command ?? request.toolCall.title}
+      </pre>
       {risk && risk.level !== 'low' && (
         <div className={cn('flex items-start gap-2 rounded-md border px-3 py-2 text-xs', risk.level === 'high' ? 'border-destructive/30 bg-destructive-soft' : 'border-warning/30 bg-warning-soft')} data-testid="permission-risk" data-level={risk.level}>
           <TriangleAlert className={cn('mt-0.5 size-3.5 shrink-0', risk.level === 'high' ? 'text-destructive' : 'text-warning')} aria-hidden="true" />
@@ -159,11 +150,17 @@ function isExternalAccess(rawInput: unknown): boolean {
   return scopeOf(rawInput) === EXTERNAL_ACCESS_SCOPE
 }
 
-// ask_user 的问题和选项；core 已经按格式校验过，这里只确认是这类请求
+// ask_user 的问题；core 已经按格式校验过，这里只确认是这类请求、每个问题的形状对
 function questionOf(rawInput: unknown): AskUserInput | null {
   if (scopeOf(rawInput) !== ASK_USER_SCOPE) return null
-  const input = rawInput as Partial<AskUserInput>
-  return typeof input.question === 'string' && Array.isArray(input.options) ? { question: input.question, options: input.options } : null
+  const questions = (rawInput as Partial<AskUserInput>).questions
+  if (!Array.isArray(questions) || questions.length === 0) return null
+  const valid = questions.every(
+    (question) =>
+      typeof question?.question === 'string' &&
+      ((question.type === 'choice' && Array.isArray(question.options)) || (question.type === 'slider' && typeof question.min === 'number' && typeof question.max === 'number' && typeof question.step === 'number') || question.type === 'file'),
+  )
+  return valid ? { questions } : null
 }
 
 function scopeOf(rawInput: unknown): unknown {
