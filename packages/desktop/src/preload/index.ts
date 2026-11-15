@@ -127,6 +127,7 @@ const api: DiffraApi = {
   onMenuCommand: (listener) => subscribe<MenuCommand>(IPC_CHANNELS.menuCommand, listener),
   isFullScreen: () => ipcRenderer.invoke(IPC_CHANNELS.windowFullScreen),
   onFullScreenChange: (listener) => subscribe<boolean>(IPC_CHANNELS.windowFullScreen, listener),
+  logRendererError: (message) => ipcRenderer.send(IPC_CHANNELS.rendererError, message),
   setBrowserBounds: (sessionId, rect) => ipcRenderer.send(IPC_CHANNELS.browserBounds, sessionId, rect),
   browserNavigate: (sessionId, url) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, sessionId, url),
   browserCommand: (sessionId, command) => ipcRenderer.send(IPC_CHANNELS.browserCommand, sessionId, command),

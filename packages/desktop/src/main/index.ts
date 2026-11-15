@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { browserHost, registerBrowserIpc } from './browser'
 import { designHost, registerDesignIpc } from './design'
-import { logEvent } from './app-log'
+import { logEvent, registerRendererLog } from './app-log'
 import { registerAttachmentIpc } from './attachments'
 import { recordVersion, registerChangelogIpc } from './changelog'
 import { startCore, stopCore } from './core-process'
@@ -161,6 +161,7 @@ app
     registerExportIpc()
     setupUpdater()
     setupWindowChrome()
+    registerRendererLog()
     createWindow()
   })
   .catch((error: unknown) => {
