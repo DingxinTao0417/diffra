@@ -10,6 +10,7 @@ import { fillComposer } from '@/state/actions'
 import { AnswerContext, findProjectFile, openFilePreview } from './answer-links'
 import { copyText } from './rich/BlockShell'
 import { useReadOnly } from './read-only'
+import { useStatic } from './static-context'
 import { useThemeKey } from './rich/theme'
 import visualKit from './visual-kit.js?raw'
 import { VISUAL_SNAPSHOT_MAX_CHARS } from '@diffra/core/types'
@@ -142,11 +143,15 @@ export function VisualFrame({ title, code, sessionId, fill = false, step = null,
       }
     }
     window.addEventListener('message', onMessage)
-    return () => {
-      window.removeEventListener('message', onMessage)
-      if (settleTimer.current !== null) window.clearTimeout(settleTimer.current)
-    }
+    return () => window.removeEventListener('message', onMessage)
   }, [title, code, sessionId, readOnly, answer, onLink])
+  // 只在卸载时清：上面的监听在流式输出时跟着 answer 一直重建，在那里清的话，内容不再变高就再也等不到「画好了」，不截快照
+  useEffect(
+    () => () => {
+      if (settleTimer.current !== null) window.clearTimeout(settleTimer.current)
+    },
+    [],
+  )
 
   // 演示模式：告诉页面显示到第几步
   useEffect(() => {
@@ -186,8 +191,9 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
   const current = versions[Math.min(index, versions.length - 1)] ?? { id, code, snapshot }
   const previous = index > 0 ? versions[index - 1] : null
   const pinned = useAppState((state) => state.pinnedVisuals.some((item) => item.sessionId === sessionId && item.id === id))
-  // 远程会话里可视化的代码换成了占位，有快照就显示快照
-  const image = readOnly ? current.snapshot : undefined
+  // 远程会话里可视化的代码换成了占位，有快照就显示快照；静态渲染（导出、分享）不跑脚本，也用快照
+  const isStatic = useStatic()
+  const image = readOnly || isStatic ? current.snapshot : undefined
   const onSettled = useSnapshot(sessionId, id, !readOnly && !snapshot && index === own && !expanded && !compare && !showCode && !presenting)
 
   useEffect(() => {
@@ -292,7 +298,11 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
         )}
         <div className={cn('flex min-w-0 flex-col gap-1', expanded && 'min-h-0 flex-1')}>
           {compare && previous && <span className="text-xs text-muted-foreground">第 {index + 1} 版</span>}
-          {image ? (
+          {isStatic && !image ? (
+            <p className="text-sm text-muted-foreground" data-testid="visual-no-snapshot">
+              （这张可视化还没有快照，在 Diffra 里打开才能看）
+            </p>
+          ) : image ? (
             <SnapshotImage
               title={title}
               snapshot={image}

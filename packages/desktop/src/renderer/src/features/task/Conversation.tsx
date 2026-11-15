@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, Download, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -25,6 +25,9 @@ import { Markdown } from './Markdown'
 import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
+import { useStatic } from './static-context'
+import { renderStaticHtml } from './static-html'
+import { downloadBlob, safeFileName } from './rich/download'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -265,11 +268,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   }, [remote, readOnly, turns, sessionId, project])
 
   // 同名的可视化按出现顺序排成几版（第 668 步）：每张卡片能切到别的版本、和上一版对比
-  const visualHistory = useMemo(() => {
-    const history = new Map<string, VisualVersion[]>()
-    for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code, snapshot: item.visualSnapshot }])
-    return history
-  }, [turns])
+  const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
 
   const onScroll = () => {
     const element = scrollRef.current
@@ -471,6 +470,35 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   )
 }
 
+function visualHistoryOf(turns: Turn[]): Map<string, VisualVersion[]> {
+  const history = new Map<string, VisualVersion[]>()
+  for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code, snapshot: item.visualSnapshot }])
+  return history
+}
+
+const noop = () => undefined
+
+// 静态渲染用（第 671 步）：这几轮按只读会话的样子、用同一套组件画；没有滚动、时间线和操作栏
+export function StaticTurns({ task, turns }: { task: TurnTask; turns: Turn[] }) {
+  const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
+  const turnTask = useMemo<TurnTask>(() => ({ ...task, running: false, permission: null }), [task])
+  return (
+    <ReadOnlyContext.Provider value={true}>
+      <VisualHistoryContext.Provider value={visualHistory}>
+        {turns.map((turn, index) => (
+          <TurnView key={turn.id} turn={turn} task={turnTask} active={false} last={index === turns.length - 1} latestWork={false} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} />
+        ))}
+      </VisualHistoryContext.Provider>
+    </ReadOnlyContext.Provider>
+  )
+}
+
+// 导出文件的标题：这一轮提问的第一行
+export function turnTitle(turn: Turn): string {
+  const line = turn.prompt.trim().split('\n')[0]?.trim() ?? ''
+  return (line.length > 60 ? `${line.slice(0, 60)}…` : line) || 'Diffra 对话'
+}
+
 // 远程会话顶上那一行：还有更早的轮次时说上拉或点这里取，拉的时候跟着变高
 function EarlierRow({ earlier, pull }: { earlier: NonNullable<ConversationProps['earlier']>; pull: number }) {
   if (earlier.count === 0) return <p className="text-center text-xs text-muted-foreground" data-testid="load-earlier">已经是最早的一轮</p>
@@ -544,6 +572,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   const canReport = !active && (turn.kind === 'prompt' || turn.kind === 'goal')
   const report = useMemo(() => (showReport && canReport ? turnReport(turn, turnFiles, task.project) : null), [showReport, canReport, turn, turnFiles, task.project])
   const readOnly = useReadOnly()
+  const isStatic = useStatic()
   // 远程任务页只读（作用于本机的按钮都不显示），但对方开放了「可查看和操作」时撤销、重新生成经对方做
   const remote = useRemoteTask()
   const canRegenerate = latestWork && (!readOnly || Boolean(remote?.regenerate))
@@ -557,6 +586,14 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
     navigator.clipboard.writeText(text).then(
       () => showToast('已复制回复'),
       (error: unknown) => console.error('复制失败', error),
+    )
+  }
+  // 这一轮存成单文件 HTML（第 671 步）：同一套组件静态渲染，带主题和图表，不带脚本
+  const exportTurn = () => {
+    const title = turnTitle(turn)
+    renderStaticHtml(<StaticTurns task={task} turns={[turn]} />, title).then(
+      (html) => downloadBlob(new Blob([html], { type: 'text/html' }), `${safeFileName(title)}.html`),
+      (error: unknown) => showToast(`导出失败：${errorMessage(error)}`),
     )
   }
 
@@ -647,7 +684,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
         </CardShell>
       )}
       {/* 只有最后一轮的操作栏常驻，其余轮悬停或键盘聚焦时才出现；用透明度隐藏，不占用也不改变布局 */}
-      {!active && (
+      {!active && !isStatic && (
         <div
           className={cn('flex items-center gap-1 text-muted-foreground transition-opacity', !last && 'opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100')}
           data-testid="turn-actions"
@@ -666,6 +703,9 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
               <FileText className="size-4" />
             </ActionButton>
           )}
+          <ActionButton label="导出这一轮" onClick={exportTurn}>
+            <Download className="size-4" />
+          </ActionButton>
           {canRestore && (
             <>
               <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />
