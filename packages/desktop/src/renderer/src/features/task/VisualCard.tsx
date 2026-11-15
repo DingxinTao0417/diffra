@@ -2,6 +2,7 @@ import { createContext, type CSSProperties, useContext, useEffect, useRef, useSt
 import { ChevronLeft, ChevronRight, Code, Columns2, Download, ExternalLink, History, Image as ImageIcon, Maximize2, Minimize2, Pin, PinOff, Presentation, Sparkles, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
 import { snapshotImage } from '@/lib/images'
@@ -66,6 +67,7 @@ window.diffra={fill:function(text){send({type:'diffra-visual-fill',text:String(t
 window.sendPrompt=window.diffra.fill;
 document.addEventListener('click',function(event){var link=event.target&&event.target.closest&&event.target.closest('a[href]');if(!link)return;event.preventDefault();if(/^https?:/i.test(link.href))send({type:'diffra-visual-link',href:link.href})},true);
 window.open=function(url){if(url&&/^https?:/i.test(String(url)))send({type:'diffra-visual-link',href:String(url)});return null};
+document.addEventListener('keydown',function(event){if(event.key==='Escape')send({type:'diffra-visual-escape'})});
 })()</script>`
 
 export function visualDocument(title: string, code: string, css = themeCss()): string {
@@ -93,6 +95,8 @@ interface FrameProps {
   step?: number | null
   onSteps?(count: number): void
   onLink(href: string): void
+  // 焦点在页面里时按 Esc：键盘事件到不了主界面，由页面转过来
+  onEscape?(): void
   // 高度一阵子没再变（画好了）时报一次，带上这个 iframe；主题变了重新挂载后会再报
   onSettled?(element: HTMLIFrameElement): void
   frameRef?(element: HTMLIFrameElement | null): void
@@ -102,7 +106,7 @@ interface FrameProps {
 
 // 一个沙箱 iframe：模型写的 HTML 在 visual.html 容器页里跑（能联网、能跑脚本，没有同源权限，碰不到应用的接口）。
 // 高度跟着内容走；里面能用的动作只有白名单里的几样
-export function VisualFrame({ title, code, sessionId, fill = false, step = null, onSteps, onLink, onSettled, frameRef, className, label }: FrameProps) {
+export function VisualFrame({ title, code, sessionId, fill = false, step = null, onSteps, onLink, onEscape, onSettled, frameRef, className, label }: FrameProps) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(120)
   // 远程会话里不填本机的输入框、不开链接（会话 id 是对方的）；内容本来就换成了占位
@@ -116,6 +120,8 @@ export function VisualFrame({ title, code, sessionId, fill = false, step = null,
   steps.current = onSteps
   const settled = useRef(onSettled)
   settled.current = onSettled
+  const escape = useRef(onEscape)
+  escape.current = onEscape
   const settleTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -130,6 +136,7 @@ export function VisualFrame({ title, code, sessionId, fill = false, step = null,
         settleTimer.current = window.setTimeout(() => frame.current && settled.current?.(frame.current), SETTLE_MS)
       }
       else if (data?.type === 'diffra-visual-steps' && typeof data.count === 'number') steps.current?.(Math.max(0, Math.floor(data.count)))
+      else if (data?.type === 'diffra-visual-escape') escape.current?.()
       else if (readOnly) return
       else if (data?.type === 'diffra-visual-fill' && typeof data.text === 'string' && data.text.trim()) fillComposer(sessionId, data.text.slice(0, MAX_FILL))
       else if (data?.type === 'diffra-visual-link' && typeof data.href === 'string' && /^https?:\/\//i.test(data.href)) onLink(data.href)
@@ -197,11 +204,17 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
   const image = readOnly || isStatic ? current.snapshot : undefined
   const onSettled = useSnapshot(sessionId, id, !readOnly && !snapshot && index === own && !expanded && !compare && !showCode && !presenting)
 
+  const card = useRef<HTMLDivElement | null>(null)
+  const collapsed = useRef(false)
+  const collapse = () => {
+    collapsed.current = true
+    setExpanded(false)
+  }
+  // 收起后焦点回到对话里的这张卡片（放大前的按钮已经不在了）
   useEffect(() => {
-    if (!expanded) return
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setExpanded(false)
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    if (expanded || !collapsed.current) return
+    collapsed.current = false
+    card.current?.focus({ preventScroll: true })
   }, [expanded])
 
   const saveHtml = () => {
@@ -226,9 +239,11 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
       panel: pinned ? state.panel : 'visuals',
     }))
 
-  return (
+  const body = (
     <div
-      className={cn('flex flex-col gap-1.5', expanded ? 'fixed inset-4 z-50 rounded-xl border bg-background p-3 shadow-overlay' : 'rounded-xl border px-3 py-2.5')}
+      ref={card}
+      tabIndex={-1}
+      className={cn('flex flex-col gap-1.5 outline-none', expanded ? 'min-h-0 flex-1' : 'rounded-xl border px-3 py-2.5')}
       data-testid="visual"
       data-expanded={expanded}
       data-version={index + 1}
@@ -278,7 +293,7 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
         <CardAction label="另存为 PNG" onClick={savePng}>
           <ImageIcon className="size-3.5" />
         </CardAction>
-        <CardAction label={expanded ? '收起' : '放大'} onClick={() => setExpanded(!expanded)}>
+        <CardAction label={expanded ? '收起' : '放大'} onClick={() => (expanded ? collapse() : setExpanded(true))}>
           {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
         </CardAction>
       </div>
@@ -293,7 +308,7 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
             {readOnly && previous.snapshot ? (
               <SnapshotImage title={`${title}（第 ${index} 版）`} snapshot={previous.snapshot} fill={expanded} />
             ) : (
-              <VisualFrame key={previous.id} title={title} code={previous.code} sessionId={sessionId} fill={expanded} onLink={setLink} label={`${title}（第 ${index} 版）`} />
+              <VisualFrame key={previous.id} title={title} code={previous.code} sessionId={sessionId} fill={expanded} onLink={setLink} onEscape={expanded ? collapse : undefined} label={`${title}（第 ${index} 版）`} />
             )}
           </div>
         )}
@@ -320,6 +335,7 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
               sessionId={sessionId}
               fill={expanded}
               onLink={setLink}
+              onEscape={expanded ? collapse : undefined}
               onSettled={onSettled}
               frameRef={(element) => {
                 frame.current = element
@@ -330,6 +346,26 @@ export function VisualCard({ id, title, code, sessionId, snapshot }: { id: strin
       </div>
       {presenting && <VisualPresentation title={title} code={current.code} sessionId={sessionId} onClose={() => setPresenting(false)} />}
     </div>
+  )
+  if (!expanded) return body
+  // 放大用弹窗挂到页面最外层：留在对话里会被对话区裁掉，「收起」那一行落在顶栏下面点不到；弹窗开着时顶栏也不拖动窗口。
+  // 换了位置，里面的页面会重新加载一次
+  return (
+    <Dialog open onOpenChange={(open) => !open && collapse()}>
+      <DialogContent
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className="inset-4 max-h-none w-auto max-w-none translate-none gap-0 overflow-hidden rounded-xl bg-background p-3 sm:max-w-none"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          card.current?.focus()
+        }}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        {body}
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -931,11 +931,13 @@ test('设备连接：可视化在本机画好后截图压成 WebP 记进会话�
     await expect(card.getByRole('button', { name: '演示' })).toHaveCount(0)
     await expect(guest.window.getByTestId('remote-task')).toContainText('第二轮的回答')
     await card.screenshot({ path: 'test-results/remote-visual-snapshot.png' })
-    // 放大：快照铺满，按比例放在顶上；Esc 收起
+    // 放大：在弹窗里铺满，快照按比例放在顶上；Esc 收起，回到对话里
     await card.getByRole('button', { name: '放大' }).click()
-    await expect(card).toHaveAttribute('data-expanded', 'true')
-    await expect(image).toBeVisible()
+    const expanded = guest.window.getByRole('dialog').getByTestId('visual')
+    await expect(expanded).toHaveAttribute('data-expanded', 'true')
+    await expect(expanded.getByTestId('visual-snapshot')).toBeVisible()
     await guest.window.keyboard.press('Escape')
+    await expect(guest.window.getByRole('dialog')).toHaveCount(0)
     await expect(card).toHaveAttribute('data-expanded', 'false')
   } finally {
     await close(devices)

@@ -83,6 +83,18 @@ test('对话里的可视化：脚本能跑、能从网上加载脚本和图片�
     await expect(card).toHaveAttribute('data-expanded', 'true')
     await window.keyboard.press('Escape')
     await expect(card).toHaveAttribute('data-expanded', 'false')
+    // 放大后盖在顶栏、侧栏、输入框上面，「收起」点得到；顶栏这时不拖动窗口（拖动区会吞掉真实鼠标的点击，测试发的点击绕得过去，所以单独查）
+    await card.getByRole('button', { name: '放大' }).click()
+    expect(await window.evaluate("getComputedStyle(document.querySelector('[data-testid=\"title-bar\"]')).getPropertyValue('-webkit-app-region')")).toBe('no-drag')
+    await expect(window.getByRole('dialog')).toHaveCSS('opacity', '1')
+    await window.screenshot({ path: 'test-results/visual-expanded.png' })
+    await card.getByRole('button', { name: '收起' }).click()
+    await expect(card).toHaveAttribute('data-expanded', 'false')
+    // 点过图里面（焦点进了 iframe）再按 Esc 也能收起
+    await card.getByRole('button', { name: '放大' }).click()
+    await frame.locator('#themed').click()
+    await window.keyboard.press('Escape')
+    await expect(card).toHaveAttribute('data-expanded', 'false')
     await card.getByRole('button', { name: '看代码' }).click()
     await expect(card.locator('pre')).toContainText('diffra.fill')
   } finally {
