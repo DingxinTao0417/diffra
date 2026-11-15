@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { brandIcon } from '@/features/extensions/brand-icons'
 import { contentsSummary, ExtensionRow, HookList, initialOf, RowPanel, SectionTitle } from '@/features/extensions/parts'
 import { PluginReview } from '@/features/extensions/PluginReview'
 import { errorMessage } from '@/lib/errors'
@@ -83,6 +84,7 @@ function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView
     <ExtensionRow
       testId="plugin-card"
       initial={initialOf(plugin.name)}
+      brand={brandIcon(plugin.name)}
       name={
         <>
           {plugin.name}

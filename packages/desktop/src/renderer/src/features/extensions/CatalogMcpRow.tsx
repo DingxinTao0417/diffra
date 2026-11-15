@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { errorMessage } from '@/lib/errors'
 import { showToast } from '@/state/store'
+import { brandIcon } from './brand-icons'
 import { ExtensionRow, initialOf, RowPanel } from './parts'
 
 export function openLink(url: string): void {
@@ -74,6 +75,7 @@ export function CatalogMcpRow({
     <ExtensionRow
       testId="catalog-mcp"
       initial={initialOf(entry.name)}
+      brand={brandIcon(entry.id)}
       dark
       name={entry.name}
       badge={entry.publisher}

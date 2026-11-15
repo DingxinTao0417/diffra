@@ -2,10 +2,12 @@ import type { ComponentProps, ReactNode } from 'react'
 import type { PluginHookInfo, PluginInfo } from '@diffra/core/types'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
+import { BrandGlyph, type BrandIconId } from './brand-icons'
 
 // 目录和已安装列表的一行：字母头像、名字和来源、一行说明，右边放操作；展开的内容占满整行
 export function ExtensionRow({
   initial,
+  brand,
   dark = false,
   name,
   badge,
@@ -16,6 +18,7 @@ export function ExtensionRow({
   testId,
 }: {
   initial: string
+  brand?: BrandIconId | null
   dark?: boolean
   name: ReactNode
   badge?: string | null
@@ -32,7 +35,7 @@ export function ExtensionRow({
           aria-hidden
           className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg font-bold', dark ? 'bg-foreground text-background' : 'bg-muted text-foreground')}
         >
-          {initial}
+          {brand ? <BrandGlyph id={brand} /> : initial}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">

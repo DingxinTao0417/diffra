@@ -4,6 +4,7 @@ import type { PluginPrepared } from '../../../../shared/ipc'
 import type { PluginView } from '../../../../shared/settings'
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/lib/errors'
+import { brandIcon } from './brand-icons'
 import { ExtensionRow, initialOf, RowPanel } from './parts'
 import { PluginReview } from './PluginReview'
 
@@ -59,6 +60,7 @@ export function CatalogPluginRow({ entry, installed, onInstalled }: { entry: Cat
     <ExtensionRow
       testId="catalog-plugin"
       initial={initialOf(entry.name)}
+      brand={brandIcon(entry.pluginName)}
       dark={entry.group === 'vendor'}
       name={entry.name}
       badge={entry.publisher}

@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import { openLink } from '@/features/extensions/CatalogMcpRow'
+import { brandIcon } from '@/features/extensions/brand-icons'
 import { ExtensionRow, initialOf, SectionTitle } from '@/features/extensions/parts'
 import { errorMessage } from '@/lib/errors'
 import { McpServerDialog } from './McpServerDialog'
@@ -141,6 +142,7 @@ function McpServerRow({ server, status, loading, prerequisites, onChange, onEdit
     <ExtensionRow
       testId="mcp-server-card"
       initial={initialOf(entry?.name ?? server.name)}
+      brand={entry ? brandIcon(entry.id) : null}
       dark
       name={server.name}
       detail={
