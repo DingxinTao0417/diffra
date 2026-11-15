@@ -177,6 +177,7 @@ export const IPC_CHANNELS = {
   menuPopup: 'menu:popup',
   menuCommand: 'menu:command',
   windowFullScreen: 'window:full-screen',
+  rendererError: 'renderer:error',
   browserBounds: 'browser:bounds',
   browserNavigate: 'browser:navigate',
   browserCommand: 'browser:command',
@@ -602,6 +603,8 @@ export interface DiffraApi {
   // 窗口进出全屏（Mac 全屏时没有红绿灯，顶栏不用再留位置）
   isFullScreen(): Promise<boolean>
   onFullScreenChange(listener: (fullScreen: boolean) => void): () => void
+  // 界面里没接住的错误，记到 logs/renderer.log
+  logRendererError(message: string): void
   // 内置浏览器：面板位置（null 表示不显示）、用户在地址栏打开网页、前进后退刷新、标签页状态
   setBrowserBounds(sessionId: string, rect: BrowserRect | null): void
   browserNavigate(sessionId: string, url: string): Promise<void>
