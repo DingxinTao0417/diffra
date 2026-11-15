@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -333,6 +333,85 @@ test('决策卡：按权重排名，改权重排名跟着变、能恢复；至�
     expect(html).toContain('×3')
     expect(html).not.toContain('选这个')
     expect(html).not.toContain('各项得分')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(downloads, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 690 步：回答里的架构图——悬停突出相连的边和节点；写了路径的节点点了（或回车）在文件面板里打开到那一行；导出的页面里是 SVG
+test('架构图：重点节点的边先突出，悬停换成这个节点的；点节点或回车在文件面板打开那一行，项目里没有的提示；有说明的列在下面；导出里是图', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-depgraph-'))
+  const downloads = mkdtempSync(join(tmpdir(), 'diffra-e2e-depgraph-out-'))
+  mkdirSync(join(project, 'src', 'pages'), { recursive: true })
+  mkdirSync(join(project, 'src', 'auth'))
+  writeFileSync(join(project, 'src', 'pages', 'login.tsx'), 'export function Login() {}\n')
+  writeFileSync(join(project, 'src', 'auth', 'index.ts'), Array.from({ length: 20 }, (_, index) => `export const line${index + 1} = ${index + 1}`).join('\n'))
+  const graph = {
+    title: '登录涉及的模块',
+    focus: 'auth',
+    nodes: [
+      { id: 'ui', label: '登录页', path: 'src/pages/login.tsx' },
+      { id: 'auth', label: 'auth', path: 'src/auth/index.ts:12', note: '校验密码、发令牌' },
+      { id: 'db', label: '用户表', kind: 'database' },
+      { id: 'sms', label: '短信服务', kind: 'external', path: 'src/missing.ts' },
+      'cache',
+    ],
+    edges: [{ from: 'ui', to: 'auth', label: '提交' }, { from: 'auth', to: 'db', label: '读用户' }, ['auth', 'sms'], ['auth', 'cache'], ['ui', 'cache']],
+  }
+  const model = await startScriptedModel([{ text: ['登录这样串起来：', '', '```depgraph', JSON.stringify(graph), '```'].join('\n') }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '登录怎么串的')
+    await waitTaskDone(window)
+    const block = window.getByTestId('rich-depgraph')
+    const node = (id: string) => block.locator(`[data-testid="depgraph-node"][data-id="${id}"]`)
+    await expect(block.getByTestId('depgraph-node')).toHaveCount(5)
+    await expect(block.getByTestId('depgraph-edge')).toHaveCount(5)
+    await expect(block.getByTestId('depgraph-notes')).toContainText('校验密码、发令牌')
+    // 重点节点 auth：和它相连的四条边突出，ui → cache 那条不突出
+    await expect(node('auth')).toHaveAttribute('data-lit', '')
+    await expect(block.locator('[data-testid="depgraph-edge"][data-lit]')).toHaveCount(4)
+    await block.screenshot({ path: 'test-results/depgraph-light.png' })
+
+    // 悬停用户表：只有 auth → 用户表 一条突出，登录页变淡
+    await node('db').hover()
+    await expect(node('db')).toHaveAttribute('data-lit', '')
+    await expect(block.locator('[data-testid="depgraph-edge"][data-lit]')).toHaveCount(1)
+    await expect(node('ui')).toHaveAttribute('opacity', '0.45')
+    await expect(node('db')).not.toHaveAttribute('role', 'button')
+
+    // 点 auth：文件面板打开到第 12 行；登录页用键盘回车打开
+    const panel = window.getByTestId('file-panel')
+    await node('auth').click()
+    await expect(panel.locator('.cm-target-line')).toHaveText('export const line12 = 12')
+    await node('ui').focus()
+    await window.keyboard.press('Enter')
+    await expect(panel).toContainText('export function Login() {}')
+    await window.getByRole('button', { name: '关闭面板' }).click()
+    // 写了路径但项目里没有：提示，不打开
+    await node('sms').click()
+    await expect(window.getByRole('status').filter({ hasText: '项目里没有 src/missing.ts' })).toBeVisible()
+
+    // 导出：是 SVG，五个节点都在
+    await app.evaluate(({ session }, target) => {
+      session.defaultSession.on('will-download', (_event, item) => item.setSavePath(`${target}/${item.getFilename()}`))
+    }, downloads)
+    await window.getByTestId('turn-actions').last().getByRole('button', { name: '导出这一轮' }).click()
+    await window.getByRole('menuitem', { name: 'HTML', exact: true }).click()
+    const file = join(downloads, '登录怎么串的.html')
+    await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
+    const html = readFileSync(file, 'utf8')
+    expect(html).toContain('data-testid="depgraph-svg"')
+    expect(html.match(/data-testid="depgraph-node"/g)).toHaveLength(5)
   } finally {
     await app.close()
     await model.close()

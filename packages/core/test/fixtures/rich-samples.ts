@@ -41,6 +41,21 @@ export const RICH_SAMPLES: Record<RichBlockKind, { valid: unknown; invalid: stri
     },
     invalid: '{"criteria":["性能"],"options":[{"name":"A","scores":{"性能":9}},{"name":"B","scores":{"性能":1}}]}',
   },
+  depgraph: {
+    valid: {
+      title: '登录涉及的模块',
+      focus: 'auth',
+      nodes: [
+        { id: 'ui', label: '登录页', path: 'src/pages/login.tsx' },
+        { id: 'auth', label: 'auth', path: 'src/auth/index.ts:12', note: '校验密码、发令牌' },
+        { id: 'db', label: '用户表', kind: 'database' },
+        { id: 'sms', label: '短信服务', kind: 'external' },
+        'cache',
+      ],
+      edges: [{ from: 'ui', to: 'auth', label: '提交' }, { from: 'auth', to: 'db', label: '读用户' }, ['auth', 'sms'], ['auth', 'cache']],
+    },
+    invalid: '{"nodes":["a"],"edges":[["a","b"]]}',
+  },
   json: { valid: { name: 'diffra', scripts: { build: 'vite build' }, nested: { deep: { target: 'found-me' } } }, invalid: '{ 不是 JSON' },
   log: { valid: ['INFO 服务启动', 'WARN 慢查询 1200ms', 'ERROR 连接被拒绝', '    at connect (src/app.ts:3:5)'].join('\n'), invalid: null },
 }

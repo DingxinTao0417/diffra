@@ -14,6 +14,8 @@ import { TodosBlock } from './TodosBlock'
 
 // 图表用 ECharts，按需加载：回答里第一次出现 ```chart 时才取
 const ChartBlock = lazy(() => import('./ChartBlock'))
+// 架构图用 dagre 排版，也按需加载
+const DepGraphBlock = lazy(() => import('./DepGraphBlock'))
 
 export type RichRenderer<K extends RichBlockKind> = ComponentType<{ data: RichBlockMap[K]; info: FenceInfo }>
 
@@ -34,6 +36,11 @@ const RENDERERS: { [K in RichBlockKind]: RichRenderer<K> } = {
   todos: TodosBlock,
   annotate: AnnotateBlock,
   decision: DecisionBlock,
+  depgraph: ({ data }) => (
+    <Suspense fallback={<BlockSkeleton label="正在画架构图…" />}>
+      <DepGraphBlock data={data} />
+    </Suspense>
+  ),
   json: ({ data, info }) => <JsonTree value={data.value} source={info.code} />,
   log: LogBlock,
 }
@@ -50,6 +57,7 @@ const NAMES: Record<RichBlockKind, string> = {
   todos: '后续事项',
   annotate: '图上标注',
   decision: '决策卡',
+  depgraph: '架构图',
   json: 'JSON',
   log: '日志',
 }

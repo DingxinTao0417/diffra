@@ -7,7 +7,7 @@ const json = (value: unknown) => JSON.stringify(value)
 
 describe('回答里的结构化富块（第 650 步）', () => {
   test('注册表认得的种类', () => {
-    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'annotate', 'decision', 'json', 'log'])
+    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'annotate', 'decision', 'depgraph', 'json', 'log'])
     expect(isRichBlockKind('chart')).toBe(true)
     expect(isRichBlockKind('ts')).toBe(false)
     expect(isRichBlockKind('toString')).toBe(false)
@@ -144,6 +144,34 @@ describe('回答里的结构化富块（第 650 步）', () => {
     expect(errorOf({ criteria: [{ name: '速度', weight: 0 }], options: two({ 速度: 1 }) })).toBe('至少要有一个评判标准的权重大于 0')
     expect(errorOf({ criteria: ['速度', '速度'], options: two({ 速度: 1 }) })).toBe('评判标准「速度」写了两次')
     expect(errorOf({ criteria: ['速度'], options: [{ name: 'A', scores: { 速度: 1 }, recommended: true }, { name: 'B', scores: { 速度: 1 }, recommended: true }] })).toBe('最多推荐一个方案')
+  })
+
+  // 第 690 步
+  test('depgraph：节点只写名字、边写成二元组都行，写了路径的默认是文件；重名、边指向不存在的节点、网址当路径都不认', () => {
+    const result = parseRichBlock('depgraph', json({ nodes: ['a', { id: 'b', path: 'src/b.ts' }, { id: 'c', label: '服务 C', kind: 'service' }], edges: [['a', 'b'], { from: 'b', to: 'c', label: '调用' }] }))
+    expect(result.ok && result.data).toEqual({
+      title: undefined,
+      direction: 'LR',
+      focus: undefined,
+      nodes: [
+        { id: 'a', label: 'a', kind: 'module' },
+        { id: 'b', label: 'b', path: 'src/b.ts', kind: 'file', note: undefined },
+        { id: 'c', label: '服务 C', path: undefined, kind: 'service', note: undefined },
+      ],
+      edges: [
+        { from: 'a', to: 'b', label: undefined },
+        { from: 'b', to: 'c', label: '调用' },
+      ],
+    })
+    const errorOf = (value: unknown) => {
+      const parsed = parseRichBlock('depgraph', json(value))
+      return parsed.ok ? null : parsed.error
+    }
+    expect(errorOf({ nodes: ['a', 'a'] })).toBe('节点「a」写了两次')
+    expect(errorOf({ nodes: ['a'], edges: [['a', 'b']] })).toBe('edges.0：没有叫「b」的节点')
+    expect(errorOf({ nodes: ['a'], focus: 'x' })).toBe('focus：没有叫「x」的节点')
+    expect(errorOf({ nodes: [{ id: 'a', path: 'https://x.test/a.ts' }] })).toBe('节点「a」的 path 要是项目里的路径，不是网址')
+    expect(errorOf({ nodes: Array.from({ length: RICH_LIMITS.graphNodes + 1 }, (_, index) => `n${index}`) })).not.toBeNull()
   })
 
   test('log：认出级别和源码位置，超过上限的行截掉并记下条数', () => {

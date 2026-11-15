@@ -25,6 +25,8 @@ export const RICH_LIMITS = {
   logLines: 5_000,
   annotateMarks: 30,
   decisionCriteria: 8,
+  graphNodes: 60,
+  graphEdges: 150,
   // 字段里的一段文字
   text: 2_000,
 } as const
@@ -393,6 +395,50 @@ function parseDecision(input: unknown): DecisionData {
   return { title: raw.title, question: raw.question, scale, criteria, options }
 }
 
+// ---- depgraph ----
+
+// 架构图（第 690 步）：模块、文件、服务之间谁依赖谁。节点写了项目里的路径（可以带 :行号），点了在文件面板里打开。
+// 节点可以只写名字（id 就是名字），边可以写成 ["a", "b"]
+export type DepGraphKind = 'module' | 'file' | 'service' | 'database' | 'external'
+export type DepGraphData = {
+  title?: string
+  direction: 'LR' | 'TD'
+  focus?: string
+  nodes: Array<{ id: string; label: string; path?: string; kind: DepGraphKind; note?: string }>
+  edges: Array<{ from: string; to: string; label?: string }>
+}
+
+const graphId = z.string().trim().min(1).max(100)
+const depGraphInput = z.object({
+  v: version,
+  title: label.optional(),
+  direction: z.enum(['LR', 'TD']).optional(),
+  focus: graphId.optional(),
+  nodes: z
+    .array(z.union([graphId, z.object({ id: graphId, label: label.optional(), path: z.string().trim().min(1).max(500).optional(), kind: z.enum(['module', 'file', 'service', 'database', 'external']).optional(), note: text.optional() })]))
+    .min(1)
+    .max(RICH_LIMITS.graphNodes),
+  edges: z.array(z.union([z.tuple([graphId, graphId]), z.object({ from: graphId, to: graphId, label: z.string().trim().max(60).optional() })])).max(RICH_LIMITS.graphEdges).optional(),
+})
+
+function parseDepGraph(input: unknown): DepGraphData {
+  const raw = depGraphInput.parse(input)
+  const nodes = raw.nodes.map((node) => (typeof node === 'string' ? { id: node, label: node, kind: 'module' as const } : { id: node.id, label: node.label ?? node.id, path: node.path, kind: node.kind ?? (node.path ? 'file' : 'module'), note: node.note }))
+  const ids = new Set<string>()
+  for (const node of nodes) {
+    if (ids.has(node.id)) throw new Error(`节点「${node.id}」写了两次`)
+    if (node.path && /^[a-z]+:\/\//i.test(node.path)) throw new Error(`节点「${node.id}」的 path 要是项目里的路径，不是网址`)
+    ids.add(node.id)
+  }
+  const edges = (raw.edges ?? []).map((edge, index) => {
+    const [from, to, edgeLabel] = Array.isArray(edge) ? [edge[0], edge[1], undefined] : [edge.from, edge.to, edge.label || undefined]
+    for (const end of [from, to]) if (!ids.has(end)) throw new Error(`edges.${index}：没有叫「${end}」的节点`)
+    return { from, to, label: edgeLabel }
+  })
+  if (raw.focus && !ids.has(raw.focus)) throw new Error(`focus：没有叫「${raw.focus}」的节点`)
+  return { title: raw.title, direction: raw.direction ?? 'LR', focus: raw.focus, nodes, edges }
+}
+
 // ---- 注册表 ----
 
 export interface RichBlockMap {
@@ -407,6 +453,7 @@ export interface RichBlockMap {
   todos: TodosData
   annotate: AnnotateData
   decision: DecisionData
+  depgraph: DepGraphData
   json: { value: unknown }
   log: LogData
 }
@@ -426,6 +473,7 @@ const REGISTRY: { [K in RichBlockKind]: { format: 'json' | 'text'; parse(input: 
   todos: { format: 'json', parse: parseTodos },
   annotate: { format: 'json', parse: parseAnnotate },
   decision: { format: 'json', parse: parseDecision },
+  depgraph: { format: 'json', parse: parseDepGraph },
   json: { format: 'json', parse: (value) => ({ value }) },
   log: { format: 'text', parse: (value) => parseLog(String(value)) },
 }
