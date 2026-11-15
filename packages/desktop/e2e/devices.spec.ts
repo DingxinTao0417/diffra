@@ -865,7 +865,7 @@ test('设备连接：可视化在本机画好后截图压成 WebP 记进会话�
     const image = card.getByTestId('visual-snapshot')
     await expect(image).toBeVisible({ timeout: 20_000 })
     await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/)
-    expect(await image.evaluate<number>((element) => (element as unknown as { naturalWidth: number }).naturalWidth)).toBeGreaterThan(100)
+    expect(await image.evaluate((element) => (element as unknown as { naturalWidth: number }).naturalWidth)).toBeGreaterThan(100)
     await expect(card.locator('iframe')).toHaveCount(0)
     await expect(card.getByRole('button', { name: '演示' })).toHaveCount(0)
     await expect(guest.window.getByTestId('remote-task')).toContainText('第二轮的回答')
