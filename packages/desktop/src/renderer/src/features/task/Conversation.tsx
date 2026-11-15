@@ -659,7 +659,7 @@ function PermissionPending({ toolCall }: { toolCall: PermissionRequestEvent['too
     <div data-testid="permission-pending">
       <DisclosureRow className="text-foreground">
         <span className="flex size-3.5 shrink-0 items-center justify-center">
-          <span className="size-2 rounded-full border-2 border-warning" />
+          <span className="size-2 rounded-full border-2 border-foreground" />
         </span>
         <span className="shrink-0 text-muted-foreground">等待确认</span>
         {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
@@ -786,7 +786,6 @@ function StatusIcon({ status, tone = 'muted', className }: { status: string; ton
   // success-color-allow: 只有 CheckRow 传 tone="success"，检查命令通过才走到绿色
   if (status === 'completed') return <Check className={cn('size-3.5 shrink-0', tone === 'success' ? 'text-success' : 'text-muted-foreground', className)} strokeWidth={2.6} />
   if (status === 'failed') return <X className={cn('size-3.5 shrink-0 text-destructive', className)} strokeWidth={2.6} />
-  if (status === 'command-failed') return <CircleAlert className={cn('size-3.5 shrink-0 text-warning', className)} />
   return <LoaderCircle className={cn('size-3.5 shrink-0 animate-spin text-muted-foreground', className)} />
 }
 
@@ -831,7 +830,7 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
     <div className="flex flex-col gap-1.5" data-testid="tool-group" data-item-ids={items.map((item) => item.id).join(' ')}>
       <div className="flex items-center gap-2">
         <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="text-muted-foreground hover:text-foreground">
-          <StatusIcon status={running || live ? 'in_progress' : failed > 0 ? 'failed' : commandsFailed > 0 ? 'command-failed' : 'completed'} />
+          <StatusIcon status={running || live ? 'in_progress' : failed > 0 ? 'failed' : 'completed'} />
           <span className="shrink-0">
             {tools.length > 0 ? `执行工具 ${tools.length} 次` : '思考'}
             {failed > 0 ? ` · ${failed} 次失败` : ''}
@@ -870,7 +869,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)} data-item-id={item.id} tabIndex={commandFailed && !output ? -1 : undefined}>
       <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground">
-        {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={commandFailed ? 'command-failed' : item.status} />}
+        {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={item.status} />}
         <span className="shrink-0 text-muted-foreground">{action}</span>
         {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}

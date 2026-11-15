@@ -316,7 +316,7 @@ function StatusLabel({ status }: { status: Verdict }) {
     <span
       className={cn(
         'flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground',
-        status.tone === 'confirm' && 'text-warning',
+        status.tone === 'confirm' && 'text-foreground',
         (status.tone === 'error' || status.tone === 'failed') && 'text-destructive',
       )}
       title={status.reason ?? undefined}
@@ -337,7 +337,7 @@ function StatusIndicator({ tone }: { tone: VerdictTone }) {
   if (tone === 'unverified' || tone === 'unfinished') return <CircleAlert className="size-3 text-warning" />
   if (tone === 'blocked') return <CirclePause className="size-3 text-warning" />
   const dot = {
-    confirm: 'size-2 border-2 border-warning',
+    confirm: 'size-2 border-2 border-foreground',
     error: 'size-2 bg-destructive',
     failed: 'size-2 bg-destructive',
     waiting: 'size-2 border-2 border-muted-foreground/60',

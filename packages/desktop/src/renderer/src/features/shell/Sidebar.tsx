@@ -404,7 +404,7 @@ function TaskStatusMarker({ status: { label, tone } }: { status: TaskStatus }) {
     tone === 'unfinished' || tone === 'blocked'
       ? null
       : {
-          confirm: 'size-2 border-2 border-warning',
+          confirm: 'size-2 border-2 border-foreground',
           error: 'size-2 bg-destructive',
           failed: 'size-2 bg-destructive',
           unread: 'size-1.5 bg-foreground',

@@ -48,13 +48,13 @@ export function PermissionCard({ request, onRespond }: PermissionCardProps) {
 
   return (
     <div
-      className="space-y-3 rounded-xl border border-warning/40 bg-warning-soft p-4 text-sm outline-none dark:border-warning/30"
+      className="space-y-3 rounded-xl border bg-card p-4 text-sm outline-none"
       data-testid="permission-card"
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
       <div className="flex items-center gap-2 font-bold">
-        {question ? <CircleHelp className="size-4 text-warning" /> : <ShieldAlert className="size-4 text-warning" />}
+        {question ? <CircleHelp className="size-4 text-muted-foreground" /> : <ShieldAlert className="size-4 text-muted-foreground" />}
         {question ? '智能体想先问你一下' : deepScanAsk ? request.toolCall.title : titleOf(request.toolCall.kind, external, request.toolCall.title ?? '')}
         {agent && (
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground" data-testid="permission-agent">
