@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, Download, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, Download, History, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -31,6 +31,7 @@ import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
 import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
+import { TurnReplay } from './TurnReplay'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -567,7 +568,11 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   const [comparing, setComparing] = useState(false)
   const [confirmingUse, setConfirmingUse] = useState(false)
   const viewed = viewing !== null ? versions[viewing]?.turn : undefined
-  const items = viewed?.items ?? turn.items
+  // 时间轴回放（第 681 步）：显示到第几步，null 是没在回放
+  const [replay, setReplay] = useState<number | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const shownItems = viewed?.items ?? turn.items
+  const items = useMemo(() => (replay === null ? shownItems : shownItems.slice(0, replay)), [shownItems, replay])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? items.filter((item) => item.id !== pendingToolId) : items), [items, pendingToolId])
@@ -624,10 +629,25 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
         switch (block.type) {
           case 'item': {
             const view = <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} streaming={active && index === blocks.length - 1} />
-            if (block.item.kind !== 'user' || versions.length === 0 || isStatic || active) return view
+            if (block.item.kind !== 'user' || isStatic || active || (versions.length === 0 && replay === null)) return view
+            const replayBar = replay !== null && (
+              <TurnReplay
+                items={shownItems}
+                step={replay}
+                onStep={setReplay}
+                playing={playing}
+                onPlaying={setPlaying}
+                onClose={() => {
+                  setPlaying(false)
+                  setReplay(null)
+                }}
+              />
+            )
+            if (versions.length === 0) return <Fragment key={block.item.id}>{view}{replayBar}</Fragment>
             return (
               <Fragment key={block.item.id}>
                 {view}
+                {replayBar}
                 <TurnVersions
                   versions={versions}
                   current={turn}
@@ -727,7 +747,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
         </CardShell>
       )}
       {/* 只有最后一轮的操作栏常驻，其余轮悬停或键盘聚焦时才出现；用透明度隐藏，不占用也不改变布局 */}
-      {!active && !isStatic && viewing === null && !comparing && (
+      {!active && !isStatic && viewing === null && !comparing && replay === null && (
         <div
           className={cn('flex items-center gap-1 text-muted-foreground transition-opacity', !last && 'opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100')}
           data-testid="turn-actions"
@@ -736,6 +756,11 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
             <Copy className="size-4" />
           </ActionButton>
           <SpeakButton id={turn.id} text={answerText} />
+          {turn.items.length > 2 && (
+            <ActionButton label="回放这一轮" onClick={() => setReplay(1)}>
+              <History className="size-4" />
+            </ActionButton>
+          )}
           {/* 出错卡片里已经有「重试」，同一个动作不再放第二个按钮 */}
           {canRegenerate && !turn.error && (
             <ActionButton label="重新生成" disabled={task.running} onClick={onRegenerate}>

@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { startScriptedModel } from './scripted-model'
+import { exec, read, startScriptedModel } from './scripted-model'
 
 const section = (name: string) => `${name}这一节讲了很多细节，要一步步看。`.repeat(18)
 const LONG = ['# 总览', section('总览'), '## 安装', section('安装'), '## 配置', section('配置'), '### 环境变量', section('环境变量'), '## 部署', section('部署'), '```md', '## 代码里的标题不算', '```'].join('\n\n')
@@ -120,6 +120,55 @@ test('朗读：读回答的文字，代码和表格线不念；读完按钮回�
     await actions.getByRole('button', { name: '停止朗读' }).click()
     await expect(actions.getByRole('button', { name: '朗读', exact: true })).toBeVisible()
     expect(await window.evaluate<number>('window.__cancelled')).toBeGreaterThan(0)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 681 步：时间轴回放
+test('回放这一轮：拖动滑块一步步看，对话里只显示到那一步；播放会走到最后停下；退出后恢复', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-replay-'))
+  writeFileSync(join(project, 'a.txt'), 'hello\n')
+  const model = await startScriptedModel([{ toolCalls: [read('a.txt')] }, { toolCalls: [exec('echo hi')] }, { text: '都看完了' }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '看看文件')
+    await waitTaskDone(window)
+    const turn = window.getByTestId('turn').last()
+    await turn.getByTestId('turn-actions').getByRole('button', { name: '回放这一轮' }).click()
+    const replay = turn.getByTestId('turn-replay')
+    const label = replay.getByTestId('turn-replay-step')
+    await expect(label).toHaveText('第 1 步：提问')
+    await expect(turn.getByTestId('agent-message')).toHaveCount(0)
+    await expect(turn.getByTestId('turn-actions')).toHaveCount(0)
+
+    const slider = replay.getByTestId('turn-replay-slider')
+    await slider.focus()
+    await window.keyboard.press('ArrowRight')
+    await expect(label).toContainText('第 2 步：')
+    await expect(label).toContainText('a.txt')
+    await window.keyboard.press('End')
+    await expect(label).toContainText('回答：都看完了')
+    await expect(turn.getByTestId('agent-message')).toContainText('都看完了')
+    await replay.screenshot({ path: 'test-results/turn-replay.png' })
+
+    // 在最后点播放：从头走一遍，到最后停下
+    await replay.getByRole('button', { name: '播放' }).click()
+    await expect(label).toHaveText('第 1 步：提问')
+    await expect(label).toContainText('回答：都看完了', { timeout: 10_000 })
+    await expect(replay.getByRole('button', { name: '播放' })).toBeVisible()
+
+    await replay.getByRole('button', { name: '退出回放' }).click()
+    await expect(replay).toHaveCount(0)
+    await expect(turn.getByTestId('turn-actions')).toHaveCount(1)
   } finally {
     await app.close()
     await model.close()
