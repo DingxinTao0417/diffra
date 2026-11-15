@@ -1,7 +1,7 @@
 import { type ReactNode, type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
 import type { ProjectState } from '../../../../shared/ipc'
-import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LayoutDashboard, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -28,6 +28,7 @@ import { CacheUsage, ContextUsage } from './ContextUsage'
 import { Conversation } from './Conversation'
 import { BranchMenu } from './BranchMenu'
 import { FilePanel } from './FilePanel'
+import { VisualsPanel } from './VisualsPanel'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
 import { StepsBar } from './StepsBar'
 import { ReadOnlyContext } from './read-only'
@@ -90,6 +91,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
       { id: 'deep-scan-project', label: '深度扫描 · 整个项目', description: '只读地扫描整个项目，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('project') },
     ] : []),
   ]
+  const pinnedCount = useAppState((state) => state.pinnedVisuals.filter((item) => item.sessionId === task.sessionId).length)
   const togglePanel = (target: SidePanel) => store.set((state) => ({ ...state, panel: state.panel === target ? null : target }))
 
   // 远程任务经对方做（对方开放了「可查看和操作」才有这些）
@@ -155,7 +157,8 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
         {/* 右侧面板互斥，做成一组，设计面板只有设计任务有；终端也在右侧栏（第 533 步），远程任务只有「完全控制」时有。远程任务没有浏览器和设计 */}
         <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5">
           {PANEL_BUTTONS.filter(
-            (item) => (item.panel !== 'design' || task.design) && !(remote && (item.panel === 'browser' || item.panel === 'design')) && !(item.panel === 'terminal' && remote && !remote.terminal),
+            // 可视化白板只在这个任务固定了可视化（或者白板正开着）时有按钮
+            (item) => (item.panel !== 'design' || task.design) && !(remote && (item.panel === 'browser' || item.panel === 'design')) && !(item.panel === 'terminal' && remote && !remote.terminal) && (item.panel !== 'visuals' || pinnedCount > 0 || panel === 'visuals'),
           ).map((item) => (
             <PanelButton
               key={item.panel}
@@ -294,6 +297,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
         {panel === 'design' && !remote && <DesignPanel sessionId={task.sessionId} project={task.project} noProject={task.noProject} />}
         {panel === 'terminal' && (remote ? remote.terminal : <TerminalPanel cwd={task.project} />)}
         {panel === 'file' && !remote && <FilePanel sessionId={task.sessionId} changeVersion={task.changeVersion} />}
+        {panel === 'visuals' && <VisualsPanel sessionId={task.sessionId} />}
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
@@ -355,6 +359,7 @@ const PANEL_BUTTONS = [
   { panel: 'browser', label: '浏览器', icon: Globe },
   { panel: 'review', label: '审阅改动', icon: FileDiff },
   { panel: 'monitor', label: '任务监控', icon: PanelRight },
+  { panel: 'visuals', label: '可视化白板', icon: LayoutDashboard },
 ] as const
 
 function PanelButton({ label, shortcut, active, onClick, children }: { label: string; shortcut?: string; active: boolean; onClick(): void; children: React.ReactNode }) {

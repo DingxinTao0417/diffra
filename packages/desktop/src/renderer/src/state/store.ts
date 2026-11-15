@@ -30,7 +30,7 @@ export type Route =
 export type ArchitectureTab = 'overview' | 'diagram' | 'dependencies' | 'flows' | 'hotspots' | 'target'
 export type DependencySection = 'graph' | 'matrix' | 'cycles' | 'externals'
 
-export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | 'terminal' | 'file' | null
+export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | 'terminal' | 'file' | 'visuals' | null
 
 // 一条消息怎么发：plan 先出计划；goal 目标模式，没达成就自动接着做；skills 这一轮带上的 Skill 名字
 export interface MessageOptions {
@@ -84,6 +84,14 @@ export interface TerminalTab {
   devServer?: { sessionId: string; command: string; url: string | null }
 }
 
+export interface PinnedVisual {
+  sessionId: string
+  // 那张可视化卡片（工具调用）的 id；同一张卡片切到别的版本时固定的是当时看的那一版
+  id: string
+  title: string
+  code: string
+}
+
 export interface AppState {
   route: Route
   // 从设置页返回时回到哪里
@@ -126,6 +134,8 @@ export interface AppState {
   reviewFile: string | null
   // 右侧栏文件预览看的文件（回答里点了这个任务没改过的文件，第 536 步）：项目、相对项目的路径、要定位的行
   filePreview: { project: string; path: string; line: number | null } | null
+  // 固定到可视化白板的可视化（第 668 步），按任务分；只在内存里，退出应用就没了
+  pinnedVisuals: PinnedVisual[]
   toast: { id: number; text: string } | null
   // 待办：启动时读一次，之后改了整份存回去；读到之前为 null
   todos: Todo[] | null
@@ -162,6 +172,7 @@ const initialState: AppState = {
   processes: {},
   reviewFile: null,
   filePreview: null,
+  pinnedVisuals: [],
   toast: null,
   todos: null,
   quickTodoOpen: false,

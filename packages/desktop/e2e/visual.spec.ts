@@ -175,3 +175,72 @@ test('可视化的预设和工具箱：对比和流程图按模板画，图表�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+// 第 668–669 步：同名可视化的版本切换和对比、从某一版接着改、固定到白板、演示模式逐步出现
+test('可视化的版本、白板和演示：同名的能切版本、和上一版对比、从旧版接着改；固定到白板并排看；演示时一步步出现', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-visual-versions-'))
+  const second = ['<div id="v">第二版</div>', '<p data-step="1">第一步</p>', '<p data-step="2">第二步</p>', '<p data-step="3">第三步</p>'].join('\n')
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'show_visual', input: { title: '首页布局', code: '<div id="v">第一版</div>' } }] },
+    { toolCalls: [{ name: 'show_visual', input: { title: '首页布局', code: second } }] },
+    { text: '改了一版' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '画两版布局')
+    await waitTaskDone(window)
+    const card = window.getByTestId('visual').nth(1)
+    const frame = (index = 0) => card.getByTestId('visual-frames').locator('iframe').nth(index).contentFrame()
+
+    // 第二张卡片是第 2/2 版；切到上一版看第一版，再切回来
+    await expect(card.getByTestId('visual-versions')).toContainText('第 2/2 版')
+    await expect(frame().locator('#v')).toHaveText('第二版')
+    await card.getByRole('button', { name: '上一版', exact: true }).click()
+    await expect(card).toHaveAttribute('data-version', '1')
+    await expect(frame().locator('#v')).toHaveText('第一版')
+    // 在旧版上「从这一版接着改」：填进输入框
+    await card.getByRole('button', { name: '从这一版接着改' }).click()
+    await expect(taskInput(window)).toHaveValue('回到可视化「首页布局」的第 1 版，在它的基础上接着改：')
+    await taskInput(window).fill('')
+    await card.getByRole('button', { name: '下一版', exact: true }).click()
+    // 和上一版并排对比
+    await card.getByRole('button', { name: '和上一版对比' }).click()
+    await expect(card.getByTestId('visual-frames').locator('iframe')).toHaveCount(2)
+    await expect(frame(0).locator('#v')).toHaveText('第一版')
+    await expect(frame(1).locator('#v')).toHaveText('第二版')
+    await card.getByRole('button', { name: '不对比' }).click()
+
+    // 固定到白板：右侧栏打开，里面是这一版；取下后白板空了
+    await card.getByRole('button', { name: '固定到白板' }).click()
+    const board = window.getByTestId('visuals-panel')
+    await expect(board.getByTestId('pinned-visual')).toHaveCount(1)
+    await expect(board.getByTestId('pinned-visual').locator('iframe').contentFrame().locator('#v')).toHaveText('第二版')
+    await board.screenshot({ path: 'test-results/visual-board.png' })
+    await board.getByRole('button', { name: '从白板取下' }).click()
+    await expect(board).toContainText('还没有固定的可视化')
+    await window.getByRole('button', { name: '关闭面板' }).click()
+
+    // 演示：铺满窗口，第一步之后的先藏着；→ 一步步出现，Esc 结束
+    await card.getByRole('button', { name: '演示' }).click()
+    const presentation = window.getByTestId('visual-presentation')
+    const stage = presentation.locator('iframe').contentFrame()
+    await expect(presentation.getByTestId('visual-presentation-step')).toHaveText('1/3')
+    await expect(stage.locator('[data-step="2"]')).toHaveClass(/dk-hidden/)
+    await window.keyboard.press('ArrowRight')
+    await expect(presentation.getByTestId('visual-presentation-step')).toHaveText('2/3')
+    await expect(stage.locator('[data-step="2"]')).not.toHaveClass(/dk-hidden/)
+    await expect(stage.locator('[data-step="3"]')).toHaveClass(/dk-hidden/)
+    await window.keyboard.press('Escape')
+    await expect(presentation).toHaveCount(0)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

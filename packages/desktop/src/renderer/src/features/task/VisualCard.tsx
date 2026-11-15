@@ -1,5 +1,5 @@
-import { useContext, useEffect, useRef, useState } from 'react'
-import { Code, Download, ExternalLink, Image as ImageIcon, Maximize2, Minimize2, Sparkles, X } from 'lucide-react'
+import { createContext, type CSSProperties, useContext, useEffect, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, Code, Columns2, Download, ExternalLink, History, Image as ImageIcon, Maximize2, Minimize2, Pin, PinOff, Presentation, Sparkles, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -10,7 +10,7 @@ import { copyText } from './rich/BlockShell'
 import { useReadOnly } from './read-only'
 import { useThemeKey } from './rich/theme'
 import visualKit from './visual-kit.js?raw'
-import { showToast, store } from '@/state/store'
+import { showToast, store, useAppState } from '@/state/store'
 
 // 主题令牌：按应用当前的深浅色和配色取值，给模型写的代码用（名字在 show_visual 的说明里）
 const TOKENS: Array<[string, string]> = [
@@ -68,14 +68,33 @@ export function visualDocument(title: string, code: string, css = themeCss()): s
 
 const MAX_COPY = 100_000
 
-// 对话里的可视化：模型写的 HTML 在沙箱 iframe 里的容器页跑（能联网、能跑脚本，没有同源权限，碰不到应用的接口）。
-// 高度跟着内容走；可以放大、另存为 HTML 或 PNG、看代码；里面的按钮能把文字填进输入框，链接要先确认
-export function VisualCard({ title, code, sessionId }: { title: string; code: string; sessionId: string }) {
-  const frame = useRef<HTMLIFrameElement>(null)
+// 同一个任务里同名的可视化按出现顺序排成几版（第 668 步）：Conversation 提供，卡片据此切版本、对比上一版
+export interface VisualVersion {
+  id: string
+  code: string
+}
+export const VisualHistoryContext = createContext<ReadonlyMap<string, VisualVersion[]>>(new Map())
+
+interface FrameProps {
+  title: string
+  code: string
+  sessionId: string
+  // 放大、白板、演示时铺满容器，不按内容定高
+  fill?: boolean
+  // 演示模式现在显示到第几步（data-step），null 是全部显示
+  step?: number | null
+  onSteps?(count: number): void
+  onLink(href: string): void
+  frameRef?(element: HTMLIFrameElement | null): void
+  className?: string
+  label?: string
+}
+
+// 一个沙箱 iframe：模型写的 HTML 在 visual.html 容器页里跑（能联网、能跑脚本，没有同源权限，碰不到应用的接口）。
+// 高度跟着内容走；里面能用的动作只有白名单里的几样
+export function VisualFrame({ title, code, sessionId, fill = false, step = null, onSteps, onLink, frameRef, className, label }: FrameProps) {
+  const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(120)
-  const [expanded, setExpanded] = useState(false)
-  const [showCode, setShowCode] = useState(false)
-  const [link, setLink] = useState<string | null>(null)
   // 远程会话里不填本机的输入框、不开链接（会话 id 是对方的）；内容本来就换成了占位
   const readOnly = useReadOnly()
   // 本机任务才有：diffra.openFile 在这个项目里找文件
@@ -83,19 +102,20 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
   // 真正生效的主题（深浅色、配色、字号）变了才重新渲染一次，令牌跟着换。以前看设置里的 appearance 对象：
   // 跟随系统时系统切深色它不变，可视化不换色；存别的设置（开关侧栏会存布局）时它换了个对象，可视化无故重载、里面的状态丢掉（第 666 步）
   const theme = useThemeKey()
-  const [version, setVersion] = useState(0)
-  useEffect(() => setVersion((current) => current + 1), [theme])
+  const steps = useRef(onSteps)
+  steps.current = onSteps
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const target = frame.current?.contentWindow
       if (!target || event.source !== target) return
-      const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown; path?: unknown; line?: unknown } | null
+      const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown; path?: unknown; line?: unknown; count?: unknown } | null
       if (data?.type === 'diffra-visual-ready') target.postMessage({ type: 'diffra-visual', html: visualDocument(title, code) }, '*')
       else if (data?.type === 'diffra-visual-height' && typeof data.height === 'number') setHeight(Math.min(Math.max(Math.ceil(data.height), 40), MAX_HEIGHT))
+      else if (data?.type === 'diffra-visual-steps' && typeof data.count === 'number') steps.current?.(Math.max(0, Math.floor(data.count)))
       else if (readOnly) return
       else if (data?.type === 'diffra-visual-fill' && typeof data.text === 'string' && data.text.trim()) fillComposer(sessionId, data.text.slice(0, MAX_FILL))
-      else if (data?.type === 'diffra-visual-link' && typeof data.href === 'string' && /^https?:\/\//i.test(data.href)) setLink(data.href)
+      else if (data?.type === 'diffra-visual-link' && typeof data.href === 'string' && /^https?:\/\//i.test(data.href)) onLink(data.href)
       else if (data?.type === 'diffra-visual-copy' && typeof data.text === 'string') copyText(data.text.slice(0, MAX_COPY), '已复制')
       else if (data?.type === 'diffra-visual-open-file' && typeof data.path === 'string' && answer) {
         // 只开项目里的文件：主进程查过在项目目录里才算
@@ -108,7 +128,46 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [title, code, sessionId, readOnly, answer])
+  }, [title, code, sessionId, readOnly, answer, onLink])
+
+  // 演示模式：告诉页面显示到第几步
+  useEffect(() => {
+    frame.current?.contentWindow?.postMessage({ type: 'diffra-visual-step', step }, '*')
+  }, [step])
+
+  return (
+    <iframe
+      key={theme}
+      ref={(element) => {
+        frame.current = element
+        frameRef?.(element)
+      }}
+      title={label ?? title}
+      // 没有 allow-same-origin：页面是不透明来源，拿不到主界面的 DOM、存储和 window.diffra
+      sandbox="allow-scripts allow-modals"
+      src={new URL('./visual.html', window.location.href).toString()}
+      className={cn('w-full border-0 bg-transparent', fill && 'min-h-0 flex-1', className)}
+      style={fill ? undefined : ({ height } satisfies CSSProperties)}
+    />
+  )
+}
+
+// 对话里的可视化卡片：可以放大、演示、另存为 HTML 或 PNG、看代码、固定到白板；同名的有几版时能切换、和上一版对比、从某一版接着改。
+// 里面的按钮能把文字填进输入框，链接要先确认
+export function VisualCard({ id, title, code, sessionId }: { id: string; title: string; code: string; sessionId: string }) {
+  const frame = useRef<HTMLIFrameElement | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [showCode, setShowCode] = useState(false)
+  const [link, setLink] = useState<string | null>(null)
+  const [compare, setCompare] = useState(false)
+  const [presenting, setPresenting] = useState(false)
+  const readOnly = useReadOnly()
+  const versions = useContext(VisualHistoryContext).get(title) ?? [{ id, code }]
+  const own = Math.max(0, versions.findIndex((version) => version.id === id))
+  const [index, setIndex] = useState(own)
+  const current = versions[Math.min(index, versions.length - 1)] ?? { id, code }
+  const previous = index > 0 ? versions[index - 1] : null
+  const pinned = useAppState((state) => state.pinnedVisuals.some((item) => item.sessionId === sessionId && item.id === id))
 
   useEffect(() => {
     if (!expanded) return
@@ -118,7 +177,7 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
   }, [expanded])
 
   const saveHtml = () => {
-    const url = URL.createObjectURL(new Blob([visualDocument(title, code)], { type: 'text/html' }))
+    const url = URL.createObjectURL(new Blob([visualDocument(title, current.code)], { type: 'text/html' }))
     const anchor = document.createElement('a')
     anchor.href = url
     anchor.download = `${title.replace(/[\\/:*?"<>|]/g, '_')}.html`
@@ -132,28 +191,57 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
       .saveVisualPng({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }, title)
       .catch((error: unknown) => showToast(`保存图片失败：${errorMessage(error)}`))
   }
-  const openLink = (where: 'browser' | 'system') => {
-    if (!link) return
-    if (where === 'system') window.diffra.openExternal(link).catch((error: unknown) => showToast(errorMessage(error)))
-    else {
-      store.set((state) => ({ ...state, panel: 'browser' }))
-      window.diffra.browserNavigate(sessionId, link).catch((error: unknown) => showToast(errorMessage(error)))
-    }
-    setLink(null)
-  }
+  const togglePin = () =>
+    store.set((state) => ({
+      ...state,
+      pinnedVisuals: pinned ? state.pinnedVisuals.filter((item) => !(item.sessionId === sessionId && item.id === id)) : [...state.pinnedVisuals, { sessionId, id, title, code: current.code }],
+      panel: pinned ? state.panel : 'visuals',
+    }))
 
   return (
     <div
       className={cn('flex flex-col gap-1.5', expanded ? 'fixed inset-4 z-50 rounded-xl border bg-background p-3 shadow-overlay' : 'rounded-xl border px-3 py-2.5')}
       data-testid="visual"
       data-expanded={expanded}
+      data-version={index + 1}
     >
       <div className="flex items-center gap-2 text-sm">
         <Sparkles className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-bold">{title}</span>
+        {versions.length > 1 && (
+          <span className="flex shrink-0 items-center text-xs text-muted-foreground" data-testid="visual-versions">
+            <CardAction label="上一版" disabled={index === 0} onClick={() => setIndex(index - 1)}>
+              <ChevronLeft className="size-3.5" />
+            </CardAction>
+            <span className="tabular-nums">
+              第 {index + 1}/{versions.length} 版
+            </span>
+            <CardAction label="下一版" disabled={index === versions.length - 1} onClick={() => setIndex(index + 1)}>
+              <ChevronRight className="size-3.5" />
+            </CardAction>
+            {previous && (
+              <CardAction label={compare ? '不对比' : '和上一版对比'} pressed={compare} onClick={() => setCompare(!compare)}>
+                <Columns2 className="size-3.5" />
+              </CardAction>
+            )}
+            {!readOnly && index !== versions.length - 1 && (
+              <CardAction label="从这一版接着改" onClick={() => fillComposer(sessionId, `回到可视化「${title}」的第 ${index + 1} 版，在它的基础上接着改：`)}>
+                <History className="size-3.5" />
+              </CardAction>
+            )}
+          </span>
+        )}
         <CardAction label={showCode ? '看效果' : '看代码'} onClick={() => setShowCode(!showCode)}>
           <Code className="size-3.5" />
         </CardAction>
+        <CardAction label="演示" onClick={() => setPresenting(true)}>
+          <Presentation className="size-3.5" />
+        </CardAction>
+        {!readOnly && (
+          <CardAction label={pinned ? '从白板取下' : '固定到白板'} pressed={pinned} onClick={togglePin}>
+            {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+          </CardAction>
+        )}
         <CardAction label="另存为 HTML" onClick={saveHtml}>
           <Download className="size-3.5" />
         </CardAction>
@@ -164,45 +252,119 @@ export function VisualCard({ title, code, sessionId }: { title: string; code: st
           {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
         </CardAction>
       </div>
-      {link && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs" data-testid="visual-link">
-          <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate" title={link}>
-            打开 {link}？
-          </span>
-          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openLink('browser')}>
-            内置浏览器
-          </Button>
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => openLink('system')}>
-            系统浏览器
-          </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="不打开" className="size-6" onClick={() => setLink(null)}>
-            <X className="size-3.5" />
-          </Button>
-        </div>
-      )}
+      {link && <LinkConfirm link={link} sessionId={sessionId} onDone={() => setLink(null)} />}
       {showCode && (
-        <pre className={cn('overflow-auto rounded-md bg-muted/50 p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap', expanded ? 'min-h-0 flex-1' : 'max-h-96')}>{code}</pre>
+        <pre className={cn('overflow-auto rounded-md bg-muted/50 p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap', expanded ? 'min-h-0 flex-1' : 'max-h-96')}>{current.code}</pre>
       )}
-      <iframe
-        key={version}
-        ref={frame}
-        title={title}
-        // 没有 allow-same-origin：页面是不透明来源，拿不到主界面的 DOM、存储和 window.diffra
-        sandbox="allow-scripts allow-modals"
-        src={new URL('./visual.html', window.location.href).toString()}
-        className={cn('w-full border-0 bg-transparent', showCode && 'hidden', expanded && 'min-h-0 flex-1')}
-        style={expanded ? undefined : { height }}
-      />
+      <div className={cn(showCode && 'hidden', compare && previous ? 'grid grid-cols-2 gap-3' : 'flex flex-col', expanded && 'min-h-0 flex-1')} data-testid="visual-frames">
+        {compare && previous && (
+          <div className={cn('flex min-w-0 flex-col gap-1', expanded && 'min-h-0')}>
+            <span className="text-xs text-muted-foreground">第 {index} 版</span>
+            <VisualFrame key={previous.id} title={title} code={previous.code} sessionId={sessionId} fill={expanded} onLink={setLink} label={`${title}（第 ${index} 版）`} />
+          </div>
+        )}
+        <div className={cn('flex min-w-0 flex-col gap-1', expanded && 'min-h-0 flex-1')}>
+          {compare && previous && <span className="text-xs text-muted-foreground">第 {index + 1} 版</span>}
+          <VisualFrame
+            key={current.id}
+            title={title}
+            code={current.code}
+            sessionId={sessionId}
+            fill={expanded}
+            onLink={setLink}
+            frameRef={(element) => {
+              frame.current = element
+            }}
+          />
+        </div>
+      </div>
+      {presenting && <VisualPresentation title={title} code={current.code} sessionId={sessionId} onClose={() => setPresenting(false)} />}
     </div>
   )
 }
 
-function CardAction({ label, onClick, children }: { label: string; onClick(): void; children: React.ReactNode }) {
+// 可视化里的链接不直接打开，先问用内置浏览器、系统浏览器，还是不打开
+export function LinkConfirm({ link, sessionId, onDone }: { link: string; sessionId: string; onDone(): void }) {
+  const open = (where: 'browser' | 'system') => {
+    if (where === 'system') window.diffra.openExternal(link).catch((error: unknown) => showToast(errorMessage(error)))
+    else {
+      store.set((state) => ({ ...state, panel: 'browser' }))
+      window.diffra.browserNavigate(sessionId, link).catch((error: unknown) => showToast(errorMessage(error)))
+    }
+    onDone()
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs" data-testid="visual-link">
+      <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate" title={link}>
+        打开 {link}？
+      </span>
+      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => open('browser')}>
+        内置浏览器
+      </Button>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => open('system')}>
+        系统浏览器
+      </Button>
+      <Button size="icon-sm" variant="ghost" aria-label="不打开" className="size-6" onClick={onDone}>
+        <X className="size-3.5" />
+      </Button>
+    </div>
+  )
+}
+
+// 演示时页面里的链接不打开（没有地方问用户）
+const ignoreLink = () => undefined
+
+// 演示模式（第 669 步）：铺满窗口、不要工具栏；页面里带 data-step 的元素按 →、空格、PageDown 一步步出现，←、PageUp 退回，Esc 结束
+export function VisualPresentation({ title, code, sessionId, onClose }: { title: string; code: string; sessionId: string; onClose(): void }) {
+  const [count, setCount] = useState(0)
+  const [step, setStep] = useState<number | null>(null)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+      else if (count > 0 && ['ArrowRight', ' ', 'PageDown', 'Enter'].includes(event.key)) setStep((current) => Math.min(count, (current ?? 0) + 1))
+      else if (count > 0 && ['ArrowLeft', 'PageUp', 'Backspace'].includes(event.key)) setStep((current) => Math.max(1, (current ?? 1) - 1))
+      else return
+      event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [count, onClose])
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-background p-6" role="dialog" aria-modal="true" aria-label={`演示：${title}`} data-testid="visual-presentation">
+      <VisualFrame
+        title={title}
+        code={code}
+        sessionId={sessionId}
+        fill
+        step={step}
+        onLink={ignoreLink}
+        onSteps={(total) => {
+          setCount(total)
+          setStep(total > 0 ? 1 : null)
+        }}
+      />
+      <div className="pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 text-xs text-muted-foreground opacity-60 hover:opacity-100">
+        {count > 0 && (
+          <span className="tabular-nums" data-testid="visual-presentation-step">
+            {step ?? count}/{count}
+          </span>
+        )}
+        <span className="pointer-events-auto">
+          <CardAction label="结束演示" onClick={onClose}>
+            <X className="size-3.5" />
+          </CardAction>
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function CardAction({ label, onClick, disabled, pressed, children }: { label: string; onClick(): void; disabled?: boolean; pressed?: boolean; children: React.ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={label} className="size-7 text-muted-foreground" onClick={onClick}>
+        <Button variant="ghost" size="icon-sm" aria-label={label} aria-pressed={pressed} disabled={disabled} className={cn('size-7 text-muted-foreground', pressed && 'bg-accent text-foreground')} onClick={onClick}>
           {children}
         </Button>
       </TooltipTrigger>

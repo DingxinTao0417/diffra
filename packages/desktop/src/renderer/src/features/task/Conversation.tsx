@@ -26,7 +26,7 @@ import { QuestionBar } from './QuestionBar'
 import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
 import { useFullOutput } from './tool-output'
-import { VisualCard } from './VisualCard'
+import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
 import { AgentTeam } from './cards/AgentTeam'
 import { BrowserSummary, isBrowserStep } from './cards/BrowserSummary'
@@ -264,6 +264,13 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
     return { sessionId, project, changed }
   }, [remote, readOnly, turns, sessionId, project])
 
+  // 同名的可视化按出现顺序排成几版（第 668 步）：每张卡片能切到别的版本、和上一版对比
+  const visualHistory = useMemo(() => {
+    const history = new Map<string, VisualVersion[]>()
+    for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code }])
+    return history
+  }, [turns])
+
   const onScroll = () => {
     const element = scrollRef.current
     if (!element) return
@@ -405,6 +412,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   return (
     <ReadOnlyContext.Provider value={readOnly}>
     <AnswerContext.Provider value={answerTarget}>
+    <VisualHistoryContext.Provider value={visualHistory}>
     <div className="relative min-h-0 flex-1">
       {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
       <div
@@ -457,6 +465,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
         </Button>
       )}
     </div>
+    </VisualHistoryContext.Provider>
     </AnswerContext.Provider>
     </ReadOnlyContext.Provider>
   )
@@ -607,7 +616,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           case 'task':
             return <ToolStep key={block.item.id} item={block.item} />
           case 'visual':
-            return <VisualCard key={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
+            return <VisualCard key={block.item.id} id={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
