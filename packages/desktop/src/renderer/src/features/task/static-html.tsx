@@ -16,6 +16,8 @@ const STATIC_CSS = `
 html,body{height:auto;overflow:visible}
 body{margin:0}
 .diffra-static{box-sizing:border-box;max-width:var(--content-max);margin:0 auto;padding:32px 16px;display:flex;flex-direction:column;gap:1.75rem}
+.diffra-static svg{max-width:100%;height:auto}
+.diffra-static [data-testid="chart-canvas"] div{max-width:100%}
 .katex .katex-html{display:none}
 .katex .katex-mathml{position:static;clip:auto;width:auto;height:auto;overflow:visible;padding:0;border:0}
 `
@@ -81,6 +83,12 @@ function cleanCopy(container: HTMLElement): HTMLElement {
   // 只有图标的按钮（复制、展开、另存为……）在静态页里点了没用；带字的留着当说明
   for (const button of copy.querySelectorAll('button')) if (!button.textContent?.trim()) button.remove()
   for (const element of copy.querySelectorAll('[tabindex]')) element.removeAttribute('tabindex')
+  // 图表按导出时的宽度画成了固定宽高：补上 viewBox，窄屏（手机上看分享版）时跟着容器等比缩小（第 684 步）
+  for (const svg of copy.querySelectorAll('svg')) {
+    const width = Number.parseFloat(svg.getAttribute('width') ?? '')
+    const height = Number.parseFloat(svg.getAttribute('height') ?? '')
+    if (!svg.hasAttribute('viewBox') && width > 0 && height > 0) svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  }
   return copy
 }
 

@@ -922,6 +922,11 @@ v2：
   - 放进和可视化一样的沙箱 iframe，按 MCP Apps 的 postMessage JSON-RPC 说话：回 `ui/initialize`（宿主是 Diffra、深浅色、`displayMode: inline`），它发 `ui/notifications/initialized` 以后把 `tool-input`、`tool-result` 发过去；`ui/open-link` 先在卡片下面问；`ui/message` 只填进输入框、不发。替它调工具（`tools/call`）、读资源这些一律回「不支持」：界面里的代码不该绕过权限确认去动 MCP 服务器。
   - 远程设备不发（换成 `{ omitted: true }`，和可视化代码一样），导出时写明「在 Diffra 里打开才能看」。
   - 测试用的带界面的服务器是 `core/test/fixtures/mcp-ui-server.mjs`（照原来的测试服务器多了 `ui_card`、`ui_weather` 两个工具），原来那个不动，免得数工具个数的用例都要改。
+- 版本回退和质量门槛（第 684 步）：每种内置富块在 `core/test/fixtures/rich-samples.ts` 里有一份样例（类型是 `Record<RichBlockKind, …>`，新加一种块不给样例就过不了类型检查），core 和桌面端的门槛共用。
+  - core（`rich-gate.test.ts`）：每种块的样例能画；数据不对、超过 10 万字、版本比这里新（`"v"` 大于 `RICH_BLOCK_VERSION`）都回退成代码并写明原因；不写版本（旧会话）、写当前版本照常画。旧会话、远程设备、导出用的是同一份校验和同一套组件，回退的样子一样。
+  - 桌面端（`e2e/rich-gate.spec.ts`）：一段回答里每种块一个，都画出来；数据不对的回退（不合法的 JSON 本来就按代码显示，不另写原因）；深浅色每种块各截一张；应用里 1280 和 375 宽不横向溢出；导出的单文件 HTML 在 375（手机上看分享版）和 1280 宽的窗口里不溢出，图表缩小了也看得见。
+  - 门槛查出来顺手修的：导出页里图表是按导出时的宽度画的固定宽高 SVG，窄屏会被裁掉一截。导出时给没有 viewBox 的 SVG 补上，SVG 和 ECharts 包的那层 div 最宽到容器宽，等比缩小（画布原来的高度不变，下面会留一点空白；把高度也改成自动会让 ECharts 的绝对定位 SVG 塌成 0 高）。
+  - 已知：窄窗口下右侧面板（任务监控、文件等）不会自动收起，会把对话挤得很窄；门槛量 375 宽前先关掉右侧面板，这个问题没在这一步改。
 
 ## 对话里的富内容（第 640 步起）
 
