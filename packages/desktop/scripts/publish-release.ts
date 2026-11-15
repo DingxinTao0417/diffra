@@ -1,12 +1,12 @@
-// 把 CI 打好的安装包发布到更新源：node scripts/publish-release.ts [版本号]，不写版本号就用 package.json 的
-// 1. 从 v<版本号> 的 GitHub Release（草稿也行）下载安装包、差分文件和 latest.yml
+// 把安装包发布到更新源：node scripts/publish-release.ts [版本号] [--local]，不写版本号就用 package.json 的
+// 1. 从 v<版本号> 的 GitHub Release（草稿也行）下载安装包、差分文件和 latest.yml；--local 直接用本机 release/ 里的构建产物
 // 2. 核对 latest.yml 里的版本、文件名、sha512 和大小
 // 3. 按顺序上传：安装包、差分文件，最后才是 latest.yml（客户端看到新版本时文件已经齐了）
 // 4. 把官网下载按钮用的 Diffra-Setup-latest.exe 指向这个版本
 // 5. 从公网地址取回 latest.yml 和安装包信息，确认和本地一致
 // 服务器上的旧版本文件不删：差分下载要用旧版本的 .blockmap
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import builderConfig from '../electron-builder.config.ts'
@@ -28,7 +28,9 @@ function parseLatest(text: string) {
 }
 
 async function main(): Promise<void> {
-  const version = process.argv[2] ?? (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
+  const args = process.argv.slice(2)
+  const local = args.includes('--local')
+  const version = args.find((arg) => !arg.startsWith('--')) ?? (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
   const tag = `v${version}`
   const exe = `Diffra-Setup-${version}.exe`
   const files = [exe, `${exe}.blockmap`, 'latest.yml']
@@ -39,14 +41,20 @@ async function main(): Promise<void> {
 
   const config = loadPublishConfig()
   const { ssh, upload } = remote(config)
-  const workDir = mkdtempSync(join(tmpdir(), 'diffra-publish-'))
+  const workDir = local ? null : mkdtempSync(join(tmpdir(), 'diffra-publish-'))
+  const sourceDir = workDir ?? join(desktopDir, 'release')
   try {
-    console.log(`下载 ${tag} 的安装包…`)
-    await run('gh', ['release', 'download', tag, ...files.flatMap((name) => ['--pattern', name]), '--dir', workDir, '--clobber'], DOWNLOAD_TIMEOUT_MS)
+    if (local) {
+      console.log('使用本机 release/ 里的构建产物…')
+      if (!existsSync(join(sourceDir, 'latest.yml'))) throw new Error('没有找到 release/latest.yml，先运行 pnpm --filter @diffra/desktop package')
+    } else {
+      console.log(`下载 ${tag} 的安装包…`)
+      await run('gh', ['release', 'download', tag, ...files.flatMap((name) => ['--pattern', name]), '--dir', sourceDir, '--clobber'], DOWNLOAD_TIMEOUT_MS)
+    }
 
-    const latestText = readFileSync(join(workDir, 'latest.yml'), 'utf8')
+    const latestText = readFileSync(join(sourceDir, 'latest.yml'), 'utf8')
     const latest = parseLatest(latestText)
-    const exeBytes = readFileSync(join(workDir, exe))
+    const exeBytes = readFileSync(join(sourceDir, exe))
     const sha512 = createHash('sha512').update(exeBytes).digest('base64')
     const problems = [
       latest.version === version ? null : `latest.yml 的版本是 ${latest.version}，不是 ${version}`,
@@ -60,7 +68,7 @@ async function main(): Promise<void> {
     await ssh(`test -d '${config.remoteDir}'`)
     for (const name of files) {
       console.log(`上传 ${name}…`)
-      await upload(join(workDir, name), `${config.remoteDir}/${name}`)
+      await upload(join(sourceDir, name), `${config.remoteDir}/${name}`)
     }
     // 先建好新的链接再改名替换，换的瞬间也不会下到半个文件
     await ssh(`cd '${config.remoteDir}' && ln -sfn '${exe}' '${LATEST_ALIAS}.partial' && mv -Tf '${LATEST_ALIAS}.partial' '${LATEST_ALIAS}'`)
@@ -73,7 +81,7 @@ async function main(): Promise<void> {
     }
     console.log(`已发布 ${version}。官网下载按钮现在指向它：${publicUrl}${LATEST_ALIAS}`)
   } finally {
-    rmSync(workDir, { recursive: true, force: true })
+    if (workDir) rmSync(workDir, { recursive: true, force: true })
   }
 }
 

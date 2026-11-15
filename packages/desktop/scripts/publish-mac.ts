@@ -1,5 +1,5 @@
-// 把 Mac 安装包发布到更新源的 mac 目录：node scripts/publish-mac.ts [版本号]，不写版本号就用 package.json 的
-// Mac 包现在还在 Mac 上手动打（pnpm package:mac），打好后把 release/ 里的这几个文件传到 v<版本号> 的 GitHub Release：
+// 把 Mac 安装包发布到更新源的 mac 目录：node scripts/publish-mac.ts [版本号] [--local]，不写版本号就用 package.json 的
+// Mac 包现在还在 Mac 上手动打（pnpm package:mac）；--local 直接用本机 release/ 里的构建产物，否则把 release/ 里的这几个文件传到 v<版本号> 的 GitHub Release：
 //   gh release upload v<版本号> release/Diffra-<版本号>-arm64.dmg release/Diffra-<版本号>-arm64.dmg.blockmap \
 //     release/Diffra-<版本号>-arm64.zip release/Diffra-<版本号>-arm64.zip.blockmap release/latest-mac.yml --clobber
 // 这个脚本在哪台电脑上跑都行（要有 publish.config.json 和服务器密钥）：
@@ -10,7 +10,7 @@
 // 5. 从公网地址取回 latest-mac.yml 和 dmg 的大小，确认和本地一致；官网要跨域读 latest-mac.yml，顺便检查跨域头
 // Mac 预览版还不自动更新（updater.ts），latest-mac.yml 和 zip 先跟着传，以后开了自动更新直接能用
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import builderConfig from '../electron-builder.config.ts'
@@ -32,7 +32,9 @@ function parseFiles(text: string): Map<string, { sha512: string; size: number }>
 }
 
 async function main(): Promise<void> {
-  const version = process.argv[2] ?? (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
+  const args = process.argv.slice(2)
+  const local = args.includes('--local')
+  const version = args.find((arg) => !arg.startsWith('--')) ?? (JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')) as { version: string }).version
   const tag = `v${version}`
   const dmg = `Diffra-${version}-${ARCH}.dmg`
   const zip = `Diffra-${version}-${ARCH}.zip`
@@ -47,18 +49,24 @@ async function main(): Promise<void> {
   // Mac 的目录和 Windows 的并排：…/win → …/mac
   const macDir = config.macRemoteDir ?? posix.join(posix.dirname(config.remoteDir), 'mac')
   const { ssh, upload } = remote(config)
-  const workDir = mkdtempSync(join(tmpdir(), 'diffra-publish-mac-'))
+  const workDir = local ? null : mkdtempSync(join(tmpdir(), 'diffra-publish-mac-'))
+  const sourceDir = workDir ?? join(desktopDir, 'release')
   try {
-    console.log(`下载 ${tag} 的 Mac 安装包…`)
-    await run('gh', ['release', 'download', tag, ...files.flatMap((name) => ['--pattern', name]), '--dir', workDir, '--clobber'], DOWNLOAD_TIMEOUT_MS)
+    if (local) {
+      console.log('使用本机 release/ 里的构建产物…')
+      if (!existsSync(join(sourceDir, 'latest-mac.yml'))) throw new Error('没有找到 release/latest-mac.yml，先运行 pnpm --filter @diffra/desktop package:mac')
+    } else {
+      console.log(`下载 ${tag} 的 Mac 安装包…`)
+      await run('gh', ['release', 'download', tag, ...files.flatMap((name) => ['--pattern', name]), '--dir', sourceDir, '--clobber'], DOWNLOAD_TIMEOUT_MS)
+    }
 
-    const latestText = readFileSync(join(workDir, 'latest-mac.yml'), 'utf8')
+    const latestText = readFileSync(join(sourceDir, 'latest-mac.yml'), 'utf8')
     const listed = parseFiles(latestText)
     const latestVersion = /^version: (.+)$/m.exec(latestText)?.[1]?.trim()
     const problems: string[] = latestVersion === version ? [] : [`latest-mac.yml 的版本是 ${latestVersion}，不是 ${version}`]
     const sizes = new Map<string, number>()
     for (const name of packages) {
-      const bytes = readFileSync(join(workDir, name))
+      const bytes = readFileSync(join(sourceDir, name))
       sizes.set(name, bytes.length)
       const entry = listed.get(name)
       if (!entry) problems.push(`latest-mac.yml 里没有 ${name}`)
@@ -71,7 +79,7 @@ async function main(): Promise<void> {
     await ssh(`mkdir -p '${macDir}'`)
     for (const name of files) {
       console.log(`上传 ${name}…`)
-      await upload(join(workDir, name), `${macDir}/${name}`)
+      await upload(join(sourceDir, name), `${macDir}/${name}`)
     }
     // 先建好新的链接再改名替换，换的瞬间也不会下到半个文件
     await ssh(`cd '${macDir}' && ln -sfn '${dmg}' '${LATEST_ALIAS}.partial' && mv -Tf '${LATEST_ALIAS}.partial' '${LATEST_ALIAS}'`)
@@ -87,7 +95,7 @@ async function main(): Promise<void> {
     }
     console.log(`已发布 Mac 版 ${version}。官网下载按钮现在指向它：${publicUrl}${LATEST_ALIAS}`)
   } finally {
-    rmSync(workDir, { recursive: true, force: true })
+    if (workDir) rmSync(workDir, { recursive: true, force: true })
   }
 }
 
