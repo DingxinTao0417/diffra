@@ -1,6 +1,7 @@
 import { useContext, useMemo, useState } from 'react'
 import { Flame, Gauge } from 'lucide-react'
 import { cn } from 'cn'
+import { stripFileScheme } from '@/lib/file-url'
 import { formatBytes } from '@/lib/format'
 import { AnswerContext, openFilePreview, useProjectFile } from '../answer-links'
 
@@ -254,7 +255,7 @@ export function FlameGraph({ root, duration }: { root: ProfileNode; duration: nu
 
 function HotFrame({ node }: { node: ProfileNode }) {
   const target = useContext(AnswerContext)
-  const path = node.url ? decodeURIComponent(node.url.replace(/^file:\/\/\/?/, '')) : null
+  const path = node.url ? decodeURIComponent(stripFileScheme(node.url)) : null
   const file = useProjectFile(path)
   return (
     <p className="flex min-w-0 items-baseline gap-2">

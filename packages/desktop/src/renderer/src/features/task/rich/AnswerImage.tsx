@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Slider } from '@/components/ui/slider'
 import { errorMessage } from '@/lib/errors'
+import { stripFileScheme } from '@/lib/file-url'
 import { fillComposer } from '@/state/actions'
 import { AnswerContext, AnswerLink } from '../answer-links'
 import { StaticProjectContext, useStatic } from '../static-context'
@@ -24,7 +25,7 @@ export function useImageSource(src: string | undefined): { url: string | null; e
   const isStatic = useStatic()
   const project = answer?.project ?? staticProject
   const [state, setState] = useState<{ src: string; url: string | null; error: string | null } | null>(null)
-  const local = src && !isWeb(src) && !isData(src) ? src.replace(/^file:\/\/\/?/i, '') : null
+  const local = src && !isWeb(src) && !isData(src) ? stripFileScheme(src) : null
   useEffect(() => {
     if (!local || !project) return
     const key = `${project}\n${local}`

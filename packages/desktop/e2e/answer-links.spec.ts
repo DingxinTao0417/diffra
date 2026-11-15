@@ -69,7 +69,7 @@ test('回答里的链接和文件：链接走内置浏览器、右键换系统�
     await window.keyboard.press('End')
     await window.keyboard.type('（已改）')
     await expect(panel.getByTestId('file-dirty')).toBeVisible()
-    await window.keyboard.press('Control+s')
+    await window.keyboard.press('ControlOrMeta+s')
     await expect(panel.getByTestId('file-dirty')).toHaveCount(0)
     await expect.poll(() => readFileSync(join(project, 'README.md'), 'utf8')).toBe('# 待办\n\n一个小的待办网页。（已改）\n')
 

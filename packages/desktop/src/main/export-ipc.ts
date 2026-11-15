@@ -58,10 +58,12 @@ export function registerExportIpc(): void {
     if (picked.canceled || !picked.filePath) return { saved: false }
     const file = join(app.getPath('temp'), `diffra-export-${randomUUID()}.html`)
     await writeFile(file, html, 'utf8')
+    // 整页高度量的是 scrollHeight，内容不够一屏时等于窗口高度。Mac 的离屏窗口不会被屏幕大小限制，
+    // 开得高了短页面底下会多出一截空白，所以先开矮一点，量完再撑到整页高
     const window = new BrowserWindow({
       show: false,
       width: EXPORT_WIDTH,
-      height: 1200,
+      height: process.platform === 'darwin' ? 600 : 1200,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, offscreen: format === 'png' },
     })
     // 导出的页面不该开新窗口、跳走

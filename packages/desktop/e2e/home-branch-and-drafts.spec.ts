@@ -104,16 +104,16 @@ test('快速记的草稿：切页面回来还在，Ctrl+J 关掉再开还在，�
     await expect(window.getByTestId('todo-image')).toHaveCount(0)
 
     // Ctrl+J：Esc 关掉再打开，字还在；回车记下以后再打开是空的
-    await window.keyboard.press('Control+j')
+    await window.keyboard.press('ControlOrMeta+j')
     const quick = window.getByLabel('快速记待办')
     await quick.fill('Ctrl+J 记了一半')
     await quick.press('Escape')
     await expect(quick).toHaveCount(0)
-    await window.keyboard.press('Control+j')
+    await window.keyboard.press('ControlOrMeta+j')
     await expect(quick).toHaveValue('Ctrl+J 记了一半')
     await quick.press('Enter')
     await expect(window.getByTestId('todo-row')).toHaveCount(2)
-    await window.keyboard.press('Control+j')
+    await window.keyboard.press('ControlOrMeta+j')
     await expect(quick).toHaveValue('')
   } finally {
     await app.close()

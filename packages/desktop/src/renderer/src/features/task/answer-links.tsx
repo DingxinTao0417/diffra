@@ -3,6 +3,7 @@ import { Clipboard, ClipboardCopy, ExternalLink, FileDiff, FileText, FolderOpen,
 import type { ProjectFile } from '../../../../shared/ipc'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { errorMessage } from '@/lib/errors'
+import { stripFileScheme } from '@/lib/file-url'
 import { showToast, store } from '@/state/store'
 
 // 回答里的链接和文件引用（第 534、535 步）。本机任务的对话给这个上下文；远程任务没有，链接交给系统浏览器、文件引用按普通代码显示
@@ -95,7 +96,7 @@ export function AnswerLink({ href, children }: { href?: string; children?: React
 
 // [loop.ts](packages/core/src/loop.ts#L1430)、[x](./a.ts:12)、file:///D:/p/a.ts
 export function fileOfHref(href: string): { path: string; line: number | null } | null {
-  let text = href.replace(/^file:\/\/\/?/i, '')
+  let text = stripFileScheme(href)
   try {
     text = decodeURIComponent(text)
   } catch {
