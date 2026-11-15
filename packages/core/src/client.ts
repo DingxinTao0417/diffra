@@ -197,6 +197,11 @@ export function retryStep(connection: acp.ClientConnection, sessionId: string, a
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
 }
 
+// 界面截好的可视化快照记回会话（第 670 步）；不是可视化的卡、已经有快照的不记
+export function recordVisualSnapshot(connection: acp.ClientConnection, params: { sessionId: string; toolCallId: string; image: { mimeType: string; data: string } }): Promise<{ recorded: boolean }> {
+  return requestOf(connection)<{ recorded: boolean }, typeof params>(SESSION_EXT_METHODS.visualSnapshot, params, extRequestOptions())
+}
+
 // 界面「运行中」停止一条后台命令；已经结束了就是 stopped: false
 export function stopProcess(connection: acp.ClientConnection, sessionId: string, id: number): Promise<{ stopped: boolean }> {
   return requestOf(connection)<{ stopped: boolean }, { sessionId: string; id: number }>(SESSION_EXT_METHODS.processStop, { sessionId, id }, extRequestOptions())

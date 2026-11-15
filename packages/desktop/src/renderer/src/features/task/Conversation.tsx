@@ -267,7 +267,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   // 同名的可视化按出现顺序排成几版（第 668 步）：每张卡片能切到别的版本、和上一版对比
   const visualHistory = useMemo(() => {
     const history = new Map<string, VisualVersion[]>()
-    for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code }])
+    for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code, snapshot: item.visualSnapshot }])
     return history
   }, [turns])
 
@@ -616,7 +616,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
           case 'task':
             return <ToolStep key={block.item.id} item={block.item} />
           case 'visual':
-            return <VisualCard key={block.item.id} id={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} />
+            return <VisualCard key={block.item.id} id={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} snapshot={block.item.visualSnapshot} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}

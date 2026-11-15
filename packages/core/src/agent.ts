@@ -32,6 +32,8 @@ import {
   type TaskSource,
   type TurnKind,
   UPDATE_SEQ_META_KEY,
+  VISUAL_SNAPSHOT_MAX_CHARS,
+  VISUAL_SNAPSHOT_TYPES,
 } from './protocol.js'
 import { countLanguages, listProjectFiles } from './rules/languages.js'
 import { selectRulePacks } from './rules/select.js'
@@ -88,6 +90,11 @@ export interface AgentOptions {
 
 const checkpointParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1) })
 const processParams = z.object({ sessionId: z.string().min(1), id: z.number().int() })
+const visualSnapshotParams = z.object({
+  sessionId: z.string().min(1),
+  toolCallId: z.string().min(1),
+  image: z.object({ mimeType: z.enum(VISUAL_SNAPSHOT_TYPES), data: z.base64().max(VISUAL_SNAPSHOT_MAX_CHARS) }),
+})
 const sessionUpdateParams = z.object({
   sessionId: z.string().min(1),
   title: z.string().trim().min(1).max(100).optional(),
@@ -298,10 +305,10 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   }
 
   // 还没开始过任务的会话不落盘，免得每次打开项目都留下一条空记录
-  const persist = async (session: Session, notify: (update: acp.SessionUpdate) => Promise<void>) => {
+  const persist = async (session: Session, notify: (update: acp.SessionUpdate) => Promise<void>, touch = true) => {
     if (!store || session.turns.length === 0) return
     try {
-      await store.save(session.toRecord())
+      await store.save(session.toRecord(touch))
     } catch (error) {
       console.error('[sessions] 会话记录保存失败', error)
       await notify({
@@ -446,7 +453,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         const loaded: LoadedSession = { info: liveInfo, title: live.title, turns: compactTurns(live.turns), taskState: taskStateView(live), design: live.designTask, noProject: live.noProject }
         return { _meta: { diffra: loaded } }
       }
-      const record = live ? live.toRecord() : await requireStore().load(params.sessionId)
+      const record = live ? live.toRecord(false) : await requireStore().load(params.sessionId)
       if (!sameDir(record.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
       const { session, info } = await openSession(record.cwd, params._meta, params.mcpServers ?? [], record)
       // 没在运行却是 running，说明还没有确定的任务状态，交给界面按轮次推导
@@ -589,6 +596,16 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const retry = sessionOf(params.sessionId).stepRetries.get(params.agent)
       retry?.()
       return { retried: retry !== undefined }
+    })
+    .onRequest(SESSION_EXT_METHODS.visualSnapshot, visualSnapshotParams, async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      const update = session.recordVisualSnapshot(params.toolCallId, params.image)
+      if (!update) return { recorded: false }
+      const notify = notifier(client, session.id)
+      await notify(update)
+      // 补一张图不算任务有新进展：不改更新时间，免得打开旧任务就把它顶到列表最前
+      await persist(session, notify, false)
+      return { recorded: true }
     })
     .onRequest(SESSION_EXT_METHODS.processStop, processParams, ({ params }) => {
       const exec = sessionOf(params.sessionId).execSessions

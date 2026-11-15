@@ -29,6 +29,9 @@ if (!app.isPackaged) {
   app.setPath('userData', process.env.DIFFRA_USER_DATA_DIR || join(app.getPath('appData'), 'Diffra-dev'))
 }
 
+// 可视化卡片在主窗口里的位置（CSS 像素）
+const visualRect = z.object({ x: z.number().int(), y: z.number().int(), width: z.number().int().positive(), height: z.number().int().positive() })
+
 // 同一份用户数据只跑一个主进程，再次启动时把已有窗口调到前面。
 // 两个实例会同时占着安装目录里的文件，更新时只有点了更新的那个会退出，卸载旧版就会失败
 const isPrimaryInstance = app.requestSingleInstanceLock()
@@ -114,13 +117,20 @@ app
     ipcMain.handle(IPC_CHANNELS.coreStatus, () => coreStatus)
     ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion())
     ipcMain.handle(IPC_CHANNELS.visualSavePng, async (event, rawRect: unknown, rawTitle: unknown) => {
-      const rect = parse(z.object({ x: z.number().int(), y: z.number().int(), width: z.number().int().positive(), height: z.number().int().positive() }), rawRect)
+      const rect = parse(visualRect, rawRect)
       const title = parse(z.string().max(200), rawTitle).replace(/[\\/:*?"<>|]/g, '_') || '可视化'
       const owner = BrowserWindow.fromWebContents(event.sender)
       if (!owner) return
       const image = await owner.webContents.capturePage(rect)
       const picked = await dialog.showSaveDialog(owner, { title: '另存为 PNG', defaultPath: `${title}.png`, filters: [{ name: 'PNG 图片', extensions: ['png'] }] })
       if (!picked.canceled && picked.filePath) await writeFile(picked.filePath, image.toPNG())
+    })
+    ipcMain.handle(IPC_CHANNELS.visualCapture, async (event, rawRect: unknown) => {
+      const rect = parse(visualRect, rawRect)
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      if (!owner || !owner.isVisible() || owner.isMinimized()) return null
+      const image = await owner.webContents.capturePage(rect)
+      return image.isEmpty() ? null : { mimeType: 'image/png', data: image.toPNG().toString('base64') }
     })
     ipcMain.handle(IPC_CHANNELS.openExternal, async (_event, raw: unknown) => {
       const url = new URL(parse(z.string().min(1), raw))

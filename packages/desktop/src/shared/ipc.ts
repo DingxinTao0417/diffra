@@ -114,6 +114,7 @@ export const IPC_CHANNELS = {
   sessionDeepScan: 'session:deep-scan',
   sessionPlan: 'session:plan',
   sessionRetryStep: 'session:retry-step',
+  sessionVisualSnapshot: 'session:visual-snapshot',
   sessionProcesses: 'session:processes',
   sessionProcessStop: 'session:process-stop',
   sessionProcessOutput: 'session:process-output',
@@ -121,6 +122,7 @@ export const IPC_CHANNELS = {
   promptEnhance: 'prompt:enhance',
   todosList: 'todos:list',
   visualSavePng: 'visual:save-png',
+  visualCapture: 'visual:capture',
   todosSave: 'todos:save',
   todosNotify: 'todos:notify',
   todosFocus: 'todos:focus',
@@ -507,6 +509,10 @@ export interface DiffraApi {
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
   // 对话里的可视化另存为 PNG：截主窗口里 rect 这块（CSS 像素），弹保存框
   saveVisualPng(rect: { x: number; y: number; width: number; height: number }, title: string): Promise<void>
+  // 可视化的快照（第 670 步）：截主窗口里 rect 这块成 PNG；窗口没显示出来、截到空图时是 null
+  captureVisual(rect: { x: number; y: number; width: number; height: number }): Promise<PromptImage | null>
+  // 压好的快照记回会话那张可视化卡（toolCallId）；已经有了的不记
+  recordVisualSnapshot(sessionId: string, toolCallId: string, image: PromptImage): Promise<{ recorded: boolean }>
   // 待办：整份读、整份存
   listTodos(): Promise<Todo[]>
   saveTodos(todos: Todo[]): Promise<Todo[]>

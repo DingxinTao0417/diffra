@@ -137,6 +137,11 @@ export interface PromptQuestion {
 // 对话里的可视化：show_visual 那张卡的 tool_call._meta.diffra.visual，{ title, code }；code 是 HTML 片段或 SVG
 export const VISUAL_META_KEY = 'visual'
 export const VISUAL_MAX_CHARS = 1_000_000
+// 可视化的快照（第 670 步）：界面画好后截成压缩图记回那张卡，放在追加的 tool_call_update._meta.diffra.visualSnapshot，
+// 按 ACP 的图片内容 { type: 'image', mimeType, data } 存。远程设备不跑可视化的脚本，显示这张图；同步时保留（packages/remote 的 redact）
+export const VISUAL_SNAPSHOT_META_KEY = 'visualSnapshot'
+export const VISUAL_SNAPSHOT_TYPES = ['image/webp', 'image/png', 'image/jpeg'] as const
+export const VISUAL_SNAPSHOT_MAX_CHARS = 200_000
 
 // 改动卡片（diff 内容）的 _meta.diffra：oldText、newText 只是变化的那段（前后各留几行上下文），不是整份文件。
 // 长任务里每次改动都带整份文件，会话记录涨到几十 MB，载入时超过 ACP 单条消息的上限。
@@ -783,6 +788,8 @@ export const SESSION_EXT_METHODS = {
   plan: '_diffra/session/plan',
   // 模型很久没有输出时，用户让卡住的那一步重发请求（主智能体或某个子智能体），这一轮不停
   retryStep: '_diffra/session/retry-step',
+  // 界面截好的可视化快照记回会话（第 670 步）
+  visualSnapshot: '_diffra/visual/snapshot',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
   // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）

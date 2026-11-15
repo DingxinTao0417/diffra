@@ -4,7 +4,7 @@ import type { Layout, ModelRef } from '../../../shared/settings'
 import type { RemoteAction, RemoteActionResult, RemoteTaskCall, RemoteTaskCallResult, RemoteTaskDetails } from '../../../shared/remote'
 import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
 import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
-import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf } from '../features/session/transcript'
+import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withVisualSnapshot } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { shrinkImage } from '../lib/images'
@@ -191,6 +191,7 @@ export function wireCoreEvents(): () => void {
     const silence = modelSilenceOf(update)
     updateLive(sessionId, (task) => {
       if (usage) return { ...task, usage }
+      if (visualSnapshotOf(update).visualSnapshot) return { ...task, turns: withVisualSnapshot(task.turns, update) }
       const last = task.turns.at(-1)
       if (!last) return task
       if (silence) return { ...task, turns: [...task.turns.slice(0, -1), { ...last, silence: applySilence(last.silence, silence) }] }

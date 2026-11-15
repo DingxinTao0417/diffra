@@ -150,6 +150,26 @@ describe('会话更新和轮次脱敏', () => {
     expect(redactUpdate(chunk)).toEqual({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '（图片未同步）' } })
   })
 
+  test('可视化的快照照发（第 670 步）：只认压过的小图；类型不对、太大、不是 base64 的换成文字；不按路径改 base64；一轮合计超出的换成文字', () => {
+    const snapshotUpdate = (snapshot: unknown) => ({ sessionUpdate: 'tool_call_update', toolCallId: 't6', _meta: { diffra: { visualSnapshot: snapshot } } }) as unknown as SessionUpdate
+    const good = { type: 'image', mimeType: 'image/webp', data: 'UklGRg/home/me/proj/x==' }
+    expect(redactUpdate(snapshotUpdate(good))).toEqual(snapshotUpdate(good))
+    expect(hidePaths(redactUpdate(snapshotUpdate(good)), { project: '/home/me/proj', home: '/home/me' })).toEqual(snapshotUpdate(good))
+    const omitted = snapshotUpdate({ type: 'text', text: '（图片未同步）' })
+    for (const bad of [
+      { type: 'image', mimeType: 'image/svg+xml', data: 'PHN2Zz4=' },
+      { type: 'image', mimeType: 'image/webp', data: 'A'.repeat(200_004) },
+      { type: 'image', mimeType: 'image/webp', data: 'not base64!' },
+      { type: 'image', mimeType: 'image/webp' },
+    ]) {
+      expect(redactUpdate(snapshotUpdate(bad)), JSON.stringify(bad).slice(0, 80)).toEqual(omitted)
+    }
+    const big = { type: 'image', mimeType: 'image/webp', data: 'A'.repeat(180_000) }
+    const turn: StoredTurn = { id: 'turn-v', kind: 'prompt', prompt: '画图', startedAt: '2026-11-14T08:00:00.000Z', endedAt: null, stopReason: null, updates: Array.from({ length: 10 }, () => snapshotUpdate(big)), skills: [], images: [] }
+    const kinds = redactTurn(turn).updates.map((update) => ((update._meta?.diffra as Record<string, { type: string }>).visualSnapshot.type))
+    expect(kinds).toEqual([...Array(8).fill('image'), 'text', 'text'])
+  })
+
   test('轮次：提问脱敏，图片不发、记下张数，更新逐条脱敏；没有敏感内容的原样', () => {
     const turn: StoredTurn = {
       id: 'turn-1',

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
@@ -809,6 +809,75 @@ test('设备连接：会话一页压缩后超过一片（约 64 KB）也能看�
     await expect.poll(() => readFileSync(join(guest.userDataDir, 'logs', 'remote.log'), 'utf8')).toContain('建通道没成：offline')
   } finally {
     await close([host, guest])
+    await relay.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+// 被连接端的会话记录里有没有可视化快照（第几轮的文件里）
+function savedSnapshots(userDataDir: string): string[] {
+  const dir = join(userDataDir, 'sessions')
+  return readdirSync(dir, { recursive: true }).flatMap((file) => {
+    const name = String(file)
+    if (!name.endsWith('.json')) return []
+    const text = readFileSync(join(dir, name), 'utf8')
+    return text.includes('"visualSnapshot"') && text.includes('"mimeType":"image/webp"') ? [name] : []
+  })
+}
+
+test('设备连接：可视化在本机画好后截图压成 WebP 记进会话（画它的那一轮已经过去也记回那一轮，最新一轮不多出东西，会话不跳到列表最前），连接端不跑脚本、显示这张快照；快照没有演示', async () => {
+  test.setTimeout(120_000)
+  const { relay, port } = await startRelay()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-remote-visual-'))
+  // 先比窗口高（截不全，不截），8 秒后变矮：那时第二轮已经结束，快照记回第一轮
+  const code = '<div id="v" style="height:2400px;border-radius:12px;background:var(--soft);color:var(--fg);padding:16px">远程看的图</div><script>setTimeout(function(){document.getElementById("v").style.height="140px"},8000)</script>'
+  const model = await startScriptedModel([{ toolCalls: [{ name: 'show_visual', input: { title: '远程看的图', code } }] }, { text: '画好了' }, { text: '第二轮的回答' }])
+  const host = await launchDevice(port)
+  const devices = [host]
+  try {
+    await configureCoderModel(host.window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(host.app, host.window, project)
+    await startTask(host.window, '画一张图')
+    await waitTaskDone(host.window)
+    await send(host.window, '再说一句')
+    await expect(host.window.getByTestId('turn')).toHaveCount(2)
+    await waitTaskDone(host.window)
+    const before = await turnTexts(host.window, 'body')
+    expect(savedSnapshots(host.userDataDir)).toEqual([])
+    const updatedAt = await host.window.evaluate<string>(`window.diffra.listSessions(null).then((tasks) => tasks[0].updatedAt)`)
+
+    await expect.poll(() => savedSnapshots(host.userDataDir), { timeout: 30_000 }).toHaveLength(1)
+    // 记在第一轮的文件里（有那张图，没有第二轮的回答）
+    const turnFile = readFileSync(join(host.userDataDir, 'sessions', savedSnapshots(host.userDataDir)[0]!), 'utf8')
+    expect(turnFile).toContain('远程看的图')
+    expect(turnFile).not.toContain('第二轮的回答')
+    expect(await turnTexts(host.window, 'body')).toEqual(before)
+    await expect(host.window.getByTestId('visual')).toHaveCount(1)
+    expect(await host.window.evaluate<string>(`window.diffra.listSessions(null).then((tasks) => tasks[0].updatedAt)`)).toBe(updatedAt)
+
+    // 连接端后开，免得盖住被连接端的窗口
+    const guest = await launchDevice(port)
+    devices.push(guest)
+    await pair(host, guest, [project])
+    await guest.window.getByTestId('sidebar').getByTestId('sidebar-remote-task').click()
+    const card = guest.window.getByTestId('remote-task').getByTestId('visual')
+    const image = card.getByTestId('visual-snapshot')
+    await expect(image).toBeVisible({ timeout: 20_000 })
+    await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/)
+    expect(await image.evaluate<number>((element) => (element as unknown as { naturalWidth: number }).naturalWidth)).toBeGreaterThan(100)
+    await expect(card.locator('iframe')).toHaveCount(0)
+    await expect(card.getByRole('button', { name: '演示' })).toHaveCount(0)
+    await expect(guest.window.getByTestId('remote-task')).toContainText('第二轮的回答')
+    await card.screenshot({ path: 'test-results/remote-visual-snapshot.png' })
+    // 放大：快照铺满，按比例放在顶上；Esc 收起
+    await card.getByRole('button', { name: '放大' }).click()
+    await expect(card).toHaveAttribute('data-expanded', 'true')
+    await expect(image).toBeVisible()
+    await guest.window.keyboard.press('Escape')
+    await expect(card).toHaveAttribute('data-expanded', 'false')
+  } finally {
+    await close(devices)
     await relay.close()
     await model.close()
     rmSync(project, { recursive: true, force: true })

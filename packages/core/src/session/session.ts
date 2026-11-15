@@ -9,7 +9,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -90,6 +90,8 @@ export class Session {
   readonly id: string
   readonly cwd: string
   readonly createdAt: string
+  // 上次存盘时记的更新时间；补可视化快照这类存盘不改它（toRecord(false)）
+  private updatedAt: string
   title: string
   archived: boolean
   // 设计任务：建会话时定下，存进记录
@@ -169,6 +171,7 @@ export class Session {
     this.architecture = options.architecture ?? null
     this.id = record?.id ?? options.id ?? randomUUID()
     this.createdAt = record?.createdAt ?? new Date().toISOString()
+    this.updatedAt = record?.updatedAt ?? this.createdAt
     this.title = record?.title ?? ''
     this.archived = record?.archived ?? false
     this.designTask = record?.design ?? options.config.design ?? false
@@ -285,6 +288,18 @@ export class Session {
     turn.updates.push(update)
   }
 
+  // 可视化的快照（第 670 步）：记进画它的那一轮，追加在末尾（这一轮可能早已结束，recordUpdate 不收）。
+  // 不是可视化的卡、已经记过的不记，返回 null
+  recordVisualSnapshot(toolCallId: string, image: { mimeType: string; data: string }): SessionUpdate | null {
+    const ofCard = (update: SessionUpdate) => (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.toolCallId === toolCallId
+    const diffraOf = (update: SessionUpdate) => update._meta?.diffra as Record<string, unknown> | undefined
+    const turn = this.turns.find((item) => item.updates.some((update) => ofCard(update) && diffraOf(update)?.[VISUAL_META_KEY]))
+    if (!turn || turn.updates.some((update) => ofCard(update) && diffraOf(update)?.[VISUAL_SNAPSHOT_META_KEY])) return null
+    const update: SessionUpdate = { sessionUpdate: 'tool_call_update', toolCallId, _meta: { diffra: { [VISUAL_SNAPSHOT_META_KEY]: { type: 'image', mimeType: image.mimeType, data: image.data } } } }
+    turn.updates.push(update)
+    return update
+  }
+
   endTurn(stopReason: StopReason): void {
     const turn = this.turns.at(-1)
     if (!turn || turn.endedAt) return
@@ -292,7 +307,8 @@ export class Session {
     turn.stopReason = stopReason
   }
 
-  toRecord(): SessionRecord {
+  toRecord(touch = true): SessionRecord {
+    if (touch) this.updatedAt = new Date().toISOString()
     return {
       version: 1,
       taskState: this.taskState,
@@ -300,7 +316,7 @@ export class Session {
       cwd: this.cwd,
       title: this.title,
       createdAt: this.createdAt,
-      updatedAt: new Date().toISOString(),
+      updatedAt: this.updatedAt,
       archived: this.archived,
       design: this.designTask,
       designStyle: this.designStyle,

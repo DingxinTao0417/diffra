@@ -47,4 +47,29 @@ function toBase64(blob: Blob): Promise<string> {
   })
 }
 
+// 可视化的快照（第 670 步）：宽最多 1200，依次降质量、再缩小，压到 maxChars 字以内；压不下就不要了
+const SNAPSHOT_WIDTH = 1200
+const SNAPSHOT_QUALITIES = [0.8, 0.6, 0.45]
+
+export async function snapshotImage(image: PromptImage, maxChars: number): Promise<PromptImage | null> {
+  const bytes = Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0))
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: image.mimeType }))
+  try {
+    let scale = Math.min(1, SNAPSHOT_WIDTH / bitmap.width)
+    for (let attempt = 0; attempt < 3; attempt++, scale *= 0.7) {
+      const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)))
+      const context = canvas.getContext('2d')
+      if (!context) return null
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      for (const quality of SNAPSHOT_QUALITIES) {
+        const data = await toBase64(await canvas.convertToBlob({ type: 'image/webp', quality }))
+        if (data.length <= maxChars) return { mimeType: 'image/webp', data }
+      }
+    }
+    return null
+  } finally {
+    bitmap.close()
+  }
+}
+
 export const imageUrl = (image: PromptImage) => `data:${image.mimeType};base64,${image.data}`

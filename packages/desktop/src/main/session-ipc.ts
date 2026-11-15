@@ -7,6 +7,7 @@ import {
   diagnose,
   enhancePrompt,
   retryStep,
+  recordVisualSnapshot,
   stopProcess,
   processOutput,
   configureSession,
@@ -36,7 +37,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import {
@@ -420,6 +421,13 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionVisualSnapshot, async (_event, rawSessionId: unknown, rawToolCallId: unknown, rawImage: unknown) =>
+    recordVisualSnapshot(await coreConnection(), {
+      sessionId: parse(z.string().min(1), rawSessionId),
+      toolCallId: parse(z.string().min(1), rawToolCallId),
+      image: parse(z.object({ mimeType: z.enum(VISUAL_SNAPSHOT_TYPES), data: z.base64().max(VISUAL_SNAPSHOT_MAX_CHARS) }), rawImage),
+    }),
   )
   ipcMain.handle(IPC_CHANNELS.sessionProcessStop, async (_event, rawSessionId: unknown, rawId: unknown) =>
     stopProcess(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.number().int(), rawId)),

@@ -27,6 +27,7 @@ import {
   mcpStatus,
   plan,
   previewCheckpoint,
+  recordVisualSnapshot,
   remoteSnapshot,
   restoreCheckpoint,
   rewindSession,
@@ -34,7 +35,7 @@ import {
   sendPrompt,
   updateSession,
 } from '../src/client.js'
-import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY } from '../src/protocol.js'
+import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS } from '../src/protocol.js'
 import { type SessionRecord, SessionStore } from '../src/session/store.js'
 import { addFile, exec, read, replaceLines } from './loop-helpers.js'
 import { MCP_SERVER_SCRIPT, testMcpServer } from './mcp-fixture.js'
@@ -451,6 +452,34 @@ describe('会话持久化', () => {
     const changed = { afterEdit: null, beforeFinish: 'pnpm test' }
     const loaded = await loadSession(core, sessionId, project, { ...config(server.baseUrl), checks: changed })
     expect(loaded.info.checks).toEqual(changed)
+  })
+
+  test('可视化的快照记回画它的那一轮：推给界面、存盘，不改会话的更新时间；重复的、不是可视化的卡不记，格式不对的拒绝', async () => {
+    server = await startScriptedServer([{ toolCalls: [{ name: 'show_visual', input: { title: '对比', code: '<p>A</p>' } }] }, { text: '画好了' }, { text: '第二轮' }])
+    const first = await startCore()
+    const { sessionId } = await createSession(first, project, config(server.baseUrl))
+    await sendPrompt(first, sessionId, 'turn-1', '画个对比')
+    await sendPrompt(first, sessionId, 'turn-2', '再说一句')
+    const visualCall = notifications.find(({ update }) => update.sessionUpdate === 'tool_call' && (update._meta?.diffra as Record<string, unknown> | undefined)?.visual)
+    const toolCallId = visualCall?.update.sessionUpdate === 'tool_call' ? visualCall.update.toolCallId : ''
+    expect(toolCallId).not.toBe('')
+    const before = (await listSessions(first))[0]?.updatedAt
+    const image = { mimeType: 'image/webp', data: 'UklGRg==' }
+
+    expect(await recordVisualSnapshot(first, { sessionId, toolCallId, image })).toEqual({ recorded: true })
+    expect(await recordVisualSnapshot(first, { sessionId, toolCallId, image })).toEqual({ recorded: false })
+    expect(await recordVisualSnapshot(first, { sessionId, toolCallId: 'not-a-visual', image })).toEqual({ recorded: false })
+    await expect(recordVisualSnapshot(first, { sessionId, toolCallId, image: { mimeType: 'image/svg+xml', data: 'PHN2Zz4=' } })).rejects.toThrow()
+    await expect(recordVisualSnapshot(first, { sessionId, toolCallId, image: { mimeType: 'image/webp', data: 'A'.repeat(VISUAL_SNAPSHOT_MAX_CHARS + 4) } })).rejects.toThrow()
+    const pushed = notifications.filter(({ update }) => update.sessionUpdate === 'tool_call_update' && (update._meta?.diffra as Record<string, unknown> | undefined)?.visualSnapshot)
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0]?.update).toMatchObject({ toolCallId, _meta: { diffra: { visualSnapshot: { type: 'image', ...image } } } })
+
+    const second = await startCore()
+    expect((await listSessions(second))[0]?.updatedAt).toBe(before)
+    const loaded = await loadSession(second, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns[0]?.updates.at(-1)).toEqual({ sessionUpdate: 'tool_call_update', toolCallId, _meta: { diffra: { visualSnapshot: { type: 'image', ...image } } } })
+    expect(JSON.stringify(loaded.turns[1]?.updates)).not.toContain('visualSnapshot')
   })
 
   test('只建了会话、没发过任务时不留记录', async () => {

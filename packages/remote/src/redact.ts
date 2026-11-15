@@ -1,17 +1,20 @@
 import { isProtectedFile } from '@diffra/core'
-import { SECRET_FORMATS, type SessionUpdate, type StoredTurn, type ToolCallContent, TOOL_PREVIEW_META_KEY, VISUAL_META_KEY } from '@diffra/core/types'
+import { SECRET_FORMATS, type SessionUpdate, type StoredTurn, type ToolCallContent, TOOL_PREVIEW_META_KEY, VISUAL_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
 import { MAX_DIFF_CHARS, TOOL_PREVIEW_CHARS } from './messages.js'
 
 // 设备连接发出会话前的脱敏和裁剪，只作用于发出去的副本。正则抓不全，只能尽力；真正的边界是授权了哪些项目。
 // - 密钥：格式明确的（和安全检查共用 SECRET_FORMATS）、PEM 私钥整块、带引号的赋值、环境变量写法、Authorization 头、地址里的账号密码
 // - 可能含密钥的文件（和工具的保护名单共用 isProtectedFile）：路径命中时这一项的文字全部不发
 // - 图片、可视化代码不发；单段文字最多 64000 字
+// - 可视化的快照照发（第 670 步，用户定的：压缩后同步给授权设备，对方不跑可视化的脚本也能看）：只认压过的小图，一轮合计有上限
 // 改动卡片的 oldText、newText、base 不截断：界面按顺序重放改动还原全文，截了就对不上。脱敏不增删换行，重放照样按行对得上
 
 export const MAX_TEXT_CHARS = 64_000
 const OMITTED_FILE = '（可能含密钥的文件，内容未同步）'
 const OMITTED_IMAGE = '（图片未同步）'
 const OMITTED_VISUAL = '<p>（可视化内容未同步）</p>'
+// 一页至少一轮：一轮几十张快照时，超出这么多字的换成占位，免得超过单条消息的上限
+const TURN_SNAPSHOT_CHARS = 1_600_000
 const TRUNCATED = '\n…（太长，已截断；完整内容在对方电脑上）'
 // 改动卡片里不截断的字段
 const DIFF_TEXT_KEYS = new Set(['oldText', 'newText', 'base'])
@@ -29,6 +32,7 @@ const QUOTED_ASSIGNMENT = /\b([A-Za-z0-9_]{0,40}(?:password|passwd|pwd|secret|ap
 // 环境变量：行首、全大写的名字
 const ENV_ASSIGNMENT = /^([ \t]{0,40}(?:export[ \t]+|set[ \t]+)?[A-Z0-9_]{0,40}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_KEY|ACCESS_KEY|CREDENTIALS?)[A-Z0-9_]{0,40}[ \t]{0,10}=[ \t]{0,10})(\S{1,1000})/gm
 const AUTHORIZATION = /(\bAuthorization\s{0,10}:\s{0,10}(?:Bearer|Basic|Token)\s{1,10})[^\s"',;]{1,4000}/gi
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s/:@]{1,256}:[^\s/@]{1,256}@/gi
 
 export function redactText(text: string, truncate = true): string {
@@ -56,7 +60,31 @@ export function redactToolCall<T extends object>(toolCall: T): T {
 export function redactTurn(turn: StoredTurn): StoredTurn & { omittedImages?: number } {
   const { images, ...rest } = turn
   const redacted = walk(rest, false) as Omit<StoredTurn, 'images'>
-  return { ...redacted, images: [], ...(images.length > 0 ? { omittedImages: images.length } : {}) }
+  return { ...redacted, updates: withinSnapshotBudget(redacted.updates), images: [], ...(images.length > 0 ? { omittedImages: images.length } : {}) }
+}
+
+function withinSnapshotBudget(updates: SessionUpdate[]): SessionUpdate[] {
+  let budget = TURN_SNAPSHOT_CHARS
+  return updates.map((update) => {
+    const diffra = update._meta?.diffra as Record<string, unknown> | undefined
+    const snapshot = diffra?.[VISUAL_SNAPSHOT_META_KEY] as { data?: unknown } | undefined
+    if (typeof snapshot?.data !== 'string') return update
+    if (snapshot.data.length <= budget) {
+      budget -= snapshot.data.length
+      return update
+    }
+    return { ...update, _meta: { ...update._meta, diffra: { ...diffra, [VISUAL_SNAPSHOT_META_KEY]: { type: 'text', text: OMITTED_IMAGE } } } }
+  })
+}
+
+function isVisualSnapshot(object: Record<string, unknown>): object is { type: 'image'; mimeType: string; data: string } {
+  return (
+    object.type === 'image' &&
+    (VISUAL_SNAPSHOT_TYPES as readonly unknown[]).includes(object.mimeType) &&
+    typeof object.data === 'string' &&
+    object.data.length <= VISUAL_SNAPSHOT_MAX_CHARS &&
+    BASE64.test(object.data)
+  )
 }
 
 // 发出去的副本不带本机的目录结构：项目里的绝对路径换成相对项目的，用户目录换成 ~（不暴露 Windows 用户名）。
@@ -109,6 +137,8 @@ function hidePath(path: string, roots: Root[]): string {
 }
 
 function hideIn(value: unknown, roots: Root[], key?: string): unknown {
+  // 快照的 base64 里可能碰巧有像路径的片段
+  if (key === VISUAL_SNAPSHOT_META_KEY) return value
   if (typeof value === 'string') {
     if (key && DIFF_TEXT_KEYS.has(key)) return value
     return key && PATH_KEYS.has(key) ? hidePath(value, roots) : hideText(value, roots)
@@ -164,6 +194,7 @@ function walk(value: unknown, omit: boolean, key?: string): unknown {
   if (Array.isArray(value)) return value.map((item) => walk(item, omit))
   if (typeof value !== 'object' || value === null) return value
   const object = value as Record<string, unknown>
+  if (key === VISUAL_SNAPSHOT_META_KEY) return isVisualSnapshot(object) ? { type: 'image', mimeType: object.mimeType, data: object.data } : { type: 'text', text: OMITTED_IMAGE }
   if (object.type === 'image' && typeof object.data === 'string') return { type: 'text', text: OMITTED_IMAGE }
   if (key === VISUAL_META_KEY && typeof object.code === 'string') return { ...object, title: typeof object.title === 'string' ? redactText(object.title) : object.title, code: OMITTED_VISUAL }
   const protectedPath = typeof object.path === 'string' && isProtectedFile(object.path)

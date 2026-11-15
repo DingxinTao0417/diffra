@@ -2,7 +2,7 @@ import type { CheckpointChange, CommandInfo, PermissionMode, PromptImage, Sessio
 import type { RemoteEvent, RemoteSessionDetails, RemoteSnapshotPage, SessionList } from '@diffra/remote/messages'
 import type { RemoteSyncEvent } from '../../../../shared/remote'
 import type { ModelRef, ProviderView } from '../../../../shared/settings'
-import { applySilence, applyUpdate, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, type Usage, usageOf } from '@/features/session/transcript'
+import { applySilence, applyUpdate, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, type Usage, usageOf, visualSnapshotOf, withVisualSnapshot } from '@/features/session/transcript'
 import { errorMessage } from '@/lib/errors'
 import { showToast, store } from '@/state/store'
 
@@ -230,6 +230,7 @@ export async function loadRemoteToolOutput(key: string, toolCallId: string): Pro
 function applyLive(task: RemoteTask, update: SessionUpdate): RemoteTask {
   const usage = usageOf(update)
   if (usage) return { ...task, usage }
+  if (visualSnapshotOf(update).visualSnapshot) return { ...task, turns: withVisualSnapshot(task.turns, update) }
   const last = task.turns.at(-1)
   if (!last) return task
   const silence = modelSilenceOf(update)
