@@ -127,7 +127,7 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
             {sameDay(selected, today) && <span className="ml-1.5 font-normal text-muted-foreground">今天</span>}
             {sameDay(selected, addDays(today, 1)) && <span className="ml-1.5 font-normal text-muted-foreground">明天</span>}
           </h2>
-          <TodoInput key={dayKey(selected)} placeholder={defaultAt ? `在这天加一条（${formatClock(defaultAt)} 提醒）` : '记一条（不定时间）'} defaultAt={defaultAt} showMeta={false} className="h-9 rounded-lg text-sm" />
+          <TodoInput key={dayKey(selected)} draftKey={`calendar:${dayKey(selected)}`} placeholder={defaultAt ? `在这天加一条（${formatClock(defaultAt)} 提醒）` : '记一条（不定时间）'} defaultAt={defaultAt} showMeta={false} className="h-9 rounded-lg text-sm" />
           {dayTodos.length === 0 ? (
             <p className="px-2 text-xs text-muted-foreground">这天没有待办</p>
           ) : (

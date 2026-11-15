@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlarmClock, Check, ChevronDown, Folder, FolderDot, FolderOpen, SquarePen, X } from 'lucide-react'
 import { parseTodoPriority } from '../../../../shared/todos'
 import { cn } from 'cn'
@@ -12,6 +12,7 @@ import { addTodo, pickProject } from '@/state/actions'
 import { showToast, useAppState } from '@/state/store'
 import { SchedulePicker } from './SchedulePicker'
 import { TodoAttachmentList, useTodoAttachments } from './TodoAttachments'
+import { readTodoDraft, writeTodoDraft } from './todo-drafts'
 import { TodoEditorDialog, type TodoDraft } from './TodoEditorDialog'
 import { PriorityBadge } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
@@ -20,13 +21,14 @@ const PROJECT_MENU = 'flex h-7 max-w-48 items-center gap-1 rounded-md border bg-
 
 // 记待办的输入框：回车保存；开头写 p0–p3 加空格设优先级。旁边的闹钟先定个提醒时间（定时发送在记下以后从那一条上设），
 // 再旁边的按钮打开添加对话框（标题、正文、优先级都能填），已经输入的字和选好的项目、标签、时间、附件带过去。图片和文件可以粘贴或拖进输入框。
-// defaultAt 是日历里选中的那天
+// defaultAt 是日历里选中的那天。draftKey：没记下的内容按它存着，切到别的页面再回来还在
 export function TodoInput({
   autoFocus = false,
   placeholder = '记下一个点子，回车保存',
   defaultAt,
   className,
   showMeta = true,
+  draftKey = 'list',
 }: {
   autoFocus?: boolean
   placeholder?: string
@@ -34,13 +36,18 @@ export function TodoInput({
   className?: string
   // 日历右边很窄，只保留记一条的输入框；标签和项目可以在列表里再改
   showMeta?: boolean
+  draftKey?: string
 }) {
-  const [draft, setDraft] = useState('')
-  const [at, setAt] = useState<Date | null>(null)
-  const [project, setProject] = useState<string | null>(null)
-  const [tags, setTags] = useState<string[]>([])
+  const [saved] = useState(() => readTodoDraft(draftKey))
+  const [draft, setDraft] = useState(saved?.text ?? '')
+  const [at, setAt] = useState<Date | null>(saved?.at ?? null)
+  const [project, setProject] = useState<string | null>(saved?.project ?? null)
+  const [tags, setTags] = useState<string[]>(saved?.tags ?? [])
   const [detail, setDetail] = useState<TodoDraft | null>(null)
-  const attachments = useTodoAttachments({ images: [], files: [] })
+  const attachments = useTodoAttachments({ images: saved?.images ?? [], files: saved?.files ?? [] })
+  useEffect(() => {
+    writeTodoDraft(draftKey, { text: draft, at, project, tags, images: attachments.images, files: attachments.files })
+  }, [draftKey, draft, at, project, tags, attachments.images, attachments.files])
   const now = useNow()
   const due = at ?? defaultAt ?? null
   const quick = parseTodoPriority(draft)

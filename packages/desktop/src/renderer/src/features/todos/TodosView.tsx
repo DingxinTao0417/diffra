@@ -258,11 +258,8 @@ export function QuickTodo() {
   const now = useNow()
   if (!open) return null
   const quick = parseTodoPriority(text)
-  const close = () => {
-    setText('')
-    setAt(null)
-    store.set((state) => ({ ...state, quickTodoOpen: false }))
-  }
+  // 关掉时没记下的字留着，下次按 Ctrl+J 接着写；记下以后才清空
+  const close = () => store.set((state) => ({ ...state, quickTodoOpen: false }))
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 dark:bg-black/50 pt-[18vh]" onMouseDown={(event) => event.target === event.currentTarget && close()} data-testid="quick-todo">
       <div className="flex w-full max-w-lg items-center gap-1 rounded-xl border bg-popover p-2 shadow-overlay">
@@ -277,7 +274,11 @@ export function QuickTodo() {
             if (event.key === 'Escape') close()
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
             event.preventDefault()
-            if (quick.text.trim()) void addTodo(quick.text, at ?? undefined, { priority: quick.priority })
+            if (quick.text.trim()) {
+              void addTodo(quick.text, at ?? undefined, { priority: quick.priority })
+              setText('')
+              setAt(null)
+            }
             close()
           }}
         />
