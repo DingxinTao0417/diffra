@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { ARCHITECTURE_USAGE_ID, CLIENT_EXT_NOTIFICATIONS, SESSION_EXT_METHODS, type SessionModel } from '../protocol.js'
 import { modelConfigSchema } from '../session/config.js'
 import { toUsageRecord, type UsageLog } from '../usage/log.js'
-import { generateDiagram, interpretArchitecture, interpretModule, proposeTarget } from './interpret.js'
+import { generateDiagram, generateFlowChart, interpretArchitecture, interpretModule, proposeTarget } from './interpret.js'
 import { ARCHITECTURE_VERSION, type ArchitectureEvent, type ArchitectureLayout, type BlockDiagram, DIAGRAM_KINDS, INTERPRET_PARTS, type InterpretPart, type TargetArchitecture } from './model.js'
 
 const PART_NAMES: Record<InterpretPart, string> = { overview: '系统简介和流程', application: '应用架构图', technology: '技术架构图', system: '系统架构图' }
@@ -117,7 +117,9 @@ export function registerArchitecture(app: acp.AgentApp, service: ArchitectureSer
             const previous = await service.interpretation(params.projectId)
             const { value, usage } = await interpretArchitecture(analysis, params.model, previous?.notes ?? {}, signal)
             await logUsage(params.model, usage, project.path)
-            await service.saveInterpretation(params.projectId, value)
+            // 流程名还在的，画过的流程图留着
+            const charts = Object.fromEntries(Object.entries(previous?.charts ?? {}).filter(([name]) => value.flows.some((flow) => flow.name === name)))
+            await service.saveInterpretation(params.projectId, { ...value, charts })
           } else {
             const previous = (await service.diagrams(params.projectId))[part]
             const { value, usage } = await generateDiagram(analysis, part, params.model, previous, signal)
@@ -160,6 +162,18 @@ export function registerArchitecture(app: acp.AgentApp, service: ArchitectureSer
         dropped: 0,
       }
       await service.saveInterpretation(params.projectId, { ...next, notes: { ...next.notes, [params.path]: value } })
+      return value
+    })
+    .onRequest(SESSION_EXT_METHODS.architectureFlowChart, projectParams.extend({ model: modelConfigSchema, flow: z.string().min(1).max(500) }), async ({ params }) => {
+      const analysis = await requireAnalysis(params.projectId)
+      const project = await service.project(params.projectId)
+      const flow = (await service.interpretation(params.projectId))?.flows.find((item) => item.name === params.flow)
+      if (!flow) throw new Error(`没有「${params.flow}」这条流程，先重新解读一遍`)
+      const { value, usage } = await generateFlowChart(analysis, flow, params.model)
+      await logUsage(params.model, usage, project.path)
+      // 画的这一两分钟里解读可能重新生成过：存进最新的那份，这条流程已经没了就不存
+      const latest = await service.interpretation(params.projectId)
+      if (latest?.flows.some((item) => item.name === params.flow)) await service.saveInterpretation(params.projectId, { ...latest, charts: { ...latest.charts, [params.flow]: value } })
       return value
     })
     .onRequest(SESSION_EXT_METHODS.architectureProposeTarget, projectParams.extend({ model: modelConfigSchema, principles: z.string().max(10_000) }), async ({ params }) => {

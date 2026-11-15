@@ -33,6 +33,8 @@ const APPLICATION = {
   ],
 }
 
+const LONG_ACTION = '把订单按创建时间倒序排好，再按每页二十条分页，最后连同总条数一起返回给管理后台渲染成订单列表'
+
 const INTERPRETATION = {
   summary: '一个小网店后端，界面调服务，服务查数据库。',
   techStack: ['TypeScript', 'Express'],
@@ -46,8 +48,35 @@ const INTERPRETATION = {
       steps: [
         { from: 'src/ui', to: 'src/services', action: '调 listOrders', anchor: { path: 'src/ui/App.ts', line: 3, symbol: 'App' } },
         { from: 'src/services', to: 'src/db', action: '查询订单表', anchor: { path: 'src/services/orders.ts', line: 5, symbol: null } },
+        // 两个参与方最后一段都叫 src；说明很长
+        { from: 'apps/web/src', to: 'apps/admin/src', action: LONG_ACTION, anchor: null },
       ],
     },
+  ],
+}
+
+// 「列订单」的流程图：查不到就重试的循环；有一条连到不存在的节点，核对时去掉
+const FLOWCHART = {
+  groups: [{ id: 'retry', label: '重试循环', parent: null }],
+  nodes: [
+    { id: 'start', kind: 'start', label: '界面要订单', detail: '', group: null, anchor: { path: 'src/ui/App.ts', line: 2, symbol: 'App' } },
+    { id: 'list', kind: 'action', label: '列订单', detail: 'listOrders', group: 'retry', anchor: { path: 'src/services/orders.ts', line: 1, symbol: 'listOrders' } },
+    { id: 'query', kind: 'action', label: '查询订单表', detail: "query('orders')", group: 'retry', anchor: null },
+    { id: 'ok', kind: 'decision', label: '查到了？', detail: '', group: 'retry', anchor: null },
+    { id: 'done', kind: 'end', label: '返回订单', detail: '', group: null, anchor: null },
+  ],
+  edges: [
+    { from: 'start', to: 'list', label: '' },
+    { from: 'list', to: 'query', label: '' },
+    { from: 'query', to: 'ok', label: '' },
+    { from: 'ok', to: 'list', label: '否' },
+    { from: 'ok', to: 'done', label: '是' },
+    { from: 'ok', to: 'ghost', label: '超时' },
+  ],
+  notes: [
+    { text: '界面调 listOrders 要订单列表。', nodes: ['start', 'list'] },
+    { text: '服务查订单表，没查到就再查一次。', nodes: ['query', 'ok'] },
+    { text: '查到后把订单交回界面。', nodes: ['done'] },
   ],
 }
 
@@ -66,6 +95,7 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
   const model = await startScriptedModel([
     { toolCalls: [{ name: 'submit_diagram', input: APPLICATION }] },
     { toolCalls: [{ name: 'submit_architecture', input: INTERPRETATION }] },
+    { toolCalls: [{ name: 'submit_flowchart', input: FLOWCHART }] },
     // 用户把「应用界面」改名后重画：模型还是叫它「应用界面」，认领的代码一样，让位给改了名的
     { toolCalls: [{ name: 'submit_diagram', input: APPLICATION }] },
     // 任务：数据层反过来依赖业务层，违反分层，被打回后改掉
@@ -180,6 +210,40 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     await tab(window, '流程').click()
     await window.getByRole('button', { name: '让模型解读' }).click()
     await expect(window.getByTestId('architecture-flows')).toContainText('查询订单表', { timeout: 30_000 })
+    // 泳道撞名时带上前一段；箭头上的说明折行，不截断
+    const sequence = window.getByRole('img', { name: '列订单的时序图' })
+    await expect(sequence.locator('text', { hasText: /^web\/src$/ })).toHaveCount(1)
+    await expect(sequence.locator('text', { hasText: /^admin\/src$/ })).toHaveCount(1)
+    const label = sequence.locator('text', { hasText: '3. ' })
+    await expect(label).toHaveText(`3. ${LONG_ACTION}`)
+    expect(await label.locator('tspan').count()).toBeGreaterThan(1)
+    await window.getByTestId('architecture-flows').screenshot({ path: 'test-results/architecture-flows.png' })
+
+    // 流程图：让模型读代码画；判断是菱形，循环用框圈起来，连到不存在节点的线去掉
+    await window.getByRole('radio', { name: '流程图', exact: true }).click()
+    await window.getByRole('button', { name: '让模型画流程图' }).click()
+    const flowchart = window.getByTestId('architecture-flowchart')
+    await expect(flowchart.getByTestId('flowchart-node')).toHaveCount(5, { timeout: 30_000 })
+    expect(model.bodies().at(-1)).toContain('export function listOrders()')
+    await expect(flowchart.locator('[data-kind="decision"] polygon')).toHaveCount(1)
+    await expect(flowchart.getByTestId('flowchart-group')).toContainText('重试循环')
+    await expect(flowchart.getByTestId('flowchart-edge')).toHaveCount(5)
+    await expect(flowchart.getByTestId('flowchart-dropped')).toHaveText('有 1 处对不上代码，已去掉')
+    // 悬停一条讲解，只突出它说的节点
+    const notes = flowchart.getByTestId('flowchart-notes').getByRole('button')
+    await expect(notes).toHaveCount(3)
+    await notes.nth(1).hover()
+    await expect(flowchart.locator('[data-node="query"]')).not.toHaveAttribute('data-dim')
+    await expect(flowchart.locator('[data-node="start"]')).toHaveAttribute('data-dim', '')
+    await window.mouse.move(0, 0)
+    await flowchart.screenshot({ path: 'test-results/architecture-flowchart.png' })
+    await window.emulateMedia({ colorScheme: 'dark' })
+    await flowchart.screenshot({ path: 'test-results/architecture-flowchart-dark.png' })
+    await window.emulateMedia({ colorScheme: 'light' })
+    // 有代码位置的节点点开看代码，停在那个函数
+    await flowchart.getByRole('button', { name: /^列订单：看代码/ }).click()
+    await expect(window.getByTestId('architecture-source').locator('.bg-highlight')).toContainText('export function listOrders()')
+    await window.getByTestId('architecture-source').press('Escape')
 
     // 依赖：循环依赖；热点
     await tab(window, '依赖').click()

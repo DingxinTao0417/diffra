@@ -11,12 +11,17 @@ import { topLevelGroups } from './engine.js'
 import {
   ARCHITECTURE_VERSION,
   type ArchitectureAnalysis,
+  type ArchitectureFlow,
   type ArchitectureInterpretation,
   type BlockDiagram,
   type CodeAnchor,
   type DiagramBlock,
   diagramBlocks,
   type DiagramKind,
+  type FlowChart,
+  type FlowChartEdge,
+  type FlowChartGroup,
+  type FlowChartNode,
   type ModuleNote,
   type TargetArchitecture,
   type TargetRule,
@@ -31,6 +36,11 @@ const MAX_EXTERNALS = 40
 const README_CHARS = 4000
 const MODULE_SOURCE_CHARS = 30_000
 const MODULE_FILE_HEAD_LINES = 150
+// 流程图带的代码：总量、单个文件的上限；文件放不下时取代码位置前后这几行
+const FLOW_SOURCE_CHARS = 40_000
+const FLOW_FILE_CHARS = 14_000
+const FLOW_LINES_BEFORE = 30
+const FLOW_LINES_AFTER = 150
 
 export interface ModelCallResult<T> {
   value: T
@@ -397,6 +407,166 @@ export async function interpretModule(analysis: ArchitectureAnalysis, modulePath
     },
     usage,
   }
+}
+
+// ---------- 流程图 ----------
+
+const flowChartSchema = z.object({
+  groups: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string().describe('Short Chinese name of the loop or phase, e.g. 外层循环、内层循环、结束门禁'),
+        parent: z.string().nullable().describe('id of the enclosing group; null at top level'),
+      }),
+    )
+    .max(10),
+  nodes: z
+    .array(
+      z.object({
+        id: z.string(),
+        kind: z.enum(['start', 'end', 'action', 'decision']),
+        label: z.string().describe('Short label in Simplified Chinese (at most ~16 characters); a decision is a question ending with ？'),
+        detail: z.string().describe('Optional extra line, e.g. what is checked or loaded; empty string if none'),
+        group: z.string().nullable().describe('id of the innermost group this node is in; null if none'),
+        anchor: anchorSchema.nullable(),
+      }),
+    )
+    .min(2)
+    .max(40),
+  edges: z.array(z.object({ from: z.string(), to: z.string(), label: z.string().describe('是 / 否 or a short condition for edges leaving a decision; empty otherwise') })).max(80),
+  notes: z.array(z.object({ text: z.string().describe('One or two sentences in Simplified Chinese'), nodes: z.array(z.string()).max(8).describe('ids of the nodes it explains') })).max(12),
+})
+
+const FLOWCHART_SYSTEM = [
+  'You draw a control-flow chart (流程图) of one runtime flow of a codebase for the developer who owns it, the kind seen in Chinese tech articles: rectangles for actions, diamonds for decisions with 是/否 branches, arrows going back up to form loops, dashed boxes around loops or phases (e.g. 外层循环、内层循环、结束门禁), and a numbered explanation (流程讲解) beside it.',
+  'You get the flow (its steps across modules) and source excerpts with line numbers. Write labels and explanations in Simplified Chinese; keep code identifiers as they are.',
+  '- Draw the real control flow from the code: loops, branches, early exits, retries, queues, waits. Never invent steps the code does not have; leave out trivial plumbing.',
+  '- 6-30 nodes. Exactly one start node; one or more end nodes (e.g. one per way it can finish). Labels are short (at most ~16 characters). A decision is a question ending with ？ with at least two outgoing edges labeled 是/否 or a short condition.',
+  '- A loop is an edge back to an earlier node. Put the nodes of each loop or phase in a group; groups may nest (parent). Give each node the innermost group it is in, or null.',
+  '- Anchors: the file and line in the excerpts where that step happens; prefer giving the symbol name (the line is corrected from the symbol list). Use null if unsure.',
+  '- notes: 4-9 explanations in reading order, each one or two sentences, listing the ids of the nodes it explains.',
+  '- Call submit_flowchart exactly once.',
+].join('\n')
+
+// 交给模型的：流程的各步，加上各步代码位置所在的文件（放不下就取位置前后几行），带行号和符号表
+async function flowChartPrompt(analysis: ArchitectureAnalysis, flow: ArchitectureFlow): Promise<string> {
+  const lines = [`Flow: ${flow.name}`, flow.description, '', 'Steps (from -> to: what happens [code location]):']
+  flow.steps.forEach((step, at) => {
+    const anchor = step.anchor ? ` [${step.anchor.path}:${step.anchor.line}${step.anchor.symbol ? ` ${step.anchor.symbol}` : ''}]` : ''
+    lines.push(`${at + 1}. ${step.from} -> ${step.to}: ${step.action}${anchor}`)
+  })
+  const files = new Map(analysis.files.map((file) => [file.path, file]))
+  const targets = new Map<string, number[]>()
+  const add = (path: string, line: number) => files.has(path) && targets.set(path, [...(targets.get(path) ?? []), line])
+  for (const step of flow.steps) {
+    if (step.anchor) add(step.anchor.path, step.anchor.line)
+    for (const name of [step.from, step.to]) if (!step.anchor || step.anchor.path !== name) add(name, 1)
+  }
+  if (targets.size === 0) throw new Error('这条流程没有对得上的代码位置，先重新解读一遍')
+  let budget = FLOW_SOURCE_CHARS
+  for (const [path, at] of targets) {
+    if (budget <= 0) break
+    const text = await readFile(join(analysis.root, path), 'utf8').catch(() => null)
+    if (text === null) continue
+    const source = text.split('\n')
+    const numbered = (from: number, to: number) => source.slice(from - 1, to).map((line, offset) => `${from + offset}| ${line}`).join('\n')
+    const limit = Math.min(budget, FLOW_FILE_CHARS)
+    let excerpt: string
+    if (text.length <= limit) excerpt = numbered(1, source.length)
+    else {
+      // 几个位置前后的行合成几段，重叠的并起来
+      const ranges: Array<[number, number]> = []
+      for (const line of [...at].sort((a, b) => a - b)) {
+        const from = Math.max(1, line - FLOW_LINES_BEFORE)
+        const to = Math.min(source.length, line + FLOW_LINES_AFTER)
+        const last = ranges.at(-1)
+        if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to)
+        else ranges.push([from, to])
+      }
+      excerpt = ranges.map(([from, to]) => numbered(from, to)).join('\n…\n')
+    }
+    excerpt = clip(excerpt, limit)
+    budget -= excerpt.length
+    const symbols = files.get(path)!.symbols.slice(0, 60).map((symbol) => `${symbol.parent ? `${symbol.parent}.` : ''}${symbol.name}@${symbol.line}`)
+    lines.push('', `--- ${path} ---`, `Symbols: ${symbols.join(' ')}`, excerpt)
+  }
+  return lines.join('\n')
+}
+
+// 模型画的图逐条核对：重复或空的 id、对不上的连线去掉，框的上级对不上或绕成圈放到最外面，没有节点的框不画，代码位置按解析结果改正
+function verifyFlowChart(input: z.infer<typeof flowChartSchema>, index: PathIndex, model: SessionModel): FlowChart {
+  let dropped = 0
+  const groups: FlowChartGroup[] = []
+  for (const group of input.groups) {
+    const id = group.id.trim()
+    if (!id || groups.some((item) => item.id === id)) {
+      dropped++
+      continue
+    }
+    groups.push({ id, label: clip(group.label.trim(), 30), parent: group.parent?.trim() || null })
+  }
+  const byId = new Map(groups.map((group) => [group.id, group]))
+  for (const group of groups) if (group.parent !== null && !byId.has(group.parent)) group.parent = null
+  for (const group of groups) {
+    const seen = new Set<string>()
+    for (let at = group.parent; at !== null && !seen.has(at); at = byId.get(at)!.parent) {
+      if (at === group.id) {
+        group.parent = null
+        break
+      }
+      seen.add(at)
+    }
+  }
+
+  const nodes: FlowChartNode[] = []
+  for (const node of input.nodes) {
+    const id = node.id.trim()
+    if (!id || nodes.some((item) => item.id === id)) {
+      dropped++
+      continue
+    }
+    const group = node.group?.trim() || null
+    nodes.push({ id, kind: node.kind, label: clip(node.label.trim(), 40), detail: clip(node.detail.trim(), 120), group: group !== null && byId.has(group) ? group : null, anchor: index.anchor(node.anchor) })
+  }
+  const ids = new Set(nodes.map((node) => node.id))
+
+  const edges: FlowChartEdge[] = []
+  const seenEdges = new Set<string>()
+  for (const edge of input.edges) {
+    const from = edge.from.trim()
+    const to = edge.to.trim()
+    const label = clip(edge.label.trim(), 20)
+    const key = `${from}\u0000${to}\u0000${label}`
+    if (!ids.has(from) || !ids.has(to) || seenEdges.has(key)) {
+      dropped++
+      continue
+    }
+    seenEdges.add(key)
+    edges.push({ from, to, label })
+  }
+  if (nodes.length < 2 || edges.length === 0) throw new Error('模型画的流程图对不上（节点或连线太少），重新画一次或换个模型')
+
+  const used = new Set<string>()
+  for (const node of nodes) for (let at = node.group; at !== null && !used.has(at); at = byId.get(at)!.parent) used.add(at)
+  return {
+    generatedAt: new Date().toISOString(),
+    model: { provider: model.provider?.name ?? model.endpoint.baseUrl, modelId: model.modelId },
+    nodes,
+    edges,
+    groups: groups.filter((group) => used.has(group.id)),
+    notes: input.notes.flatMap((note) => {
+      const text = clip(note.text.trim(), 300)
+      return text ? [{ text, nodes: [...new Set(note.nodes.map((id) => id.trim()))].filter((id) => ids.has(id)) }] : []
+    }),
+    dropped: dropped + index.dropped,
+  }
+}
+
+export async function generateFlowChart(analysis: ArchitectureAnalysis, flow: ArchitectureFlow, model: SessionModel, signal?: AbortSignal): Promise<ModelCallResult<FlowChart>> {
+  const prompt = await flowChartPrompt(analysis, flow)
+  const { value, usage } = await submitOnce(model, FLOWCHART_SYSTEM, prompt, 'submit_flowchart', flowChartSchema, signal)
+  return { value: verifyFlowChart(value, new PathIndex(analysis), model), usage }
 }
 
 // ---------- 架构图（分层方块图） ----------

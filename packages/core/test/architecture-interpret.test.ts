@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { analyzeProject } from '../src/architecture/engine.js'
-import { generateDiagram, interpretArchitecture, interpretModule, proposeTarget } from '../src/architecture/interpret.js'
+import { generateDiagram, generateFlowChart, interpretArchitecture, interpretModule, proposeTarget } from '../src/architecture/interpret.js'
 import type { ArchitectureAnalysis, TargetArchitecture } from '../src/architecture/model.js'
 import { findRipgrep } from '../src/environment.js'
 import { startScriptedServer } from './scripted-server.js'
@@ -97,6 +97,88 @@ describe('架构的模型解读', () => {
     } finally {
       await server.close()
     }
+  })
+
+  test('流程图：带上各步代码位置所在文件的代码（有行号）和符号表；节点、连线、框逐条核对，对不上的去掉', async () => {
+    const flow = {
+      name: '查订单',
+      description: '用户查订单',
+      steps: [
+        { from: '用户', to: 'src/main.ts', action: '请求', anchor: { path: 'src/main.ts', line: 5, symbol: null } },
+        { from: 'src/main.ts', to: 'src/orders', action: '列订单', anchor: { path: 'src/orders/service.ts', line: 3, symbol: 'listOrders' } },
+      ],
+    }
+    const server = await startScriptedServer([
+      {
+        toolCalls: [
+          {
+            name: 'submit_flowchart',
+            input: {
+              groups: [
+                { id: 'loop', label: '重试循环', parent: null },
+                { id: 'inner', label: '内层', parent: 'gone' },
+                { id: 'a', label: 'A', parent: 'b' },
+                { id: 'b', label: 'B', parent: 'a' },
+                { id: 'empty', label: '空框', parent: null },
+              ],
+              nodes: [
+                { id: 'start', kind: 'start', label: '收到请求', detail: '', group: null, anchor: { path: 'src/main.ts', line: 5, symbol: null } },
+                { id: 'query', kind: 'action', label: '查数据库', detail: 'select 1', group: 'loop', anchor: { path: 'src/orders/service.ts', line: 99, symbol: 'listOrders' } },
+                { id: 'ok', kind: 'decision', label: '成功？', detail: '', group: 'inner', anchor: { path: 'src/x.ts', line: 1, symbol: null } },
+                { id: 'query', kind: 'action', label: '重复的', detail: '', group: null, anchor: null },
+                { id: 'end', kind: 'end', label: '返回', detail: '', group: 'a', anchor: null },
+              ],
+              edges: [
+                { from: 'start', to: 'query', label: '' },
+                { from: 'query', to: 'ok', label: '' },
+                { from: 'ok', to: 'query', label: '否' },
+                { from: 'ok', to: 'end', label: '是' },
+                { from: 'ok', to: 'nowhere', label: '是' },
+                { from: 'start', to: 'query', label: '' },
+              ],
+              notes: [
+                { text: '先查，失败就重试。', nodes: ['query', 'ok', 'ghost'] },
+                { text: '  ', nodes: [] },
+              ],
+            },
+          },
+        ],
+      },
+    ])
+    try {
+      const { value } = await generateFlowChart(analysis, flow, modelAt(server.baseUrl))
+      const body = server.bodies[0]!
+      expect(body).toContain("5|   express().get('/orders', listOrders)")
+      expect(body).toContain('listOrders@3')
+      expect(body).toContain('2. src/main.ts -> src/orders: 列订单 [src/orders/service.ts:3 listOrders]')
+      expect(value.nodes.map((node) => node.id)).toEqual(['start', 'query', 'ok', 'end'])
+      // 给了符号名的按符号的行号改正；文件不存在的代码位置去掉
+      expect(value.nodes[1]!.anchor).toEqual({ path: 'src/orders/service.ts', line: 3, symbol: 'listOrders' })
+      expect(value.nodes[2]).toMatchObject({ group: 'inner', anchor: null })
+      // 上级对不上的、绕成圈的放到最外面；没有节点的框不画
+      expect(value.groups).toEqual([
+        { id: 'loop', label: '重试循环', parent: null },
+        { id: 'inner', label: '内层', parent: null },
+        { id: 'a', label: 'A', parent: null },
+      ])
+      expect(value.edges).toEqual([
+        { from: 'start', to: 'query', label: '' },
+        { from: 'query', to: 'ok', label: '' },
+        { from: 'ok', to: 'query', label: '否' },
+        { from: 'ok', to: 'end', label: '是' },
+      ])
+      expect(value.notes).toEqual([{ text: '先查，失败就重试。', nodes: ['query', 'ok'] }])
+      // 重复的节点、对不上的连线、重复的连线、不存在的文件
+      expect(value.dropped).toBe(4)
+      expect(value.model).toEqual({ provider: '测试服务', modelId: 'm' })
+    } finally {
+      await server.close()
+    }
+  })
+
+  test('流程图：流程里没有一处对得上的代码，不调模型', async () => {
+    const flow = { name: '空', description: '', steps: [{ from: '用户', to: '数据库', action: '查', anchor: null }] }
+    await expect(generateFlowChart(analysis, flow, modelAt('http://127.0.0.1:9'))).rejects.toThrow('这条流程没有对得上的代码位置')
   })
 
   test('架构图：模型画的方块路径和包逐条核对，层名对上竖栏和连线；手改的方块保留，同名方块沿用旧 id', async () => {

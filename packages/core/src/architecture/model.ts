@@ -220,6 +220,45 @@ export interface ArchitectureFlow {
   steps: FlowStep[]
 }
 
+// 流程图（第 696 步）：一条流程里的控制逻辑（判断、循环、提前结束），按需让模型读这条流程经过的代码画
+export type FlowChartNodeKind = 'start' | 'end' | 'action' | 'decision'
+
+export interface FlowChartNode {
+  id: string
+  kind: FlowChartNodeKind
+  label: string
+  // 一行补充说明，可以为空
+  detail: string
+  // 所在的框（循环、阶段）；null 在最外面
+  group: string | null
+  anchor: CodeAnchor | null
+}
+
+export interface FlowChartEdge {
+  from: string
+  to: string
+  // 判断的分支写「是 / 否」或简短条件；普通连线为空
+  label: string
+}
+
+export interface FlowChartGroup {
+  id: string
+  label: string
+  parent: string | null
+}
+
+export interface FlowChart {
+  generatedAt: string
+  model: { provider: string; modelId: string }
+  nodes: FlowChartNode[]
+  edges: FlowChartEdge[]
+  groups: FlowChartGroup[]
+  // 流程讲解：按阅读顺序，每条说的是哪几个节点
+  notes: Array<{ text: string; nodes: string[] }>
+  // 校验时去掉的节点、连线和代码位置
+  dropped: number
+}
+
 export interface ModuleNote {
   generatedAt: string
   model: { provider: string; modelId: string }
@@ -243,6 +282,8 @@ export interface ArchitectureInterpretation {
   flows: ArchitectureFlow[]
   // 单个目录的解读，下钻时按需生成；键是目录路径
   notes: Record<string, ModuleNote>
+  // 流程图，按需生成；键是流程名。旧的解读文件里没有
+  charts?: Record<string, FlowChart>
   // 校验时丢掉的代码位置（文件不存在、行号越界）
   dropped: number
 }

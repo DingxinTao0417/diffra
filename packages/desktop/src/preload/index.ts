@@ -107,6 +107,7 @@ const api: DiffraApi = {
   interpretArchitecture: (projectId, parts) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpret, projectId, parts),
   saveArchitectureDiagram: (projectId, diagram) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveDiagram, projectId, diagram),
   interpretArchitectureModule: (projectId, path) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpretModule, projectId, path),
+  drawArchitectureFlowChart: (projectId, flow) => ipcRenderer.invoke(IPC_CHANNELS.architectureFlowChart, projectId, flow),
   proposeTargetArchitecture: (projectId, principles) => ipcRenderer.invoke(IPC_CHANNELS.architectureProposeTarget, projectId, principles),
   saveTargetArchitecture: (projectId, target) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveTarget, projectId, target),
   saveArchitectureLayout: (projectId, layout) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveLayout, projectId, layout),

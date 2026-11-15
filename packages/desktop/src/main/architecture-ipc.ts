@@ -4,6 +4,7 @@ import {
   architectureAnalyze,
   architectureBundle,
   architectureCancel,
+  architectureFlowChart,
   architectureInterpret,
   architectureInterpretModule,
   architectureList,
@@ -53,6 +54,9 @@ export function registerArchitectureIpc(architectureModel: () => Promise<Session
   )
   ipcMain.handle(IPC_CHANNELS.architectureInterpretModule, async (_event, rawId: unknown, rawPath: unknown) =>
     architectureInterpretModule(await coreConnection(), parse(projectId, rawId), parse(relativePath, rawPath), await architectureModel()),
+  )
+  ipcMain.handle(IPC_CHANNELS.architectureFlowChart, async (_event, rawId: unknown, rawFlow: unknown) =>
+    architectureFlowChart(await coreConnection(), parse(projectId, rawId), parse(z.string().min(1).max(500), rawFlow), await architectureModel()),
   )
   ipcMain.handle(IPC_CHANNELS.architectureProposeTarget, async (_event, rawId: unknown, rawPrinciples: unknown) =>
     architectureProposeTarget(await coreConnection(), parse(projectId, rawId), parse(z.string().max(10_000), rawPrinciples), await architectureModel()),

@@ -53,7 +53,7 @@ import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntr
 import type { ChangelogRelease } from './changelog'
 import type { PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
-import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -149,6 +149,7 @@ export const IPC_CHANNELS = {
   architectureStale: 'architecture:stale',
   architectureInterpret: 'architecture:interpret',
   architectureInterpretModule: 'architecture:interpret-module',
+  architectureFlowChart: 'architecture:flow-chart',
   architectureProposeTarget: 'architecture:propose-target',
   architectureSaveTarget: 'architecture:save-target',
   architectureSaveLayout: 'architecture:save-layout',
@@ -562,6 +563,8 @@ export interface DiffraApi {
   interpretArchitecture(projectId: string, parts: InterpretPart[]): Promise<void>
   saveArchitectureDiagram(projectId: string, diagram: BlockDiagram): Promise<void>
   interpretArchitectureModule(projectId: string, path: string): Promise<ModuleNote>
+  // 让模型读这条流程经过的代码画流程图，存进解读结果
+  drawArchitectureFlowChart(projectId: string, flow: string): Promise<FlowChart>
   proposeTargetArchitecture(projectId: string, principles: string): Promise<{ target: TargetArchitecture; rationale: string }>
   saveTargetArchitecture(projectId: string, target: TargetArchitecture | null): Promise<void>
   saveArchitectureLayout(projectId: string, layout: ArchitectureLayout): Promise<void>

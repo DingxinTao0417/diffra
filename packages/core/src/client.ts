@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, InterpretPart, ModuleNote, TargetArchitecture } from './architecture/model.js'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from './architecture/model.js'
 import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
@@ -464,6 +464,14 @@ export function architectureInterpretModule(connection: acp.ClientConnection, pr
   return requestOf(connection)<ModuleNote, { projectId: string; path: string; model: SessionModel }>(
     SESSION_EXT_METHODS.architectureInterpretModule,
     { projectId, path, model },
+    { cancellationSignal: AbortSignal.timeout(ARCHITECTURE_MODEL_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
+export function architectureFlowChart(connection: acp.ClientConnection, projectId: string, flow: string, model: SessionModel): Promise<FlowChart> {
+  return requestOf(connection)<FlowChart, { projectId: string; flow: string; model: SessionModel }>(
+    SESSION_EXT_METHODS.architectureFlowChart,
+    { projectId, flow, model },
     { cancellationSignal: AbortSignal.timeout(ARCHITECTURE_MODEL_TIMEOUT_MS), stopWaitingOnCancel: true },
   )
 }

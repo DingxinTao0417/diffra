@@ -891,6 +891,8 @@ export const SESSION_EXT_METHODS = {
   architectureStale: '_diffra/architecture/stale',
   architectureInterpret: '_diffra/architecture/interpret',
   architectureInterpretModule: '_diffra/architecture/interpret-module',
+  // 让模型读一条流程经过的代码，画它的流程图
+  architectureFlowChart: '_diffra/architecture/flow-chart',
   architectureProposeTarget: '_diffra/architecture/propose-target',
   architectureSaveTarget: '_diffra/architecture/save-target',
   architectureSaveLayout: '_diffra/architecture/save-layout',

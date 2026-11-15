@@ -206,6 +206,12 @@ export async function interpretModule(projectId: string, path: string): Promise<
   }))
 }
 
+export async function drawFlowChart(projectId: string, flow: string): Promise<void> {
+  const chart = await window.diffra.drawArchitectureFlowChart(projectId, flow)
+  // 和单目录解读一样直接合进来；流程图只在有解读、有这条流程时才画得出来
+  updateBundle(projectId, (bundle) => (bundle.interpretation ? { ...bundle, interpretation: { ...bundle.interpretation, charts: { ...bundle.interpretation.charts, [flow]: chart } } } : bundle))
+}
+
 export async function saveTarget(projectId: string, target: TargetArchitecture | null): Promise<void> {
   const previous = state.bundles[projectId]?.target ?? null
   updateBundle(projectId, (bundle) => ({ ...bundle, target }))
