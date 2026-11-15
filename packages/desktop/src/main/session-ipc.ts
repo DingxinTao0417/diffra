@@ -11,6 +11,7 @@ import {
   useTurnVersion,
   sessionBlocks,
   commandRiskOf,
+  applyDiff,
   stopProcess,
   processOutput,
   configureSession,
@@ -426,6 +427,16 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionApplyDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawPrompt: unknown, rawDiff: unknown) =>
+    (
+      await applyDiff(await coreConnection(), {
+        sessionId: parse(z.string().min(1), rawSessionId),
+        turnId: parse(z.string().min(1), rawTurnId),
+        prompt: parse(z.string().min(1).max(2000), rawPrompt),
+        diff: parse(z.string().min(1).max(500_000), rawDiff),
+      })
+    ).stopReason,
   )
   ipcMain.handle(IPC_CHANNELS.commandRisk, async (_event, rawCommand: unknown) => commandRiskOf(await coreConnection(), parse(z.string().min(1).max(20_000), rawCommand)))
   ipcMain.handle(IPC_CHANNELS.sessionBlocks, async (_event, rawSessionId: unknown) => sessionBlocks(await coreConnection(), parse(z.string().min(1), rawSessionId)))

@@ -199,6 +199,11 @@ export function retryStep(connection: acp.ClientConnection, sessionId: string, a
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
 }
 
+// 直接应用回答里的 diff（第 686 步），记成一轮 apply；prompt 是这一轮显示的说明
+export function applyDiff(connection: acp.ClientConnection, params: { sessionId: string; turnId: string; prompt: string; diff: string }): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, typeof params>(SESSION_EXT_METHODS.applyDiff, params, { cancellationSignal: AbortSignal.timeout(600_000), stopWaitingOnCancel: true })
+}
+
 // 回答里的命令打进终端之前看风险（第 687 步）
 export function commandRiskOf(connection: acp.ClientConnection, command: string): Promise<CommandRisk> {
   return requestOf(connection)<CommandRisk, { command: string }>(SESSION_EXT_METHODS.commandRisk, { command }, extRequestOptions())

@@ -661,6 +661,14 @@ export async function diagnose(sessionId: string, target: { turnId: string; card
   await runTurnOnCore(sessionId, text, 'diagnose', [], [], (turnId) => window.diffra.diagnose(sessionId, turnId, text, { turnId: target.turnId, cardId: target.cardId ?? null }))
 }
 
+// 直接应用回答里的 diff（第 686 步）：记成一轮 apply，走和模型改文件一样的权限、检查点和改动卡片
+export async function applyAnswerDiff(sessionId: string, diff: string, files: string[]): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  const text = `应用回答里的改动：${files.join('、') || '补丁'}`
+  await runTurnOnCore(sessionId, text, 'apply', [], [], (turnId) => window.diffra.applyDiff(sessionId, turnId, text, diff))
+}
+
 export async function compactTask(sessionId: string): Promise<void> {
   const task = store.get().live[sessionId]
   if (!task || task.running) return

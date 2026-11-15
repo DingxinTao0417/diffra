@@ -86,6 +86,7 @@ const api: DiffraApi = {
   shareTurns: (sessionId, turnIds) => ipcRenderer.invoke(IPC_CHANNELS.shareTurns, sessionId, turnIds),
   sessionBlocks: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionBlocks, sessionId),
   commandRisk: (command) => ipcRenderer.invoke(IPC_CHANNELS.commandRisk, command),
+  applyDiff: (sessionId, turnId, prompt, diff) => ipcRenderer.invoke(IPC_CHANNELS.sessionApplyDiff, sessionId, turnId, prompt, diff),
   useTurnVersion: (sessionId, turnId, index) => ipcRenderer.invoke(IPC_CHANNELS.sessionUseVersion, sessionId, turnId, index),
   recordVisualSnapshot: (sessionId, toolCallId, image) => ipcRenderer.invoke(IPC_CHANNELS.sessionVisualSnapshot, sessionId, toolCallId, image),
   listTodos: () => ipcRenderer.invoke(IPC_CHANNELS.todosList),

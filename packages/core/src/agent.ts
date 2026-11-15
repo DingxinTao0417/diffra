@@ -59,6 +59,7 @@ import { setBrowserSites } from './session/browser.js'
 import { DEEP_SCAN_TITLES, runDeepScan } from './security/deep.js'
 import { enhancePrompt } from './prompt-enhance.js'
 import { runDiagnose } from './session/diagnose.js'
+import { runApplyDiff } from './session/apply-diff.js'
 import { compactTurns } from './session/edit-diff.js'
 import { runPlan } from './session/plan.js'
 import { compactManually } from './session/compact.js'
@@ -714,6 +715,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       await persist(session, notify)
       await notify(taskStateUpdate(session))
       return result
+    })
+    .onRequest(SESSION_EXT_METHODS.applyDiff, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), prompt: z.string().min(1).max(2000), diff: z.string().min(1).max(500_000) }), async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('上一个任务还没结束')
+      session.turnRequested()
+      const stopReason = await runRecordedTurn(session, client, params.turnId, params.prompt, 'apply', [], [], (io) => runApplyDiff(session, params.diff, io))
+      return { stopReason }
     })
     .onRequest(SESSION_EXT_METHODS.commandRisk, z.object({ command: z.string().max(20_000) }), ({ params }) => commandRisk(params.command))
     .onRequest(SESSION_EXT_METHODS.sessionBlocks, z.object({ sessionId: z.string().min(1) }), ({ params }) => ({ blocks: sessionOf(params.sessionId).pluginBlocks }))

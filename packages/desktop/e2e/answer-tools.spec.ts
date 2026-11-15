@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -215,6 +215,47 @@ test('可执行代码块：命令打进这个项目的终端但不执行；有�
     // console 写法：去掉 $ 提示符和输出行
     await blocks.nth(2).getByRole('button', { name: '填入输入框' }).click()
     await expect(taskInput(window)).toHaveValue('pnpm test')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+
+// 第 686 步：回答里的 diff 直接应用，走正常的改文件流程
+test('应用回答里的 diff：记成一轮「应用回答里的改动」，改了文件、有改动卡片，能撤销；没写文件名的 diff 没有这个按钮', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-apply-diff-'))
+  writeFileSync(join(project, 'a.txt'), 'hello\n')
+  const answer = ['改成这样：', '', '```diff', '--- a/a.txt', '+++ b/a.txt', '@@ -1 +1 @@', '-hello', '+hi', '```', '', '这一段没写文件名：', '', '```diff', '@@ -1 +1 @@', '-x', '+y', '```'].join('\n')
+  const model = await startScriptedModel([{ text: answer }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '帮我改一下')
+    await waitTaskDone(window)
+    const diffs = window.getByTestId('agent-message').last().getByTestId('diff-block')
+    await expect(diffs).toHaveCount(2)
+    await expect(diffs.nth(1).getByRole('button', { name: '应用这个改动' })).toHaveCount(0)
+
+    await diffs.nth(0).getByRole('button', { name: '应用这个改动' }).click()
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    // 应用了还没跑检查：未完成 · 未验证
+    await expect(window.getByTestId('task-status')).toContainText('未验证', { timeout: 20_000 })
+    const applied = window.getByTestId('turn').last()
+    await expect(applied.getByTestId('user-message')).toHaveText('应用回答里的改动：a.txt')
+    await expect.poll(() => readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hi\n')
+    await expect(applied.getByTestId('turn-files')).toContainText('1 个文件')
+
+    // 撤销这一轮：文件回去
+    await applied.getByTestId('turn-actions').getByRole('button', { name: '撤销这一轮及之后的改动' }).click()
+    await window.getByTestId('restore-confirm').click()
+    await expect.poll(() => readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hello\n')
   } finally {
     await app.close()
     await model.close()

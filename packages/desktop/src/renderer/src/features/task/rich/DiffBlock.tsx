@@ -1,10 +1,13 @@
 import { useContext, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, FileDiff, PanelRight } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, FileDiff, PanelRight } from 'lucide-react'
 import { cn } from 'cn'
 import { DiffCounts } from '@/features/session/DiffView'
 import { DiffLines } from '@/features/session/DiffLines'
 import { type LooseDiffFile, parseLooseDiff } from '@/lib/unified-diff'
-import { store } from '@/state/store'
+import { applyAnswerDiff } from '@/state/actions'
+import { store, useAppState } from '@/state/store'
+import { useStatic } from '../static-context'
+import { useMarkdownSource } from './fence'
 import { AnswerContext, LanguageBadge, openFilePreview, useProjectFile } from '../answer-links'
 import { BlockShell, copyText, ShellAction } from './BlockShell'
 import { CodeBlock } from './CodeBlock'
@@ -19,6 +22,11 @@ export function DiffBlock({ info }: { info: FenceInfo }) {
   const files = useMemo(() => parseLooseDiff(info.code), [info.code])
   const target = useContext(AnswerContext)
   const only = useProjectFile(files.length === 1 ? files[0]!.path : null)
+  const isStatic = useStatic()
+  const streaming = useMarkdownSource().streaming
+  const running = useAppState((state) => (target ? (state.live[target.sessionId]?.running ?? true) : true))
+  // 直接应用（第 686 步）：写了文件名的才能应用；任务在跑时不行
+  const applicable = target !== null && !isStatic && !streaming && files.every((file) => file.path) && /^(---|\+\+\+) /m.test(info.code)
   if (files.length === 0) return <CodeBlock info={info} />
   const added = files.reduce((total, file) => total + file.added, 0)
   const removed = files.reduce((total, file) => total + file.removed, 0)
@@ -47,6 +55,11 @@ export function DiffBlock({ info }: { info: FenceInfo }) {
           {only && target?.changed.has(only.relative) && (
             <ShellAction label="查看这个任务的改动" onClick={() => store.set((state) => ({ ...state, panel: 'review', reviewFile: only.relative }))}>
               <FileDiff />
+            </ShellAction>
+          )}
+          {applicable && (
+            <ShellAction label={running ? '应用这个改动（任务结束后才能用）' : '应用这个改动'} onClick={() => (running ? undefined : void applyAnswerDiff(target!.sessionId, info.code, files.map((file) => file.path!)))}>
+              <Check />
             </ShellAction>
           )}
           <ShellAction label="复制补丁" onClick={() => copyText(info.code, '已复制补丁')}>

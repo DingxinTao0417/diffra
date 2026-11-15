@@ -35,6 +35,7 @@ import {
   sendPrompt,
   updateSession,
   useTurnVersion,
+  applyDiff,
 } from '../src/client.js'
 import { type ListTarget, type SessionConfig, UPDATE_SEQ_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS } from '../src/protocol.js'
 import { type SessionRecord, SessionStore } from '../src/session/store.js'
@@ -697,6 +698,30 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(last.turns.at(-1)?.versions?.[0]).toMatchObject({ edited: true })
     await expect(useTurnVersion(second, sessionId, 'turn-3b', 0)).rejects.toThrow('那一次改过文件')
     await expect(useTurnVersion(second, sessionId, 'turn-1b', 0)).rejects.toThrow('只能在最后一轮')
+  })
+
+  // 第 686 步：直接应用回答里的 diff
+  test('直接应用回答里的 diff：记成一轮 apply，改了文件、有改动卡片和检查点（能撤销）；模型下一轮知道；没写文件名的 diff 不改文件、说明原因', async () => {
+    writeFileSync(join(project, 'a.txt'), 'hello\n')
+    server = await startScriptedServer([{ text: '好' }, { text: '知道了' }])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'turn-1', '看看')
+    const diff = ['--- a/a.txt', '+++ b/a.txt', '@@ -1 +1 @@', '-hello', '+hi'].join('\n')
+    expect(await applyDiff(core, { sessionId, turnId: 'apply-1', prompt: '应用回答里的改动：a.txt', diff })).toEqual({ stopReason: 'end_turn' })
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hi\n')
+    expect(await previewCheckpoint(core, sessionId, 'apply-1')).toEqual([{ path: 'a.txt', change: 'modified' }])
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'blocked', needsVerification: true })
+
+    await sendPrompt(core, sessionId, 'turn-2', '接着')
+    expect(server.bodies[1]).toContain('The user applied a patch from your earlier answer')
+    expect(server.bodies[1]).toContain('*** Update File: a.txt')
+    const loaded = await loadSession(core, sessionId, project, config(server.baseUrl))
+    expect(loaded.turns.map((turn) => turn.kind)).toEqual(['prompt', 'apply', 'prompt'])
+    expect(JSON.stringify(loaded.turns[1]?.updates)).toContain('"type":"diff"')
+
+    await expect(applyDiff(core, { sessionId, turnId: 'apply-2', prompt: '应用', diff: ['@@ -1 +1 @@', '-hi', '+no'].join('\n') })).rejects.toThrow('没写文件名')
+    expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hi\n')
   })
 
   test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字也会在停下时跑门禁', async () => {

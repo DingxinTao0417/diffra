@@ -372,7 +372,8 @@ export interface UsageCache {
 // 存下来的一轮：界面重建这一轮要用的会话更新，按收到的顺序
 // 普通的一轮提问，或者用户发起的深度安全扫描
 // diagnose：停下或子智能体失败后的「定位问题」，只读地查原因、给修复提示词，不改文件、不改变任务结论
-export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact' | 'diagnose'
+// apply 是直接应用回答里的 diff（第 686 步）
+export type TurnKind = 'prompt' | 'deep-scan' | 'plan' | 'goal' | 'compact' | 'diagnose' | 'apply'
 export const MANUAL_COMPACTION_PROMPT = '/compact'
 // 深度扫描那一轮记下的提问（也是对话里显示的那一行）
 export const DEEP_SCAN_TITLES: Record<'task' | 'project', string> = {
@@ -858,6 +859,8 @@ export const SESSION_EXT_METHODS = {
   sessionBlocks: '_diffra/session/blocks',
   // 回答里的命令打进终端之前看风险（第 687 步），和确认卡用同一套规则
   commandRisk: '_diffra/command/risk',
+  // 直接应用回答里的 diff（第 686 步），记成一轮 apply
+  applyDiff: '_diffra/session/apply-diff',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
   // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）

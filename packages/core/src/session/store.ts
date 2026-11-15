@@ -97,7 +97,7 @@ const recordSchema = z.object({
     z.object({
       id: z.string(),
       // 第 14 步加的，旧记录都是普通提问；第 15 步加了出计划
-      kind: z.enum(['prompt', 'deep-scan', 'plan', 'goal', 'compact', 'diagnose']).default('prompt'),
+      kind: z.enum(['prompt', 'deep-scan', 'plan', 'goal', 'compact', 'diagnose', 'apply']).default('prompt'),
       prompt: z.string(),
       startedAt: z.string(),
       endedAt: z.string().nullable(),
