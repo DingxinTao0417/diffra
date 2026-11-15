@@ -30,6 +30,7 @@ import { SelectionAsk } from './SelectionAsk'
 import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
 import { ExportMenu, exportTurns } from './export'
+import { SpeakButton } from './SpeakButton'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -604,11 +605,9 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   // 定位轮不改文件、没有检查点
   const canRestore = (!readOnly || Boolean(remote?.restore)) && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
 
+  const answerText = useMemo(() => turn.items.flatMap((item) => (item.kind === 'agent' ? [item.text] : [])).join('\n\n'), [turn.items])
   const copy = () => {
-    const text = turn.items
-      .flatMap((item) => (item.kind === 'agent' ? [item.text] : []))
-      .join('\n\n')
-    navigator.clipboard.writeText(text).then(
+    navigator.clipboard.writeText(answerText).then(
       () => showToast('已复制回复'),
       (error: unknown) => console.error('复制失败', error),
     )
@@ -736,6 +735,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           <ActionButton label="复制回复" onClick={copy}>
             <Copy className="size-4" />
           </ActionButton>
+          <SpeakButton id={turn.id} text={answerText} />
           {/* 出错卡片里已经有「重试」，同一个动作不再放第二个按钮 */}
           {canRegenerate && !turn.error && (
             <ActionButton label="重新生成" disabled={task.running} onClick={onRegenerate}>

@@ -67,3 +67,63 @@ test('长回答有目录，点了跳过去，短回答没有；选中一段文�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+// 第 680 步：朗读。系统语音换成记录下来的替身，不真的出声
+const STUB_SPEECH = `(() => {
+  window.__spoken = []
+  window.__cancelled = 0
+  window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text } }
+  const synth = window.speechSynthesis
+  synth.speak = (utterance) => { window.__spoken.push({ text: utterance.text, voice: utterance.voice ? utterance.voice.voiceURI : null }); setTimeout(() => utterance.onend && utterance.onend(), 200) }
+  synth.cancel = () => { window.__cancelled += 1 }
+  synth.getVoices = () => [{ name: '测试女声', lang: 'zh-CN', voiceURI: 'test-zh' }, { name: 'Test Voice', lang: 'en-US', voiceURI: 'test-en' }]
+  synth.dispatchEvent(new Event('voiceschanged'))
+})()`
+
+test('朗读：读回答的文字，代码和表格线不念；读完按钮回到「朗读」；能选声音并记住；能中途停', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-speech-'))
+  const answer = ['## 结论', '', '第一句话。第二句话！', '', '```ts', 'const secretNumber = 1', '```', '', '| 列 | 值 |', '| --- | --- |', '| a | 1 |', '', '最后一句。'].join('\n')
+  const model = await startScriptedModel([{ text: answer }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '念给我听')
+    await waitTaskDone(window)
+    await window.evaluate(STUB_SPEECH)
+    const actions = window.getByTestId('turn-actions')
+    const spoken = () => window.evaluate<Array<{ text: string; voice: string | null }>>('window.__spoken')
+
+    await actions.getByRole('button', { name: '朗读', exact: true }).click()
+    await expect(actions.getByRole('button', { name: '停止朗读' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(actions.getByRole('button', { name: '朗读', exact: true })).toBeVisible({ timeout: 10_000 })
+    const text = (await spoken()).map((item) => item.text).join('')
+    expect(text).toContain('结论')
+    expect(text).toContain('第一句话。第二句话！')
+    expect(text).toContain('这里有一段代码。')
+    expect(text).toContain('最后一句。')
+    expect(text).not.toContain('secretNumber')
+    expect(text).not.toContain('---')
+
+    // 选声音：记住，下次朗读用它
+    await actions.getByRole('button', { name: '选择朗读的声音' }).click()
+    await window.getByRole('menuitemradio', { name: /测试女声/ }).click()
+    expect(await window.evaluate(`localStorage.getItem('diffra.speechVoice')`)).toBe('test-zh')
+    await window.evaluate('window.__spoken = []')
+    await actions.getByRole('button', { name: '朗读', exact: true }).click()
+    await expect.poll(async () => (await spoken())[0]?.voice).toBe('test-zh')
+
+    // 中途停
+    await actions.getByRole('button', { name: '停止朗读' }).click()
+    await expect(actions.getByRole('button', { name: '朗读', exact: true })).toBeVisible()
+    expect(await window.evaluate<number>('window.__cancelled')).toBeGreaterThan(0)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
