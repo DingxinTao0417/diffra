@@ -7,7 +7,7 @@ const json = (value: unknown) => JSON.stringify(value)
 
 describe('回答里的结构化富块（第 650 步）', () => {
   test('注册表认得的种类', () => {
-    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'annotate', 'json', 'log'])
+    expect(RICH_BLOCK_KINDS).toEqual(['chart', 'metrics', 'table', 'timeline', 'steps', 'compare', 'filetree', 'keyvalue', 'todos', 'annotate', 'decision', 'json', 'log'])
     expect(isRichBlockKind('chart')).toBe(true)
     expect(isRichBlockKind('ts')).toBe(false)
     expect(isRichBlockKind('toString')).toBe(false)
@@ -116,6 +116,34 @@ describe('回答里的结构化富块（第 650 步）', () => {
     expect(errorOf({ image: 'a.png', marks: [{ shape: 'circle', x: 0.1, y: 0.1, w: 0 }] })).toBe('marks.0：圈要写正的 w、h（宽和高）')
     expect(errorOf({ image: 'http://x.test/a.png', marks: [{ shape: 'pin', x: 0, y: 0 }] })).toContain('网络图片不加载')
     expect(errorOf({ image: 'a.png', marks: Array.from({ length: RICH_LIMITS.annotateMarks + 1 }, () => ({ shape: 'pin', x: 0, y: 0 })) })).not.toBeNull()
+  })
+
+  // 第 689 步
+  test('decision：标准可以只写名字（权重 1），分数按标准的顺序排；缺分数、超出满分、全是 0 权重、推荐两个都不认', () => {
+    const result = parseRichBlock('decision', json({ scale: 10, criteria: ['速度', { name: '成本', weight: 0 }], options: [{ name: 'A', scores: { 成本: 3, 速度: 8 } }, { name: 'B', scores: { 速度: 6, 成本: 10 }, recommended: true }] }))
+    expect(result.ok && result.data).toEqual({
+      title: undefined,
+      question: undefined,
+      scale: 10,
+      criteria: [
+        { name: '速度', weight: 1 },
+        { name: '成本', weight: 0 },
+      ],
+      options: [
+        { name: 'A', summary: undefined, recommended: false, scores: [8, 3] },
+        { name: 'B', summary: undefined, recommended: true, scores: [6, 10] },
+      ],
+    })
+    const errorOf = (value: unknown) => {
+      const parsed = parseRichBlock('decision', json(value))
+      return parsed.ok ? null : parsed.error
+    }
+    const two = (scores: Record<string, number>, recommended = false) => [{ name: 'A', scores }, { name: 'B', scores, recommended }]
+    expect(errorOf({ criteria: ['速度', '成本'], options: two({ 速度: 1 }) })).toBe('options.0.scores：缺「成本」的分数')
+    expect(errorOf({ criteria: ['速度'], options: two({ 速度: 6 }) })).toBe('options.0.scores.速度：分数要在 0–5 之间')
+    expect(errorOf({ criteria: [{ name: '速度', weight: 0 }], options: two({ 速度: 1 }) })).toBe('至少要有一个评判标准的权重大于 0')
+    expect(errorOf({ criteria: ['速度', '速度'], options: two({ 速度: 1 }) })).toBe('评判标准「速度」写了两次')
+    expect(errorOf({ criteria: ['速度'], options: [{ name: 'A', scores: { 速度: 1 }, recommended: true }, { name: 'B', scores: { 速度: 1 }, recommended: true }] })).toBe('最多推荐一个方案')
   })
 
   test('log：认出级别和源码位置，超过上限的行截掉并记下条数', () => {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -260,6 +260,84 @@ test('应用回答里的 diff：记成一轮「应用回答里的改动」，改
     await app.close()
     await model.close()
     rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 689 步：决策卡——按加权平均分排名，改权重排名跟着变；「选这个」连同权重填进输入框；导出的页面展开各项得分、没有按钮
+test('决策卡：按权重排名，改权重排名跟着变、能恢复；至少留一项有权重；选这个连同权重填进输入框；导出时各项得分展开', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-decision-'))
+  const downloads = mkdtempSync(join(tmpdir(), 'diffra-e2e-decision-out-'))
+  const decision = {
+    title: '缓存放哪里',
+    question: '要不要上 Redis？',
+    criteria: [{ name: '性能', weight: 3 }, { name: '改动量', weight: 2 }, '运维'],
+    options: [
+      { name: 'Redis', summary: '多实例共享', scores: { 性能: 5, 改动量: 2, 运维: 2 }, recommended: true },
+      { name: '进程内缓存', summary: '改动最小', scores: { 性能: 4, 改动量: 5, 运维: 5 } },
+    ],
+  }
+  const model = await startScriptedModel([{ text: ['两个方案：', '', '```decision', JSON.stringify(decision), '```'].join('\n') }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '缓存放哪里')
+    await waitTaskDone(window)
+    const card = window.getByTestId('rich-decision')
+    const options = card.getByTestId('decision-option')
+    const ranking = () => options.evaluateAll((items) => items.map((item) => `${item.querySelector('.font-bold')?.textContent} ${item.querySelector('[data-testid="decision-score"]')?.textContent}`))
+
+    // 模型给的权重 3、2、1：进程内缓存 (12+10+5)/6=4.5 排第一，Redis (15+4+2)/6=3.5 是模型推荐
+    await expect.poll(ranking).toEqual(['进程内缓存 4.5 / 5', 'Redis 3.5 / 5'])
+    await expect(options.nth(1)).toHaveAttribute('data-recommended', 'true')
+    await expect(options.nth(1)).toContainText('模型推荐')
+    await card.screenshot({ path: 'test-results/decision-light.png' })
+
+    // 只看性能：改动量、运维降到 0，Redis 排到第一；性能是唯一有权重的一项，不能再降
+    for (let i = 0; i < 2; i++) await card.getByRole('button', { name: '降低「改动量」的权重' }).click()
+    await card.getByRole('button', { name: '降低「运维」的权重' }).click()
+    await expect(card.getByRole('button', { name: '降低「运维」的权重' })).toBeDisabled()
+    await card.getByRole('button', { name: '提高「性能」的权重' }).click()
+    await card.getByRole('button', { name: '提高「性能」的权重' }).click()
+    await expect(card.getByRole('button', { name: '提高「性能」的权重' })).toBeDisabled()
+    await expect.poll(ranking).toEqual(['Redis 5.0 / 5', '进程内缓存 4.0 / 5'])
+    for (let i = 0; i < 4; i++) await card.getByRole('button', { name: '降低「性能」的权重' }).click()
+    await expect(card.getByLabel('「性能」的权重', { exact: true })).toHaveText('1')
+    await expect(card.getByRole('button', { name: '降低「性能」的权重' })).toBeDisabled()
+
+    // 各项得分展开；选这个连同当时的权重填进输入框
+    await options.nth(0).getByRole('button', { name: '各项得分' }).click()
+    await expect(options.nth(0).getByTestId('decision-scores')).toContainText('性能5 / 5')
+    await options.nth(0).getByRole('button', { name: '选这个' }).click()
+    await expect(taskInput(window)).toHaveValue('选「Redis」。我看重的：性能（权重 1）、改动量（权重 0）、运维（权重 0）')
+
+    // 恢复模型给的权重
+    await card.getByRole('button', { name: '恢复模型给的权重' }).click()
+    await expect.poll(ranking).toEqual(['进程内缓存 4.5 / 5', 'Redis 3.5 / 5'])
+    await expect(card.getByRole('button', { name: '恢复模型给的权重' })).toHaveCount(0)
+
+    // 导出：按模型给的权重，各项得分展开，没有按钮
+    await app.evaluate(({ session }, target) => {
+      session.defaultSession.on('will-download', (_event, item) => item.setSavePath(`${target}/${item.getFilename()}`))
+    }, downloads)
+    await window.getByTestId('turn-actions').last().getByRole('button', { name: '导出这一轮' }).click()
+    await window.getByRole('menuitem', { name: 'HTML', exact: true }).click()
+    const file = join(downloads, '缓存放哪里.html')
+    await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
+    const html = readFileSync(file, 'utf8')
+    expect(html.match(/data-testid="decision-scores"/g)).toHaveLength(2)
+    expect(html).toContain('×3')
+    expect(html).not.toContain('选这个')
+    expect(html).not.toContain('各项得分')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(downloads, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })

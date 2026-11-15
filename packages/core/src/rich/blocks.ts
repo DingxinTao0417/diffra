@@ -24,6 +24,7 @@ export const RICH_LIMITS = {
   treeEntries: 1_000,
   logLines: 5_000,
   annotateMarks: 30,
+  decisionCriteria: 8,
   // 字段里的一段文字
   text: 2_000,
 } as const
@@ -356,6 +357,42 @@ function parseAnnotate(input: unknown): AnnotateData {
   return { image: raw.image, title: raw.title, marks }
 }
 
+// ---- decision ----
+
+// 决策卡（第 689 步）：几个方案按加权的评判标准打分。分数在 0 到 scale（5 或 10）之间，权重 0–5（0 是不看这一项），用户能在界面上改权重、看排名变化、选一个
+export type DecisionData = { title?: string; question?: string; scale: number; criteria: Array<{ name: string; weight: number }>; options: Array<{ name: string; summary?: string; scores: number[]; recommended: boolean }> }
+
+const decisionInput = z.object({
+  v: version,
+  title: label.optional(),
+  question: text.optional(),
+  scale: z.union([z.literal(5), z.literal(10)]).optional(),
+  criteria: z.array(z.union([label, z.object({ name: label, weight: z.number().int().min(0).max(5).optional() })])).min(1).max(RICH_LIMITS.decisionCriteria),
+  options: z.array(z.object({ name: label, summary: text.optional(), scores: z.record(z.string(), finite), recommended: z.boolean().optional() })).min(2).max(RICH_LIMITS.compareOptions),
+})
+
+function parseDecision(input: unknown): DecisionData {
+  const raw = decisionInput.parse(input)
+  const scale = raw.scale ?? 5
+  const criteria = raw.criteria.map((criterion) => (typeof criterion === 'string' ? { name: criterion, weight: 1 } : { name: criterion.name, weight: criterion.weight ?? 1 }))
+  const repeated = criteria.find((criterion, index) => criteria.findIndex((other) => other.name === criterion.name) !== index)
+  if (repeated) throw new Error(`评判标准「${repeated.name}」写了两次`)
+  if (criteria.every((criterion) => criterion.weight === 0)) throw new Error('至少要有一个评判标准的权重大于 0')
+  const options = raw.options.map((option, index) => ({
+    name: option.name,
+    summary: option.summary,
+    recommended: option.recommended ?? false,
+    scores: criteria.map((criterion) => {
+      const score = option.scores[criterion.name]
+      if (score === undefined) throw new Error(`options.${index}.scores：缺「${criterion.name}」的分数`)
+      if (score < 0 || score > scale) throw new Error(`options.${index}.scores.${criterion.name}：分数要在 0–${scale} 之间`)
+      return score
+    }),
+  }))
+  if (options.filter((option) => option.recommended).length > 1) throw new Error('最多推荐一个方案')
+  return { title: raw.title, question: raw.question, scale, criteria, options }
+}
+
 // ---- 注册表 ----
 
 export interface RichBlockMap {
@@ -369,6 +406,7 @@ export interface RichBlockMap {
   keyvalue: KeyValueData
   todos: TodosData
   annotate: AnnotateData
+  decision: DecisionData
   json: { value: unknown }
   log: LogData
 }
@@ -387,6 +425,7 @@ const REGISTRY: { [K in RichBlockKind]: { format: 'json' | 'text'; parse(input: 
   keyvalue: { format: 'json', parse: parseKeyValue },
   todos: { format: 'json', parse: parseTodos },
   annotate: { format: 'json', parse: parseAnnotate },
+  decision: { format: 'json', parse: parseDecision },
   json: { format: 'json', parse: (value) => ({ value }) },
   log: { format: 'text', parse: (value) => parseLog(String(value)) },
 }

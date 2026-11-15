@@ -5,6 +5,7 @@ import { BlockSkeleton } from './BlockShell'
 import { CodeBlock } from './CodeBlock'
 import { CompareBlock, KeyValueBlock, MetricsBlock, StepsBlock, TimelineBlock } from './DataBlocks'
 import { DataTableBlock } from './DataTableBlock'
+import { DecisionBlock } from './DecisionBlock'
 import type { FenceInfo } from './fence'
 import { FileTreeBlock } from './FileTreeBlock'
 import { JsonTree } from './JsonBlock'
@@ -32,6 +33,7 @@ const RENDERERS: { [K in RichBlockKind]: RichRenderer<K> } = {
   keyvalue: KeyValueBlock,
   todos: TodosBlock,
   annotate: AnnotateBlock,
+  decision: DecisionBlock,
   json: ({ data, info }) => <JsonTree value={data.value} source={info.code} />,
   log: LogBlock,
 }
@@ -47,6 +49,7 @@ const NAMES: Record<RichBlockKind, string> = {
   keyvalue: '键值表',
   todos: '后续事项',
   annotate: '图上标注',
+  decision: '决策卡',
   json: 'JSON',
   log: '日志',
 }

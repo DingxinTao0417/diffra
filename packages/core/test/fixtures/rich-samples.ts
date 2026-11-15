@@ -30,6 +30,17 @@ export const RICH_SAMPLES: Record<RichBlockKind, { valid: unknown; invalid: stri
     },
     invalid: '{"image":"https://example.com/a.png","marks":[{"shape":"pin","x":0.5,"y":0.5}]}',
   },
+  decision: {
+    valid: {
+      title: '缓存放哪里',
+      criteria: [{ name: '性能', weight: 3 }, { name: '改动量', weight: 2 }, '运维'],
+      options: [
+        { name: 'Redis', summary: '多实例共享', scores: { 性能: 5, 改动量: 2, 运维: 2 }, recommended: true },
+        { name: '进程内缓存', summary: '改动最小', scores: { 性能: 4, 改动量: 5, 运维: 5 } },
+      ],
+    },
+    invalid: '{"criteria":["性能"],"options":[{"name":"A","scores":{"性能":9}},{"name":"B","scores":{"性能":1}}]}',
+  },
   json: { valid: { name: 'diffra', scripts: { build: 'vite build' }, nested: { deep: { target: 'found-me' } } }, invalid: '{ 不是 JSON' },
   log: { valid: ['INFO 服务启动', 'WARN 慢查询 1200ms', 'ERROR 连接被拒绝', '    at connect (src/app.ts:3:5)'].join('\n'), invalid: null },
 }
