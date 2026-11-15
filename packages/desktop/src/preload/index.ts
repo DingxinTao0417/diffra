@@ -55,6 +55,7 @@ const api: DiffraApi = {
   onTerminalUrl: (listener) => subscribe<{ id: string; url: string }>(IPC_CHANNELS.terminalUrl, listener),
   resolveFiles: (project, paths) => ipcRenderer.invoke(IPC_CHANNELS.fileResolve, project, paths),
   readFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileRead, project, path),
+  readImage: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileReadImage, project, path),
   writeFile: (project, path, text, version) => ipcRenderer.invoke(IPC_CHANNELS.fileWrite, project, path, text, version),
   openFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileOpen, project, path),
   revealFile: (project, path) => ipcRenderer.invoke(IPC_CHANNELS.fileReveal, project, path),

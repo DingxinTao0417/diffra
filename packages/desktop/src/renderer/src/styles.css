@@ -378,29 +378,136 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
   border-radius: 4px;
   padding: 0.1em 0.35em;
 }
+/* 代码块的外壳由 rich/CodeBlock.tsx 画，代码区见下面的 .code-body */
 .markdown pre {
-  background: var(--muted);
-  border-radius: 8px;
-  padding: 0.75em 1em;
-  overflow-x: auto;
-}
-.markdown pre code {
-  background: transparent;
-  padding: 0;
-  font-size: 0.85em;
+  margin: 0;
 }
 .markdown blockquote {
   border-left: 3px solid var(--border);
   padding-left: 0.8em;
   color: var(--muted-foreground);
 }
+.markdown .callout-body > * + * {
+  margin-top: 0.5em;
+}
+/* 表格（rich/RichTable.tsx）：外层框画边线和圆角，单元格只画内部分隔线；表头固定在滚动区顶上 */
 .markdown table {
-  border-collapse: collapse;
-  display: block;
-  overflow-x: auto;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .markdown th,
 .markdown td {
-  border: 1px solid var(--border);
-  padding: 0.3em 0.6em;
+  padding: 0.35em 0.7em;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.markdown th + th,
+.markdown td + td {
+  border-left: 1px solid var(--border);
+}
+.markdown tbody tr:last-child td {
+  border-bottom: none;
+}
+.markdown th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--muted);
+  font-weight: 700;
+  text-align: left;
+}
+.markdown th[align="center"],
+.markdown td[align="center"] {
+  text-align: center;
+}
+.markdown th[align="right"],
+.markdown td[align="right"] {
+  text-align: right;
+}
+/* 行多时收起，只留前 15 行（RichTable.tsx 的 PREVIEW_ROWS） */
+.markdown .table-collapsed tbody tr:nth-child(n + 16) {
+  display: none;
+}
+/* 脚注和来源：放在回答最后，比正文小一档 */
+.markdown .footnotes {
+  margin-top: 1.2em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--muted-foreground);
+}
+.markdown .footnotes-label {
+  margin: 0 0 0.4em;
+  font-size: var(--text-xs);
+}
+.markdown .footnote-source {
+  list-style: none;
+  margin-left: -1.4em;
+}
+.markdown .math-display .katex-display {
+  margin: 0;
+}
+.mermaid-view svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 回答里代码块的代码区（rich/CodeBlock.tsx 的 CodeLines）：字号比正文小一档，行号不跟着选中和复制；放大的弹窗不在 .markdown 里，所以不依赖它 */
+.code-body {
+  margin: 0;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  tab-size: 4;
+}
+.code-body code,
+.markdown .code-body code {
+  font-size: inherit;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
+.code-line {
+  display: flex;
+  min-height: 1lh;
+  padding: 0 0.85rem;
+  white-space: pre;
+}
+.code-line-mark {
+  background: var(--highlight);
+}
+.code-ln {
+  flex: none;
+  margin-right: 1rem;
+  text-align: right;
+  color: var(--muted-foreground);
+  user-select: none;
+}
+/* 语法高亮的颜色，和文件面板（FilePanel.tsx 的 HighlightStyle）同一套令牌 */
+.tok-keyword {
+  color: var(--code-keyword);
+}
+.tok-string {
+  color: var(--code-string);
+}
+.tok-number {
+  color: var(--code-number);
+}
+.tok-comment {
+  color: var(--code-comment);
+  font-style: italic;
+}
+.tok-function {
+  color: var(--code-function);
+}
+.tok-type {
+  color: var(--code-type);
+}
+.tok-tag {
+  color: var(--code-tag);
+}
+.tok-invalid {
+  color: var(--destructive);
 }

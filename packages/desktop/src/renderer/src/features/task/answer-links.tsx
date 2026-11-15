@@ -33,6 +33,22 @@ const isWebUrl = (href: string) => /^https?:\/\//i.test(href)
 // 回答里的链接：网址默认在这个任务的内置浏览器里打开，右键可以换系统浏览器；指向项目文件的链接按文件引用处理
 export function AnswerLink({ href, children }: { href?: string; children?: ReactNode }) {
   const target = useContext(AnswerContext)
+  // 页内跳转：脚注编号和脚注里的「回到正文」
+  if (href?.startsWith('#')) {
+    return (
+      <a
+        href={href}
+        onClick={(event) => {
+          event.preventDefault()
+          const element = document.getElementById(decodeURIComponent(href.slice(1)))
+          element?.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+          element?.focus({ preventScroll: true })
+        }}
+      >
+        {children}
+      </a>
+    )
+  }
   // 不带协议的、file: 开头的、盘符开头的都可能是文件；mailto: 这类别的协议不是（盘符只有一个字母，协议至少两个）
   const file = target && href && (/^file:/i.test(href) || !/^[a-z][\w+.-]+:/i.test(href)) ? fileOfHref(href) : null
   if (file) return <FileReference path={file.path} line={file.line} label={children} />
@@ -78,7 +94,7 @@ export function AnswerLink({ href, children }: { href?: string; children?: React
 }
 
 // [loop.ts](packages/core/src/loop.ts#L1430)、[x](./a.ts:12)、file:///D:/p/a.ts
-function fileOfHref(href: string): { path: string; line: number | null } | null {
+export function fileOfHref(href: string): { path: string; line: number | null } | null {
   let text = href.replace(/^file:\/\/\/?/i, '')
   try {
     text = decodeURIComponent(text)
@@ -160,20 +176,35 @@ export function AnswerCode({ children, className }: { children?: ReactNode; clas
   return <FileReference path={file.path} line={file.line} label={text} code />
 }
 
-function FileReference({ path, line, label, code }: { path: string; line: number | null; label: ReactNode; code?: boolean }) {
-  const target = useContext(AnswerContext)!
-  const candidate = candidatePath(target, path)
-  const [file, setFile] = useState<ProjectFile | null | undefined>(undefined)
+// 回答里提到的路径是不是项目里的文件：查到了是文件，不是或还没查完是 null；本机任务以外（远程、只读）一直是 null
+export function useProjectFile(path: string | null): ProjectFile | null {
+  const target = useContext(AnswerContext)
+  const candidate = target && path ? candidatePath(target, path) : null
+  const project = target?.project ?? null
+  const [file, setFile] = useState<{ key: string; file: ProjectFile | null } | null>(null)
+  const key = project && candidate ? `${project}\n${candidate}` : null
   useEffect(() => {
+    if (!project || !candidate) return
     let stale = false
-    void lookup(target.project, candidate).then((found) => !stale && setFile(found))
+    void lookup(project, candidate).then((found) => !stale && setFile({ key: `${project}\n${candidate}`, file: found }))
     return () => {
       stale = true
     }
-  }, [target.project, candidate])
+  }, [project, candidate])
+  return file && file.key === key ? file.file : null
+}
+
+// 在右侧文件面板里打开项目里的文件、定位到那一行（第 546 步）
+export function openFilePreview(project: string, relative: string, line: number | null) {
+  store.set((state) => ({ ...state, panel: 'file', filePreview: { project, path: relative, line } }))
+}
+
+function FileReference({ path, line, label, code }: { path: string; line: number | null; label: ReactNode; code?: boolean }) {
+  const target = useContext(AnswerContext)!
+  const file = useProjectFile(path)
   if (!file) return code ? <code>{label}</code> : <span>{label}</span>
   // 点了都在右侧文件面板里打开这一个文件、定位到那一行（第 546 步）；看改动走右键
-  const view = () => store.set((state) => ({ ...state, panel: 'file', filePreview: { project: target.project, path: file.relative, line } }))
+  const view = () => openFilePreview(target.project, file.relative, line)
   const changed = target.changed.has(file.relative)
   const run = (action: Promise<unknown>) => action.catch((error: unknown) => showToast(errorMessage(error)))
   const copyContent = async () => {

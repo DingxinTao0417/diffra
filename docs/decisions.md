@@ -37,6 +37,7 @@ v2：
 - 其他运行时依赖：
   - core：`@vscode/ripgrep`（搜索）、`shell-quote`（拆分命令做权限分级）、`@modelcontextprotocol/sdk`（MCP 客户端，只用到 client 部分，服务端依赖不进 bundle）。
   - 桌面端：`diff`（渲染 diff）、`react-markdown` + `remark-gfm`（回复按 Markdown 显示，不渲染原始 HTML）、`@xterm/xterm` + `@xterm/addon-fit`（终端界面）、`node-pty`（终端进程）。
+  - 回答里的富内容（第 640 步起，见「对话里的富内容」）：`remark-math` + `katex`（公式）、`mermaid`（流程图等）、`echarts`（图表）。都按需加载，不进首屏的包；代码高亮复用文件面板的 CodeMirror 语法，不另加高亮库。
 - 运行前提：Windows 上需要 Git for Windows，检查点要用 git，命令执行要用它自带的 bash。Mac 上用系统的 `/bin/bash` 和 git（Xcode 命令行工具）。
 
 ## 进程结构
@@ -840,6 +841,22 @@ v2：
   - 可视化里的按钮可以把一段话填进输入框（`diffra.fill` / `sendPrompt`），只填不发，发不发由用户决定。
 - 配色通过 CSS 变量传进去（`--bg`、`--fg`、`--primary` 等），跟着亮暗主题走。
 - 可以放大看、看代码、存成 HTML 或 PNG。PNG 由主进程截 iframe 所在区域。
+
+## 对话里的富内容（第 640 步起）
+
+回答从「文字加零散卡片」升级成三层：Markdown 增强 > 结构化富块 > 生成式视觉（show_visual）。能用普通 Markdown 说清的不做卡片，能用结构化块表达的不让模型写 HTML。
+
+- 第一层，Markdown 增强（第 640 步，`features/task/Markdown.tsx` 和 `features/task/rich/`）：
+  - 代码块：语法高亮复用文件面板的 CodeMirror 语法（`@codemirror/language-data` 按需加载各语言解析器），颜色是同一套 `--code-*` 令牌（`.tok-*`）。围栏后面能写文件名和行号（```` ```ts src/a.ts:10 ````、`title="…"`）和重点行（`{2,4-6}`）；超过 30 行先收起；能复制、放大；文件名是项目里的文件时能在文件面板打开到那一行。命令、输出这类语言不标行号。
+  - ```` ```diff ````：按文件分组的红绿改动，宽松解析（有没有 `diff --git`、`@@` 都行），文件名能在文件面板打开，这个任务改过的能看审阅。
+  - 公式：`remark-math` 解析，KaTeX 按需加载（`trust` 关着）。单个 `$` 里有中文或紧挨着空格的不当公式（`$PATH 和 $HOME`）。`\(…\)`、`\[…\]` 先换成 `$` 写法。
+  - Mermaid：按需加载，`securityLevel: strict`，标签画成 SVG 文字（不用 foreignObject）以便导出 PNG；颜色从当前主题令牌取真实值（mermaid 要做颜色运算），跟随系统切深浅色时重画。语法错了按代码显示并写明原因。
+  - Callout：GitHub 的 `> [!NOTE]` 写法，另认 SUCCESS、RISK、BACKGROUND、DETAILS 和中文名；标记后加 `-` 默认收起、`+` 可折叠。「完成」（SUCCESS）只用中性色：那是模型的说法，不是验证结果。
+  - 表格：横向滚动、表头固定、超过 25 行先收起；能复制成 Markdown 或 CSV。
+  - 图片：项目里的图片经主进程按 base64 读（`readImage`，只认常见图片扩展名、最大 8 MB）；点开看大图，能缩放、切换同一段回答里的图；一段里只有「前…」「后…」两张图时是对比滑块。网络图片不加载，显示成链接：主窗口的 CSP 不放行外部图片，模型也可能被网页诱导用图片地址把数据带出去。
+  - 单独成段的文件引用是文件卡（能预览那几行）；单独成段的网页链接和脚注里的来源是来源卡，域名首字母当图标，不联网取 favicon。脚注 id 按每段回答加前缀，页面上几段回答不撞。
+  - 流式输出时没写完的富块（流程图、公式、图表）只占位，写完再画，不先闪出代码；普通代码边写边显示，写完再高亮。
+- 不渲染原始 HTML 的规矩不变：富块只接受白名单格式，KaTeX、mermaid 的输出是它们自己生成的标签。
 
 ## 任务之间互通（第 222–230 步）
 

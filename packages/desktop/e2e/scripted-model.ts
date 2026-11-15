@@ -6,9 +6,10 @@ import type { AddressInfo } from 'node:net'
 // 工具参数可以是函数：拿这次请求的对话（messages）算出来，比如用前一个工具返回的节点 id。
 // match：只回答第一条用户消息（不算环境上下文）里含这段文字的请求（子智能体的对话从它的任务开始），按顺序；没写 match 的步骤回答其余请求。
 // thinking：回复前先出一段思考（reasoning_content，DeepSeek 的写法）
+// pauseAfter：文字流到这一段为止先停 ms 毫秒再发剩下的，用来看流式输出到一半时界面的样子
 export type ScriptMessages = Array<{ role: string; content: unknown; tool_calls?: unknown }>
 type ScriptInput = unknown | ((messages: ScriptMessages) => unknown)
-type StepTiming = { delayMs?: number; promptTokens?: number; cacheReadTokens?: number; match?: string; thinking?: string }
+type StepTiming = { delayMs?: number; promptTokens?: number; cacheReadTokens?: number; match?: string; thinking?: string; pauseAfter?: { text: string; ms: number } }
 export type ScriptStep =
   | ({ toolCalls: Array<{ name: string; input: ScriptInput }>; text?: string } & StepTiming)
   | ({ text: string } & StepTiming)
@@ -118,8 +119,15 @@ export async function startScriptedModel(
       }
       setTimeout(() => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-        for (const chunk of chunksFor(step, index)) res.write(`data: ${JSON.stringify(chunk)}\n\n`)
-        res.end('data: [DONE]\n\n')
+        const chunks = chunksFor(step, index)
+        const pause = step.pauseAfter && step.text?.includes(step.pauseAfter.text) ? step.pauseAfter : null
+        // 有 pauseAfter 时文字拆成了两块：思考（如果有）和前一块先发
+        const pauseAt = pause ? (step.thinking ? 2 : 1) : chunks.length
+        for (const chunk of chunks.slice(0, pauseAt)) res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+        setTimeout(() => {
+          for (const chunk of chunks.slice(pauseAt)) res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+          res.end('data: [DONE]\n\n')
+        }, pause?.ms ?? 0)
       }, step.delayMs ?? 0)
     })
   })
@@ -140,6 +148,14 @@ export async function startScriptedModel(
   }
 }
 
+function textParts(step: ScriptStep): string[] {
+  if (!step.text) return []
+  const at = step.pauseAfter ? step.text.indexOf(step.pauseAfter.text) : -1
+  if (at < 0) return [step.text]
+  const cut = at + step.pauseAfter!.text.length
+  return [step.text.slice(0, cut), step.text.slice(cut)].filter(Boolean)
+}
+
 function chunksFor(step: ScriptStep, index: number): unknown[] {
   const base = { id: `chatcmpl-${index}`, object: 'chat.completion.chunk', created: 1, model: 'scripted' }
   const promptTokens = step.promptTokens ?? 1200
@@ -151,7 +167,7 @@ function chunksFor(step: ScriptStep, index: number): unknown[] {
   }
   const textChunks = [
     ...(step.thinking ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: step.thinking }, finish_reason: null }] }] : []),
-    ...(step.text ? [{ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: step.text }, finish_reason: null }] }] : []),
+    ...textParts(step).map((content) => ({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })),
   ]
   if (!('toolCalls' in step)) {
     return [...textChunks, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage }]

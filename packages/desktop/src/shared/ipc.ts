@@ -101,6 +101,7 @@ export const IPC_CHANNELS = {
   terminalUrl: 'terminal:url',
   fileResolve: 'file:resolve',
   fileRead: 'file:read',
+  fileReadImage: 'file:read-image',
   fileWrite: 'file:write',
   fileOpen: 'file:open',
   fileReveal: 'file:reveal',
@@ -470,6 +471,8 @@ export interface DiffraApi {
   // 回答里提到的文件：哪些在项目里（不在的是 null）、读出来（最多 1 MB）、用默认应用打开、在资源管理器里显示
   resolveFiles(project: string, paths: string[]): Promise<Record<string, ProjectFile | null>>
   readFile(project: string, path: string): Promise<{ text: string; binary: boolean; truncated: boolean; version: string }>
+  // 回答里引用的项目图片（主窗口的 CSP 只放行 data:，按 base64 取）：只认常见图片扩展名，最大 8 MB
+  readImage(project: string, path: string): Promise<{ mimeType: string; data: string }>
   // 文件面板保存（第 546 步）：version 对不上（读出来之后外面改过）时不写、saved 为 false；version 传 null 是覆盖
   writeFile(project: string, path: string, text: string, version: string | null): Promise<{ saved: true; version: string } | { saved: false }>
   openFile(project: string, path: string): Promise<void>

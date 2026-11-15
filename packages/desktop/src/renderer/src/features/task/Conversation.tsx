@@ -539,7 +539,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
       {blocks.map((block, index) => {
         switch (block.type) {
           case 'item':
-            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} />
+            return <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} streaming={active && index === blocks.length - 1} />
           case 'process':
             return (
               <ProcessGroup
@@ -700,8 +700,8 @@ function ActionButton({ label, disabled, onClick, children }: { label: string; d
 }
 
 // goal、skills、images 只用在提问气泡上：这一轮是目标模式、带了哪些 Skill 和图片
-// imageNote：远程会话里还没过来、没同步的图片说明
-function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<TranscriptItem, ProcessItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null }) {
+// imageNote：远程会话里还没过来、没同步的图片说明；streaming：这段回复还在流式输出（富块没写完时先占位）
+function ItemView({ item, goal, skills, images, imageNote, streaming }: { item: Exclude<TranscriptItem, ProcessItem>; goal: boolean; skills: string[]; images: PromptImage[]; imageNote: string | null; streaming: boolean }) {
   switch (item.kind) {
     case 'user':
       if (!goal && skills.length === 0 && images.length === 0 && !imageNote) {
@@ -743,7 +743,7 @@ function ItemView({ item, goal, skills, images, imageNote }: { item: Exclude<Tra
     case 'agent':
       return (
         <div data-testid="agent-message">
-          <Markdown text={item.text} />
+          <Markdown text={item.text} streaming={streaming} />
         </div>
       )
     case 'notice':

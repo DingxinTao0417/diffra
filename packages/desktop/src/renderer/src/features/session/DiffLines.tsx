@@ -26,7 +26,8 @@ export function DiffLines({ hunks, className, ...props }: React.ComponentProps<'
       <div className="w-max min-w-full">
         {hunks.map((hunk, index) => (
           <div key={index}>
-            <div className="px-3 text-muted-foreground select-none">{hunkHeader(hunk)}</div>
+            {/* 回答里没写 @@ 的片段没有行号，也就没有段头 */}
+            {hunk.some((line) => line.oldLine !== null || line.newLine !== null) && <div className="px-3 text-muted-foreground select-none">{hunkHeader(hunk)}</div>}
             {hunk.map((line, lineIndex) => (
               <div key={lineIndex} className={cn('grid', ROW_CLASSES[line.kind])} style={{ gridTemplateColumns: columns }}>
                 {hasOld && <span className="pr-2 text-right text-muted-foreground tabular-nums select-none">{line.oldLine}</span>}

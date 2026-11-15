@@ -1,5 +1,5 @@
-import { open, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute, join, normalize, relative } from 'node:path'
+import { open, readFile, stat, writeFile } from 'node:fs/promises'
+import { extname, isAbsolute, join, normalize, relative } from 'node:path'
 import { ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS, type ProjectFile } from '../shared/ipc'
@@ -13,6 +13,20 @@ const MAX_PATHS = 100
 const MAX_READ_BYTES = 1024 * 1024
 // 开头这么多字节里有 0 就当二进制
 const BINARY_PROBE_BYTES = 8 * 1024
+
+// 回答里引用的项目图片（第 640 步）。SVG 当图片显示时脚本不会跑
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const IMAGE_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  svg: 'image/svg+xml',
+}
 
 const projectSchema = z.string().min(1)
 const pathSchema = z.string().min(1).max(4096)
@@ -60,6 +74,15 @@ export function registerFileIpc(): void {
     } finally {
       await handle.close()
     }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.fileReadImage, async (_event, rawProject: unknown, rawPath: unknown) => {
+    const path = await requireFile(parse(projectSchema, rawProject), parse(pathSchema, rawPath))
+    const mimeType = IMAGE_TYPES[extname(path).slice(1).toLowerCase()]
+    if (!mimeType) throw new Error(`不是图片：${rawPath as string}`)
+    const { size } = await stat(path)
+    if (size > MAX_IMAGE_BYTES) throw new Error(`图片太大（超过 ${MAX_IMAGE_BYTES / 1024 / 1024} MB）`)
+    return { mimeType, data: (await readFile(path)).toString('base64') }
   })
 
   // 文件面板里编辑后保存。version 是读出来时的版本，对不上（外面改过了）就不写，交给界面问用户；null 是用户选了覆盖
