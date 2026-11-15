@@ -15,8 +15,8 @@ const visualInput = z.object({
 // 代码在桌面端的独立沙箱页面里跑，能联网（CDN 上的库、网络图片），碰不到应用自己的接口
 export const showVisualTool = tool({
   description: [
-    'Show the user a visual inline in the conversation: a side-by-side comparison of options, a UI mockup, a flow or architecture diagram, a chart, or a small interactive demo.',
-    'Use it when seeing beats reading (comparing layouts, a multi-step flow, numbers); do not use it for things one or two sentences can say. Keep explanations in your normal reply, not inside the visual.',
+    'Show the user a visual inline in the conversation: a UI mockup, a custom layout, or a small interactive demo.',
+    'Try the lighter options first: plain Markdown, a ```mermaid diagram, or a structured block in your reply (chart, metrics, table, timeline, steps, compare). Use show_visual only when none of them fits. Do not use it for things one or two sentences can say, and do not chart three numbers. Keep explanations in your normal reply, not inside the visual.',
     'code is an HTML fragment or an <svg>. Scripts run, and you can load libraries from public CDNs (cdnjs, jsdelivr, unpkg) and images from the web.',
     "Match the app: colors only through the CSS variables --bg, --fg, --muted, --border, --card, --primary, --soft, --accent, --warning, --danger, --success (they follow the user's light/dark theme and color scheme); the body font is already set. Keep the outer background transparent.",
     "A button can put text into the user's message box with diffra.fill('text') (the user still sends it). Links open only after the user confirms.",

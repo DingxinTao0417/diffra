@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/client.ts",
     "./types": "./src/protocol.ts",
-    "./architecture": "./src/architecture/model.ts"
+    "./architecture": "./src/architecture/model.ts",
+    "./rich": "./src/rich/blocks.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

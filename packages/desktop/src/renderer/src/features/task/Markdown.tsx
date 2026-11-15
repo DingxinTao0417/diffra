@@ -10,9 +10,11 @@ import { CodeBlock } from './rich/CodeBlock'
 import { DiffBlock } from './rich/DiffBlock'
 import { type Element, fenceClosed, fenceInfo, type MarkdownSource, MarkdownSourceContext, textOf, useMarkdownSource } from './rich/fence'
 import { FileCard, SourceCard } from './rich/FileCard'
+import { JsonBlock } from './rich/JsonBlock'
 import { InlineMath, MathBlock } from './rich/MathView'
 import { MermaidBlock } from './rich/MermaidBlock'
 import { normalizeMath, remarkCallouts } from './rich/remark-rich'
+import { RichBlock, richKindOf } from './rich/RichBlock'
 import { RichTable } from './rich/RichTable'
 
 // 代码围栏按语言换成对应的富块；还在流式输出、没写完的富块先显示占位，不先闪一下代码（第 640 步）
@@ -29,7 +31,12 @@ function FencedBlock({ node }: ComponentProps<'pre'> & ExtraProps) {
       return closed ? <MathBlock tex={info.code} /> : <BlockSkeleton label="正在写公式…" />
     case 'mermaid':
       return closed ? <MermaidBlock info={info} /> : <BlockSkeleton label="正在画图…" />
+    case 'json':
+      return <JsonBlock info={info} closed={closed} />
   }
+  // ```chart、```metrics 这类结构化富块（第 650 步）
+  const kind = richKindOf(info.language)
+  if (kind) return <RichBlock kind={kind} info={info} closed={closed} />
   return <CodeBlock info={info} closed={closed} />
 }
 

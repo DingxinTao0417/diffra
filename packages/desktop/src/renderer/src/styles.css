@@ -390,25 +390,26 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
 .markdown .callout-body > * + * {
   margin-top: 0.5em;
 }
-/* 表格（rich/RichTable.tsx）：外层框画边线和圆角，单元格只画内部分隔线；表头固定在滚动区顶上 */
-.markdown table {
+/* Markdown 表格（rich/RichTable.tsx 的 .table-scroll）：外层框画边线和圆角，单元格只画内部分隔线；表头固定在滚动区顶上。
+ * 只管 Markdown 写的表格，富块里的表格（数据表、图表的数据表）自己排版 */
+.markdown .table-scroll table {
   border-collapse: separate;
   border-spacing: 0;
 }
-.markdown th,
-.markdown td {
+.markdown .table-scroll th,
+.markdown .table-scroll td {
   padding: 0.35em 0.7em;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
-.markdown th + th,
-.markdown td + td {
+.markdown .table-scroll th + th,
+.markdown .table-scroll td + td {
   border-left: 1px solid var(--border);
 }
-.markdown tbody tr:last-child td {
+.markdown .table-scroll tbody tr:last-child td {
   border-bottom: none;
 }
-.markdown th {
+.markdown .table-scroll th {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -416,13 +417,17 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
   font-weight: 700;
   text-align: left;
 }
-.markdown th[align="center"],
-.markdown td[align="center"] {
+.markdown .table-scroll [align="center"] {
   text-align: center;
 }
-.markdown th[align="right"],
-.markdown td[align="right"] {
+.markdown .table-scroll [align="right"] {
   text-align: right;
+}
+/* 富块（figure）里的列表由组件自己排版：回答正文的列表样式不带进去，退回 Tailwind 的写法 */
+.markdown figure :is(ul, ol, li) {
+  list-style: revert-layer;
+  padding-left: revert-layer;
+  margin-top: revert-layer;
 }
 /* 行多时收起，只留前 15 行（RichTable.tsx 的 PREVIEW_ROWS） */
 .markdown .table-collapsed tbody tr:nth-child(n + 16) {

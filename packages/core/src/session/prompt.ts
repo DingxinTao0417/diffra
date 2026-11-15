@@ -98,7 +98,7 @@ export async function buildSystemPrompt(
     '## Final message',
     '- End with a message that reads like a concise update from a teammate: what you did, what you verified, anything left or worth doing next. Lead with the outcome; keep it short unless the user needs detail.',
     '- Plain text with light Markdown. Put commands, paths and identifiers in backticks; reference code as `path:line`. Do not paste large files you wrote: the user has them.',
-    ...(worker ? [] : ['- If the user only asked a question, just answer it.', '- Reply in the same language the user writes in.']),
+    ...(worker ? [] : ['- If the user only asked a question, just answer it.', '- Reply in the same language the user writes in.', ...ANSWER_FORMAT_LINES]),
     '',
     '# Tool guidelines',
     '',
@@ -125,6 +125,27 @@ export async function buildSystemPrompt(
   lines.push(...codingRuleLines(rulePacks, rules.review && !worker))
   return lines.join('\n')
 }
+
+// 回答格式指南（第 652 步）：界面能把哪些写法画成什么（desktop 的 Markdown.tsx、core 的 rich/blocks.ts），什么时候该用。
+// 每种块只给一行 JSON 形状，不给长示例，控制 token；子智能体的结果按纯文本显示，不给它
+const ANSWER_FORMAT_LINES = [
+  '',
+  '## Formatting your answer',
+  'Your messages render as Markdown with extras. Plain prose, lists and Markdown tables come first; use the extras below only when they make the answer clearer, and never wrap one or two sentences in a block.',
+  '- Code fences are highlighted. When code comes from a file, put the path and start line after the language (```ts src/api.ts:40); mark lines to look at with {3,5-7}. ```diff shows a red/green change.',
+  '- Callouts: > [!NOTE], > [!TIP], > [!WARNING], > [!RISK], > [!SUCCESS], with an optional title after the marker; > [!DETAILS]- Title folds long logs or lists.',
+  '- Math with $…$ and $$…$$. Diagrams with ```mermaid (flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, gantt) when a flow or structure has several steps or parts.',
+  '- Structured blocks: a fence whose language is one of the names below, holding JSON (log holds raw lines):',
+  '  chart: {"type":"bar|line|area|pie|scatter|heatmap","title":"…","unit":"s","data":[{"label":"build","value":30}]} or {"x":["Mon","Tue"],"series":[{"name":"p95","data":[120,98]}]}; scatter series data are [x,y] pairs; heatmap is {"x":[…],"y":[…],"data":[[one row per y]]}; optional "horizontal", "stacked".',
+  '  metrics: {"items":[{"label":"Bundle","value":"412","unit":"KB","delta":"-8%","better":"down"}]}',
+  '  table: {"columns":["File",{"key":"kb","label":"Size (KB)"}],"rows":[["a.js",12]]} (sortable and filterable; for more than ~10 rows, otherwise use a Markdown table)',
+  '  timeline: {"items":[{"time":"10:02","title":"Deploy started","detail":"…","status":"done|active|pending|failed"}]}',
+  '  steps: {"current":2,"items":["Install deps",{"title":"Run migration","command":"pnpm db:migrate"}]}',
+  '  compare: {"criteria":["Speed"],"options":[{"name":"A","summary":"…","pros":["…"],"cons":["…"],"scores":{"Speed":"fast"},"recommended":true}]}',
+  '  filetree: {"items":[{"path":"src/app.ts","status":"added|modified|deleted","note":"…"}]}; keyvalue: {"Port":3000,"Mode":"dev"}; log: raw log lines.',
+  '- Pick by content: a chart only for trends or distributions with more than a handful of numbers (three numbers are a sentence, not a pie chart); metrics for 2-8 headline numbers; steps for a procedure the user will follow; timeline for events in order; compare for choosing between 2-6 options; filetree for a set of files.',
+  '- Use show_visual only when none of these fits, such as a custom layout or an interactive demo.',
+]
 
 // 编码规范排在最后，并写明优先级低于用户和 AGENTS.md；只约束这次写或改的代码，免得模型顺手大改旧代码
 function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
