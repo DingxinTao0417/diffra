@@ -176,3 +176,49 @@ test('回放这一轮：拖动滑块一步步看，对话里只显示到那一�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+// 第 687 步：回答里的命令能打进终端（不按回车）或填进输入框，有风险的先说清楚
+test('可执行代码块：命令打进这个项目的终端但不执行；有风险的先列出原因，确认后才打；console 写法去掉提示符后能填进输入框', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-run-code-'))
+  const answer = ['先看看目录：', '', '```bash', 'echo run-code-ok', '```', '', '清掉构建产物：', '', '```bash', 'rm -rf build', '```', '', '```console', '$ pnpm test', '> 跑测试的输出', '```'].join('\n')
+  const model = await startScriptedModel([{ text: answer }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '给我几条命令')
+    await waitTaskDone(window)
+    const blocks = window.getByTestId('agent-message').last().getByTestId('code-block')
+    await expect(blocks).toHaveCount(3)
+
+    // 普通命令：打进终端，不执行（终端里只有命令，没有输出）
+    await blocks.nth(0).getByRole('button', { name: '在终端运行（打进去，按回车才执行）' }).click()
+    const host = window.getByTestId('terminal-host')
+    await expect(host).toContainText('echo run-code-ok', { timeout: 20_000 })
+    await expect(host).not.toContainText(/^run-code-ok$/m)
+
+    // 有风险的：先列出原因，确认后才打
+    await blocks.nth(1).getByRole('button', { name: '在终端运行（打进去，按回车才执行）' }).click()
+    const risk = blocks.nth(1).getByTestId('command-risk')
+    await expect(risk).toContainText('递归删除文件和目录')
+    await risk.screenshot({ path: 'test-results/command-risk.png' })
+    await risk.getByRole('button', { name: '取消' }).click()
+    await expect(risk).toHaveCount(0)
+    await expect(host).not.toContainText('rm -rf build')
+    await blocks.nth(1).getByRole('button', { name: '在终端运行（打进去，按回车才执行）' }).click()
+    await blocks.nth(1).getByRole('button', { name: '仍然打进终端' }).click()
+    await expect(host).toContainText('rm -rf build')
+
+    // console 写法：去掉 $ 提示符和输出行
+    await blocks.nth(2).getByRole('button', { name: '填入输入框' }).click()
+    await expect(taskInput(window)).toHaveValue('pnpm test')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

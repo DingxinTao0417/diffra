@@ -856,6 +856,8 @@ export const SESSION_EXT_METHODS = {
   useTurnVersion: '_diffra/session/use-version',
   // 这个任务开着的插件注册的富块（第 682 步）
   sessionBlocks: '_diffra/session/blocks',
+  // 回答里的命令打进终端之前看风险（第 687 步），和确认卡用同一套规则
+  commandRisk: '_diffra/command/risk',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
   // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）

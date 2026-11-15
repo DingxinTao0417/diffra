@@ -34,6 +34,7 @@ import {
   type PromptImage,
   type PermissionMode,
   type PluginBlock,
+  type CommandRisk,
   type RemoteSnapshot,
   SESSION_EXT_METHODS,
   type SessionConfig,
@@ -196,6 +197,11 @@ export function enhancePrompt(
 // 模型很久没有输出时，让卡住的那一步重发；agent 是 main 或子智能体的 id
 export function retryStep(connection: acp.ClientConnection, sessionId: string, agent: string): Promise<{ retried: boolean }> {
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
+}
+
+// 回答里的命令打进终端之前看风险（第 687 步）
+export function commandRiskOf(connection: acp.ClientConnection, command: string): Promise<CommandRisk> {
+  return requestOf(connection)<CommandRisk, { command: string }>(SESSION_EXT_METHODS.commandRisk, { command }, extRequestOptions())
 }
 
 // 这个任务开着的插件注册的富块（第 682 步）

@@ -8,6 +8,7 @@ import type {
   PromptEnhancement,
   AskAnswer,
   PluginBlock,
+  CommandRisk,
   PromptImage,
   ReasoningEffort,
   PermissionMode,
@@ -120,6 +121,7 @@ export const IPC_CHANNELS = {
   sessionVisualSnapshot: 'session:visual-snapshot',
   sessionUseVersion: 'session:use-version',
   sessionBlocks: 'session:blocks',
+  commandRisk: 'command:risk',
   sessionProcesses: 'session:processes',
   sessionProcessStop: 'session:process-stop',
   sessionProcessOutput: 'session:process-output',
@@ -525,6 +527,8 @@ export interface DiffraApi {
   shareTurns(sessionId: string, turnIds: string[] | null): Promise<{ title: string; turns: StoredTurn[] }>
   // 可视化的快照（第 670 步）：截主窗口里 rect 这块成 PNG；窗口没显示出来、截到空图时是 null
   captureVisual(rect: { x: number; y: number; width: number; height: number }): Promise<PromptImage | null>
+  // 回答里的命令打进终端之前看风险（第 687 步）
+  commandRisk(command: string): Promise<CommandRisk>
   // 这个任务开着的插件注册的富块（第 682 步）
   sessionBlocks(sessionId: string): Promise<{ blocks: PluginBlock[] }>
   // 换回重新生成之前的那一次（第 676 步）：index 是这一轮 versions 里的位置

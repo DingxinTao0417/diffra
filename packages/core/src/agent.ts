@@ -43,6 +43,7 @@ import { McpPool } from './mcp.js'
 import { loadAgentTypes } from './subagents.js'
 import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
 import { inspectPlugin, pluginBlocks, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { commandRisk } from './permissions.js'
 import { sessionStartContext } from './session/plugin-hooks.js'
 import {
   checkSwitchesSchema,
@@ -714,6 +715,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       await notify(taskStateUpdate(session))
       return result
     })
+    .onRequest(SESSION_EXT_METHODS.commandRisk, z.object({ command: z.string().max(20_000) }), ({ params }) => commandRisk(params.command))
     .onRequest(SESSION_EXT_METHODS.sessionBlocks, z.object({ sessionId: z.string().min(1) }), ({ params }) => ({ blocks: sessionOf(params.sessionId).pluginBlocks }))
     .onRequest(SESSION_EXT_METHODS.useTurnVersion, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), index: z.number().int().nonnegative() }), async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
