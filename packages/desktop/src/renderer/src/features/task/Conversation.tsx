@@ -445,6 +445,8 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
                 task={turnTask}
                 active={task.running && last}
                 last={last}
+                // 远程会话往前翻页时自己挪滚动位置、关了滚动锚定，按需渲染的轮次一画出来高度就变，看着的位置会跳，不开
+                deferred={!last && !earlier}
                 latestWork={index === workIndex}
                 // 只传给那一步所在的轮次，别的轮次 props 不变、不用重画
                 locate={locate && turn.items.some((item) => item.id === locate.id) ? locate : null}
@@ -524,6 +526,8 @@ interface TurnViewProps {
   last: boolean
   // 最后一个执行轮（后面只跟着定位轮时仍算）：停下说明的按钮、重新生成、子智能体卡片的「定位问题」都在它上面
   latestWork: boolean
+  // 长会话按需渲染（第 672 步）：不在视口附近时跳过排版和绘制
+  deferred?: boolean
   // 要滚到这一轮里的哪一步（任务监控、定位结果点的），不在这一轮时是 null
   locate: ConversationProps['locate']
   onLocate(id: string): void
@@ -541,7 +545,7 @@ export function lastWorkIndex(turns: Turn[]): number {
   return -1
 }
 
-const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, locate, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
+const TurnView = memo(function TurnView({ turn, task, active, last, deferred = false, latestWork, locate, onLocate, onRestore: restoreTurn, onRegenerate: regenerateTurn }: TurnViewProps) {
   const onRestore = useCallback(() => restoreTurn(turn.id), [restoreTurn, turn.id])
   const onRegenerate = useCallback(() => regenerateTurn(turn.id), [regenerateTurn, turn.id])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
@@ -598,7 +602,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, latestWork, 
   }
 
   return (
-    <section data-testid="turn" data-turn-id={turn.id} className="group/turn flex flex-col gap-3.5">
+    // 按需渲染用 content-visibility：内容还在 DOM 里，页面内搜索、定位、复制照常；auto 记住画过一次的高度，滚动条不来回跳
+    <section data-testid="turn" data-turn-id={turn.id} className={cn('group/turn flex flex-col gap-3.5', deferred && '[contain-intrinsic-size:auto_480px] [content-visibility:auto]')}>
       {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
       {turn.remote && <RemoteSourceTag source={turn.remote} />}
       {blocks.map((block, index) => {

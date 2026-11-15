@@ -71,7 +71,8 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     await failed.nth(1).getByRole('button').click()
     await expect(failed.nth(0)).toContainText('rejected')
     await expect(failed.nth(1)).toContainText('read-only')
-    expect(await window.locator('body').innerText()).not.toContain(SECRET)
+    // 读 textContent：按需渲染（第 672 步）跳过的轮次 innerText 是空的，查不到
+    expect(await window.locator('body').textContent()).not.toContain(SECRET)
     expect(readFileSync(join(project, 'data', 'db.json'), 'utf8')).toBe('{"users":[]}\n')
 
     // 上下文占用：底部显示百分比，点开看总数

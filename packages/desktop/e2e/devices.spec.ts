@@ -280,7 +280,8 @@ interface TurnTexts {
 }
 const turnTexts = (window: Page, root: string) =>
   window.evaluate<TurnTexts[]>(`[...document.querySelectorAll('${root} [data-testid="turn"]')].map((turn) => ({
-    messages: [...turn.querySelectorAll('[data-testid="user-message"], [data-testid="agent-message"]')].map((node) => node.innerText.trim()),
+    // textContent：本机的长对话按需渲染（第 672 步），屏幕外的轮次 innerText 是空的
+    messages: [...turn.querySelectorAll('[data-testid="user-message"], [data-testid="agent-message"]')].map((node) => node.textContent.trim()),
     tools: turn.querySelectorAll('[data-testid="tool-call"]').length,
   }))`)
 
