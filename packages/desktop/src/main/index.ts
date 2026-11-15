@@ -21,6 +21,7 @@ import { registerArchitectureIpc } from './architecture-ipc'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { registerFileIpc } from './file-ipc'
+import { registerExportIpc } from './export-ipc'
 import { setupUpdater } from './updater'
 import { setupWindowChrome, titleBarOptions, watchAppCommands, watchFullScreen } from './window-chrome'
 
@@ -157,6 +158,7 @@ app
     registerAttachmentIpc()
     registerTerminalIpc()
     registerFileIpc()
+    registerExportIpc()
     setupUpdater()
     setupWindowChrome()
     createWindow()

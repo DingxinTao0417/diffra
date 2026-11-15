@@ -29,8 +29,7 @@ import { useStatic } from './static-context'
 import { SelectionAsk } from './SelectionAsk'
 import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
-import { renderStaticHtml } from './static-html'
-import { downloadBlob, safeFileName } from './rich/download'
+import { ExportMenu, exportTurns } from './export'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -614,14 +613,6 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
       (error: unknown) => console.error('复制失败', error),
     )
   }
-  // 这一轮存成单文件 HTML（第 671 步）：同一套组件静态渲染，带主题和图表，不带脚本
-  const exportTurn = () => {
-    const title = turnTitle(turn)
-    renderStaticHtml(<StaticTurns task={task} turns={[turn]} />, title).then(
-      (html) => downloadBlob(new Blob([html], { type: 'text/html' }), `${safeFileName(title)}.html`),
-      (error: unknown) => showToast(`导出失败：${errorMessage(error)}`),
-    )
-  }
 
   return (
     // 按需渲染用 content-visibility：内容还在 DOM 里，页面内搜索、定位、复制照常；auto 记住画过一次的高度，滚动条不来回跳
@@ -756,9 +747,12 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
               <FileText className="size-4" />
             </ActionButton>
           )}
-          <ActionButton label="导出这一轮" onClick={exportTurn}>
-            <Download className="size-4" />
-          </ActionButton>
+          {/* 导出这一轮（第 671、678 步）：Markdown、HTML、PDF、图片 */}
+          <ExportMenu onExport={(format) => void exportTurns(format, turnTitle(turn), [turn], () => <StaticTurns task={task} turns={[turn]} />)}>
+            <Button variant="ghost" size="icon-sm" aria-label="导出这一轮" title="导出这一轮">
+              <Download className="size-4" />
+            </Button>
+          </ExportMenu>
           {canRestore && (
             <>
               <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />

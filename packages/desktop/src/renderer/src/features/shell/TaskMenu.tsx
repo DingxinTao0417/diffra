@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { errorMessage } from '@/lib/errors'
 import { deleteTask, renameTask, setArchived } from '@/state/actions'
+import { type ExportFormat, ExportSubmenu } from '@/features/task/export'
 import { showToast, useAppState } from '@/state/store'
 
 interface TaskMenuProps {
@@ -30,10 +31,12 @@ interface TaskMenuProps {
   align?: 'start' | 'end'
   // 任务页顶栏的菜单给：打开项目设置（检查命令、禁止修改的目录等）
   onProjectSettings?(): void
+  // 任务页顶栏的菜单给：导出整个任务（第 678 步）
+  onExport?(format: ExportFormat): void
   children: ReactNode
 }
 
-export function TaskMenu({ sessionId, title, project, noProject, archived, open, onOpenChange, align = 'start', onProjectSettings, children }: TaskMenuProps) {
+export function TaskMenu({ sessionId, title, project, noProject, archived, open, onOpenChange, align = 'start', onProjectSettings, onExport, children }: TaskMenuProps) {
   const running = useAppState((state) => state.live[sessionId]?.running ?? false)
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -60,6 +63,7 @@ export function TaskMenu({ sessionId, title, project, noProject, archived, open,
               项目设置
             </DropdownMenuItem>
           )}
+          {onExport && <ExportSubmenu label="导出整个任务" onExport={onExport} />}
           <DropdownMenuItem disabled={running} onSelect={() => void setArchived(sessionId, !archived)}>
             <Archive />
             {archived ? '取消归档' : '归档'}

@@ -126,6 +126,7 @@ export const IPC_CHANNELS = {
   todosList: 'todos:list',
   visualSavePng: 'visual:save-png',
   visualCapture: 'visual:capture',
+  exportDocument: 'export:document',
   todosSave: 'todos:save',
   todosNotify: 'todos:notify',
   todosFocus: 'todos:focus',
@@ -515,6 +516,8 @@ export interface DiffraApi {
   plan(sessionId: string, turnId: string, text: string, skills: string[]): Promise<StopReason>
   // 对话里的可视化另存为 PNG：截主窗口里 rect 这块（CSS 像素），弹保存框
   saveVisualPng(rect: { x: number; y: number; width: number; height: number }, title: string): Promise<void>
+  // 导出 PDF、图片（第 678 步）：主进程在看不见的窗口里打开这份静态 HTML 打印或截图，先弹保存框；太长的图片只存前面一部分（truncated）
+  exportDocument(html: string, format: 'pdf' | 'png', name: string): Promise<{ saved: boolean; truncated?: boolean }>
   // 可视化的快照（第 670 步）：截主窗口里 rect 这块成 PNG；窗口没显示出来、截到空图时是 null
   captureVisual(rect: { x: number; y: number; width: number; height: number }): Promise<PromptImage | null>
   // 换回重新生成之前的那一次（第 676 步）：index 是这一轮 versions 里的位置

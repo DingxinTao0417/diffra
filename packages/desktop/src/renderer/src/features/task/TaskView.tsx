@@ -25,7 +25,8 @@ import { type LiveTask, type SidePanel, showToast, store, updateLive, useAppStat
 import { Composer, type ComposerCommand } from './Composer'
 import { composerDraftKey } from './composer-drafts'
 import { CacheUsage, ContextUsage } from './ContextUsage'
-import { Conversation } from './Conversation'
+import { Conversation, StaticTurns } from './Conversation'
+import { exportTurns } from './export'
 import { BranchMenu } from './BranchMenu'
 import { FilePanel } from './FilePanel'
 import { VisualsPanel } from './VisualsPanel'
@@ -146,6 +147,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
             archived={archived}
             // 无项目任务的文件夹不是用户的项目，不给它存项目设置
             onProjectSettings={task.noProject ? undefined : () => setEditingProject(true)}
+            onExport={task.turns.length > 0 ? (format) => void exportTurns(format, task.title || 'Diffra 任务', task.turns, () => <StaticTurns task={task} turns={task.turns} />) : undefined}
           >
             <Button variant="ghost" size="icon-sm" aria-label="任务菜单" className="text-muted-foreground">
               <Ellipsis className="size-4" />

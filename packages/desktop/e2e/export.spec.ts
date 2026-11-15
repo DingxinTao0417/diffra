@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type ElectronApplication, expect, test } from '@playwright/test'
-import { chooseProject, startTask, waitTaskDone } from './flows'
+import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
@@ -97,6 +97,7 @@ test('导出这一轮：单文件 HTML，没有脚本和操作按钮；高亮、
     await saveDownloadsTo(app, downloads)
 
     await window.getByTestId('turn-actions').getByRole('button', { name: '导出这一轮' }).click()
+    await window.getByRole('menuitem', { name: 'HTML' }).click()
     const file = join(downloads, '画个图再总结.html')
     await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
     const html = readFileSync(file, 'utf8')
@@ -123,11 +124,101 @@ test('导出这一轮：单文件 HTML，没有脚本和操作按钮；高亮、
     await expect(window.locator('html')).toHaveClass(/dark/)
     rmSync(file)
     await window.getByTestId('turn-actions').getByRole('button', { name: '导出这一轮' }).click()
+    await window.getByRole('menuitem', { name: 'HTML' }).click()
     await expect.poll(() => existsSync(file), { timeout: 20_000 }).toBe(true)
     expect(readFileSync(file, 'utf8')).toMatch(/<html[^>]* class="[^"]*dark/)
     const dark = await openExported(app, file, 'test-results/export-turn-dark.png')
     expect(dark.errors).toEqual([])
     expect(dark.background).not.toBe(light.background)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(downloads, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 678 步：导出成 Markdown、PDF、图片，整个任务也能导出
+test('导出：一轮存成 Markdown（提问、回答原文、可视化快照）、PDF、整页图片；任务菜单里能导出整个任务', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-export-formats-'))
+  const downloads = mkdtempSync(join(tmpdir(), 'diffra-e2e-export-formats-out-'))
+  const model = await startScriptedModel([{ text: ANSWER }, { text: '第二轮的回答：都导出好了。' }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '总结一下')
+    await waitTaskDone(window)
+    await expect(window.getByTestId('mermaid-block').locator('svg').first()).toBeVisible()
+    await saveDownloadsTo(app, downloads)
+    // 保存框换成直接存到临时目录
+    const saveTo = (file: string) =>
+      app.evaluate(({ dialog }, target) => {
+        dialog.showSaveDialog = (async () => ({ canceled: false, filePath: target })) as typeof dialog.showSaveDialog
+      }, file)
+    const exportTurn = async (format: string) => {
+      await window.getByTestId('turn-actions').last().getByRole('button', { name: '导出这一轮' }).click()
+      await window.getByRole('menuitem', { name: format }).click()
+    }
+
+    // Markdown：标题、提问引用、回答原文（图表照样是围栏）
+    await exportTurn('Markdown')
+    const markdownFile = join(downloads, '总结一下.md')
+    await expect.poll(() => existsSync(markdownFile), { timeout: 20_000 }).toBe(true)
+    const markdown = readFileSync(markdownFile, 'utf8')
+    expect(markdown.startsWith('# 总结一下\n\n> 总结一下\n')).toBe(true)
+    expect(markdown).toContain('```mermaid')
+    expect(markdown).toContain('```chart')
+    expect(markdown).toContain('| app | 120 KB |')
+
+    // PDF
+    const pdfFile = join(downloads, 'turn.pdf')
+    await saveTo(pdfFile)
+    await exportTurn('PDF')
+    await expect.poll(() => existsSync(pdfFile), { timeout: 30_000 }).toBe(true)
+    expect(readFileSync(pdfFile).subarray(0, 5).toString()).toBe('%PDF-')
+
+    // 图片：整页一张，比一屏高
+    const pngFile = join(downloads, 'turn.png')
+    await saveTo(pngFile)
+    await exportTurn('图片（PNG）')
+    await expect.poll(() => existsSync(pngFile), { timeout: 30_000 }).toBe(true)
+    const png = readFileSync(pngFile)
+    copyFileSync(pngFile, 'test-results/export-turn-page.png')
+    expect(png.subarray(1, 4).toString()).toBe('PNG')
+    expect(png.readUInt32BE(16)).toBe(900)
+    // 和同一份 HTML 在 900 宽的窗口里的整页高度一样（不是只截一屏）
+    await exportTurn('HTML')
+    const turnHtml = join(downloads, '总结一下.html')
+    await expect.poll(() => existsSync(turnHtml), { timeout: 20_000 }).toBe(true)
+    const pageHeight = await app.evaluate(async ({ BrowserWindow }, file) => {
+      const page = new BrowserWindow({ show: false, width: 900, height: 600 })
+      await page.loadFile(file)
+      const height = (await page.webContents.executeJavaScript('document.documentElement.scrollHeight')) as number
+      page.destroy()
+      return height
+    }, turnHtml)
+    expect(pageHeight).toBeGreaterThan(600)
+    expect(Math.abs(png.readUInt32BE(20) - pageHeight)).toBeLessThanOrEqual(2)
+    rmSync(turnHtml)
+
+    // 整个任务：两轮都在
+    await taskInput(window).fill('再来一轮')
+    await window.keyboard.press('Control+Enter')
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    await waitTaskDone(window)
+    await window.getByRole('main').getByRole('button', { name: '任务菜单' }).click()
+    await window.getByRole('menuitem', { name: '导出整个任务' }).click()
+    await window.getByRole('menuitem', { name: 'HTML' }).click()
+    const taskFile = join(downloads, '总结一下.html')
+    await expect.poll(() => existsSync(taskFile), { timeout: 20_000 }).toBe(true)
+    const html = readFileSync(taskFile, 'utf8')
+    expect(html.match(/data-testid="turn"/g)).toHaveLength(2)
+    expect(html).toContain('第二轮的回答')
   } finally {
     await app.close()
     await model.close()
