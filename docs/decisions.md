@@ -1720,5 +1720,6 @@ v2：
 - 中转：`packages/relay` 的 `createRelay` 新增 `enabled` 选项，关闭时仍提供健康检查，但拒绝所有 WebSocket 升级（503）；`src/main.ts` 默认关闭，只有 `RELAY_ENABLED=1` 才接设备连接，systemd 单元写明 `RELAY_ENABLED=0`。
 - 测试：`packages/desktop/e2e/devices.spec.ts` 在开关关闭时整体跳过；开关恢复后会自动重新运行。
 - 恢复条件：先彻底解决网络安全问题，再把桌面端开关改回 `true`、恢复官网说明，确认构建和测试后发布；中转要把 `RELAY_ENABLED` 改成 `1` 并重新部署。
-- 还没做的：线上 relay 仍跑着旧版本，需要提交并部署这次的 relay 改动（或先停掉服务）之后才真正拒绝旧客户端的连接；部署要另行确认。
+- 2026-11-15 已紧急停用线上 relay：执行 `systemctl disable --now diffra-relay`，现有连接断开，`https://relay.diffra.dev/health` 返回 502，服务器重启也不会自动恢复；官网和更新服务不受影响。恢复要另行通知后执行 `systemctl enable --now diffra-relay`。
+- 还没做的：桌面新版本和官网还没发布；线上 relay 跑的还是旧代码（现在停着）。正式恢复前仍建议部署这次的 relay 代码并把 `RELAY_ENABLED` 设为 `1`；部署要另行确认。
 - 验证：`pnpm --filter @diffra/desktop typecheck`、`build`、`build:website` 通过；桌面端完整测试 131 通过、15 跳过；`pnpm --filter @diffra/relay test` 13 个通过（含关闭时拒绝升级、健康检查照常）；构建后的官网和更新日志里搜不到设备连接、relay 相关文案；e2e 确认侧栏、标题栏和设置里没有可见入口。
