@@ -32,9 +32,9 @@ test('标题栏：顶栏能拖动、弹窗时不拖动；中文菜单从 ≡ 弹
     if (mac) {
       expect(Number.parseFloat(await computedStyle(bar, 'padding-left'))).toBeGreaterThanOrEqual(80)
       await expect(bar.getByRole('button', { name: '主菜单' })).toHaveCount(0)
-      // 顶栏不单独占一行：按钮组浮在侧栏顶上，内容面板顶到窗口上沿（留 8px）；窗口最上面一条能拖动
+      // 顶栏不单独占一行：按钮组浮在侧栏顶上，内容面板顶到窗口上沿（不留缝，留缝的话右上角会被窗口圆角切掉）；窗口最上面一条能拖动
       expect((await bar.boundingBox())!.width).toBeLessThan(300)
-      expect((await window.locator('main').first().boundingBox())!.y).toBeLessThanOrEqual(10)
+      expect((await window.locator('main').first().boundingBox())!.y).toBe(0)
       expect(await appRegion(window.locator('.mac-drag-strip'))).toBe('drag')
     } else expect(await appRegion(bar.getByRole('button', { name: '主菜单' }))).toBe('no-drag')
 

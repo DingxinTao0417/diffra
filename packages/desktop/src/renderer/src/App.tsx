@@ -167,8 +167,9 @@ export function App() {
           ) : (
             <>
               {sidebarShown && <Sidebar />}
-              {/* Mac 没有单独的顶栏：侧栏在时内容面板顶到窗口上沿（留 8px）；侧栏收起时顶上留一条放红绿灯和按钮（MAC_CHROME_HEIGHT） */}
-              <main ref={route.name === 'home' || route.name === 'design' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0', IS_MAC && (sidebarShown ? 'mt-2' : 'border-t-0 pt-[40px]'))}>
+              {/* Mac 没有单独的顶栏：内容面板顶到窗口上沿，不要上边框和左上圆角（上面留缝的话，缝和边框伸到右上角会被窗口圆角切掉）；
+                  侧栏收起时顶上留一条放红绿灯和按钮（MAC_CHROME_HEIGHT） */}
+              <main ref={route.name === 'home' || route.name === 'design' ? columnRef : undefined} className={cn('min-w-0 flex-1', INSET_PANEL, !sidebarShown && 'rounded-tl-none border-l-0', IS_MAC && 'rounded-tl-none border-t-0', IS_MAC && !sidebarShown && 'pt-[40px]')}>
                 {route.name === 'home' && <HomeView key="home" projectPath={route.project} />}
                 {route.name === 'design' && <HomeView key="design" design projectPath={route.project} />}
                 {route.name === 'task' && <TaskView sessionId={route.sessionId} columnRef={columnRef} />}

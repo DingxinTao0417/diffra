@@ -158,7 +158,7 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           </div>
         ))}
       </nav>
-      <main className={cn('min-w-0 flex-1', INSET_PANEL, IS_MAC && 'mt-2')}>
+      <main className={cn('min-w-0 flex-1', INSET_PANEL, IS_MAC && 'rounded-tl-none border-t-0')}>
         <div className="h-full overflow-y-auto [scrollbar-gutter:stable]">
           <div className="mx-auto max-w-[760px] px-6 py-10 lg:py-12">
             <SectionBody section={section} />
