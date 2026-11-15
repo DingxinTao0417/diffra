@@ -9,6 +9,73 @@ export const SHOW_VISUAL_TOOL = 'show_visual'
 const label = z.string().trim().min(1).max(200)
 const note = z.string().max(2000)
 
+// 参数沙盘（第 688 步）的公式：只能用数字、参数名、x、运算符和下面这些 Math 函数，工具箱（visual-kit.js 的 FORMULA_NAMES）按同一份名单算
+export const FORMULA_FUNCTIONS = ['abs', 'min', 'max', 'pow', 'sqrt', 'cbrt', 'log', 'log2', 'log10', 'exp', 'round', 'floor', 'ceil', 'sin', 'cos', 'tan', 'PI', 'E']
+const FORMULA_TOKEN = /\s+|(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|[A-Za-z_]\w*|\*\*|<=|>=|==|!=|&&|\|\||[-+*/%^()?:,<>!]/y
+const SANDBOX_POINTS = 200
+
+// 公式哪里不对；没问题返回 null
+export function formulaProblem(formula: string, names: ReadonlySet<string>): string | null {
+  let depth = 0
+  // 上一个是数、名字或右括号时，后面不能直接跟数、名字、函数或左括号（2x、(a)(b) 要写乘号）
+  let previous: { token: string; value: boolean } | null = null
+  FORMULA_TOKEN.lastIndex = 0
+  while (FORMULA_TOKEN.lastIndex < formula.length) {
+    const at = FORMULA_TOKEN.lastIndex
+    const match = FORMULA_TOKEN.exec(formula)
+    if (!match) return `has an unsupported character "${formula[at]}" at ${at}`
+    const token = match[0]
+    if (/^\s/.test(token)) continue
+    const name = /^[A-Za-z_]/.test(token)
+    if (name && !names.has(token) && !FORMULA_FUNCTIONS.includes(token)) return `uses an unknown name "${token}" (only the parameter ids${names.has('x') ? ', x' : ''} and ${FORMULA_FUNCTIONS.join(', ')})`
+    const operand = name || /^[\d.]/.test(token) || token === '('
+    if (previous?.value && operand) return `is missing an operator between "${previous.token}" and "${token}" (write * for multiplication)`
+    if (token === '(') depth++
+    if (token === ')' && --depth < 0) return 'has an unmatched ")"'
+    const call = name && FORMULA_FUNCTIONS.includes(token) && token !== 'PI' && token !== 'E'
+    previous = { token, value: (name && !call) || /^[\d.]/.test(token) || token === ')' }
+  }
+  return depth === 0 ? null : 'has an unmatched "("'
+}
+
+const formula = z.string().trim().min(1).max(300)
+const sandboxInput = z
+  .object({
+    intro: note.optional(),
+    params: z
+      .array(z.object({ id: z.string().regex(/^[A-Za-z_]\w{0,30}$/, 'use letters, digits and _'), label: label, min: z.number(), max: z.number(), step: z.number().positive().optional(), value: z.number(), unit: z.string().max(20).optional() }))
+      .min(1)
+      .max(6),
+    x: z.object({ from: z.number(), to: z.number(), step: z.number().positive().optional(), label: label.optional() }).optional(),
+    chart: z.object({ type: z.enum(['line', 'area', 'bar']), title: label.optional(), unit: z.string().max(20).optional(), series: z.array(z.object({ name: label, formula })).min(1).max(4) }).optional(),
+    outputs: z.array(z.object({ label: label, formula, unit: z.string().max(20).optional() })).max(6).optional(),
+  })
+  .superRefine((value, context) => {
+    const ids = value.params.map((param) => param.id)
+    value.params.forEach((param, index) => {
+      if (param.id === 'x' || FORMULA_FUNCTIONS.includes(param.id)) context.addIssue({ code: 'custom', path: ['params', index, 'id'], message: `"${param.id}" is reserved` })
+      if (ids.indexOf(param.id) !== index) context.addIssue({ code: 'custom', path: ['params', index, 'id'], message: `duplicate id "${param.id}"` })
+      if (param.min >= param.max) context.addIssue({ code: 'custom', path: ['params', index, 'max'], message: 'max must be greater than min' })
+      else if (param.value < param.min || param.value > param.max) context.addIssue({ code: 'custom', path: ['params', index, 'value'], message: 'value must be between min and max' })
+    })
+    if (!value.chart && !value.outputs?.length) context.addIssue({ code: 'custom', path: ['chart'], message: 'give a chart, outputs, or both' })
+    if (value.chart) {
+      if (!value.x) context.addIssue({ code: 'custom', path: ['x'], message: 'a chart needs x: {from, to, step}' })
+      else if (value.x.from >= value.x.to) context.addIssue({ code: 'custom', path: ['x', 'to'], message: 'to must be greater than from' })
+      else if ((value.x.to - value.x.from) / (value.x.step ?? 1) + 1 > SANDBOX_POINTS) context.addIssue({ code: 'custom', path: ['x', 'step'], message: `at most ${SANDBOX_POINTS} points; use a bigger step` })
+      const names = new Set([...ids, 'x'])
+      value.chart.series.forEach((series, index) => {
+        const problem = formulaProblem(series.formula, names)
+        if (problem) context.addIssue({ code: 'custom', path: ['chart', 'series', index, 'formula'], message: `the formula ${problem}` })
+      })
+    }
+    const names = new Set(ids)
+    value.outputs?.forEach((output, index) => {
+      const problem = formulaProblem(output.formula, names)
+      if (problem) context.addIssue({ code: 'custom', path: ['outputs', index, 'formula'], message: `the formula ${problem}` })
+    })
+  })
+
 // 预设（第 667 步）：模型只给数据，桌面端的工具箱（visual-kit.js 的 diffra.preset）按模板画，样子稳定、跟着主题走
 const PRESETS = {
   compare: z.object({
@@ -52,6 +119,7 @@ const PRESETS = {
     intro: note.optional(),
     items: z.array(z.object({ label: label, value: z.union([z.string().max(60), z.number()]), unit: z.string().max(20).optional(), delta: z.union([z.string().max(30), z.number()]).optional(), better: z.enum(['up', 'down']).optional() })).min(1).max(12),
   }),
+  sandbox: sandboxInput,
 } as const
 
 type PresetName = keyof typeof PRESETS
@@ -90,6 +158,7 @@ export const showVisualTool = tool({
     '- chart: {type:"bar|line|area|pie|donut|scatter",data:[{label,value}] or {labels:[],series:[{name,values:[]}]},options:{title,unit,stacked}}',
     '- mockup: {device:"desktop|mobile",screens:[{title,blocks:[{kind:"nav|header|text|button|input|image|list|card|table",text,items:[]}]}]}',
     '- flow: {direction:"LR|TD",nodes:[{id,label,kind:"start|end|decision|step"}],edges:[{from,to,label}]}  - cards: {items:[{label,value,unit,delta,better:"up|down"}]}',
+    '- sandbox: lets the user drag sliders and watch a result change, for "what if" questions (cost vs. traffic, timeout vs. retries). {params:[{id:"users",label,min,max,step,value,unit}],x:{from,to,step,label},chart:{type:"line|area|bar",title,unit,series:[{name,formula:"users * 0.02 * x"}]},outputs:[{label,formula,unit}]}; formulas use numbers, the param ids, x (chart only), + - * / % ^ ( ) and comparisons, and abs min max pow sqrt log log10 exp round floor ceil.',
     'Any preset data can start with an "intro" sentence.',
     'With code (an HTML fragment or an <svg>): scripts run, and public CDNs (cdnjs, jsdelivr, unpkg) and web images load. A kit is already loaded: diffra.chart(type, data, {title, unit, stacked, into}) returns a themed SVG chart element; diffra.ui.card({title, body, footer, tone}), stat({label, value, unit, delta, better}), badge(text, tone), tabs([{label, content}]), progress(value, {max, label}), grid(children, {min}), table(rows, {columns}) return elements. Elements with data-step="1", "2"… appear one by one in presentation mode.',
     "Match the app: colors only through the CSS variables --bg, --fg, --muted, --border, --card, --primary, --soft, --accent, --warning, --danger, --success, --chart-1..4 (they follow the user's light/dark theme and color scheme); the body font is already set. Keep the outer background transparent.",

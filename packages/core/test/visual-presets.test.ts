@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { SessionUpdate } from '../src/protocol.js'
 import type { StepToolCall, TurnIO } from '../src/session/loop.js'
-import { presetCode, runShowVisual } from '../src/session/visual.js'
+import { formulaProblem, presetCode, runShowVisual } from '../src/session/visual.js'
 
 const call = (input: unknown): StepToolCall => ({ toolCallId: 'v1', toolName: 'show_visual', input }) as StepToolCall
 
@@ -40,6 +40,46 @@ describe('可视化预设', () => {
       const outcome = await runShowVisual(call(input), io)
       expect(JSON.stringify(outcome.result), JSON.stringify(input)).toContain('Invalid arguments')
       expect(updates[0]).toMatchObject({ status: 'failed' })
+    }
+  })
+
+  // 第 688 步
+  test('参数沙盘：公式只认数字、参数名、x 和 Math 函数，少乘号、括号不配、不认识的名字都说清楚', async () => {
+    const names = new Set(['users', 'price', 'x'])
+    expect(formulaProblem('users * price * x + max(0, users - 1000) ^ 2', names)).toBeNull()
+    expect(formulaProblem('round(sqrt(users) * PI) >= 3 ? 1 : 0', names)).toBeNull()
+    expect(formulaProblem('2x', names)).toBe('is missing an operator between "2" and "x" (write * for multiplication)')
+    expect(formulaProblem('(users)(price)', names)).toContain('missing an operator')
+    expect(formulaProblem('users * (price', names)).toBe('has an unmatched "("')
+    expect(formulaProblem('users)', names)).toBe('has an unmatched ")"')
+    expect(formulaProblem('window.alert(1)', names)).toContain('unknown name "window"')
+    expect(formulaProblem('users["a"]', names)).toContain('unsupported character "["')
+    expect(formulaProblem('users = 1', names)).toContain('unsupported character "="')
+
+    const data = {
+      params: [
+        { id: 'users', label: '日活', min: 1000, max: 100000, step: 1000, value: 20000, unit: '人' },
+        { id: 'price', label: '单价', min: 0.01, max: 0.1, value: 0.02, unit: '元' },
+      ],
+      x: { from: 1, to: 12, label: '月' },
+      chart: { type: 'line', series: [{ name: '累计成本', formula: 'users * price * x' }] },
+      outputs: [{ label: '年成本', formula: 'users * price * 12', unit: '元' }],
+    }
+    const { updates, io } = recording()
+    await runShowVisual(call({ title: '成本', preset: 'sandbox', data }), io)
+    expect((updates[0] as { _meta?: { diffra?: { visual?: { code: string } } } })._meta?.diffra?.visual?.code).toContain('diffra.preset("sandbox"')
+
+    for (const [broken, message] of [
+      [{ ...data, outputs: [{ label: '年成本', formula: 'users * x' }] }, 'outputs.0.formula: the formula uses an unknown name "x"'],
+      [{ ...data, x: undefined }, 'x: a chart needs x'],
+      [{ ...data, x: { from: 0, to: 1000 } }, 'x.step: at most 200 points'],
+      [{ ...data, params: [{ ...data.params[0], value: 0 }] }, 'params.0.value: value must be between min and max'],
+      [{ ...data, params: [{ ...data.params[0], id: 'max' }] }, 'params.0.id: "max" is reserved'],
+      [{ params: data.params }, 'chart: give a chart, outputs, or both'],
+    ] as const) {
+      const recorder = recording()
+      const outcome = await runShowVisual(call({ title: '成本', preset: 'sandbox', data: broken }), recorder.io)
+      expect((outcome.result.output as { value: string }).value).toContain(message)
     }
   })
 

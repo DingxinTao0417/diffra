@@ -244,3 +244,60 @@ test('可视化的版本、白板和演示：同名的能切版本、和上一�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+// 第 688 步：参数沙盘——拖滑块，图和结果在沙箱里重算；算不出来的写明；「用这组参数问」填进输入框；公式写错时模型拿到原因
+test('参数沙盘：拖滑块重算图和结果，算不出来的写明；用这组参数问填进输入框；公式写错时模型拿到原因', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-visual-sandbox-'))
+  const data = {
+    intro: '拖一下看成本怎么变',
+    params: [
+      { id: 'users', label: '日活', min: 1000, max: 100000, step: 1000, value: 20000, unit: '人' },
+      { id: 'price', label: '单价', min: 0.01, max: 0.1, step: 0.01, value: 0.02, unit: '元' },
+    ],
+    x: { from: 1, to: 12, label: '月' },
+    chart: { type: 'line', title: '累计成本', unit: '元', series: [{ name: '累计', formula: 'users * price * x' }, { name: '坏公式', formula: 'sqrt(0 - users)' }] },
+    outputs: [{ label: '年成本', formula: 'users * price * 12', unit: '元' }],
+  }
+  const model = await startScriptedModel([
+    { toolCalls: [{ name: 'show_visual', input: { title: '成本沙盘', preset: 'sandbox', data } }] },
+    { toolCalls: [{ name: 'show_visual', input: { title: '写错的', preset: 'sandbox', data: { ...data, outputs: [{ label: '年成本', formula: '12users' }] } } }] },
+    { text: '拖拖看' },
+  ])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '算算成本')
+    await waitTaskDone(window)
+    await expect(window.getByTestId('visual')).toHaveCount(1)
+    const frame = window.getByTestId('visual').locator('iframe').contentFrame()
+    await expect(frame.getByRole('slider')).toHaveCount(2)
+    await expect(frame.locator('.dk-stat-value')).toHaveText('4,800元')
+    await expect(frame.locator('.dk-chart svg polyline')).toHaveCount(2)
+    await expect(frame.locator('.dk-sandbox-problem')).toHaveText('算不出来（图上按 0 画）：坏公式')
+    await window.getByTestId('visual').screenshot({ path: 'test-results/visual-sandbox-light.png' })
+
+    // 日活拖到 5 万：年成本跟着变
+    await frame.getByRole('slider', { name: '日活' }).fill('50000')
+    await expect(frame.locator('.dk-sandbox-value').first()).toHaveText('5万人')
+    await expect(frame.locator('.dk-stat-value')).toHaveText('1.2万元')
+    await frame.getByRole('button', { name: '用这组参数问' }).click()
+    await expect(taskInput(window)).toHaveValue('参数沙盘里我把参数调成：日活 5万人、单价 0.02元；算出来：年成本 1.2万元。')
+
+    await window.emulateMedia({ colorScheme: 'dark' })
+    await window.waitForTimeout(400)
+    await window.getByTestId('visual').screenshot({ path: 'test-results/visual-sandbox-dark.png' })
+
+    // 公式写错（12users 少了乘号）：没画，模型拿到哪个字段、为什么
+    const lastTool = (JSON.parse(model.bodies().at(-1)!) as { messages: Array<{ role: string; content: unknown }> }).messages.filter((message) => message.role === 'tool').at(-1)
+    expect(String(lastTool?.content)).toContain('missing an operator between')
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

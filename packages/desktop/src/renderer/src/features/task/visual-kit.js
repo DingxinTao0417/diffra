@@ -361,6 +361,13 @@
     '.dk-option button,.dk-pick{all:unset;cursor:pointer;align-self:flex-start;border:1px solid var(--border);border-radius:6px;padding:2px 10px;font-size:12px}',
     '.dk-option button:hover,.dk-pick:hover{background:var(--accent)}',
     '.dk-muted{color:var(--muted);font-size:12px}',
+    '.dk-sandbox{display:flex;flex-direction:column;gap:12px}',
+    '.dk-sandbox-params{display:grid;gap:10px 16px;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}',
+    '.dk-sandbox-param{display:flex;flex-direction:column;gap:4px;font-size:13px}',
+    '.dk-sandbox-label{display:flex;justify-content:space-between;gap:8px;color:var(--muted)}',
+    '.dk-sandbox-value{color:var(--fg);font-weight:700;font-variant-numeric:tabular-nums}',
+    '.dk-sandbox-param input{width:100%;margin:0;accent-color:var(--chart-1)}',
+    '.dk-sandbox-problem{color:var(--warning);font-size:12px}.dk-sandbox-problem:empty{display:none}',
     '.dk-timeline{list-style:none;margin:0;padding:0 0 0 18px;border-left:2px solid var(--border);display:flex;flex-direction:column;gap:12px}',
     '.dk-timeline li{position:relative}',
     '.dk-timeline li::before{content:"";position:absolute;left:-25px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--muted);border:2px solid var(--card)}',
@@ -495,6 +502,99 @@
     return diffra.ui.grid((data.items || []).map(function (item) { return diffra.ui.stat(item) }), { min: '150px' })
   }
 
+  // 参数沙盘（第 688 步）：拖滑块，公式在这里重算，图和结果跟着变。core 查过公式（formulaProblem）：只有数字、参数名、x、运算符和这些函数，名单和 core 的 FORMULA_FUNCTIONS 一样
+  var FORMULA_NAMES = ['abs', 'min', 'max', 'pow', 'sqrt', 'cbrt', 'log', 'log2', 'log10', 'exp', 'round', 'floor', 'ceil', 'sin', 'cos', 'tan', 'PI', 'E']
+  function compileFormula(formula, names) {
+    var run
+    try {
+      run = new Function(names.concat(FORMULA_NAMES).join(','), 'return (' + String(formula).replace(/\^/g, '**') + ')')
+    } catch (error) {
+      return function () { return null }
+    }
+    var math = FORMULA_NAMES.map(function (name) { return Math[name] })
+    return function (values) {
+      try {
+        var result = run.apply(null, values.concat(math))
+        if (typeof result === 'boolean') result = result ? 1 : 0
+        return typeof result === 'number' && isFinite(result) ? result : null
+      } catch (error) {
+        return null
+      }
+    }
+  }
+
+  function presetSandbox(data) {
+    var params = data.params || []
+    var state = params.map(function (p) { return Number(p.value) })
+    var ids = params.map(function (p) { return p.id })
+    var xs = []
+    if (data.chart && data.x) {
+      for (var i = 0; xs.length < 200; i++) {
+        var value = Math.round((data.x.from + i * (data.x.step || 1)) * 1e9) / 1e9
+        if (value > data.x.to + 1e-9) break
+        xs.push(value)
+      }
+    }
+    var series = data.chart ? data.chart.series.map(function (s) { return { name: s.name, run: compileFormula(s.formula, ids.concat(['x'])) } }) : []
+    var outputs = (data.outputs || []).map(function (o) { return { label: o.label, unit: o.unit, run: compileFormula(o.formula, ids) } })
+    var chartSlot = el('div', 'dk-sandbox-chart')
+    var statsSlot = el('div', 'dk-sandbox-stats')
+    var problem = el('div', 'dk-sandbox-problem')
+    problem.setAttribute('role', 'status')
+    var results = []
+    function update() {
+      var broken = []
+      if (data.chart) {
+        var model = {
+          labels: xs.map(function (x) { return format(x) }),
+          series: series.map(function (s) {
+            return {
+              name: s.name,
+              values: xs.map(function (x) {
+                var result = s.run(state.concat([x]))
+                if (result === null && broken.indexOf(s.name) < 0) broken.push(s.name)
+                return result === null ? 0 : result
+              }),
+            }
+          }),
+        }
+        chartSlot.replaceChildren(diffra.chart(data.chart.type, model, { title: data.chart.title, unit: data.chart.unit }))
+      }
+      results = outputs.map(function (o) {
+        var result = o.run(state)
+        if (result === null) broken.push(o.label)
+        return result
+      })
+      if (outputs.length) statsSlot.replaceChildren(diffra.ui.grid(outputs.map(function (o, index) { return diffra.ui.stat({ label: o.label, value: results[index] === null ? '—' : results[index], unit: o.unit }) }), { min: '140px' }))
+      problem.textContent = broken.length ? '算不出来（图上按 0 画）：' + broken.join('、') : ''
+    }
+    var controls = el('div', 'dk-sandbox-params', params.map(function (p, index) {
+      var output = el('output', 'dk-sandbox-value', format(state[index], p.unit))
+      var input = document.createElement('input')
+      input.type = 'range'
+      input.min = String(p.min)
+      input.max = String(p.max)
+      input.step = String(p.step || (p.max - p.min) / 100)
+      input.value = String(p.value)
+      input.setAttribute('aria-label', p.label)
+      input.oninput = function () {
+        state[index] = Number(input.value)
+        output.textContent = format(state[index], p.unit)
+        update()
+      }
+      return el('label', 'dk-sandbox-param', [el('span', 'dk-sandbox-label', [el('span', '', p.label), output]), input])
+    }))
+    var ask = el('button', 'dk-pick', '用这组参数问')
+    ask.type = 'button'
+    ask.onclick = function () {
+      var picked = params.map(function (p, index) { return p.label + ' ' + format(state[index], p.unit) }).join('、')
+      var computed = outputs.map(function (o, index) { return o.label + ' ' + format(results[index], o.unit) }).join('、')
+      diffra.ask('参数沙盘里我把参数调成：' + picked + (computed ? '；算出来：' + computed : '') + '。')
+    }
+    update()
+    return el('div', 'dk-sandbox', [controls, data.chart ? chartSlot : null, data.chart && data.x && data.x.label ? el('div', 'dk-muted', '横轴：' + data.x.label) : null, outputs.length ? statsSlot : null, problem, ask])
+  }
+
   var PRESETS = {
     compare: presetCompare,
     timeline: presetTimeline,
@@ -502,6 +602,7 @@
     mockup: presetMockup,
     flow: presetFlow,
     cards: presetCards,
+    sandbox: presetSandbox,
   }
 
   diffra.preset = function (name, data) {
