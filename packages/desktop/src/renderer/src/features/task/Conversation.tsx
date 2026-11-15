@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, Download, History, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, Download, History, ListChecks, LoaderCircle, Map as MapIcon, MessageSquare, MonitorSmartphone, RefreshCw, FileText, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -31,6 +31,7 @@ import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
 import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
+import { TurnMap } from './TurnMap'
 import { TurnReplay } from './TurnReplay'
 import { PromptImagesContext } from './rich/annotations'
 import { PluginBlocksContext, useSessionPluginBlocks } from './rich/PluginBlock'
@@ -428,6 +429,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
       {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
       <div
         ref={scrollRef}
+        data-conversation-scroll=""
         onScroll={onScroll}
         onWheel={onWheel}
         onKeyDown={onKeyDown}
@@ -586,6 +588,9 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   // 时间轴回放（第 681 步）：显示到第几步，null 是没在回放
   const [replay, setReplay] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
+  // 对话地图（第 691 步）：这一轮的步骤、文件、图表和要你定的地方，点了滚过去
+  const [showMap, setShowMap] = useState(false)
+  const sectionRef = useRef<HTMLElement>(null)
   const shownItems = viewed?.items ?? turn.items
   const items = useMemo(() => (replay === null ? shownItems : shownItems.slice(0, replay)), [shownItems, replay])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
@@ -635,7 +640,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
 
   return (
     // 按需渲染用 content-visibility：内容还在 DOM 里，页面内搜索、定位、复制照常；auto 记住画过一次的高度，滚动条不来回跳
-    <section data-testid="turn" data-turn-id={turn.id} className={cn('group/turn flex flex-col gap-3.5', deferred && '[contain-intrinsic-size:auto_480px] [content-visibility:auto]')}>
+    <section ref={sectionRef} data-testid="turn" data-turn-id={turn.id} className={cn('group/turn flex flex-col gap-3.5', deferred && '[contain-intrinsic-size:auto_480px] [content-visibility:auto]')}>
       {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
       {turn.remote && <RemoteSourceTag source={turn.remote} />}
       {blocks.map((block, index) => {
@@ -644,7 +649,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
         switch (block.type) {
           case 'item': {
             const view = <ItemView key={block.item.id} item={block.item} goal={turn.kind === 'goal'} skills={turn.skills} images={turn.images} imageNote={imageNote} streaming={active && index === blocks.length - 1} />
-            if (block.item.kind !== 'user' || isStatic || active || (versions.length === 0 && replay === null)) return view
+            const mapPanel = showMap && !isStatic && <TurnMap items={shownItems} files={turnFiles} root={sectionRef} cardOf={toolBlockType} onLocate={onLocate} onClose={() => setShowMap(false)} />
+            if (block.item.kind !== 'user' || isStatic || active || (versions.length === 0 && replay === null && !mapPanel)) return view
             const replayBar = replay !== null && (
               <TurnReplay
                 items={shownItems}
@@ -658,11 +664,12 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
                 }}
               />
             )
-            if (versions.length === 0) return <Fragment key={block.item.id}>{view}{replayBar}</Fragment>
+            if (versions.length === 0) return <Fragment key={block.item.id}>{view}{replayBar}{mapPanel}</Fragment>
             return (
               <Fragment key={block.item.id}>
                 {view}
                 {replayBar}
+                {mapPanel}
                 <TurnVersions
                   versions={versions}
                   current={turn}
@@ -776,6 +783,11 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           {turn.items.length > 2 && (
             <ActionButton label="回放这一轮" onClick={() => setReplay(1)}>
               <History className="size-4" />
+            </ActionButton>
+          )}
+          {turn.items.length > 1 && (
+            <ActionButton label={showMap ? '收起这一轮的地图' : '这一轮的地图'} onClick={() => setShowMap(!showMap)}>
+              <MapIcon className="size-4" />
             </ActionButton>
           )}
           {/* 出错卡片里已经有「重试」，同一个动作不再放第二个按钮 */}

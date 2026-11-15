@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { exec, read, startScriptedModel } from './scripted-model'
+import { addFile, exec, read, startScriptedModel } from './scripted-model'
 
 const section = (name: string) => `${name}这一节讲了很多细节，要一步步看。`.repeat(18)
 const LONG = ['# 总览', section('总览'), '## 安装', section('安装'), '## 配置', section('配置'), '### 环境变量', section('环境变量'), '## 部署', section('部署'), '```md', '## 代码里的标题不算', '```'].join('\n\n')
@@ -417,6 +417,62 @@ test('架构图：重点节点的边先突出，悬停换成这个节点的；�
     await model.close()
     rmSync(project, { recursive: true, force: true })
     rmSync(downloads, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
+// 第 691 步：对话地图——这一轮的步骤、改了的文件、图表和卡片、要你定的地方；点一项滚到它在对话里的位置
+test('对话地图：列出步骤（失败的标出来）、文件、图表和卡片、决策卡；点了滚过去；能收起', async () => {
+  test.setTimeout(60_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-turn-map-'))
+  writeFileSync(join(project, 'a.txt'), 'hello\n')
+  const filler = Array.from({ length: 40 }, (_, index) => `第 ${index + 1} 段说明，这里写得比较长，占一些位置，让后面的卡片不在一屏里。`).join('\n\n')
+  const decision = { title: '选哪个', criteria: ['速度'], options: [{ name: '甲', scores: { 速度: 4 } }, { name: '乙', scores: { 速度: 2 } }] }
+  const answer = ['```chart', JSON.stringify({ type: 'bar', title: '耗时', data: [{ label: 'a', value: 1 }, { label: 'b', value: 2 }] }), '```', '', filler, '', '```decision', JSON.stringify(decision), '```'].join('\n')
+  const model = await startScriptedModel([{ toolCalls: [read('a.txt'), read('missing.txt')] }, { toolCalls: [addFile('b.txt', 'hi')] }, { text: answer }])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '做几步再画图')
+    await waitTaskDone(window)
+
+    await window.getByTestId('turn-actions').getByRole('button', { name: '这一轮的地图' }).click()
+    const map = window.getByTestId('turn-map')
+    await expect(map).toBeVisible()
+    // 两次读、一次新建，加上 Diffra 自己的静态检查和完成卡
+    await expect(map.getByTestId('turn-map-steps').getByTestId('turn-map-entry')).toHaveCount(5)
+    await expect(map.getByTestId('turn-map-steps')).toContainText('检查 2')
+    await expect(map.getByTestId('turn-map-steps')).toContainText('（失败）')
+    await expect(map.getByTestId('turn-map-files').getByTestId('turn-map-entry')).toHaveText(['b.txt +1 −0'])
+    await expect(map.getByTestId('turn-map-charts').getByTestId('turn-map-entry')).toHaveText(['耗时'])
+    await expect(map.getByTestId('turn-map-decisions').getByTestId('turn-map-entry')).toHaveText(['选哪个'])
+    await map.screenshot({ path: 'test-results/turn-map.png' })
+
+    // 点决策卡：滚到回答最后那张卡；再点文件：滚回改动那一步
+    const card = window.getByTestId('rich-decision')
+    await expect(card).not.toBeInViewport()
+    await map.getByTestId('turn-map-decisions').getByTestId('turn-map-entry').click()
+    await expect(card).toBeInViewport()
+    await expect(map).not.toBeInViewport()
+    // 地图滚出去了：回到顶上再点文件
+    await map.scrollIntoViewIfNeeded()
+    await map.getByTestId('turn-map-entry').filter({ hasText: '（失败）' }).click()
+    await expect(window.getByTestId('tool-call').filter({ hasText: 'missing.txt' })).toBeInViewport()
+    await map.getByTestId('turn-map-files').getByTestId('turn-map-entry').click()
+    await expect(window.locator('[data-kind="edit"], [data-testid="edit-card"]').filter({ hasText: 'b.txt' }).first()).toBeInViewport()
+    await map.getByTestId('turn-map-charts').getByTestId('turn-map-entry').click()
+    await expect(window.locator('[data-kind="chart-bar"]')).toBeInViewport()
+
+    await map.scrollIntoViewIfNeeded()
+    await map.getByRole('button', { name: '收起这一轮的地图' }).click()
+    await expect(map).toHaveCount(0)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
