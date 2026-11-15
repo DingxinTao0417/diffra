@@ -27,6 +27,7 @@ import { ReadOnlyContext, useReadOnly } from './read-only'
 import { useRemoteTask } from './remote-task'
 import { useStatic } from './static-context'
 import { SelectionAsk } from './SelectionAsk'
+import { ConversationSearch } from './ConversationSearch'
 import { renderStaticHtml } from './static-html'
 import { downloadBlob, safeFileName } from './rich/download'
 import { useFullOutput } from './tool-output'
@@ -461,6 +462,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
         </div>
       </div>
       <SelectionAsk root={scrollRef} />
+      <ConversationSearch root={scrollRef} version={task.turns} />
       {task.turns.length > 1 && <Timeline turns={task.turns} activeTurn={activeTurn ?? task.turns.at(-1)?.id ?? null} onJump={scrollToTurn} />}
       {!atBottom && (
         <Button variant="outline" size="icon" aria-label="回到底部" className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full shadow-overlay" onClick={scrollToBottom}>

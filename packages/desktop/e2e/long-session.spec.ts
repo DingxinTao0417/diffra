@@ -115,3 +115,55 @@ test('长会话：150 轮打开、滚到最早一轮、改窗口宽度都在预�
     rmSync(userDataDir, { recursive: true, force: true })
   }
 })
+
+// 第 675 步：回答内搜索
+test('回答内搜索：Ctrl+F 在长对话里找字，能跳到屏幕外没画的轮次；回车、Shift+回车上下跳；太多时写 1000+；Esc 关掉、高亮清掉', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-long-search-'))
+  await seedLongSession(userDataDir, project)
+  const model = await startScriptedModel([])
+  const app = await launchApp(userDataDir)
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await window.getByTestId('sidebar').getByRole('button', { name: '很长的任务' }).click()
+    await expect(window.getByTestId('turn')).toHaveCount(TURNS, { timeout: 30_000 })
+
+    await window.keyboard.press('Control+f')
+    const bar = window.getByTestId('conversation-search')
+    const input = bar.getByLabel('在对话里搜索')
+    const count = bar.getByTestId('conversation-search-count')
+    await expect(input).toBeFocused()
+    // 第 3 轮在最上面，停在底部时它没画
+    await input.fill('第 3 轮改好了')
+    await expect(count).toHaveText('1/1')
+    await expect(window.getByTestId('turn').nth(2).getByText('第 3 轮改好了')).toBeInViewport()
+    expect(await window.evaluate(`CSS.highlights.has('diffra-search-current')`)).toBe(true)
+    await bar.screenshot({ path: 'test-results/conversation-search.png' })
+    await window.getByTestId('turn').nth(2).locator('.markdown p').first().screenshot({ path: 'test-results/conversation-search-hit.png' })
+
+    await input.fill('改好了')
+    await expect(count).toHaveText(`1/${TURNS}`)
+    await input.press('Enter')
+    await expect(count).toHaveText(`2/${TURNS}`)
+    await input.press('Shift+Enter')
+    await input.press('Shift+Enter')
+    await expect(count).toHaveText(`${TURNS}/${TURNS}`)
+    await expect(window.getByTestId('turn').last().getByText(`第 ${TURNS} 轮改好了`)).toBeInViewport()
+
+    await input.fill('compute(')
+    await expect(count).toHaveText('1/1000+')
+    await input.fill('没有这个词')
+    await expect(count).toHaveText('没有找到')
+    await input.press('Escape')
+    await expect(bar).toHaveCount(0)
+    expect(await window.evaluate(`CSS.highlights.has('diffra-search') || CSS.highlights.has('diffra-search-current')`)).toBe(false)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})

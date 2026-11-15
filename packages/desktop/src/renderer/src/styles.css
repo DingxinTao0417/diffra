@@ -289,6 +289,15 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
   }
 }
 
+/* 回答内搜索的命中（第 675 步，ConversationSearch.tsx）：所有命中淡一些，当前这个深一些 */
+::highlight(diffra-search) {
+  background-color: color-mix(in oklab, var(--warning) 25%, transparent);
+}
+::highlight(diffra-search-current) {
+  background-color: color-mix(in oklab, var(--warning) 60%, transparent);
+  color: var(--foreground);
+}
+
 /*
  * 滚动条：细的圆角滑块、透明轨道、没有上下箭头。
  * 不能再设 scrollbar-width / scrollbar-color，设了以后 Chromium 会忽略下面这些 ::-webkit-scrollbar 规则
