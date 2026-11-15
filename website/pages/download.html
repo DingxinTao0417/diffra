@@ -4,7 +4,7 @@
     <p>免费下载，公测期间所有功能都能用。</p>
   </header>
 
-  <div class="download-card">
+  <div class="download-card" id="windows">
     <div>
       <h2>Diffra for Windows</h2>
       <p data-release="summary">Windows 10 / 11 · 64 位</p>
@@ -18,13 +18,32 @@
   <dl class="specs">
     <dt>版本</dt><dd data-release="version">—</dd>
     <dt>发布日期</dt><dd data-release="date">—</dd>
-    <dt>安装包大小</dt><dd data-release="size">约 120 MB</dd>
+    <dt>安装包大小</dt><dd data-release="size">约 140 MB</dd>
     <dt>系统要求</dt><dd>Windows 10 / 11，64 位</dd>
     <dt>SHA-512</dt><dd><code data-release="sha512">—</code></dd>
   </dl>
 
+  <div class="download-card download-card-next" id="mac">
+    <div>
+      <h2>Diffra for Mac <span class="badge">预览版</span></h2>
+      <p data-release-mac="summary">macOS 12 及以上 · Apple 芯片（M 系列）</p>
+    </div>
+    <a class="button large" href="https://update.diffra.dev/mac/Diffra-latest-arm64.dmg" data-download-mac>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+      下载 dmg
+    </a>
+  </div>
+
+  <dl class="specs">
+    <dt>版本</dt><dd data-release-mac="version">—</dd>
+    <dt>发布日期</dt><dd data-release-mac="date">—</dd>
+    <dt>安装包大小</dt><dd data-release-mac="size">约 140 MB</dd>
+    <dt>系统要求</dt><dd>macOS 12 Monterey 及以上，Apple 芯片（M1 及更新）。暂不支持 Intel 芯片的 Mac</dd>
+    <dt>SHA-512</dt><dd><code data-release-mac="sha512">—</code></dd>
+  </dl>
+
   <div class="prose">
-    <h2 id="install">安装</h2>
+    <h2 id="install">在 Windows 上安装</h2>
     <ol>
       <li>运行下载好的 <code>Diffra-Setup-版本号.exe</code>。</li>
       <li>安装包还没有代码签名，Windows 可能提示「Windows 已保护你的电脑」：点「更多信息」，再点「仍要运行」。</li>
@@ -32,14 +51,24 @@
       <li>装好后打开 Diffra，按<a href="/docs.html">快速开始</a>接入模型，就能开始第一个任务。</li>
     </ol>
 
+    <h2 id="install-mac">在 Mac 上安装</h2>
+    <ol>
+      <li>打开下载好的 <code>Diffra-版本号-arm64.dmg</code>，把 Diffra 拖进「应用程序」文件夹。</li>
+      <li>预览版还没有经过 Apple 公证，第一次打开时 macOS 会提示无法验证、不让打开：点「完成」关掉提示，打开「系统设置 → 隐私与安全性」，在下面找到 Diffra 那一行，点「仍要打开」，输入开机密码确认。之后再打开就不会再问。</li>
+      <li>打开 Diffra，按<a href="/docs.html">快速开始</a>接入模型，就能开始第一个任务。快捷键里的 <code>Ctrl</code> 在 Mac 上换成 <code>⌘</code>。</li>
+    </ol>
+
     <h2 id="verify">核对安装包</h2>
-    <p>想确认安装包完整、没被改过，可以在 PowerShell 里算一下它的 SHA-512，和上面列的值比对：</p>
+    <p>想确认安装包完整、没被改过，可以算一下它的 SHA-512，和上面列的值比对。Windows 在 PowerShell 里：</p>
     <pre><code>[Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::ReadAllBytes("Diffra-Setup-版本号.exe")))</code></pre>
+    <p>Mac 在「终端」里：</p>
+    <pre><code>shasum -a 512 -b Diffra-版本号-arm64.dmg | cut -d' ' -f1 | xxd -r -p | base64</code></pre>
 
     <h2 id="update">更新和卸载</h2>
     <ul>
-      <li>有新版本时 Diffra 会在后台下载，「设置 → 更新与关于」里点「重启并更新」，或者下次退出时自动装好。每个版本改了什么见<a href="/changelog.html">更新日志</a>。</li>
-      <li>卸载：Windows「设置 → 应用」里找到 Diffra 卸载。你的任务记录和设置留在 <code>%APPDATA%\Diffra</code>，重装后还在；不需要的话可以手动删掉这个文件夹。</li>
+      <li>Windows：有新版本时 Diffra 会在后台下载，「设置 → 更新与关于」里点「重启并更新」，或者下次退出时自动装好。每个版本改了什么见<a href="/changelog.html">更新日志</a>。</li>
+      <li>Mac 预览版暂时不会自动更新，有新版本时到这里重新下载 dmg，把新的 Diffra 拖进「应用程序」替换旧的就行，任务记录和设置都还在。</li>
+      <li>卸载：Windows「设置 → 应用」里找到 Diffra 卸载；Mac 把「应用程序」里的 Diffra 移到废纸篓。你的任务记录和设置留在 Windows 的 <code>%APPDATA%\Diffra</code>、Mac 的 <code>~/Library/Application Support/Diffra</code>，重装后还在；不需要的话可以手动删掉这个文件夹。</li>
     </ul>
   </div>
 </div>

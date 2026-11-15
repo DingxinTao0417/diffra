@@ -106,8 +106,8 @@ ${rows.map(([name = '', license = '', source = '']) => `<tr><td>${cell(name)}</t
 function pages(): Page[] {
   const releases = readChangelog()
   return [
-    { file: 'index.html', title: 'Diffra · Windows 上的编程智能体', description: '描述任务，Diffra 在你的项目里读代码、改代码、跑检查，做完给你看改动。每一轮都能撤销，模型用你自己的 API Key。', body: pageBody('index.html') },
-    { file: 'download.html', title: '下载 Diffra · Windows 版', description: '下载 Diffra Windows 版：版本、大小、系统要求、校验值和安装说明。', body: pageBody('download.html') },
+    { file: 'index.html', title: 'Diffra · Windows 和 Mac 上的编程智能体', description: '描述任务，Diffra 在你的项目里读代码、改代码、跑检查，做完给你看改动。每一轮都能撤销，模型用你自己的 API Key。', body: pageBody('index.html') },
+    { file: 'download.html', title: '下载 Diffra · Windows 和 Mac', description: '下载 Diffra 的 Windows 版和 Mac 版：版本、大小、系统要求、校验值和安装说明。', body: pageBody('download.html') },
     { file: 'docs.html', title: '快速开始 · Diffra', description: '五分钟用上 Diffra：安装、接入模型、开始第一个任务，以及权限模式和浏览器扩展。', body: pageBody('docs.html') },
     { file: 'changelog.html', title: '更新日志 · Diffra', description: 'Diffra 每个版本新增和修复了什么。', body: () => changelogBody(releases) },
     { file: 'privacy.html', title: '隐私政策 · Diffra', description: 'Diffra 处理哪些数据、发到哪里、官网记录什么。', body: pageBody('privacy.html') },

@@ -17,6 +17,8 @@ const configSchema = z.object({
   ssh: z.object({ target: z.string().min(1), port: z.number().int().positive(), identityFile: z.string().min(1) }),
   // 更新源的安装包目录
   remoteDir: remotePath,
+  // Mac 安装包目录；不写就是 remoteDir 旁边的 mac（…/win → …/mac）
+  macRemoteDir: remotePath.optional(),
   // 官网文件目录
   siteDir: remotePath,
   // nginx 访问日志（含轮转出来的旧文件），统计用；默认是 Ubuntu 上 nginx 的位置

@@ -23,6 +23,7 @@
     "test:packaged": "pnpm run package && node scripts/build-extension.ts && playwright test --project=packaged",
     "test:packaged:mac": "pnpm run package:mac && node scripts/build-extension.ts && playwright test --project=packaged",
     "publish:release": "node scripts/publish-release.ts",
+    "publish:mac": "node scripts/publish-mac.ts",
     "publish:relay": "node scripts/publish-relay.ts",
     "publish:website": "node scripts/publish-website.ts",
     "changelog": "node scripts/changelog.ts",

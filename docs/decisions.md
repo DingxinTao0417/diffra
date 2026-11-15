@@ -138,7 +138,7 @@ v2：
 ## macOS
 
 - 原则：Windows 的行为一点不改。主进程按 `process.platform` 分支，界面从 `renderer/src/lib/platform.ts` 的 `IS_MAC` 分（preload 把 `process.platform` 放在 `window.diffra.platform`）。只在 Windows 上有意义的代码保持原样；两边都要的改动先确认 Windows 上结果不变。
-- 现状（2026-11-11）：开发版和临时签名的打包版在 Mac（Apple 芯片）上能跑，core 的单元测试、桌面端 e2e（开发版和打包版各 98 个）全部通过。签名公证、自动更新、发布、CI 还没做（见下面「还没做」）。
+- 现状（2026-11-11）：开发版和临时签名的打包版在 Mac（Apple 芯片）上能跑，core 的单元测试、桌面端 e2e（开发版和打包版各 98 个）全部通过。签名公证、自动更新、CI 还没做（见下面「还没做」）。
 - 窗口：
   - 去掉系统标题栏（`titleBarStyle: 'hidden'`），红绿灯放在 (14, 12)。
   - 顶栏不单独占一行（2026-11-11 定的「侧栏通顶」，像访达、备忘录）：红绿灯、侧栏开关、后退前进浮在窗口左上角，落在侧栏顶部留出的 40px 里；内容面板顶到窗口上沿（留 8px）。侧栏收起时内容区顶上留一条 40px 放这几个按钮。全屏时红绿灯藏起来，按钮挪到最左（主进程发 `window:full-screen`）。侧栏最窄 216px，放得下这一组。
@@ -168,10 +168,16 @@ v2：
   - 更新源 `https://update.diffra.dev/mac/`（`mac.publish`，写进包里，发布后不能改）。
 - 自动更新：Mac 的自动更新要求新旧版本用同一个 Developer ID 签名，临时签名的包一更新就失败，所以现在 Mac 打包版不检查更新，「更新与关于」显示「Mac 预览版暂不自动更新，新版本请到官网下载」（`updater.ts` 的 `mac-preview`）。正式发 Mac 版时去掉。
 - 钥匙串：Mac 上 safeStorage 用钥匙串里的「Diffra Safe Storage」加密 API Key，开发版和打包版共用这个名字。签名不同的程序第一次读它会弹系统授权框；临时签名每次打包都不一样，所以每装一个新包都会问一次，有了 Developer ID 就不会。e2e 在 Mac 上加 `--use-mock-keychain`，不碰用户真实的钥匙串。
+- 发布（2026-11-15 起，从 0.5.2 开始，Mac 版叫「预览版」）：
+  - 还没有 Developer ID 证书，先发临时签名、没公证的包。用户第一次打开会被 Gatekeeper 拦，要到「系统设置 → 隐私与安全性」点「仍要打开」；下载页、首页常见问题、快速开始里写了步骤，和 Windows 没签名时教用户点「仍要运行」一样。有了证书以后改成签名公证的包，再去掉这些说明。
+  - 流程：在 Mac 上 `package:mac`（先 `pnpm install`），把 `release/` 里的 dmg、zip、两个 `.blockmap`、`latest-mac.yml` 用 `gh release upload v<版本> … --clobber` 传到这一版的 GitHub Release；然后在有 `publish.config.json` 的电脑上 `pnpm --filter @diffra/desktop publish:mac`（`scripts/publish-mac.ts`），再 `publish:website`。Windows 的 `publish:release` 不变，两边各发各的。
+  - 服务器目录：`publish.config.json` 的 `macRemoteDir`，不写就是 `remoteDir` 旁边的 `mac`（`/var/www/diffra-update/mac`），脚本自己建。官网的下载按钮用 `Diffra-latest-arm64.dmg`（软链接，和 Windows 的 `Diffra-Setup-latest.exe` 一样）。
+  - 官网：下载页两块卡片，Windows 读 `win/latest.yml`、Mac 读 `mac/latest-mac.yml` 里 dmg 那一项（顶层的 sha512 是 zip 的）。首页的下载按钮和版本说明标了 `data-follow-platform`，用 Mac 打开时换成 Mac 版（iPad 也自称 Mac，按触点数排除）。Intel 芯片的 Mac 浏览器认不出来，下载页写明暂不支持。跨域读 `.yml` 要 nginx 给 `/mac/` 也加 `Access-Control-Allow-Origin: https://diffra.dev`，`publish:mac` 发完会检查，没有就提醒（不影响下载）。
+  - 用户的数据在 `~/Library/Application Support/Diffra`，隐私政策、用户协议、快速开始里和 Windows 的写在一起。
 - 打包版验收：`pnpm --filter @diffra/desktop test:packaged:mac` 先打包，再把全部 e2e 跑在 `release/mac-arm64/Diffra.app` 上（Playwright 的 `packaged` 项目按系统选程序路径）。
 - 还没做：
   - 签名和公证：要 Apple Developer 账号（每年 99 美元，国内 688 元）和 Developer ID Application 证书；公证要 App Store Connect 的 API 密钥或 App 专用密码。个人账号的话，系统弹窗里显示的开发者是本人姓名。
-  - 发布：`publish-release.ts` 加 Mac 的文件（dmg、zip、`.blockmap`、`latest-mac.yml`），服务器建 `/var/www/diffra-update/mac/`，nginx、官网下载页（按系统给链接）、下载统计跟着加。
+  - 下载统计（`website-stats.ts`）还只算 Windows 的安装包。
   - CI 加 `macos-latest` 的任务（打包、跑打包版 e2e、传草稿 Release），证书和公证凭据放进 secrets。
   - Intel 版或 universal 包。
 
