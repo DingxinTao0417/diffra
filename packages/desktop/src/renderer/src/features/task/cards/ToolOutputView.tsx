@@ -9,7 +9,9 @@ import { CodeLines } from '../rich/CodeBlock'
 import { useHighlighted } from '../rich/highlight'
 import { JsonTree } from '../rich/JsonBlock'
 import { parseAnsi, stripAnsi } from './ansi'
+import { isGitDiff, looksLikeLog, parseBuildAssets, parseGitLog, parseGitPush, parseGitStatus, parseHttp, parseQueryTable } from './more-parsers'
 import { type FileRead, parseRead, parseSearch, parseTestSummary, type SearchResults, splitCommandOutput, type TestSummary } from './output-parsers'
+import { BuildView, GitDiffView, GitLogView, GitPushView, GitStatusView, HttpView, LogView, QueryView } from './OutputViews'
 
 // 输出超过这么多行只画最后这么多（报错一般在最后）
 const MAX_LINES = 2000
@@ -26,24 +28,33 @@ export function ToolOutputView({ command, output }: { command: string | null; ou
       const json = jsonOf(output)
       return json === undefined ? null : ({ kind: 'json', value: json } as const)
     }
-    const test = parseTestSummary(parsed.body)
+    const body = parsed.body
+    const test = parseTestSummary(body)
     if (test) return { kind: 'test', test } as const
-    const search = parseSearch(command, parsed.body)
+    if (isGitDiff(command, body)) return { kind: 'git-diff' } as const
+    const status = parseGitStatus(command, body)
+    if (status) return { kind: 'git-status', status } as const
+    const commits = parseGitLog(command, body)
+    if (commits) return { kind: 'git-log', commits } as const
+    const push = parseGitPush(command, body)
+    if (push) return { kind: 'git-push', push } as const
+    const response = parseHttp(command, body)
+    if (response) return { kind: 'http', response } as const
+    const table = parseQueryTable(command, body)
+    if (table) return { kind: 'query', table } as const
+    const assets = parseBuildAssets(body)
+    if (assets) return { kind: 'build', assets } as const
+    const search = parseSearch(command, body)
     if (search) return { kind: 'search', search } as const
-    const read = parsed.exitCode === 0 ? parseRead(command, parsed.body) : null
-    return read ? ({ kind: 'read', read } as const) : null
+    const log = looksLikeLog(body)
+    const read = parsed.exitCode === 0 ? parseRead(command, body) : null
+    // 读的是日志文件（.log、.out、.err）就按日志看，能筛选级别、跳到源码
+    if (read && !(log && /\.(?:log|out|err)$/i.test(read.path))) return { kind: 'read', read } as const
+    return log ? ({ kind: 'log' } as const) : null
   }, [command, output, parsed])
   const fill = target ? (text: string) => fillComposer(target.sessionId, text) : null
   const header = command && parsed.state ? output.slice(0, output.indexOf('\n') < 0 ? undefined : output.indexOf('\n')) : null
   const failedTests = view?.kind === 'test' && view.test.failures.length > 0 ? view.test.failures : null
-  // JSON 树自己带外框，不再套一层（卡片里不套卡片）
-  if (view?.kind === 'json') {
-    return (
-      <div className="mt-1.5 ml-5" data-testid="tool-output" data-view="json">
-        <JsonTree value={view.value} source={output} />
-      </div>
-    )
-  }
   return (
     <div className="mt-1.5 ml-5 overflow-hidden rounded-md border bg-muted" data-testid="tool-output" data-view={view?.kind ?? 'text'}>
       {command && (
@@ -73,7 +84,21 @@ export function ToolOutputView({ command, output }: { command: string | null; ou
       {view?.kind === 'test' && <FailureList test={view.test} />}
       {view?.kind === 'search' && <SearchView search={view.search} />}
       {view?.kind === 'read' && <ReadView read={view.read} />}
-      {(!view || view.kind === 'test') && <TerminalText text={parsed.body} />}
+      {view?.kind === 'json' && (
+        <div className="bg-background">
+          <JsonTree value={view.value} source={output} bare />
+        </div>
+      )}
+      {view?.kind === 'git-diff' && <GitDiffView diff={parsed.body} />}
+      {view?.kind === 'git-status' && <GitStatusView status={view.status} />}
+      {view?.kind === 'git-log' && <GitLogView commits={view.commits} />}
+      {view?.kind === 'git-push' && <GitPushView push={view.push} />}
+      {view?.kind === 'http' && <HttpView response={view.response} />}
+      {view?.kind === 'query' && <QueryView table={view.table} />}
+      {view?.kind === 'build' && <BuildView assets={view.assets} />}
+      {view?.kind === 'log' && <LogView text={parsed.body} />}
+      {/* 测试、构建、推送的原始输出也留着：警告和提示在里面 */}
+      {(!view || view.kind === 'test' || view.kind === 'build' || view.kind === 'git-push') && <TerminalText text={parsed.body} />}
     </div>
   )
 }

@@ -23,7 +23,7 @@ const LINE_TONE: Record<LogLevel, string> = {
 }
 
 // ```log：按级别筛选（标签上是条数）、搜索；行里的源码位置（src/a.ts:12）是项目里的文件时能点开到那一行
-export function LogBlock({ data }: { data: LogData }) {
+export function LogBlock({ data, bare }: { data: LogData; bare?: boolean }) {
   const [levels, setLevels] = useState<Set<LogLevel>>(new Set())
   const [query, setQuery] = useState('')
   const [all, setAll] = useState(false)
@@ -45,6 +45,7 @@ export function LogBlock({ data }: { data: LogData }) {
   const numberWidth = `${String(data.lines.length).length}ch`
   return (
     <BlockShell
+      bare={bare}
       testId="log-block"
       kind="log"
       icon={<ScrollText className="size-3.5 shrink-0" />}

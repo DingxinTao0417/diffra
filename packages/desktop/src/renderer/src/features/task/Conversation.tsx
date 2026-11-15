@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type ModelErrorKind, type PromptImage, type RemoteSource, STEPS_CARD_TITLE } from '@diffra/core/types'
 import type { PermissionRequestEvent } from '../../../../shared/ipc'
 import type { ModelRef } from '../../../../shared/settings'
-import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, X } from 'lucide-react'
+import { ArrowDown, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleAlert, Copy, ListChecks, LoaderCircle, MessageSquare, MonitorSmartphone, RefreshCw, SearchCheck, Sparkles, Square, Target, Undo2, Wrench, X } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,6 +28,9 @@ import { useRemoteTask } from './remote-task'
 import { useFullOutput } from './tool-output'
 import { VisualCard } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
+import { FINDING_PATTERN, levelStyle, ReviewFindings, SecurityFindings } from './cards/FindingLists'
+import { LocationLink } from './cards/LocationLink'
+import { ShellAction } from './rich/BlockShell'
 import { ToolOutputView } from './cards/ToolOutputView'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
@@ -1090,6 +1093,12 @@ function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }
   )
 }
 
+// 卡片上的「填入修复提示词」：只有本机任务有（远程、只读会话没有 AnswerContext），只填不发
+function useFillPrompt(): ((text: string) => void) | null {
+  const target = useContext(AnswerContext)
+  return target ? (text: string) => fillComposer(target.sessionId, text) : null
+}
+
 // 运行中每秒刷新一次；结束后不再计时，也不显示
 function useElapsed(startedAt: number | undefined, running: boolean): number | null {
   const [now, setNow] = useState(() => Date.now())
@@ -1404,9 +1413,7 @@ function CheckRow({ item }: { item: ToolItem }) {
   )
 }
 
-const FINDING_PATTERN = /^(\S+) {2}(\S+:\d+) {2}(.+)$/
-
-// 规范审查和架构检查：每行一处问题「规则或导入  路径:行号  说明」
+// 规范审查和架构检查：每行一处问题「规则或导入  路径:行号  说明」（FINDING_PATTERN 在 cards/FindingLists）
 function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
   const text = textOf(item)
   const common = { 'data-testid': 'tool-call', 'data-kind': toolBlockType(item), 'data-status': item.status }
@@ -1456,30 +1463,16 @@ function ReviewBlock({ item, label }: { item: ToolItem; label: string }) {
       titleClassName="text-destructive"
       copy={{ label: '复制问题', text: () => text }}
     >
-      {lines.map((line, index) => {
-        const match = findings[index]
-        if (!match) return <div key={index} className="leading-relaxed">{line}</div>
-        return (
-          <div key={index} className="flex flex-wrap gap-x-2.5 leading-relaxed">
-            <span className="font-mono text-xs leading-6 text-destructive">{match[1]}</span>
-            <span className="font-mono text-xs leading-6">{match[2]}</span>
-            <span>{match[3]}</span>
-          </div>
-        )
-      })}
+      <ReviewFindings lines={lines} />
     </CardShell>
   )
 }
 
 // 安全检查卡片的一行：级别  规则号  路径:行号  说明
 const SECURITY_LINE = /^(高危|提醒|已放行) {2}(\S+) {2}(\S+:\d+) {2}(.+)$/
-const LEVEL_STYLES: Record<string, string> = {
-  高危: 'bg-destructive/10 text-destructive',
-  提醒: 'bg-warning/10 text-warning',
-  已放行: 'bg-muted text-muted-foreground',
-}
 
 function SecurityBlock({ item }: { item: ToolItem }) {
+  const fillPrompt = useFillPrompt()
   const text = textOf(item)
   const title = SECURITY_TITLES.get(item.title) ?? item.title
   const common = { 'data-testid': 'tool-call', 'data-kind': 'security', 'data-status': item.status }
@@ -1513,6 +1506,7 @@ function SecurityBlock({ item }: { item: ToolItem }) {
     )
   }
   const high = findings.filter((row) => row.match?.[1] === '高危').length
+  const fill = fillPrompt
   return (
     <CardShell
       {...common}
@@ -1522,21 +1516,15 @@ function SecurityBlock({ item }: { item: ToolItem }) {
       title={high > 0 ? `${title} · ${high} 处高危问题，已打回` : `${title} · 没有高危问题，${findings.length} 条需要留意`}
       titleClassName={high > 0 ? 'text-destructive' : undefined}
       copy={{ label: '复制发现', text: () => text }}
+      actions={
+        fill && (
+          <ShellAction label="填入修复提示词" onClick={() => fill(`修复${title}发现的这些问题：\n${findings.filter((row) => row.match?.[1] !== '已放行').map((row) => `- ${row.line}`).join('\n')}`)}>
+            <Wrench />
+          </ShellAction>
+        )
+      }
     >
-      {rows.map(({ line, match }, index) =>
-        match ? (
-          <div key={index} className="flex flex-wrap items-baseline gap-x-2.5 leading-relaxed" data-testid="security-finding">
-            <span className={cn('shrink-0 rounded-sm px-1.5 text-xs', LEVEL_STYLES[match[1] ?? ''])}>{match[1]}</span>
-            <span className="font-mono text-xs">{match[2]}</span>
-            <span className="font-mono text-xs">{match[3]}</span>
-            <span>{match[4]}</span>
-          </div>
-        ) : (
-          <div key={index} className="leading-relaxed">
-            {line}
-          </div>
-        ),
-      )}
+      <SecurityFindings rows={rows} />
     </CardShell>
   )
 }
@@ -1579,7 +1567,7 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
       else next.add(index)
       return next
     })
-  const fix = () => {
+  const fixPrompt = () => {
     const lines = findings
       .filter((_, index) => selected.has(index))
       .map(
@@ -1588,8 +1576,9 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
           (finding.flow ? `\n   链路：${finding.flow}` : '') +
           (finding.fix ? `\n   修复建议：${finding.fix}` : ''),
       )
-    void sendMessage(task.sessionId, `修复深度安全扫描发现的这些问题：\n${lines.join('\n')}`)
+    return `修复深度安全扫描发现的这些问题：\n${lines.join('\n')}`
   }
+  const fix = () => void sendMessage(task.sessionId, fixPrompt())
 
   return (
     <CardShell
@@ -1607,9 +1596,9 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
           {!readOnly && <Checkbox className="mt-0.5" checked={selected.has(index)} onCheckedChange={() => toggle(index)} />}
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className={cn('rounded-sm px-1.5 text-xs', LEVEL_STYLES[finding.level])}>{finding.level}</span>
+              <span className={cn('rounded-sm px-1.5 text-xs', levelStyle(finding.level))}>{finding.level}</span>
               <span className="font-mono text-xs">{finding.ruleId}</span>
-              <span className="font-mono text-xs">{finding.location}</span>
+              <LocationLink location={finding.location} className="font-mono text-xs" />
             </div>
             <div>{finding.problem}</div>
             {finding.flow && <div className="text-xs text-muted-foreground">链路：{finding.flow}</div>}
@@ -1618,9 +1607,14 @@ function DeepScanReport({ item, task }: { item: ToolItem; task: TurnTask }) {
         </label>
       ))}
       {!readOnly && findings.length > 0 && (
-        <Button disabled={selected.size === 0} className="self-start" onClick={fix}>
-          {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button disabled={selected.size === 0} onClick={fix}>
+            {task.running ? `排队修复选中的 ${selected.size} 个问题` : `修复选中的 ${selected.size} 个问题`}
+          </Button>
+          <Button variant="outline" disabled={selected.size === 0} onClick={() => fillComposer(task.sessionId, fixPrompt())}>
+            填入输入框
+          </Button>
+        </div>
       )}
     </CardShell>
   )

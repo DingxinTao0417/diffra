@@ -61,7 +61,7 @@ export function DiffBlock({ info }: { info: FenceInfo }) {
   )
 }
 
-function DiffFileSection({ file, single, defaultOpen }: { file: LooseDiffFile; single: boolean; defaultOpen: boolean }) {
+export function DiffFileSection({ file, single, defaultOpen }: { file: LooseDiffFile; single: boolean; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   const target = useContext(AnswerContext)
   const resolved = useProjectFile(file.path)

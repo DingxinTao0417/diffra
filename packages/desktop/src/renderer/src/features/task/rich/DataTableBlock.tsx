@@ -15,7 +15,7 @@ type Cell = TableData['rows'][number][number]
 const cellText = (value: Cell) => (value === null ? '' : String(value))
 
 // ```table：结构化数据。点表头排序（再点倒序、第三次恢复），行多时能筛选，分页显示；复制成 Markdown 或 CSV 时按当前排序和筛选
-export function DataTableBlock({ data }: { data: TableData }) {
+export function DataTableBlock({ data, bare }: { data: TableData; bare?: boolean }) {
   const [sort, setSort] = useState<{ column: number; direction: 1 | -1 } | null>(null)
   const [filter, setFilter] = useState('')
   const [limit, setLimit] = useState(PAGE_ROWS)
@@ -36,6 +36,7 @@ export function DataTableBlock({ data }: { data: TableData }) {
   const cycle = (column: number) => setSort((current) => (current?.column !== column ? { column, direction: 1 } : current.direction === 1 ? { column, direction: -1 } : null))
   return (
     <BlockShell
+      bare={bare}
       testId="rich-table"
       kind="table"
       tone="card"

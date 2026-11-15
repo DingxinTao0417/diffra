@@ -20,12 +20,21 @@ export interface BlockShellProps {
   // 放大看：在弹窗里重新画一份内容（给了才有「放大」按钮）
   expand?: () => ReactNode
   tone?: 'code' | 'card'
+  // 放在别的框里（工具输出）时不画外框和顶栏，只留内容，卡片里不套卡片
+  bare?: boolean
   className?: string
   children: ReactNode
 }
 
-export function BlockShell({ testId, kind, icon, title, meta, actions, expand, tone = 'code', className, children }: BlockShellProps) {
+export function BlockShell({ testId, kind, icon, title, meta, actions, expand, tone = 'code', bare = false, className, children }: BlockShellProps) {
   const [expanded, setExpanded] = useState(false)
+  if (bare) {
+    return (
+      <div className={cn('min-w-0', className)} data-testid={testId} data-kind={kind}>
+        {children}
+      </div>
+    )
+  }
   return (
     <figure className={cn('min-w-0 overflow-hidden rounded-lg border', tone === 'code' ? 'bg-muted' : 'bg-card', className)} data-testid={testId} data-kind={kind}>
       <figcaption className="flex h-7 items-center gap-1.5 border-b pr-1 pl-3 text-xs text-muted-foreground">

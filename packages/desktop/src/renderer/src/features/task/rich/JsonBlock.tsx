@@ -34,12 +34,13 @@ export function JsonBlock({ info, closed }: { info: FenceInfo; closed: boolean }
 }
 
 // JSON 树：点箭头展开收起；搜索时自动展开命中的路径、高亮命中的键和值；点键名复制它的路径（$.a.b[0]）
-export function JsonTree({ value, source, onShowCode }: { value: unknown; source: string; onShowCode?: () => void }) {
+export function JsonTree({ value, source, onShowCode, bare }: { value: unknown; source: string; onShowCode?: () => void; bare?: boolean }) {
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
   const matches = useMemo(() => (needle ? matchingPaths(value, needle) : null), [value, needle])
   return (
     <BlockShell
+      bare={bare}
       testId="json-tree"
       kind="json"
       icon={<Braces className="size-3.5 shrink-0" />}

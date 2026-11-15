@@ -88,6 +88,13 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     await expect(security.nth(0)).toHaveAttribute('data-status', 'failed')
     await expect(security.nth(0)).toContainText('静态检查 · 1 处高危问题，已打回')
     await expect(security.nth(0)).toContainText('files.ts:2')
+    // 位置能点开到那一行；「填入修复提示词」把发现填进输入框，不发送（第 658 步）
+    await security.nth(0).getByTestId('finding-location').click()
+    await expect(window.getByTestId('file-panel')).toContainText('files.ts')
+    await window.getByRole('button', { name: '关闭面板' }).click()
+    await security.nth(0).getByRole('button', { name: '填入修复提示词' }).click()
+    await expect(taskInput(window)).toHaveValue(/修复静态检查发现的这些问题：\n- 高危/)
+    await taskInput(window).fill('')
     await expect(security.nth(1)).toContainText('没有发现常见的高危写法')
     await expect(security.nth(2)).toHaveAttribute('data-status', 'failed')
     await expect(security.nth(2)).toContainText('轻量扫描 · 1 处高危问题，已打回')

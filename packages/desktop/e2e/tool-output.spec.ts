@@ -1,6 +1,9 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { type ElectronApplication, expect, test } from '@playwright/test'
 import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
@@ -104,5 +107,130 @@ test('工具输出：测试汇总和修复提示词、搜索按文件分组能�
     await model.close()
     rmSync(userDataDir, { recursive: true, force: true })
     rmSync(project, { recursive: true, force: true })
+  }
+})
+
+// psql 的对齐格式输出；测试里用 PATH 上的假 psql 打印它（本机不一定装了 PostgreSQL）
+const PSQL_OUTPUT = [' id | name  | score', '----+-------+-------', '  1 | alice |    90', '  2 | bob   |    75', '(2 rows)'].join('\n')
+
+const BUILD_LOG = [
+  'vite v8.0.0 building for production...',
+  'dist/index.html                  0.46 kB │ gzip:  0.30 kB',
+  'dist/assets/index-abc.css       12.10 kB │ gzip:  3.20 kB',
+  'dist/assets/vendor-def.js      420.50 kB │ gzip: 130.00 kB',
+  'dist/assets/index-ghi.js        88.20 kB │ gzip: 30.10 kB',
+  '(!) Some chunks are larger than 400 kB after minification.',
+].join('\n')
+
+const APP_LOG = ['2026-11-14 10:00:01 INFO 启动', '2026-11-14 10:00:02 WARN 慢查询 1200ms', '2026-11-14 10:00:03 ERROR 连接被拒绝', '    at connect (src/a.ts:1:5)'].join('\n')
+
+const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.com', ...args], { cwd, stdio: 'pipe' })
+
+// 第 657 步：git（状态、提交、diff）、构建产物体积、HTTP 响应、数据库查询结果、带级别的日志各有自己的视图
+test('工具输出（二）：git 状态和提交和 diff、构建产物体积、curl 的 HTTP 响应、psql 的查询表、带级别的日志', async () => {
+  test.setTimeout(120_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-tool-output2-'))
+  const bin = mkdtempSync(join(tmpdir(), 'diffra-e2e-bin-'))
+  mkdirSync(join(project, 'src'))
+  writeFileSync(join(project, 'src', 'a.ts'), 'export const a = 1\n')
+  git(project, 'init', '-q', '-b', 'main')
+  git(project, 'add', '.')
+  git(project, 'commit', '-q', '-m', '初始提交')
+  writeFileSync(join(project, 'src', 'a.ts'), 'export const a = 2\n')
+  writeFileSync(join(project, 'src', 'new.ts'), 'export const b = 1\n')
+  writeFileSync(join(project, 'build.log'), BUILD_LOG)
+  writeFileSync(join(project, 'app.log'), APP_LOG)
+  writeFileSync(join(bin, 'psql.out'), `${PSQL_OUTPUT}\n`)
+  writeFileSync(join(bin, 'psql'), ['#!/bin/sh', `cat "$(dirname "$0")/psql.out"`, ''].join('\n'), { mode: 0o755 })
+  const api = createServer((_request, response) => response.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({ id: 7, user: { name: 'alice' } })))
+  await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(api.address() as AddressInfo).port}/users`
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
+  const model = await startScriptedModel([
+    { toolCalls: [exec('git status')] },
+    { toolCalls: [exec('git log --oneline')] },
+    { toolCalls: [exec('git diff')] },
+    { toolCalls: [exec('cat build.log')] },
+    { toolCalls: [exec(`curl -s -i -X POST ${url}`)] },
+    { toolCalls: [exec('psql -c "select id, name, score from users"')] },
+    { toolCalls: [exec('cat app.log')] },
+    { text: '看完了' },
+  ])
+  const app = await launchApp(userDataDir, { [pathKey]: `${bin}${delimiter}${process.env[pathKey] ?? ''}` })
+  try {
+    const window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '看看项目状态')
+    // 访问网络、不认识的命令要确认：都允许一次
+    const permission = window.getByTestId('permission-card')
+    const done = window.getByTestId('task-status').filter({ hasText: '已完成' })
+    for (let index = 0; index < 4; index++) {
+      await expect(permission.or(done)).toBeVisible({ timeout: 20_000 })
+      if (await done.isVisible()) break
+      await permission.getByRole('button', { name: '允许一次' }).click()
+      await expect(permission).toHaveCount(0)
+    }
+    await waitTaskDone(window)
+    await window.getByTestId('tool-group').getByRole('button').first().click()
+    const open = async (command: string) => {
+      const step = window.getByTestId('tool-call').filter({ hasText: command }).first()
+      await step.getByRole('button').first().click()
+      return step.getByTestId('tool-output')
+    }
+
+    // git status：分支、未暂存和未跟踪分组，文件能点开
+    const status = await open('git status')
+    await expect(status).toHaveAttribute('data-view', 'git-status')
+    await expect(status.getByTestId('git-status')).toContainText('main')
+    await expect(status.getByTestId('git-group-unstaged')).toContainText('src/a.ts')
+    await expect(status.getByTestId('git-group-untracked')).toContainText('src/new.ts')
+    // git log：提交列表；git diff：红绿改动
+    await expect(await open('git log --oneline')).toContainText('初始提交')
+    const diff = await open('git diff')
+    await expect(diff).toHaveAttribute('data-view', 'git-diff')
+    await expect(diff.getByTestId('diff-block-lines')).toContainText('export const a = 2')
+    // 构建产物：按体积排，最大的在最前；原始输出（带警告）也在
+    const build = await open('cat build.log')
+    await expect(build).toHaveAttribute('data-view', 'build')
+    await expect(build.getByTestId('build-asset').first()).toContainText('vendor-def.js')
+    await expect(build.getByTestId('terminal-output')).toContainText('larger than 400 kB')
+    // HTTP：方法、状态码，JSON 正文是树
+    const http = await open('curl -s -i -X POST')
+    await expect(http).toHaveAttribute('data-view', 'http')
+    await expect(http.getByTestId('http-response')).toContainText('POST')
+    await expect(http.getByTestId('http-status')).toContainText('201')
+    await expect(http.getByTestId('json-tree')).toContainText('alice')
+    // 数据库：查询语句、行数，表能按列排序
+    const query = await open('psql -c')
+    await expect(query).toHaveAttribute('data-view', 'query')
+    await expect(query.getByTestId('query-result')).toContainText('select id, name, score from users')
+    await expect(query.getByTestId('query-result')).toContainText('(2 rows)')
+    await query.getByRole('button', { name: /score/ }).click()
+    await expect(query.getByTestId('rich-table-row').first()).toContainText('bob')
+    // 日志：能按级别筛选，源码位置能点开
+    const log = await open('cat app.log')
+    await expect(log).toHaveAttribute('data-view', 'log')
+    await log.getByTestId('log-filter-error').click()
+    await expect(log.getByTestId('log-line')).toHaveCount(1)
+    await log.getByTestId('log-filter-error').click()
+    await log.getByTestId('log-source').click()
+    await expect(window.getByTestId('file-panel').locator('.cm-target-line')).toHaveText('export const a = 2')
+
+    for (const scheme of ['light', 'dark'] as const) {
+      await window.emulateMedia({ colorScheme: scheme })
+      await status.screenshot({ path: `test-results/tool-output-git-${scheme}.png` })
+      await build.screenshot({ path: `test-results/tool-output-build-${scheme}.png` })
+      await http.screenshot({ path: `test-results/tool-output-http-${scheme}.png` })
+      await query.screenshot({ path: `test-results/tool-output-query-${scheme}.png` })
+    }
+  } finally {
+    await app.close()
+    await model.close()
+    api.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
+    rmSync(bin, { recursive: true, force: true })
   }
 })
