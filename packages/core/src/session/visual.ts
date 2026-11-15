@@ -152,7 +152,7 @@ export function presetCode(preset: PresetName, data: unknown): string {
 export const showVisualTool = tool({
   description: [
     'Show the user a visual inline in the conversation: a UI mockup, a custom layout, or a small interactive demo.',
-    'Try the lighter options first: plain Markdown, a ```mermaid diagram, or a structured block in your reply (chart, metrics, table, timeline, steps, compare). Use show_visual only when none of them fits. Do not use it for things one or two sentences can say, and do not chart three numbers. Keep explanations in your normal reply, not inside the visual.',
+    'Try the lighter options first: plain Markdown, a ```mermaid diagram, or a structured block in your reply (chart, metrics, table, timeline, steps, compare, decision, depgraph, annotate). Use show_visual only when none of them fits. Do not use it for things one or two sentences can say, and do not chart three numbers. Keep explanations in your normal reply, not inside the visual.',
     'Prefer a preset with data over code: it looks consistent and follows the theme. Presets and their data:',
     '- compare: {options:[{name,summary,pros:[],cons:[],recommended}]}  - timeline: {items:[{time,title,detail,status:"done|active|pending|failed"}]}',
     '- chart: {type:"bar|line|area|pie|donut|scatter",data:[{label,value}] or {labels:[],series:[{name,values:[]}]},options:{title,unit,stacked}}',
