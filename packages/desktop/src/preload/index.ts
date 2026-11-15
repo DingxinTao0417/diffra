@@ -84,6 +84,7 @@ const api: DiffraApi = {
   captureVisual: (rect) => ipcRenderer.invoke(IPC_CHANNELS.visualCapture, rect),
   exportDocument: (html, format, name) => ipcRenderer.invoke(IPC_CHANNELS.exportDocument, html, format, name),
   shareTurns: (sessionId, turnIds) => ipcRenderer.invoke(IPC_CHANNELS.shareTurns, sessionId, turnIds),
+  sessionBlocks: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionBlocks, sessionId),
   useTurnVersion: (sessionId, turnId, index) => ipcRenderer.invoke(IPC_CHANNELS.sessionUseVersion, sessionId, turnId, index),
   recordVisualSnapshot: (sessionId, toolCallId, image) => ipcRenderer.invoke(IPC_CHANNELS.sessionVisualSnapshot, sessionId, toolCallId, image),
   listTodos: () => ipcRenderer.invoke(IPC_CHANNELS.todosList),

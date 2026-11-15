@@ -42,7 +42,7 @@ import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
 import { loadAgentTypes } from './subagents.js'
 import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
-import { inspectPlugin, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { inspectPlugin, pluginBlocks, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
 import { sessionStartContext } from './session/plugin-hooks.js'
 import {
   checkSwitchesSchema,
@@ -286,7 +286,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     const roots = skillRoots(cwd, pluginSkillRoots(config.plugins))
     const skills = (await loadSkills(roots)).map(({ body: _body, ...info }) => info)
     const frontend = hasFrontend(files) ? { browser: config.browser, screenshots: config.browser && config.model.supportsImages } : null
-    const promptContext = { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)) }
+    const blocks = await pluginBlocks(config.plugins)
+    const promptContext = { skills, frontend, memory: memoryPrompt(await readMemory(config.memoryDir)), blocks }
     // 插件的 SessionStart 钩子在这里跑，输出放进主智能体的系统提示词；子智能体不带
     const hooks = await pluginHooks(config.plugins)
     const id = record?.id ?? randomUUID()
@@ -305,6 +306,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       outputRoot: options.sessionsDir ?? null,
       agentTypes: await loadAgentTypes(cwd, config.plugins),
       pluginHooks: hooks,
+      pluginBlocks: blocks,
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
       record,
@@ -712,6 +714,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       await notify(taskStateUpdate(session))
       return result
     })
+    .onRequest(SESSION_EXT_METHODS.sessionBlocks, z.object({ sessionId: z.string().min(1) }), ({ params }) => ({ blocks: sessionOf(params.sessionId).pluginBlocks }))
     .onRequest(SESSION_EXT_METHODS.useTurnVersion, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), index: z.number().int().nonnegative() }), async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       const notify = notifier(client, session.id)

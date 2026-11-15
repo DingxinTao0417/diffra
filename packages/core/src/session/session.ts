@@ -9,7 +9,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
+import { type CheckpointChange, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { Compaction, SessionRecord } from './store.js'
@@ -82,6 +82,8 @@ export interface SessionOptions {
   agentTypes?: AgentType[]
   // 用户允许了的插件钩子（见 plugin-hooks.ts）
   pluginHooks?: LoadedPluginHook[]
+  // 开着的插件注册的富块（第 682 步）
+  pluginBlocks?: PluginBlock[]
   // 新会话的 id；不传就新生成。插件的 SessionStart 钩子在建会话之前跑，要先知道 id
   id?: string
 }
@@ -114,6 +116,7 @@ export class Session {
   readonly outputDir: string | null
   readonly agentTypes: AgentType[]
   readonly pluginHooks: LoadedPluginHook[]
+  readonly pluginBlocks: PluginBlock[]
   readonly mcpServers: McpServer[]
   readonly mcpPool: McpPool | null
   readonly architecture: ArchitectureService | null
@@ -200,6 +203,7 @@ export class Session {
     this.outputDir = options.outputRoot ? join(options.outputRoot, this.id, 'outputs') : null
     this.agentTypes = options.agentTypes ?? []
     this.pluginHooks = options.pluginHooks ?? []
+    this.pluginBlocks = options.pluginBlocks ?? []
     this.readRoots = [...(options.readRoots ?? []), ...(this.outputDir ? [this.outputDir] : [])]
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null

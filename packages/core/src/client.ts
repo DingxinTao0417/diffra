@@ -33,6 +33,7 @@ import {
   type PromptEnhancement,
   type PromptImage,
   type PermissionMode,
+  type PluginBlock,
   type RemoteSnapshot,
   SESSION_EXT_METHODS,
   type SessionConfig,
@@ -195,6 +196,11 @@ export function enhancePrompt(
 // 模型很久没有输出时，让卡住的那一步重发；agent 是 main 或子智能体的 id
 export function retryStep(connection: acp.ClientConnection, sessionId: string, agent: string): Promise<{ retried: boolean }> {
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
+}
+
+// 这个任务开着的插件注册的富块（第 682 步）
+export function sessionBlocks(connection: acp.ClientConnection, sessionId: string): Promise<{ blocks: PluginBlock[] }> {
+  return requestOf(connection)<{ blocks: PluginBlock[] }, { sessionId: string }>(SESSION_EXT_METHODS.sessionBlocks, { sessionId }, extRequestOptions())
 }
 
 // 换回重新生成之前的那一次（第 676 步）；这一次的文件改动按检查点撤掉时 filesRestored 为 true

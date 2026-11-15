@@ -411,6 +411,19 @@ export interface PluginHookInfo {
 }
 
 // 插件里有什么；unsupported 是读到了但 Diffra 不支持的部分（output-styles、不支持的钩子时机等）
+// 插件注册的富块（第 682 步）：插件的 blocks/blocks.json 声明，模型写 ```kind 的围栏。renders 是内置的富块（数据写法和它一样，
+// 界面用它的渲染器画），或者 template（插件里的 HTML 模板，放进和可视化一样的沙箱 iframe，数据在 window.diffraData）。不在主界面跑插件代码
+export interface PluginBlock {
+  plugin: string
+  // 小写、至少一个连字符（deploy-status），免得和代码语言、内置的富块重名
+  kind: string
+  title: string
+  description: string
+  renders: string
+  // renders 是 template 时插件里那个 HTML 文件的内容
+  template?: string
+}
+
 export interface PluginInfo {
   name: string
   version: string
@@ -418,6 +431,8 @@ export interface PluginInfo {
   commands: string[]
   skills: string[]
   mcpServers: string[]
+  // 注册的富块（第 682 步）
+  blocks: string[]
   // 子智能体类型，名字带插件名（插件名:类型名）
   agents: string[]
   hooks: PluginHookInfo[]
@@ -824,6 +839,8 @@ export const SESSION_EXT_METHODS = {
   visualSnapshot: '_diffra/visual/snapshot',
   // 重新生成之前的那一次换回来（第 676 步）
   useTurnVersion: '_diffra/session/use-version',
+  // 这个任务开着的插件注册的富块（第 682 步）
+  sessionBlocks: '_diffra/session/blocks',
   // 定位问题：停下的一轮或失败的子智能体，用当前模型只读地查原因，交回原因、证据和修复提示词
   diagnose: '_diffra/session/diagnose',
   // 界面「运行中」：停止一条后台命令、看它最近的输出（第 528 步）

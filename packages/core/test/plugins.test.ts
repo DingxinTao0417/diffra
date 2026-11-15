@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { commandRoots, loadCommands } from '../src/commands.js'
-import { hooksFingerprint, inspectPlugin, pluginHooks, pluginMcpServers, pluginServerName } from '../src/plugins.js'
+import { hooksFingerprint, inspectPlugin, pluginBlocks, pluginHooks, pluginMcpServers, pluginServerName } from '../src/plugins.js'
+import { buildSystemPrompt } from '../src/session/prompt.js'
 import { loadAgentTypes } from '../src/subagents.js'
 
 let root: string
@@ -65,8 +66,48 @@ describe('插件', () => {
       agents: ['kit:builder', 'kit:explorer', 'kit:runner'],
       hooks: [],
       hooksFingerprint: null,
+      blocks: [],
       unsupported: ['output-styles'],
     })
+  })
+
+  // 第 682 步：插件注册的富块
+  test('富块：blocks/blocks.json 里的套用内置富块或插件里的模板；格式不对、模板不在插件里或太大的不收、写进不支持；同名只留先开的插件的；系统提示词里写明', async () => {
+    const dir = join(root, 'ops')
+    write(join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'ops' }))
+    write(join(dir, 'templates', 'build.html'), '<div id="b"></div>')
+    write(join(dir, 'templates', 'big.html'), 'x'.repeat(250_000))
+    write(
+      join(dir, 'blocks', 'blocks.json'),
+      JSON.stringify({
+        blocks: [
+          { kind: 'deploy-status', title: '部署状态', description: '一个服务的部署状态', renders: 'keyvalue' },
+          { kind: 'build-report', title: '构建报告', renders: 'template', template: 'templates/build.html' },
+          { kind: 'nohyphen', title: '没有连字符', renders: 'table' },
+          { kind: 'bad-renderer', title: '不认识的渲染', renders: 'video' },
+          { kind: 'too-big', title: '太大', renders: 'template', template: 'templates/big.html' },
+          { kind: 'escape-out', title: '跑出去', renders: 'template', template: '../secret.html' },
+        ],
+      }),
+    )
+    const info = await inspectPlugin(dir)
+    expect(info.blocks).toEqual(['deploy-status', 'build-report'])
+    expect(info.unsupported).toEqual(['富块 nohyphen（格式不对）', '富块 bad-renderer（格式不对）', '富块 too-big（模板不在插件里、不存在或超过 200 KB）', '富块 escape-out（模板不在插件里、不存在或超过 200 KB）'])
+
+    const other = join(root, 'other')
+    write(join(other, 'blocks', 'blocks.json'), JSON.stringify({ blocks: [{ kind: 'deploy-status', title: '另一个', renders: 'table' }] }))
+    const blocks = await pluginBlocks([
+      { name: 'ops', dir },
+      { name: 'other', dir: other },
+    ])
+    expect(blocks).toEqual([
+      { plugin: 'ops', kind: 'deploy-status', title: '部署状态', description: '一个服务的部署状态', renders: 'keyvalue' },
+      { plugin: 'ops', kind: 'build-report', title: '构建报告', description: '', renders: 'template', template: '<div id="b"></div>' },
+    ])
+    const prompt = await buildSystemPrompt(null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: { packs: [], review: false } }, [], { skills: [], frontend: null, blocks })
+    expect(prompt).toContain("Blocks added by the user's plugins")
+    expect(prompt).toContain('deploy-status: 部署状态 — 一个服务的部署状态 (same JSON as keyvalue)')
+    expect(prompt).toContain('build-report: 构建报告 (JSON shaped as the description says)')
   })
 
   test('子智能体：名字带插件名；tools 里没有改文件、跑命令的工具才是只读；没写 tools 是全能；正文前说明它来自 Claude Code 插件', async () => {

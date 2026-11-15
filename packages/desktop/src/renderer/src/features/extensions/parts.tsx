@@ -112,9 +112,10 @@ export function contentsSummary(info: PluginInfo): string {
     [info.agents.length, '个子智能体'],
     [info.mcpServers.length, '个 MCP 服务器'],
     [info.hooks.length, '个钩子'],
+    [info.blocks?.length ?? 0, '种富块'],
   ]
   const shown = parts.filter(([count]) => count > 0).map(([count, unit]) => `${count} ${unit}`)
-  return shown.length > 0 ? shown.join(' · ') : '没有可用的命令、Skill、子智能体、钩子或 MCP 服务器'
+  return shown.length > 0 ? shown.join(' · ') : '没有可用的命令、Skill、子智能体、钩子、富块或 MCP 服务器'
 }
 
 export const initialOf = (name: string) => (name.trim()[0] ?? '?').toUpperCase()

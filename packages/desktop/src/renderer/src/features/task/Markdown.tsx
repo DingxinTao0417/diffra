@@ -15,6 +15,7 @@ import { InlineMath, MathBlock } from './rich/MathView'
 import { MermaidBlock } from './rich/MermaidBlock'
 import { normalizeMath, remarkCallouts } from './rich/remark-rich'
 import { RichBlock, richKindOf } from './rich/RichBlock'
+import { PluginBlockView, usePluginBlock } from './rich/PluginBlock'
 import { RichTable } from './rich/RichTable'
 
 // 代码围栏按语言换成对应的富块；还在流式输出、没写完的富块先显示占位，不先闪一下代码（第 640 步）。
@@ -31,6 +32,8 @@ function FencedBlockView({ node }: ComponentProps<'pre'> & ExtraProps) {
   const source = useMarkdownSource()
   const info = fenceInfo(node)
   const closed = fenceClosed(source, node)
+  // 插件注册的富块（第 682 步）
+  const plugin = usePluginBlock(info.language)
   switch (info.language) {
     case 'diff':
     case 'patch':
@@ -46,6 +49,7 @@ function FencedBlockView({ node }: ComponentProps<'pre'> & ExtraProps) {
   // ```chart、```metrics 这类结构化富块（第 650 步）
   const kind = richKindOf(info.language)
   if (kind) return <RichBlock kind={kind} info={info} closed={closed} />
+  if (plugin) return <PluginBlockView block={plugin} info={info} closed={closed} />
   return <CodeBlock info={info} closed={closed} />
 }
 

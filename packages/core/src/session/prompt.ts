@@ -1,5 +1,5 @@
 import { MEMORY_HEADING } from './memory.js'
-import type { RulePack, SessionChecks, SessionConfig, SkillInfo, SkillSource } from '../protocol.js'
+import type { PluginBlock, RulePack, SessionChecks, SessionConfig, SkillInfo, SkillSource } from '../protocol.js'
 import { renderRules } from '../rules/select.js'
 
 // 系统提示词（第 514 步起照 Codex 默认提示词的结构：工作方式、AGENTS.md、进度说明、计划、执行、验证、最终回复、工具用法）。
@@ -23,6 +23,8 @@ export interface PromptContext {
   memory?: string
   // 给子智能体用的那一份（第 453 步）：没有结束门禁、计划、提问、派工这些它用不了的东西，由 agents.ts 再接上工人规则
   worker?: boolean
+  // 开着的插件注册的富块（第 682 步），接在回答格式指南后面
+  blocks?: PluginBlock[]
 }
 
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
@@ -98,7 +100,7 @@ export async function buildSystemPrompt(
     '## Final message',
     '- End with a message that reads like a concise update from a teammate: what you did, what you verified, anything left or worth doing next. Lead with the outcome; keep it short unless the user needs detail.',
     '- Plain text with light Markdown. Put commands, paths and identifiers in backticks; reference code as `path:line`. Do not paste large files you wrote: the user has them.',
-    ...(worker ? [] : ['- If the user only asked a question, just answer it.', '- Reply in the same language the user writes in.', ...ANSWER_FORMAT_LINES]),
+    ...(worker ? [] : ['- If the user only asked a question, just answer it.', '- Reply in the same language the user writes in.', ...ANSWER_FORMAT_LINES, ...pluginBlockLines(context.blocks ?? [])]),
     '',
     '# Tool guidelines',
     '',
@@ -147,6 +149,15 @@ const ANSWER_FORMAT_LINES = [
   '- Pick by content: a chart only for trends or distributions with more than a handful of numbers (three numbers are a sentence, not a pie chart); metrics for 2-8 headline numbers; steps for a procedure the user will follow; timeline for events in order; compare for choosing between 2-6 options; filetree for a set of files.',
   '- Use show_visual only when none of these fits, such as a custom layout or an interactive demo.',
 ]
+
+// 插件注册的富块：一行一个，写明数据和哪个内置块一样（模板的就是插件自己定的 JSON）
+function pluginBlockLines(blocks: PluginBlock[]): string[] {
+  if (blocks.length === 0) return []
+  return [
+    '- Blocks added by the user\'s plugins (a fence with this language, holding JSON):',
+    ...blocks.map((block) => `  ${block.kind}: ${block.title}${block.description ? ` — ${block.description}` : ''}${block.renders === 'template' ? ' (JSON shaped as the description says)' : ` (same JSON as ${block.renders})`}`),
+  ]
+}
 
 // 编码规范排在最后，并写明优先级低于用户和 AGENTS.md；只约束这次写或改的代码，免得模型顺手大改旧代码
 function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {

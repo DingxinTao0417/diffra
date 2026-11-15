@@ -29,8 +29,11 @@ export interface BlockShellProps {
 
 // 这一块在回答里的 Markdown 围栏（Markdown.tsx 的 FencedBlock 提供）：有了才能固定到白板（第 677 步）
 export const BlockSourceContext = createContext<{ language: string; code: string } | null>(null)
+// 插件注册的富块套用内置渲染器时，标题用插件给的（第 682 步）
+export const BlockTitleContext = createContext<string | null>(null)
 
-export function BlockShell({ testId, kind, icon, title, meta, actions, expand, tone = 'code', bare = false, className, children }: BlockShellProps) {
+export function BlockShell({ testId, kind, icon, title: ownTitle, meta, actions, expand, tone = 'code', bare = false, className, children }: BlockShellProps) {
+  const title = useContext(BlockTitleContext) ?? ownTitle
   const [expanded, setExpanded] = useState(false)
   const figure = useRef<HTMLElement>(null)
   const source = useContext(BlockSourceContext)

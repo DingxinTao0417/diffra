@@ -4,7 +4,8 @@ import { basename, join } from 'node:path'
 import type { McpServer } from '@agentclientprotocol/sdk'
 import { z } from 'zod'
 import { commandRoots, loadCommands } from './commands.js'
-import { PLUGIN_HOOK_EVENTS, type PluginHookEvent, type PluginHookInfo, type PluginInfo, type PluginRef } from './protocol.js'
+import { PLUGIN_HOOK_EVENTS, type PluginBlock, type PluginHookEvent, type PluginHookInfo, type PluginInfo, type PluginRef } from './protocol.js'
+import { RICH_BLOCK_KINDS } from './rich/blocks.js'
 import { loadSkills } from './skills.js'
 import { loadPluginAgentTypes } from './subagents.js'
 
@@ -14,6 +15,19 @@ import { loadPluginAgentTypes } from './subagents.js'
 const MANIFESTS = [join('.diffra-plugin', 'plugin.json'), join('.claude-plugin', 'plugin.json')]
 const UNSUPPORTED = ['output-styles', 'monitors']
 const HOOKS_FILE = join('hooks', 'hooks.json')
+const BLOCKS_FILE = join('blocks', 'blocks.json')
+const MAX_BLOCKS = 20
+const MAX_TEMPLATE_BYTES = 200_000
+
+// blocks/blocks.json（第 682 步）：{ "blocks": [{ "kind": "deploy-status", "title": "部署状态", "description": "…", "renders": "keyvalue" }] }，
+// renders 也可以是 template，再给 "template": "templates/x.html"（插件里的相对路径）
+const blockEntrySchema = z.object({
+  kind: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/).max(40),
+  title: z.string().trim().min(1).max(40),
+  description: z.string().trim().max(300).default(''),
+  renders: z.enum(['template', ...RICH_BLOCK_KINDS]),
+  template: z.string().trim().min(1).max(200).optional(),
+})
 
 const manifestSchema = z.object({
   name: z.string().trim().min(1).optional(),
@@ -104,6 +118,52 @@ async function readHooks(dir: string): Promise<{ hooks: PluginHookInfo[]; unsupp
   return { hooks, unsupported: [...unsupported] }
 }
 
+// 插件注册的富块；格式不对的条目跳过，写进 unsupported
+async function readBlocks(dir: string, plugin: string): Promise<{ blocks: PluginBlock[]; unsupported: string[] }> {
+  const raw = await readJson(join(dir, BLOCKS_FILE))
+  if (raw === null) return { blocks: [], unsupported: [] }
+  const entries = typeof raw === 'object' && raw !== null && 'blocks' in raw && Array.isArray(raw.blocks) ? (raw.blocks as unknown[]) : null
+  if (!entries) return { blocks: [], unsupported: ['blocks/blocks.json 格式不对'] }
+  const blocks: PluginBlock[] = []
+  const unsupported: string[] = []
+  for (const entry of entries.slice(0, MAX_BLOCKS)) {
+    const parsed = blockEntrySchema.safeParse(entry)
+    const label = typeof (entry as { kind?: unknown })?.kind === 'string' ? (entry as { kind: string }).kind : '一项'
+    if (!parsed.success) {
+      unsupported.push(`富块 ${label}（格式不对）`)
+      continue
+    }
+    const { template, ...block } = parsed.data
+    if (block.renders !== 'template') {
+      blocks.push({ plugin, ...block })
+      continue
+    }
+    const file = template ? join(dir, template) : null
+    const inside = file !== null && !template!.split(/[\\/]/).includes('..')
+    const info = inside ? await stat(file!).catch(() => null) : null
+    if (!info?.isFile() || info.size > MAX_TEMPLATE_BYTES) {
+      unsupported.push(`富块 ${label}（模板不在插件里、不存在或超过 200 KB）`)
+      continue
+    }
+    blocks.push({ plugin, ...block, template: await readFile(file!, 'utf8') })
+  }
+  if (entries.length > MAX_BLOCKS) unsupported.push(`富块超过 ${MAX_BLOCKS} 个的部分`)
+  return { blocks, unsupported }
+}
+
+// 开着的插件注册的富块，同名的只留先开的那个；读不了的插件跳过，不影响建任务
+export async function pluginBlocks(plugins: PluginRef[]): Promise<PluginBlock[]> {
+  const blocks: PluginBlock[] = []
+  for (const plugin of plugins) {
+    const loaded = await readBlocks(plugin.dir, plugin.name).catch((error: unknown) => {
+      console.error(`[plugins] 读取 ${plugin.name} 的富块失败`, error)
+      return { blocks: [] }
+    })
+    for (const block of loaded.blocks) if (!blocks.some((item) => item.kind === block.kind)) blocks.push(block)
+  }
+  return blocks
+}
+
 // 用户允许钩子时记下它；之后插件里的钩子变了，指纹对不上就不跑
 export function hooksFingerprint(hooks: PluginHookInfo[]): string | null {
   if (hooks.length === 0) return null
@@ -114,19 +174,20 @@ export async function inspectPlugin(dir: string): Promise<PluginInfo> {
   const manifest = await readManifest(dir)
   const name = manifest?.name ?? basename(dir)
   const plugin = { name, dir }
-  const [commands, skills, mcpServers, agents, hooks] = await Promise.all([
+  const [commands, skills, mcpServers, agents, hooks, blocks] = await Promise.all([
     loadCommands(commandRoots(dir, [plugin]).filter((root) => root.source === 'plugin')),
     loadSkills([{ source: 'plugin', dir: join(dir, 'skills') }]),
     readMcpEntries(dir),
     loadPluginAgentTypes([plugin]),
     readHooks(dir),
+    readBlocks(dir, name),
   ])
   const unsupported: string[] = []
   for (const item of UNSUPPORTED) if (await exists(join(dir, item))) unsupported.push(item)
   if (manifest?.hooks !== undefined) unsupported.push('plugin.json 里的 hooks')
-  unsupported.push(...hooks.unsupported)
-  if (!manifest && commands.length === 0 && skills.length === 0 && mcpServers.length === 0 && agents.length === 0 && hooks.hooks.length === 0) {
-    throw new Error('这个文件夹不是插件：没有 .claude-plugin/plugin.json，也没有 commands、skills、agents、hooks 或 .mcp.json')
+  unsupported.push(...hooks.unsupported, ...blocks.unsupported)
+  if (!manifest && commands.length === 0 && skills.length === 0 && mcpServers.length === 0 && agents.length === 0 && hooks.hooks.length === 0 && blocks.blocks.length === 0) {
+    throw new Error('这个文件夹不是插件：没有 .claude-plugin/plugin.json，也没有 commands、skills、agents、hooks、blocks 或 .mcp.json')
   }
   return {
     name,
@@ -138,6 +199,7 @@ export async function inspectPlugin(dir: string): Promise<PluginInfo> {
     agents: agents.map((agent) => agent.name),
     hooks: hooks.hooks,
     hooksFingerprint: hooksFingerprint(hooks.hooks),
+    blocks: blocks.blocks.map((block) => block.kind),
     unsupported,
   }
 }

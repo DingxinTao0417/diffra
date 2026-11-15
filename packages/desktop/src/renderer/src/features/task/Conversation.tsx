@@ -32,6 +32,7 @@ import { ConversationSearch } from './ConversationSearch'
 import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
 import { TurnReplay } from './TurnReplay'
+import { PluginBlocksContext, useSessionPluginBlocks } from './rich/PluginBlock'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -273,6 +274,8 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
 
   // 同名的可视化按出现顺序排成几版（第 668 步）：每张卡片能切到别的版本、和上一版对比
   const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
+  // 开着的插件注册的富块（第 682 步）；远程任务没有
+  const pluginBlocks = useSessionPluginBlocks(sessionId, !remote && !readOnly)
 
   const onScroll = () => {
     const element = scrollRef.current
@@ -416,6 +419,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
     <ReadOnlyContext.Provider value={readOnly}>
     <AnswerContext.Provider value={answerTarget}>
     <VisualHistoryContext.Provider value={visualHistory}>
+    <PluginBlocksContext.Provider value={pluginBlocks}>
     <div className="relative min-h-0 flex-1">
       {/* 两侧都预留滚动条槽位，内容列无论是否滚动都居中，与下方输入框对齐；底部 24px 渐隐，pb-8 让贴底时最后一行落在渐隐区外 */}
       <div
@@ -472,6 +476,7 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
         </Button>
       )}
     </div>
+    </PluginBlocksContext.Provider>
     </VisualHistoryContext.Provider>
     </AnswerContext.Provider>
     </ReadOnlyContext.Provider>
@@ -498,12 +503,15 @@ const noop = () => undefined
 export function StaticTurns({ task, turns }: { task: TurnTask; turns: Turn[] }) {
   const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
   const turnTask = useMemo<TurnTask>(() => ({ ...task, running: false, permission: null }), [task])
+  const pluginBlocks = useSessionPluginBlocks(task.sessionId, true)
   return (
     <ReadOnlyContext.Provider value={true}>
       <VisualHistoryContext.Provider value={visualHistory}>
-        {turns.map((turn, index) => (
-          <TurnView key={turn.id} turn={turn} task={turnTask} active={false} last={index === turns.length - 1} latestWork={false} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} />
-        ))}
+        <PluginBlocksContext.Provider value={pluginBlocks}>
+          {turns.map((turn, index) => (
+            <TurnView key={turn.id} turn={turn} task={turnTask} active={false} last={index === turns.length - 1} latestWork={false} locate={null} onLocate={noop} onRestore={noop} onRegenerate={noop} />
+          ))}
+        </PluginBlocksContext.Provider>
       </VisualHistoryContext.Provider>
     </ReadOnlyContext.Provider>
   )
