@@ -33,6 +33,7 @@ import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
 import { TurnReplay } from './TurnReplay'
 import { PluginBlocksContext, useSessionPluginBlocks } from './rich/PluginBlock'
+import { McpAppCard } from './McpAppCard'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
@@ -56,7 +57,7 @@ type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ProcessItem> }
   | { type: 'process'; id: string; items: ProcessItem[] }
   | { type: 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task'; item: ToolItem }
 
 const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' && item.status !== 'completed' && item.status !== 'failed'
 
@@ -123,10 +124,12 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'wait' | 'task' | 'steps' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'steps' | null {
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
   if (item.visual) return 'visual'
+  // MCP 工具带的界面（第 683 步）单独成卡
+  if (item.mcpUi && !item.parentId) return 'mcp-ui'
   // 等 CI 这类长时间等待单独一行、默认展开，看得到第几次检查
   if (item.toolKind === 'execute' && item.title.startsWith('等待 ')) return 'wait'
   // 指向别的任务的卡片（发消息、新建、等它做完）单独一行，「打开任务」不收进工具组
@@ -723,6 +726,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
             return <ToolStep key={block.item.id} item={block.item} defaultOpen />
           case 'task':
             return <ToolStep key={block.item.id} item={block.item} />
+          case 'mcp-ui':
+            return <McpAppCard key={block.item.id} ui={block.item.mcpUi!} sessionId={task.sessionId} />
           case 'visual':
             return <VisualCard key={block.item.id} id={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} snapshot={block.item.visualSnapshot} />
         }

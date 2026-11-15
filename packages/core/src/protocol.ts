@@ -519,6 +519,21 @@ export interface BrowserActionResult {
   image: PromptImage | null
   thumbnail?: PromptImage | null
 }
+// MCP 工具带的界面（第 683 步，MCP Apps / MCP-UI 的写法）：工具结果里内嵌的 ui:// HTML 资源，或者工具定义 _meta 的 "ui/resourceUri"
+// 指向的 ui:// 资源（调用后由 core 读出来）。放在 MCP 那一步的 tool_call_update._meta.diffra.mcpUi，界面放进和可视化一样的沙箱 iframe，
+// 按 MCP Apps 的 postMessage JSON-RPC 把工具参数和结果交给它。远程设备不发（和可视化代码一样换成占位）
+export const MCP_UI_META_KEY = 'mcpUi'
+export const MCP_UI_MAX_CHARS = 500_000
+export interface McpUiMeta {
+  uri: string
+  html: string
+  server: string
+  tool: string
+  // 交给界面的工具参数和结果（结果里只有文字内容和 structuredContent）
+  input: unknown
+  result: { content: Array<{ type: 'text'; text: string }>; structuredContent?: unknown }
+}
+
 // 浏览器截图那一步的 _meta.diffra.browserShot：缩略图，按 ACP 的图片内容 { type: 'image', mimeType, data } 存，
 // 同步给远程设备时和别的图片一样换成占位（packages/remote 的 redact）
 export const BROWSER_SHOT_META_KEY = 'browserShot'

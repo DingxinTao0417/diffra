@@ -917,6 +917,11 @@ v2：
   - 或者 `template`：插件里的 HTML 文件（不能出插件目录、不超过 200 KB），放进和可视化一样的沙箱 iframe，数据按 JSON 放在 `window.diffraData`（`<` 换成 `<`），工具箱和填输入框照样能用，链接不开。数据不是合法 JSON 时按代码显示、写明原因。主界面里不跑插件的代码。
   - core 建任务时读好（`pluginBlocks`），接在系统提示词的回答格式指南后面，一行一个，写明数据和哪个内置块一样；界面向 core 要（`_diffra/session/blocks`，每个任务要一次）。扩展页的插件卡片写「N 种富块」，详情里列出来。格式不对的条目不收，写进「已忽略」。
   - 导出：套用内置的照样画；模板的不跑脚本，写明「在 Diffra 里打开才能看」。远程任务没有插件的富块，按代码显示。
+- MCP 工具带的界面（第 683 步）：装的 MCP SDK 1.32.2 没有 MCP Apps 专门的类型，按协议里有的东西认两种写法：工具结果里内嵌的 `ui://` HTML 资源（MCP-UI 的写法）；工具定义 `_meta` 的 `"ui/resourceUri"`（或 `ui.resourceUri`）指向的 `ui://` 资源（MCP Apps 的写法），调用成功后 core 用 `resources/read` 读出来。超过 50 万字的不显示。
+  - 挂在那一步的 `_meta.diffra.mcpUi`（界面的 HTML、服务器、工具、参数、结果里的文字和 `structuredContent`），对话里单独成卡（「来自 MCP 服务器 X」）。界面的 HTML 不给模型，给模型的结果里写「[界面 …，显示给用户了]」。
+  - 放进和可视化一样的沙箱 iframe，按 MCP Apps 的 postMessage JSON-RPC 说话：回 `ui/initialize`（宿主是 Diffra、深浅色、`displayMode: inline`），它发 `ui/notifications/initialized` 以后把 `tool-input`、`tool-result` 发过去；`ui/open-link` 先在卡片下面问；`ui/message` 只填进输入框、不发。替它调工具（`tools/call`）、读资源这些一律回「不支持」：界面里的代码不该绕过权限确认去动 MCP 服务器。
+  - 远程设备不发（换成 `{ omitted: true }`，和可视化代码一样），导出时写明「在 Diffra 里打开才能看」。
+  - 测试用的带界面的服务器是 `core/test/fixtures/mcp-ui-server.mjs`（照原来的测试服务器多了 `ui_card`、`ui_weather` 两个工具），原来那个不动，免得数工具个数的用例都要改。
 
 ## 对话里的富内容（第 640 步起）
 

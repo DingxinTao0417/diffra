@@ -32,6 +32,7 @@ import {
   PROJECT_COMMANDS_META_KEY,
   COMMAND_RISK_META_KEY,
   BROWSER_SHOT_META_KEY,
+  MCP_UI_META_KEY,
   COMMAND_DURATION_META_KEY,
   type ProjectCommandsMeta,
   type PromptImage,
@@ -1270,6 +1271,8 @@ async function runMcpToolCall(
       toolCallId: call.toolCallId,
       status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: output.text } }],
+      // 工具带的界面（第 683 步）
+      ...(output.ui ? { _meta: { diffra: { [MCP_UI_META_KEY]: output.ui } } } : {}),
     })
     // 不知道 MCP 工具改没改文件，不算编辑：不重置卡死检测
     return { result: textResult(call, output.text), edited: false }

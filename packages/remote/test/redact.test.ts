@@ -148,6 +148,9 @@ describe('会话更新和轮次脱敏', () => {
     expect(redactUpdate(visual)).toEqual({ sessionUpdate: 'tool_call', toolCallId: 't5', title: '图表', _meta: { diffra: { visual: { title: '用量', code: '<p>（可视化内容未同步）</p>' } } } })
     const chunk = { sessionUpdate: 'agent_message_chunk', content: { type: 'image', mimeType: 'image/png', data: 'AAAA' } } as unknown as SessionUpdate
     expect(redactUpdate(chunk)).toEqual({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '（图片未同步）' } })
+    // MCP 工具带的界面（第 683 步）和可视化代码一样不发
+    const mcp = { sessionUpdate: 'tool_call_update', toolCallId: 't7', _meta: { diffra: { mcpUi: { uri: 'ui://x/y', html: '<div>secret ui</div>', server: 's', tool: 't', input: {}, result: { content: [] } } } } } as unknown as SessionUpdate
+    expect(redactUpdate(mcp)).toEqual({ sessionUpdate: 'tool_call_update', toolCallId: 't7', _meta: { diffra: { mcpUi: { omitted: true } } } })
   })
 
   test('可视化的快照照发（第 670 步）：只认压过的小图；类型不对、太大、不是 base64 的换成文字；不按路径改 base64；一轮合计超出的换成文字', () => {

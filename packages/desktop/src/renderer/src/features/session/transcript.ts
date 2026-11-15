@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -39,6 +39,8 @@ export type TranscriptItem =
       visual?: { title: string; code: string }
       // 可视化画好后界面截的快照（第 670 步），远程会话里不跑脚本时显示它
       visualSnapshot?: VisualSnapshot
+      // MCP 工具带的界面（第 683 步）
+      mcpUi?: McpUiMeta
       // 任务互通的卡片指向的那个任务
       taskLink?: TaskSource
     }
@@ -264,6 +266,12 @@ export function visualSnapshotOf(update: SessionUpdate): { visualSnapshot?: Visu
   return { visualSnapshot: { mimeType: value.mimeType as string, data: value.data } }
 }
 
+// MCP 工具带的界面（第 683 步）；远程同步时换成了 { omitted: true }，不算
+function mcpUiOf(update: SessionUpdate): { mcpUi?: McpUiMeta } {
+  const value = diffraMetaOf(update)?.[MCP_UI_META_KEY] as Partial<McpUiMeta> | undefined
+  return typeof value?.html === 'string' && typeof value.uri === 'string' && typeof value.tool === 'string' && typeof value.server === 'string' ? { mcpUi: value as McpUiMeta } : {}
+}
+
 // 快照追加在画它的那一轮，不一定是最后一轮：记到那张卡所在的轮次，找不到就不记（不凭空多一张卡）
 export function withVisualSnapshot<T extends { items: TranscriptItem[] }>(turns: T[], update: SessionUpdate): T[] {
   if (update.sessionUpdate !== 'tool_call_update') return turns
@@ -391,6 +399,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         ...(existing?.visual ? { visual: existing.visual } : {}),
         ...(existing?.visualSnapshot ? { visualSnapshot: existing.visualSnapshot } : {}),
         ...visualSnapshotOf(update),
+        ...(existing?.mcpUi ? { mcpUi: existing.mcpUi } : {}),
+        ...mcpUiOf(update),
         ...(taskLinkOf(update).taskLink ? taskLinkOf(update) : existing?.taskLink ? { taskLink: existing.taskLink } : {}),
       }))
     case 'notice':

@@ -1,5 +1,5 @@
 import { isProtectedFile } from '@diffra/core'
-import { SECRET_FORMATS, type SessionUpdate, type StoredTurn, type ToolCallContent, TOOL_PREVIEW_META_KEY, VISUAL_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
+import { MCP_UI_META_KEY, SECRET_FORMATS, type SessionUpdate, type StoredTurn, type ToolCallContent, TOOL_PREVIEW_META_KEY, VISUAL_META_KEY, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES } from '@diffra/core/types'
 import { MAX_DIFF_CHARS, TOOL_PREVIEW_CHARS } from './messages.js'
 
 // 设备连接发出会话前的脱敏和裁剪，只作用于发出去的副本。正则抓不全，只能尽力；真正的边界是授权了哪些项目。
@@ -198,6 +198,8 @@ function walk(value: unknown, omit: boolean, key?: string): unknown {
   if (key === VISUAL_SNAPSHOT_META_KEY) return isVisualSnapshot(object) ? { type: 'image', mimeType: object.mimeType, data: object.data } : { type: 'text', text: OMITTED_IMAGE }
   if (object.type === 'image' && typeof object.data === 'string') return { type: 'text', text: OMITTED_IMAGE }
   if (key === VISUAL_META_KEY && typeof object.code === 'string') return { ...object, title: typeof object.title === 'string' ? redactText(object.title) : object.title, code: OMITTED_VISUAL }
+  // MCP 工具带的界面（第 683 步）和可视化代码一样不发
+  if (key === MCP_UI_META_KEY) return { omitted: true }
   const protectedPath = typeof object.path === 'string' && isProtectedFile(object.path)
   return Object.fromEntries(Object.entries(object).map(([name, item]) => [name, walk(item, omit || protectedPath, name)]))
 }

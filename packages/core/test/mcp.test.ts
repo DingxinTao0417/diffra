@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { McpServer } from '@agentclientprotocol/sdk'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { McpPool, mcpToolName } from '../src/mcp.js'
-import { testMcpServer as testServer } from './mcp-fixture.js'
+import { MCP_UI_SERVER_SCRIPT, testMcpServer as testServer } from './mcp-fixture.js'
 
 let project: string
 let pool: McpPool
@@ -17,6 +17,25 @@ beforeEach(() => {
 afterEach(async () => {
   await pool.closeAll()
   rmSync(project, { recursive: true, force: true })
+})
+
+describe('MCP 工具带的界面（第 683 步）', () => {
+  test('结果里内嵌的 ui:// HTML 和工具定义 _meta 指的 ui:// 资源都读出来，连同参数和结果交给界面；HTML 不给模型；没有界面的工具照旧', async () => {
+    const server: McpServer = { name: 'ui', command: process.execPath, args: [MCP_UI_SERVER_SCRIPT], env: [] }
+    const turn = await pool.turnTools(project, [server])
+    const signal = new AbortController().signal
+    const card = await pool.callTool(turn.byName.get('mcp__ui__ui_card')!, {}, signal)
+    expect(card.text).toContain('[界面 ui://diffra-test/card，显示给用户了]')
+    expect(card.text).not.toContain('MCP 卡片的界面')
+    expect(card.ui).toEqual({ uri: 'ui://diffra-test/card', html: '<div id="card">MCP 卡片的界面</div>', server: 'ui', tool: 'ui_card', input: {}, result: { content: [{ type: 'text', text: 'card shown' }] } })
+
+    const weather = await pool.callTool(turn.byName.get('mcp__ui__ui_weather')!, { city: '杭州' }, signal)
+    expect(weather.text).toBe('杭州 21 度')
+    expect(weather.ui).toMatchObject({ uri: 'ui://diffra-test/weather', input: { city: '杭州' }, result: { content: [{ type: 'text', text: '杭州 21 度' }], structuredContent: { city: '杭州', temp: 21 } } })
+    expect(weather.ui?.html).toContain('ui/initialize')
+
+    expect(await pool.callTool(turn.byName.get('mcp__ui__echo')!, { text: 'hi' }, signal)).toEqual({ text: 'echo: hi', isError: false })
+  })
 })
 
 describe('MCP 连接', () => {

@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontex
 import type { CallToolResult, Prompt, Tool } from '@modelcontextprotocol/sdk/types.js'
 import { jsonSchema, type JSONSchema7, tool, type ToolSet } from 'ai'
 import { truncateForModel } from './process.js'
-import type { McpServerStatus } from './protocol.js'
+import { MCP_UI_MAX_CHARS, type McpServerStatus, type McpUiMeta } from './protocol.js'
 import { CORE_VERSION } from './version.js'
 
 // 连接（含首次用 npx 下载）、列工具、调工具的等待上限
@@ -191,7 +191,7 @@ export class McpPool {
     return result
   }
 
-  async callTool(ref: McpToolRef, input: unknown, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
+  async callTool(ref: McpToolRef, input: unknown, signal: AbortSignal): Promise<{ text: string; isError: boolean; ui?: McpUiMeta }> {
     const entry = this.entries.get(ref.key)
     if (entry?.state !== 'connected') throw new Error(`MCP 服务器「${ref.server}」没有连上`)
     const result = (await entry.client.callTool(
@@ -199,7 +199,30 @@ export class McpPool {
       undefined,
       { signal, timeout: CALL_TIMEOUT_MS, resetTimeoutOnProgress: true, maxTotalTimeout: CALL_MAX_TOTAL_MS },
     )) as CallToolResult
-    return { text: truncateForModel(resultText(result)).text, isError: result.isError === true }
+    const text = truncateForModel(resultText(result)).text
+    if (result.isError === true) return { text, isError: true }
+    // 界面读不出来只少一张卡，工具结果照常给模型
+    const ui = await this.uiOf(entry.client, entry.tools.find((item) => item.name === ref.tool), result).catch((error: unknown) => {
+      console.error(`[mcp] 读取 ${ref.server} · ${ref.tool} 的界面失败`, error)
+      return null
+    })
+    if (!ui) return { text, isError: false }
+    const content = result.content.flatMap((item) => (item.type === 'text' ? [{ type: 'text' as const, text: item.text }] : []))
+    return { text, isError: false, ui: { ...ui, server: ref.server, tool: ref.tool, input: input ?? {}, result: { content, ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}) } } }
+  }
+
+  // 工具带的界面（第 683 步）：结果里内嵌的 ui:// HTML 资源（MCP-UI），或者工具定义 _meta 指的 ui:// 资源（MCP Apps）
+  private async uiOf(client: Client, definition: Tool | undefined, result: CallToolResult): Promise<{ uri: string; html: string } | null> {
+    for (const item of result.content) {
+      if (item.type === 'resource' && isUiResource(item.resource.uri, item.resource.mimeType) && 'text' in item.resource) return limitedUi(item.resource.uri, item.resource.text)
+    }
+    const meta = definition?._meta as Record<string, unknown> | undefined
+    const nested = meta?.ui as { resourceUri?: unknown } | undefined
+    const uri = typeof meta?.['ui/resourceUri'] === 'string' ? meta['ui/resourceUri'] : typeof nested?.resourceUri === 'string' ? nested.resourceUri : null
+    if (!uri?.startsWith('ui://')) return null
+    const read = await client.readResource({ uri }, { timeout: LIST_TIMEOUT_MS })
+    const content = read.contents.find((item) => isUiResource(uri, item.mimeType) && 'text' in item)
+    return content && 'text' in content ? limitedUi(uri, content.text) : null
   }
 
   // 设置页、监控和斜杠菜单用：各服务器连上没有、有哪些工具和 prompt
@@ -271,11 +294,19 @@ export class McpPool {
 
 type Content = CallToolResult['content'][number]
 
+const isUiResource = (uri: string, mimeType: string | undefined) => uri.startsWith('ui://') && /^text\/html/i.test(mimeType ?? 'text/html')
+
+function limitedUi(uri: string, html: string): { uri: string; html: string } | null {
+  return html.length > MCP_UI_MAX_CHARS ? null : { uri, html }
+}
+
 function contentText(content: Content): string {
   switch (content.type) {
     case 'text':
       return content.text
     case 'resource':
+      // 界面的 HTML 不给模型（用户看得到，模型拿不到的东西不白占上下文）
+      if (isUiResource(content.resource.uri, content.resource.mimeType)) return `[界面 ${content.resource.uri}，显示给用户了]`
       return 'text' in content.resource ? `[资源 ${content.resource.uri}]\n${content.resource.text}` : `[资源 ${content.resource.uri}，二进制内容未显示]`
     case 'resource_link':
       return `[资源链接 ${content.uri}${content.name ? ` ${content.name}` : ''}]`
