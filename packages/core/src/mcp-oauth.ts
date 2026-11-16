@@ -62,12 +62,14 @@ export interface McpOAuthOptions {
 
 export class McpOAuth {
   private readonly key: string
+  readonly serverUrl: string
+  private readonly storage: OAuthStorage
+  private readonly options: McpOAuthOptions
 
-  constructor(
-    readonly serverUrl: string,
-    private readonly storage: OAuthStorage,
-    private readonly options: McpOAuthOptions,
-  ) {
+  constructor(serverUrl: string, storage: OAuthStorage, options: McpOAuthOptions) {
+    this.serverUrl = serverUrl
+    this.storage = storage
+    this.options = options
     this.key = oauthKey(serverUrl)
   }
 

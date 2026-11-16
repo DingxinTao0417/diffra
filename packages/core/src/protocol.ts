@@ -1246,3 +1246,8 @@ export interface SecurityToolsInfo {
   // 动态测试从代码里认出的接口路径
   routes: string[]
 }
+
+// 评测结果的统计（v2 · M11）：纯计算，评测命令行和桌面端共用
+export * from './stats.js'
+// 用量的单价和费用（v2 · M11）：纯整数计算，评测命令行也用
+export { formatCost, PRICE_PATTERN, PriceBook, priceMicros } from './usage/pricing.js'

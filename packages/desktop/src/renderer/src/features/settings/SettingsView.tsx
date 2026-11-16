@@ -7,6 +7,7 @@ import {
   Bot,
   Check,
   Ellipsis,
+  FlaskConical,
   Folder,
   Globe,
   HardDrive,
@@ -62,6 +63,7 @@ import { ExternalAgentsSection } from './ExternalAgentsSection'
 import { ReleaseItems, ReleaseList } from './Changelog'
 import { UsageSection } from './UsageSection'
 import { DesignSection } from './DesignSection'
+import { EvalSection } from './EvalSection'
 import { DevicesSection } from '@/features/devices/DevicesSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -105,7 +107,8 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
     name: '数据',
     items: [
       { id: 'storage', label: '会话与存储', icon: HardDrive, keywords: '归档 删除 磁盘 记录 默认保存位置 无项目 文件夹' },
-      { id: 'usage', label: '用量', icon: BarChart3, keywords: 'token 统计 模型调用 缓存' },
+      { id: 'usage', label: '用量', icon: BarChart3, keywords: 'token 统计 模型调用 缓存 费用 单价 预算 导出 清理' },
+      { id: 'eval', label: '评测结果', icon: FlaskConical, keywords: '评测 results.json 通过率 比较 显著性 难度' },
     ],
   },
   { name: '应用', items: [{ id: 'about', label: '更新与关于', icon: Info, keywords: '版本 更新' }] },
@@ -191,6 +194,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <UsageSection />
     case 'design':
       return <DesignSection />
+    case 'eval':
+      return <EvalSection />
     case 'about':
       return <AboutSection />
   }

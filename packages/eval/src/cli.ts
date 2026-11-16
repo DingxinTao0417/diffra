@@ -1,6 +1,6 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { apiKeyOf, type EvalConfig, loadConfig } from './config.ts'
 import { type DeepScanResult, runDeepScanSample } from './deep-scan.ts'
@@ -9,6 +9,7 @@ import { copyProject, probeTask } from './probe.ts'
 import { runTask, type TaskResult } from './run-task.ts'
 import { selfCheck } from './selfcheck.ts'
 import { EVAL_DIR, type EvalTask, loadDeepScanSamples, loadTasks } from './tasks.ts'
+import { compareResults } from './stats-report.ts'
 
 const USAGE = `用法：
   pnpm eval selfcheck [--tasks t01,t02]
@@ -19,6 +20,8 @@ const USAGE = `用法：
       拿任意项目（复制一份，原目录不动）、任意需求跑一次，写出过程记录；脚本和 task.json 一样的写法，可以写多轮、提问怎么答、明确要求
   通用：--permission-mode ask|auto|full 覆盖题目的权限档；--effort low|medium|high|xhigh 覆盖模型的思考强度；--goal 第一轮用目标模式
   pnpm eval deep-scan --config eval.config.json [--models a] [--samples s01]
+  pnpm eval compare <A 的结果目录或 results.json> <B 的>
+      两次结果按题配对比较：通过率的差、自助法区间和符号检验的 p 值，写到 B 旁边的 compare.md
       只跑深度扫描准确率样例`
 
 // 同时跑几道题；每道题一个 core 进程
@@ -70,6 +73,18 @@ async function main(): Promise<void> {
     const failed = results.filter((result) => !result.ok).length
     console.log(`\n${results.length - failed}/${results.length} 道题自检通过`)
     process.exitCode = failed > 0 ? 1 : 0
+    return
+  }
+
+  // 比较两次结果（v2）：按题配对算通过率的差和显著性，写到 B 旁边的 compare.md
+  if (command === 'compare') {
+    const [a, b] = positionals.slice(1)
+    if (!a || !b) throw new Error('用法：pnpm eval compare <A 的 results.json 或目录> <B 的>')
+    const markdown = compareResults(a, b)
+    const out = join(statSync(b).isDirectory() ? b : dirname(b), 'compare.md')
+    writeFileSync(out, markdown)
+    console.log(markdown)
+    console.log(`写到了 ${out}`)
     return
   }
 

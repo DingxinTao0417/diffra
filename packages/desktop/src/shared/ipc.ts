@@ -64,7 +64,7 @@ import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntr
 import type { ChangelogRelease } from './changelog'
 import type { CatalogView, PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
-import type { SecurityTool, SecurityToolReport, SecurityToolsInfo } from '@diffra/core/types'
+import type { EvalOutcome, SecurityTool, SecurityToolReport, SecurityToolsInfo } from '@diffra/core/types'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from '@diffra/core/architecture'
 
 export const IPC_CHANNELS = {
@@ -112,6 +112,7 @@ export const IPC_CHANNELS = {
   sessionsStorage: 'sessions:storage',
   usageSummary: 'usage:summary',
   stockKeysGet: 'stock:keys',
+  evalResultsOpen: 'eval:open',
   stockKeySet: 'stock:key-set',
   usageExport: 'usage:export',
   usageFiles: 'usage:files',
@@ -581,6 +582,8 @@ export interface DiffraApi {
   usageSummary(query: UsageQuery): Promise<UsageSummary>
   // 图库的 API Key（v2）：只拿掩码；key 为 null 是删掉
   stockKeys(): Promise<{ pexels: string | null; unsplash: string | null }>
+  // 评测结果（v2）：选一份 results.json 读出每次运行的结果；取消返回 null
+  openEvalResults(): Promise<{ path: string; startedAt: string | null; outcomes: EvalOutcome[] } | null>
   setStockKey(provider: 'pexels' | 'unsplash', key: string | null): Promise<void>
   // v2：导出范围内的用量记录（弹保存对话框，取消返回 null）；各月的记录文件；删掉某个月（YYYY-MM）之前的
   exportUsage(query: UsageQuery): Promise<{ rows: number; skippedLines: number; path: string } | null>

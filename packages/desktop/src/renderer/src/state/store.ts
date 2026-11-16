@@ -9,7 +9,7 @@ import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'agents' | 'permissions' | 'security' | 'execution' | 'browser' | 'design' | 'devices' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'agents' | 'permissions' | 'security' | 'execution' | 'browser' | 'design' | 'devices' | 'storage' | 'usage' | 'eval' | 'about'
 
 // 扩展页的分栏：推荐、MCP 目录、插件目录、已安装（第 595 步）
 export type ExtensionsTab = 'recommended' | 'mcp' | 'plugins' | 'installed'

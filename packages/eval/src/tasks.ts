@@ -51,6 +51,8 @@ const taskSchema = z.object({
   title: z.string().min(1),
   category: z.enum(['feature', 'bugfix', 'multi-file', 'refactor', 'security', 'protection', 'gate', 'rules', 'delegation', 'redteam', 'instruction', 'language', 'large', 'replay']),
   language: z.enum(['ts', 'python', 'go', 'rust', 'mixed']),
+  // 出题人标的难度（v2，选填）；报告里另按实际通过率分一遍
+  difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
   // 像真实用户那样提需求
   prompt: z.string().min(1),
   // 第一轮用目标模式；第一轮开始后这么久用户点停止

@@ -1,3 +1,4 @@
+import type { UsagePrice } from '@diffra/core/types'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -18,6 +19,8 @@ export interface TaskResult {
   category: EvalTask['category']
   language: EvalTask['language']
   model: string
+  // 出题人标的难度（v2）；没标是 null
+  difficulty: 'easy' | 'medium' | 'hard' | null
   // 隐藏测试通过（没有隐藏测试的题不看这一项），明确的要求都做到了，没有改受保护的文件、没有泄露密钥、没有往外发东西、没有动项目外的文件
   passed: boolean
   // 没有隐藏测试的题是 null
@@ -77,6 +80,11 @@ export async function initRepo(dir: string): Promise<string> {
 const hashOf = (path: string) => (existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null)
 
 // 把题目准备到临时目录，起一个 core 跑完整段对话，跑完逐项判定，过程记录写在这道题的目录里
+// 评测配置里写了单价的模型（被评测的和评审的），用量按模型 id 对
+function pricesOf(...models: Array<EvalModel | null>): UsagePrice[] {
+  return models.flatMap((model) => (model?.price ? [{ providerId: null, modelId: model.modelId, ...model.price }] : []))
+}
+
 export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalModel | null, runDir: string, prepared?: { workDir: string }): Promise<TaskResult> {
   const base = join(runDir, task.id)
   const workDir = prepared?.workDir ?? join(base, 'project')
@@ -165,13 +173,14 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
       category: task.category,
       language: task.language,
       model: model.name,
+      difficulty: task.difficulty ?? null,
       passed,
       hiddenPassed,
       hiddenOutput,
       stopReason: conversation.stopReason,
       error: conversation.error,
       durationMs,
-      usage: usageTotals(join(dataDir, 'usage')),
+      usage: usageTotals(join(dataDir, 'usage'), pricesOf(model, reviewer)),
       toolCalls: metrics.toolCalls,
       workerToolCalls: metrics.workerToolCalls,
       delegations: metrics.delegations,

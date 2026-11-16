@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 
+const PRICE = /^\d{1,7}(\.\d{1,6})?$/
+
 // 评测用的模型配置。密钥不写进文件：apiKeyEnv 写环境变量名，运行时从环境变量读
 const modelSchema = z.object({
   name: z.string().min(1),
@@ -11,6 +13,15 @@ const modelSchema = z.object({
   apiKeyEnv: z.string().min(1),
   // 思考强度，和模型设置里的一样；不写就是模型默认
   reasoningEffort: z.enum(['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+  // 单价（每百万 token，小数字符串；v2）：写了报告里就有费用
+  price: z
+    .object({
+      input: z.string().regex(PRICE),
+      cachedInput: z.string().regex(PRICE).optional(),
+      cacheWrite: z.string().regex(PRICE).optional(),
+      output: z.string().regex(PRICE),
+    })
+    .optional(),
 })
 
 const configSchema = z.object({

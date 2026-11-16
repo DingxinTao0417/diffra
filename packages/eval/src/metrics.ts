@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { SessionUpdate, TurnOutcome } from '@diffra/core/types'
+import type { SessionUpdate, TurnOutcome, UsagePrice, UsageRecord } from '@diffra/core/types'
+import { coreTypes } from './core.ts'
 
 const CHECK_PREFIXES = ['快速检查：', '完成检查：']
 // 静态检查、轻量扫描以前叫安全检查、安全扫描，旧的会话记录里还是旧标题，两套都认
@@ -97,6 +98,8 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
 }
 
 export interface UsageTotals {
+  // 按配置里的单价算的费用（v2）；没配单价是 null
+  cost: string | null
   calls: number
   coderCalls: number
   reviewerCalls: number
@@ -108,13 +111,17 @@ export interface UsageTotals {
 }
 
 // 这道题的 core 进程写下的用量记录（每次模型调用一行）
-export function usageTotals(usageDir: string): UsageTotals {
-  const totals: UsageTotals = { calls: 0, coderCalls: 0, reviewerCalls: 0, subagentCalls: 0, subagentTokens: 0, inputTokens: 0, outputTokens: 0 }
+export function usageTotals(usageDir: string, prices: readonly UsagePrice[] = []): UsageTotals {
+  const totals: UsageTotals = { cost: null, calls: 0, coderCalls: 0, reviewerCalls: 0, subagentCalls: 0, subagentTokens: 0, inputTokens: 0, outputTokens: 0 }
   if (!existsSync(usageDir)) return totals
+  const book = prices.length > 0 ? new coreTypes.PriceBook(prices) : null
+  let cost = 0n
   for (const name of readdirSync(usageDir)) {
     for (const line of readFileSync(join(usageDir, name), 'utf8').split('\n')) {
       if (!line.trim()) continue
-      const record = JSON.parse(line) as { role: string; input: number | null; output: number | null }
+      const record = JSON.parse(line) as UsageRecord
+      const priced = book?.cost(record) ?? null
+      if (priced !== null) cost += priced
       totals.calls++
       if (record.role === 'coder') totals.coderCalls++
       else if (record.role === 'subagent') {
@@ -125,5 +132,6 @@ export function usageTotals(usageDir: string): UsageTotals {
       totals.outputTokens += record.output ?? 0
     }
   }
+  if (book) totals.cost = coreTypes.formatCost(cost)
   return totals
 }

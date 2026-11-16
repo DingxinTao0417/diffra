@@ -22,6 +22,7 @@ import { registerTodosIpc } from './todos-ipc'
 import { registerRemoteIpc } from './remote-ipc'
 import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../shared/remote'
 import { registerArchitectureIpc } from './architecture-ipc'
+import { registerEvalResultsIpc } from './eval-results'
 import { SettingsStore } from './settings-store'
 import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { registerFileIpc } from './file-ipc'
@@ -162,6 +163,7 @@ app
     const { architectureModel } = registerSessionIpc(settings, secrets, userDataDir)
     registerTodosIpc(userDataDir)
     if (REMOTE_DEVICE_CONNECTION_ENABLED) registerRemoteIpc(userDataDir)
+    registerEvalResultsIpc()
     registerArchitectureIpc(architectureModel)
     registerPluginsIpc(settings, userDataDir)
     registerExtensionsIpc(settings, secrets)

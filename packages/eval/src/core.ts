@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type * as Core from '@diffra/core'
 import type { ModelEndpoint, RulePack, SessionConfig } from '@diffra/core/types'
+import type * as CoreTypes from '@diffra/core/types'
 import { apiKeyOf, type EvalModel } from './config.ts'
 import { CORE_DIST, EVAL_ENV } from './proc.ts'
 
@@ -11,6 +12,8 @@ import { CORE_DIST, EVAL_ENV } from './proc.ts'
 export const core = (await import(pathToFileURL(join(CORE_DIST, 'client.js')).href)) as typeof Core
 // 结束 core 时连它起的命令、服务一起结束：Windows 上 child.kill() 只结束 core 本身，core 的退出钩子不会跑
 const { killTreeSync } = (await import(pathToFileURL(join(CORE_DIST, 'process.js')).href)) as { killTreeSync(pid: number | undefined): void }
+// 统计和费用（v2）：core 里的纯计算，和桌面端的「评测结果」页用同一份
+export const coreTypes = (await import(pathToFileURL(join(CORE_DIST, 'protocol.js')).href)) as typeof CoreTypes
 
 const MAX_STDERR_CHARS = 20_000
 const BUILTIN_PACKS_DIR = resolve(CORE_DIST, '../rules/packs')

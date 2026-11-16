@@ -53,6 +53,7 @@ const api: DiffraApi = {
   sessionsStorage: () => ipcRenderer.invoke(IPC_CHANNELS.sessionsStorage),
   usageSummary: (query) => ipcRenderer.invoke(IPC_CHANNELS.usageSummary, query),
   stockKeys: () => ipcRenderer.invoke(IPC_CHANNELS.stockKeysGet),
+  openEvalResults: () => ipcRenderer.invoke(IPC_CHANNELS.evalResultsOpen),
   setStockKey: (provider, key) => ipcRenderer.invoke(IPC_CHANNELS.stockKeySet, provider, key),
   exportUsage: (query) => ipcRenderer.invoke(IPC_CHANNELS.usageExport, query),
   usageFiles: () => ipcRenderer.invoke(IPC_CHANNELS.usageFiles),

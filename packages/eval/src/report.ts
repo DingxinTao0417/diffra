@@ -2,6 +2,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DeepScanResult } from './deep-scan.ts'
 import type { TaskResult } from './run-task.ts'
+import { coreTypes } from './core.ts'
+import { outcomesOf, summaryLines } from './stats-report.ts'
 
 const CATEGORY_LABELS: Record<TaskResult['category'], string> = {
   feature: '功能',
@@ -43,6 +45,9 @@ export function writeReport(outDir: string, meta: { startedAt: string; models: s
     if (results.length === 0) continue
     const passed = results.filter((item) => item.passed).length
     lines.push(`## ${model}`, '')
+    // v2：通过率区间、费用、按难度（多遍、多模型时更有意义）
+    const summary = coreTypes.summarizeEval(outcomesOf(results)).models[0]
+    if (summary) lines.push(...summaryLines(summary))
     lines.push(
       `通过 ${passed}/${results.length}（${Math.round((passed / results.length) * 100)}%）；` +
         `平均每题 ${tokens(average(results.map((item) => item.usage.inputTokens + item.usage.outputTokens)))} token、` +
