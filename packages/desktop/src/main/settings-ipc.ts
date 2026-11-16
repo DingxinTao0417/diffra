@@ -90,7 +90,7 @@ function rememberReasoning(current: Settings, choice: { providerId: string; mode
 }
 
 export async function settingsView(settings: SettingsStore, secrets: SecretStore): Promise<SettingsView> {
-  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents } = settings.get()
+  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents, computerUse } = settings.get()
   return {
     providers: await Promise.all(
       providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -108,6 +108,7 @@ export async function settingsView(settings: SettingsStore, secrets: SecretStore
     defaultWorkspace: workspaceRoot(settings),
     externalAgents,
     mcpOAuth: await oauthStates(settings, secrets),
+    computerUse: computerUse ?? { enabled: false, acknowledged: false },
     loadError: settings.loadError ?? secrets.loadError,
   }
 }
@@ -165,6 +166,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
         defaultPermissionMode: permissionModeSchema.optional(),
         security: securitySchema.optional(),
         execution: executionSchema.optional(),
+        computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
         reasoningChoice: z.object({ providerId: z.string().min(1), modelId: z.string().min(1), effort: z.enum(REASONING_EFFORTS) }).optional(),
       }),
       raw,

@@ -170,6 +170,8 @@ const settingsSchema = z.object({
   layout: layoutSchema.default(() => ({ ...DEFAULT_LAYOUT })),
   // 第 273 步加的
   browser: browserSettingsSchema.default(() => ({ ...DEFAULT_BROWSER })),
+  // v2 加的：电脑操控，默认关
+  computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
   defaultPermissionMode: permissionModeSchema.default('ask'),
   // 第 14 步加的
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),

@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from './architecture/model.js'
-import { browserActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
@@ -12,6 +12,8 @@ import {
   type CheckRunResult,
   type BrowserActionParams,
   type BrowserActionResult,
+  type ComputerActionParams,
+  type ComputerActionResult,
   type BrowserSites,
   CLIENT_EXT_METHODS,
   CLIENT_EXT_NOTIFICATIONS,
@@ -69,6 +71,8 @@ export interface CoreClientHandlers {
   onPermissionRequest(request: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse>
   // 智能体操作内置浏览器、起开发服务器；不提供时会话里不要开 browser
   onBrowserAction?(params: BrowserActionParams): Promise<BrowserActionResult>
+  // 电脑操控（v2）：截屏、鼠标、键盘；不提供时会话里不要开 computer
+  onComputerAction?(params: ComputerActionParams): Promise<ComputerActionResult>
   onDevServer?(params: DevServerParams): Promise<DevServerResult>
   // 智能体调用设计面板的工具；不提供时不要给会话配置设计工具
   onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
@@ -98,6 +102,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
       .onRequest(acp.methods.client.session.requestPermission, ({ params }) => handlers.onPermissionRequest(params))
     const onBrowserAction = handlers.onBrowserAction
     if (onBrowserAction) app.onRequest(CLIENT_EXT_METHODS.browserAction, browserActionParamsSchema, ({ params }) => onBrowserAction(params))
+    const onComputerAction = handlers.onComputerAction
+    if (onComputerAction) app.onRequest(CLIENT_EXT_METHODS.computerAction, computerActionParamsSchema, ({ params }) => onComputerAction(params))
     const onDevServer = handlers.onDevServer
     if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
     const onDesignAction = handlers.onDesignAction

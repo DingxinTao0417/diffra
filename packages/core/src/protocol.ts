@@ -265,6 +265,8 @@ export interface SessionConfig {
   plugins: PluginRef[]
   // 客户端有内置浏览器：给模型浏览器工具，操作由客户端执行
   browser?: boolean
+  // 电脑操控（v2）：用户在设置里开了（默认关），给模型 computer 工具，截屏和鼠标键盘由客户端执行
+  computer?: boolean
   // 设计任务：建会话时定下，存进会话记录；客户端在每轮开始前把设计面板的工具配置给它
   design?: boolean
   // 设计任务的风格预设（DESIGN_STYLES 的 id）；null 是不用预设。建会话时定下，存进会话记录
@@ -603,9 +605,37 @@ export interface DesignActionResult {
   image: PromptImage | null
 }
 
+// 电脑操控（v2 · M5）：坐标是最近一张截图里的像素，客户端换算到屏幕上。wait 在 core 里等，不发给客户端
+export type ComputerAction =
+  | { action: 'screenshot' }
+  | { action: 'cursor' }
+  | { action: 'click'; x: number; y: number; button: 'left' | 'right'; count: 1 | 2 }
+  | { action: 'move'; x: number; y: number }
+  | { action: 'drag'; x: number; y: number; toX: number; toY: number }
+  | { action: 'type'; text: string }
+  | { action: 'key'; keys: string }
+  | { action: 'scroll'; x: number; y: number; direction: 'up' | 'down' | 'left' | 'right'; amount: number }
+  | { action: 'wait'; seconds: number }
+
+export type ComputerActionParams = { sessionId: string } & Exclude<ComputerAction, { action: 'wait' }>
+
+export interface ComputerActionResult {
+  text: string
+  image: PromptImage | null
+  // 工具卡上的小图
+  thumbnail?: PromptImage | null
+}
+
+export const COMPUTER_MAX_TEXT = 2000
+export const COMPUTER_WAIT_MAX_SECONDS = 10
+// 按键：一个键或用 + 连起来的组合，比如 Enter、Ctrl+C、Ctrl+Shift+T、F5
+export const COMPUTER_KEY_PATTERN = /^[A-Za-z0-9]+(\+[A-Za-z0-9]+)*$|^[^\s+]$/
+
 // core 请求客户端做的事
 export const CLIENT_EXT_METHODS = {
   browserAction: '_diffra/browser/action',
+  // 电脑操控（v2）：截屏、鼠标、键盘
+  computerAction: '_diffra/computer/action',
   devServer: '_diffra/devserver',
   designAction: '_diffra/design/action',
   // 任务之间互通：智能体给别的任务发消息、新建任务，由客户端载入任务、起一轮

@@ -4,6 +4,7 @@ import { app, BrowserWindow, dialog, ipcMain, autoUpdater as nativeUpdater, shel
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { browserHost, registerBrowserIpc } from './browser'
+import { computerHost, registerComputerIpc } from './computer/host'
 import { designHost, registerDesignIpc } from './design'
 import { logEvent, registerRendererLog } from './app-log'
 import { registerAttachmentIpc } from './attachments'
@@ -159,6 +160,8 @@ app
     // 外接智能体的清单交给 core；core 还没连上时等它，失败只记日志
     void syncExternalAgents(settings, secrets)
     registerBrowserIpc()
+    computerHost.start(settings, userDataDir)
+    registerComputerIpc()
     // 浏览器扩展的宿主登记和管道：失败了只影响用户自己的浏览器，内置浏览器照常
     browserHost.start(settings, userDataDir).catch((error: unknown) => console.error('[browser] 启动浏览器扩展通道失败', error))
     registerDesignIpc()
@@ -198,6 +201,7 @@ app.on('will-quit', () => {
   killAllTerminals()
   stopCore()
   browserHost.stop()
+  computerHost.stop()
 })
 
 app.on('quit', (_event, exitCode) => logEvent(`[quit] 主进程退出 code=${exitCode}`))

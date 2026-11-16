@@ -116,6 +116,29 @@ export interface BrowserSettings {
 
 export const DEFAULT_BROWSER: BrowserSettings = { agent: 'builtin', allowSites: [], blockSites: [] }
 
+// 电脑操控（v2）：默认关；第一次打开时界面先讲清楚它能做什么、怎么停，用户确认了记下 acknowledged
+export interface ComputerUseSettings {
+  enabled: boolean
+  acknowledged: boolean
+}
+
+// 这台电脑支不支持电脑操控（Windows、macOS 支持）
+export interface ComputerStatus {
+  supported: boolean
+  platform: string
+}
+
+// 电脑操控的一条审计记录：输入的文字只记字数
+export interface ComputerAuditEntry {
+  at: string
+  sessionId: string
+  action: string
+  detail: string
+  ok: boolean
+  error: string | null
+  ms: number
+}
+
 // 三层安全检查和完成前的规范审查，所有项目共用，改了对已经打开的任务立即生效。
 // 静态检查、轻量扫描、规范审查在完成前；深度扫描在智能体提交或推送前问要不要先扫，任务页也能手动发起
 export interface SecuritySettings {
@@ -217,6 +240,8 @@ export interface Settings {
   execution: ExecutionSettings
   mcpServers: McpServerConfig[]
   plugins: InstalledPlugin[]
+  // v2：电脑操控；旧设置没有这一项（就是关着）
+  computerUse?: ComputerUseSettings
   // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
   defaultWorkspace: string | null
   // 上次启动的版本；升级后第一次启动据此提示改了什么，界面不显示
@@ -250,6 +275,8 @@ export interface SettingsView {
   externalAgents: ExternalAgentConfig[]
   // 浏览器登录的 MCP 服务器的登录状态，按服务器 id
   mcpOAuth: Record<string, McpOAuthState>
+  // 电脑操控（v2）：没设过就是关着
+  computerUse: ComputerUseSettings
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

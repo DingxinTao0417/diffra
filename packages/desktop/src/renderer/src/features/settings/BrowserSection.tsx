@@ -2,13 +2,14 @@ import { type FormEvent, useState } from 'react'
 import { X } from 'lucide-react'
 import { EXTENSION_STORE_URLS } from '../../../../shared/browser-bridge'
 import type { DirectChromeStatus } from '../../../../shared/ipc'
-import { AGENT_BROWSERS, type AgentBrowser, type BrowserSettings } from '../../../../shared/settings'
+import { AGENT_BROWSERS, type AgentBrowser, type BrowserSettings, type ComputerUseSettings } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Segmented } from '@/components/ui/segmented'
 import { errorMessage } from '@/lib/errors'
 import { showToast, store, useAppState } from '@/state/store'
+import { ComputerUseGroup } from './ComputerUseGroup'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
 
 const AGENT_OPTIONS: Array<{ value: AgentBrowser; label: string }> = AGENT_BROWSERS.map((value) => ({ value, label: { builtin: '内置浏览器', chrome: '我的 Chrome', edge: '我的 Edge' }[value] }))
@@ -21,9 +22,22 @@ const CHROME_MODES: Array<{ value: 'extension' | 'direct'; label: string }> = [
 // 智能体用哪个浏览器；用户自己的 Chrome、Edge 要装 Diffra 浏览器扩展，Chrome 也可以直接启动（v2）；哪些网站直接打开、哪些不让打开
 export function BrowserSection() {
   const browser = useAppState((state) => state.settings?.browser ?? null)
+  const computerUse = useAppState((state) => state.settings?.computerUse ?? null)
   const bridge = useAppState((state) => state.bridge)
   const [saved, flashSaved] = useSavedFlash()
-  if (!browser) return null
+  if (!browser || !computerUse) return null
+
+  const saveComputerUse = async (next: ComputerUseSettings) => {
+    store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, computerUse: next } } : state))
+    try {
+      const settings = await window.diffra.savePreferences({ computerUse: next })
+      store.set((state) => ({ ...state, settings }))
+      flashSaved()
+    } catch (error) {
+      store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, computerUse } } : state))
+      showToast(`保存失败：${errorMessage(error)}`)
+    }
+  }
 
   const save = async (next: BrowserSettings) => {
     store.set((state) => (state.settings ? { ...state, settings: { ...state.settings, browser: next } } : state))
@@ -91,6 +105,7 @@ export function BrowserSection() {
       <p className="mt-4 mb-8 text-sm text-muted-foreground">
         用你自己的 Chrome、Edge 时，智能体会用你在那里的登录状态。它只操作自己开的「Diffra · 任务名」分组里的标签页，或者你在扩展里交给它的标签页；操作时浏览器顶部会提示「正在调试此浏览器」，点提示条上的「取消」就会停下。
       </p>
+      <ComputerUseGroup value={computerUse} onSave={saveComputerUse} />
       <SettingsGroup title="网站" className="divide-y-0">
         <SiteList
           label="直接打开"

@@ -11,6 +11,8 @@ import { EXT_METHODS } from './models/types.js'
 import {
   type BrowserActionParams,
   type BrowserActionResult,
+  type ComputerActionParams,
+  type ComputerActionResult,
   ASK_ANSWERS_META_KEY,
   CLIENT_EXT_METHODS,
   CLIENT_EXT_NOTIFICATIONS,
@@ -92,6 +94,9 @@ import { ExternalSession } from './external/session.js'
 import { applyCandidate, type CandidateHost, candidateDiff, candidateRunOf, cleanupRun, discardCandidates, recoverRuns, runCandidates, runCardUpdate } from './session/candidates.js'
 
 export const AGENT_NAME = 'diffra-core'
+
+// 电脑操控的一步（截屏、点击、输入）最多等客户端这么久
+const COMPUTER_REQUEST_TIMEOUT_MS = 30_000
 
 export interface AgentOptions {
   // 会话记录存放的目录；不给就不保存，session/load、list、delete 都不可用
@@ -517,6 +522,17 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             )
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
+            }),
+        // 电脑操控（v2）：客户端那边每步有自己的时限，这里再兜 30 秒
+        computer: (action, signal) =>
+          client
+            .request<ComputerActionResult, ComputerActionParams>(
+              CLIENT_EXT_METHODS.computerAction,
+              { sessionId: session.id, ...action },
+              { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(COMPUTER_REQUEST_TIMEOUT_MS)]), stopWaitingOnCancel: true },
+            )
+            .catch((error: unknown) => {
+              throw new Error(signal.aborted ? '已取消' : clientErrorMessage(error))
             }),
         tasks: {
           list: async () => (store ? store.list() : []),

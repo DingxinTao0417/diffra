@@ -41,6 +41,9 @@ import type {
   Layout,
   BrowserSettings,
   AgentBrowser,
+  ComputerAuditEntry,
+  ComputerStatus,
+  ComputerUseSettings,
   ExecutionSettings,
   McpServerInput,
   ModelRef,
@@ -209,6 +212,9 @@ export const IPC_CHANNELS = {
   browserSetBackend: 'browser:set-backend',
   browserResume: 'browser:resume',
   browserDevTools: 'browser:devtools',
+  computerStatus: 'computer:status',
+  computerAudit: 'computer:audit',
+  computerAuditClear: 'computer:audit-clear',
   browserFrame: 'browser:frame',
   browserStopRequest: 'browser:stop-request',
   browserBridgeStatus: 'browser:bridge-status',
@@ -574,6 +580,8 @@ export interface DiffraApi {
     defaultPermissionMode?: PermissionMode
     security?: SecuritySettings
     execution?: ExecutionSettings
+    // 电脑操控（v2）：开了对新任务生效，关掉马上生效
+    computerUse?: ComputerUseSettings
     // 输入框里给这个模型选了思考程度，记下来
     reasoningChoice?: { providerId: string; modelId: string; effort: ReasoningEffort }
   }): Promise<SettingsView>
@@ -707,6 +715,10 @@ export interface DiffraApi {
   browserResume(sessionId: string): void
   // 当前标签页的开发者工具（v2）：内置浏览器单独开窗口，直接启动的 Chrome 在那里开检查器
   browserDevTools(sessionId: string): Promise<void>
+  // 电脑操控（v2）：这台电脑支不支持；最近的操作记录（新的在前）；清空记录
+  computerStatus(): Promise<ComputerStatus>
+  computerAudit(): Promise<ComputerAuditEntry[]>
+  clearComputerAudit(): Promise<void>
   // 用户 Chrome、Edge 里智能体那个标签页的画面（JPEG base64）
   onBrowserFrame(listener: (event: { sessionId: string; data: string }) => void): () => void
   // 用户在扩展里停下某个任务

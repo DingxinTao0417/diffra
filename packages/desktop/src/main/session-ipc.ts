@@ -69,6 +69,7 @@ import { reasoningEffortsFor, withRememberedEffort } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { currentBranch, listBranches, switchBranch } from './project-branch'
 import { browserHost } from './browser'
+import { computerEnabled, computerHost } from './computer/host'
 import { designHost } from './design'
 import { devServer, killTerminalsIn, pathInside, stopDevServer } from './terminal-ipc'
 import { parse } from './ipc-input'
@@ -189,6 +190,7 @@ export const coreClientHandlers: CoreClientHandlers = {
       else emitSessionEvent({ type: 'permission', ...event })
     }),
   onBrowserAction: (params) => browserHost.act(params),
+  onComputerAction: (params) => computerHost.act(params),
   onDevServer: (params) => devServer(params),
   onDesignAction: (params) => designHost.act(params),
   onArchitectureEvent: (event) => {
@@ -355,6 +357,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         },
         plugins: enabledPlugins(settings),
         browser: true,
+        computer: computerEnabled(settings),
         design: options.design ?? false,
         designStyle: options.design ? (options.designStyle ?? null) : null,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),

@@ -7,6 +7,9 @@ import {
   BROWSER_MODIFIERS,
   BROWSER_UPLOAD_MAX_FILES,
   BROWSER_WAIT_MAX_SECONDS,
+  COMPUTER_KEY_PATTERN,
+  COMPUTER_MAX_TEXT,
+  type ComputerActionParams,
   REASONING_EFFORTS,
   SCREENSHOT_MAX_WIDTH,
   SCREENSHOT_MIN_WIDTH,
@@ -76,6 +79,7 @@ export const sessionConfigSchema = z.object({
   }),
   plugins: z.array(z.object({ name: z.string().min(1), dir: z.string().min(1), hooks: z.string().min(1).optional() })).default([]),
   browser: z.boolean().default(false),
+  computer: z.boolean().default(false),
   design: z.boolean().default(false),
   designStyle: z.string().min(1).nullable().default(null),
   noProject: z.boolean().default(false),
@@ -144,6 +148,20 @@ export const browserActionParamsSchema = z.intersection(
     z.object({ action: z.literal('switch'), browser: z.enum(BROWSER_BACKENDS) }),
   ]),
 )
+
+export const computerActionParamsSchema = z.intersection(
+  z.object({ sessionId: z.string().min(1) }),
+  z.discriminatedUnion('action', [
+    z.object({ action: z.literal('screenshot') }),
+    z.object({ action: z.literal('cursor') }),
+    z.object({ action: z.literal('click'), x: z.number().finite().min(0), y: z.number().finite().min(0), button: z.enum(['left', 'right']), count: z.union([z.literal(1), z.literal(2)]) }),
+    z.object({ action: z.literal('move'), x: z.number().finite().min(0), y: z.number().finite().min(0) }),
+    z.object({ action: z.literal('drag'), x: z.number().finite().min(0), y: z.number().finite().min(0), toX: z.number().finite().min(0), toY: z.number().finite().min(0) }),
+    z.object({ action: z.literal('type'), text: z.string().min(1).max(COMPUTER_MAX_TEXT) }),
+    z.object({ action: z.literal('key'), keys: z.string().regex(COMPUTER_KEY_PATTERN) }),
+    z.object({ action: z.literal('scroll'), x: z.number().finite().min(0), y: z.number().finite().min(0), direction: z.enum(['up', 'down', 'left', 'right']), amount: z.number().int().min(1).max(20) }),
+  ]),
+) satisfies z.ZodType<ComputerActionParams>
 
 export const devServerParamsSchema = z.discriminatedUnion('action', [
   z.object({ sessionId: z.string().min(1), action: z.literal('terminal-list') }),
