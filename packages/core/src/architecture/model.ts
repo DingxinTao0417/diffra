@@ -16,6 +16,8 @@ export interface ImportFact {
   // 导入的名字；import * 和整模块导入为空
   names: string[]
   kind: ImportKind
+  // 整模块导入时本地起的名字（import * as fmt、import x as y、Go 的 import u "…"），调用图用（v2 · M9）
+  local?: string
 }
 
 export type SymbolKind = 'function' | 'class' | 'interface' | 'type' | 'enum' | 'variable' | 'constant' | 'method' | 'struct' | 'trait' | 'impl' | 'module'
@@ -41,6 +43,21 @@ export interface FileFacts {
   typeRefs: string[]
   // Java 顶层类型上的注解名（SpringBootApplication、RestController…），v2 的 Java 适配器加的；其他语言没有
   annotations?: string[]
+  // 函数级调用图（v2 · M9）：文件里的调用处，见 CallFact；以前的缓存没有，重新解析一次
+  calls?: CallFact[]
+}
+
+// 一处调用：被调的名字、前缀（a.b() 的 a；this、self 照记；看不出是什么的写 ?；没有前缀是 null）、行号。
+// 谁调的不在这里记，按行号落在哪个函数的范围里算
+export type CallFact = [name: string, qualifier: string | null, line: number]
+
+// 解析出来的一条函数调用：from 文件里的 fromSymbol 调了 to 文件里的 toSymbol（方法写成 类.方法，模块顶层的调用是 (module)）
+export interface CallLink {
+  from: number
+  fromSymbol: string
+  to: number
+  toSymbol: string
+  lines: number[]
 }
 
 export type Ecosystem = 'npm' | 'go' | 'cargo' | 'maven' | 'gradle' | 'python' | 'none'
@@ -97,6 +114,7 @@ export interface EdgeImport {
   specifier: string
   names: string[]
   kind: ImportKind
+  local?: string
 }
 
 // 项目内文件到文件的依赖；from、to 是 files 的下标
@@ -188,6 +206,8 @@ export interface ArchitectureAnalysis {
   commits: CommitInfo[]
   unresolved: UnresolvedImport[]
   resolver: ResolverConfig
+  // 函数级调用图（v2 · M9）：静态解析出来的、项目里函数之间的调用。以前的分析结果没有
+  calls?: CallLink[]
 }
 
 export const MAX_EXTERNAL_USES = 50

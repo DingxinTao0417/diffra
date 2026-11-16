@@ -98,7 +98,8 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     { toolCalls: [{ name: 'submit_flowchart', input: FLOWCHART }] },
     // 用户把「应用界面」改名后重画：模型还是叫它「应用界面」，认领的代码一样，让位给改了名的
     { toolCalls: [{ name: 'submit_diagram', input: APPLICATION }] },
-    // 任务：数据层反过来依赖业务层，违反分层，被打回后改掉
+    // 任务：先查架构图看谁调了 listOrders（v2）；数据层反过来依赖业务层，违反分层，被打回后改掉
+    { toolCalls: [{ name: 'architecture', input: { action: 'callers', path: 'src/services/orders.ts', symbol: 'listOrders' } }] },
     { toolCalls: [read('src/db/client.ts')] },
     { toolCalls: [patch('*** Update File: src/db/client.ts', " import express from 'express'", "+import { listOrders } from '../services/orders'")] },
     { text: '数据层用上了订单列表' },
@@ -203,6 +204,16 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     await expect(inspector).toContainText('listOrders')
     await node(window, 'file:src/services/orders.ts').dblclick()
     await expect(window.getByTestId('architecture-file')).toContainText('被谁引用（2）')
+    // 函数调用图（v2）：listOrders 被 App 调用、调用了 query；点 query 换到 db/client.ts，以 query 为中心
+    const fileCalls = window.getByTestId('file-calls')
+    await expect(fileCalls.getByTestId('call-function')).toHaveText(['listOrders←1 →1'])
+    const callGraph = fileCalls.getByTestId('call-graph')
+    await expect(callGraph).toContainText('App')
+    await expect(callGraph).toContainText('src/ui/App.ts')
+    await window.screenshot({ path: 'test-results/architecture-calls.png' })
+    await callGraph.getByText('query', { exact: true }).click()
+    await expect(window.getByTestId('architecture-file').getByRole('heading', { level: 2 })).toHaveText('src/db/client.ts')
+    await expect(window.getByTestId('call-graph')).toContainText('listOrders')
     await window.getByTestId('architecture-breadcrumb').getByRole('button', { name: '项目', exact: true }).click()
     await expect(window.getByTestId('architecture-node')).toHaveCount(3)
 
@@ -299,6 +310,8 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     await window.getByRole('menuitem', { name: '在这个项目开任务' }).click()
     await startTask(window, '让数据层用订单列表')
     await waitTaskDone(window, 60_000)
+    await expect(window.getByTestId('tool-call').filter({ hasText: /查架构：被谁调用\s*src\/services\/orders\.ts listOrders/ })).toHaveCount(1)
+    expect(model.bodies().some((body) => body.includes('src/ui/App.ts App (call at src/ui/App.ts:3)'))).toBe(true)
     const checks = window.locator('[data-testid="tool-call"][data-kind="architecture"]')
     await expect(checks.first()).toContainText('架构检查 · 1 处问题，已打回', { timeout: 10_000 })
     await expect(checks.first()).toContainText('src/db/client.ts:2')

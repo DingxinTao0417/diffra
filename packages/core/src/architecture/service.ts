@@ -223,6 +223,17 @@ export class ArchitectureService {
     return analysis ? { analysis, target } : null
   }
 
+  // 任务里的智能体查架构（v2 · M9）：这个目录分析过没有。列工具时同步调，只看文件在不在
+  hasAnalysis(root: string): boolean {
+    return existsSync(join(this.projectDir(projectIdOf(root)), 'analysis.json'))
+  }
+
+  async queryData(root: string): Promise<{ analysis: ArchitectureAnalysis; target: TargetArchitecture | null } | null> {
+    const id = projectIdOf(root)
+    const [analysis, target] = await Promise.all([this.analysis(id), this.target(id)])
+    return analysis ? { analysis, target } : null
+  }
+
   async bundle(id: string): Promise<ArchitectureBundle> {
     const project = await this.project(id)
     const dir = this.projectDir(id)

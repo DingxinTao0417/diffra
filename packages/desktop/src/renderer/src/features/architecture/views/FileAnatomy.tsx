@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useArch } from '../context'
 import { formatCount } from '../graph'
+import { CallGraph, callKey, useCallIndex } from './CallGraph'
 
 // L4：一个文件里的符号，谁引用了哪个符号，它又依赖了什么。鼠标移到符号上，标出用到它的文件
 export function FileAnatomy({ path }: { path: string }) {
@@ -133,8 +134,61 @@ export function FileAnatomy({ path }: { path: string }) {
             ))}
           </Column>
         </div>
+        {file.parsed && <FileCalls fileIndex={fileIndex!} />}
       </div>
     </div>
+  )
+}
+
+// 函数调用（v2 · M9）：这个文件里有调用关系的函数，选一个看调用图；选中的函数记在路由的 focus 里（symbol:名字）
+function FileCalls({ fileIndex }: { fileIndex: number }) {
+  const { analysis, route, go } = useArch()
+  const { callers, callees } = useCallIndex(analysis.calls)
+  const file = analysis.files[fileIndex]!
+  const functions = useMemo(() => {
+    const names = [...file.symbols.filter((symbol) => symbol.kind === 'function' || symbol.kind === 'method').map((symbol) => (symbol.parent ? `${symbol.parent}.${symbol.name}` : symbol.name)), '(module)']
+    return [...new Set(names)]
+      .map((name) => ({ name, callers: callers.get(callKey(fileIndex, name))?.length ?? 0, callees: callees.get(callKey(fileIndex, name))?.length ?? 0 }))
+      .filter((item) => item.callers + item.callees > 0)
+  }, [file, fileIndex, callers, callees])
+  const focused = route.focus?.startsWith('symbol:') ? route.focus.slice(7) : null
+  const selected = functions.find((item) => item.name === focused)?.name ?? [...functions].sort((a, b) => b.callers + b.callees - (a.callers + a.callees))[0]?.name ?? null
+
+  return (
+    <section className="space-y-2" aria-label="函数调用" data-testid="file-calls">
+      <h3 className="text-xs text-muted-foreground">函数调用{analysis.calls ? `（${functions.length} 个函数有调用关系）` : ''}</h3>
+      {!analysis.calls ? (
+        <Empty>这次分析还没有函数调用图，重新分析一次就有。</Empty>
+      ) : functions.length === 0 ? (
+        <Empty>静态分析没找到这个文件里函数和项目里其他函数之间的调用。</Empty>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
+            {functions.map((item) => (
+              <button
+                key={item.name}
+                type="button"
+                aria-pressed={item.name === selected}
+                className="flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs hover:bg-accent aria-pressed:border-foreground/30 aria-pressed:bg-soft"
+                onClick={() => go({ focus: `symbol:${item.name}` }, false)}
+                data-testid="call-function"
+              >
+                <span className="min-w-0 truncate font-mono">{item.name}</span>
+                <span className="shrink-0 text-muted-foreground tabular-nums" title="被调用 / 调用">
+                  ←{item.callers} →{item.callees}
+                </span>
+              </button>
+            ))}
+          </div>
+          {selected && (
+            <CallGraph
+              target={{ file: fileIndex, symbol: selected }}
+              onSelect={(next) => (next.file === fileIndex ? go({ focus: `symbol:${next.symbol}` }, false) : go({ scope: `file:${analysis.files[next.file]!.path}`, focus: `symbol:${next.symbol}` }))}
+            />
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 

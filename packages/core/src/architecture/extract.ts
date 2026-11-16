@@ -1,7 +1,7 @@
 import { extname } from 'node:path'
 import { Lang, type NapiConfig, parse, type SgNode } from '@ast-grep/napi'
 import { dynamicLanguageAvailable, vueScripts } from '../syntax.js'
-import type { FileFacts, ImportFact, SourceLanguage, SymbolFact, SymbolKind } from './model.js'
+import type { CallFact, FileFacts, ImportFact, SourceLanguage, SymbolFact, SymbolKind } from './model.js'
 
 export function sourceLanguageOf(path: string): SourceLanguage | null {
   switch (extname(path).toLowerCase()) {
@@ -34,32 +34,142 @@ export function sourceLanguageOf(path: string): SourceLanguage | null {
 export function extractFacts(path: string, source: string): FileFacts | null {
   const language = sourceLanguageOf(path)
   if (!language) return null
+  const calls = new CallCollector()
   const facts: FileFacts = { language, imports: [], symbols: [], namespace: null, typeRefs: [] }
   switch (language) {
     case 'typescript':
     case 'javascript': {
       const lang = /\.[jt]sx$/i.test(path) ? Lang.Tsx : language === 'typescript' ? Lang.TypeScript : Lang.JavaScript
-      scriptFacts(parse(lang, source).root(), 0, facts)
+      const root = parse(lang, source).root()
+      scriptFacts(root, 0, facts)
+      calls.collect(root, 'script', 0)
       break
     }
     case 'vue':
-      for (const block of vueScripts(source)) scriptFacts(parse(block.lang, block.code).root(), block.lineOffset, facts)
+      for (const block of vueScripts(source)) {
+        const root = parse(block.lang, block.code).root()
+        scriptFacts(root, block.lineOffset, facts)
+        calls.collect(root, 'script', block.lineOffset)
+      }
       break
-    case 'python':
-      pythonFacts(parse('python', source).root(), facts)
+    case 'python': {
+      const root = parse('python', source).root()
+      pythonFacts(root, facts)
+      calls.collect(root, 'python', 0)
       break
-    case 'go':
-      goFacts(parse('go', source).root(), facts)
+    }
+    case 'go': {
+      const root = parse('go', source).root()
+      goFacts(root, facts)
+      calls.collect(root, 'go', 0)
       break
-    case 'rust':
-      rustFacts(parse('rust', source).root(), facts)
+    }
+    case 'rust': {
+      const root = parse('rust', source).root()
+      rustFacts(root, facts)
+      calls.collect(root, 'rust', 0)
       break
-    case 'java':
-      javaFacts(parse('java', source).root(), facts)
+    }
+    case 'java': {
+      const root = parse('java', source).root()
+      javaFacts(root, facts)
+      calls.collect(root, 'java', 0)
       break
+    }
   }
   facts.imports.sort((a, b) => a.line - b.line)
+  facts.calls = calls.list
   return facts
+}
+
+// ---------- 函数调用（v2 · M9） ----------
+
+export const MAX_FILE_CALLS = 2000
+
+type CallDialect = 'script' | 'python' | 'go' | 'rust' | 'java'
+
+const CALL_RULES: Record<CallDialect, NapiConfig> = {
+  script: { rule: { any: [{ kind: 'call_expression' }, { kind: 'new_expression' }] } },
+  python: { rule: { kind: 'call' } },
+  go: { rule: { kind: 'call_expression' } },
+  rust: { rule: { kind: 'call_expression' } },
+  java: { rule: { any: [{ kind: 'method_invocation' }, { kind: 'object_creation_expression' }] } },
+}
+
+const SELF_NAMES = new Set(['this', 'self', 'Self'])
+
+// a.b.c() 的前缀取 b；this / self 照记；调用结果、下标这类看不出是谁的记 ?
+function qualifierOf(node: SgNode | null, dialect: CallDialect): string | null {
+  if (!node) return '?'
+  const kind = String(node.kind())
+  if (kind === 'identifier' || kind === 'this' || kind === 'self' || kind === 'type_identifier') return node.text()
+  if (kind === 'member_expression') return node.field('property')?.text() ?? '?'
+  if (kind === 'attribute') return node.field('attribute')?.text() ?? '?'
+  if (kind === 'field_access') return node.field('field')?.text() ?? '?'
+  if (kind === 'selector_expression') return node.field('field')?.text() ?? '?'
+  if (kind === 'field_expression') return node.field('field')?.text() ?? '?'
+  if (dialect === 'rust' && (kind === 'scoped_identifier' || kind === 'crate' || kind === 'super')) return node.text().split('::').pop() ?? '?'
+  return '?'
+}
+
+function calleeOf(node: SgNode, dialect: CallDialect): [string, string | null] | null {
+  const kind = String(node.kind())
+  if (dialect === 'java') {
+    if (kind === 'object_creation_expression') {
+      const type = node.field('type')
+      const name = type?.kind() === 'type_identifier' ? type.text() : type?.find({ rule: { kind: 'type_identifier' } })?.text()
+      return name ? [name, null] : null
+    }
+    const name = node.field('name')?.text()
+    if (!name) return null
+    const object = node.field('object')
+    return [name, object ? qualifierOf(object, dialect) : null]
+  }
+  const callee = dialect === 'script' && kind === 'new_expression' ? node.field('constructor') : node.field('function')
+  if (!callee) return null
+  const calleeKind = String(callee.kind())
+  if (calleeKind === 'identifier') return callee.text() === 'require' ? null : [callee.text(), null]
+  if (calleeKind === 'member_expression') {
+    const name = callee.field('property')?.text()
+    return name ? [name, qualifierOf(callee.field('object'), dialect)] : null
+  }
+  if (calleeKind === 'attribute') {
+    const name = callee.field('attribute')?.text()
+    return name ? [name, qualifierOf(callee.field('object'), dialect)] : null
+  }
+  if (calleeKind === 'selector_expression') {
+    const name = callee.field('field')?.text()
+    return name ? [name, qualifierOf(callee.field('operand'), dialect)] : null
+  }
+  if (calleeKind === 'field_expression') {
+    const name = callee.field('field')?.text()
+    return name ? [name, qualifierOf(callee.field('value'), dialect)] : null
+  }
+  if (calleeKind === 'scoped_identifier') {
+    const name = callee.field('name')?.text()
+    const path = callee.field('path')
+    return name ? [name, path ? qualifierOf(path, dialect) : null] : null
+  }
+  return null
+}
+
+class CallCollector {
+  readonly list: CallFact[] = []
+  private readonly seen = new Set<string>()
+
+  collect(root: SgNode, dialect: CallDialect, offset: number): void {
+    for (const node of root.findAll(CALL_RULES[dialect])) {
+      if (this.list.length >= MAX_FILE_CALLS) return
+      const callee = calleeOf(node, dialect)
+      if (!callee) continue
+      const [name, qualifier] = callee
+      const line = lineOf(node) + offset
+      const key = `${name}\u0000${qualifier ?? ''}\u0000${line}`
+      if (this.seen.has(key)) continue
+      this.seen.add(key)
+      this.list.push([name, qualifier !== null && SELF_NAMES.has(qualifier) ? 'self' : qualifier, line])
+    }
+  }
 }
 
 const lineOf = (node: SgNode) => node.range().start.line + 1
@@ -153,6 +263,7 @@ function scriptImport(node: SgNode, offset: number, imports: ImportFact[]): void
   const source = node.field('source')
   if (!source) return
   const names: string[] = []
+  let local: string | undefined
   let specifiers = 0
   let allTypes = true
   for (const part of clause?.children() ?? []) {
@@ -160,7 +271,10 @@ function scriptImport(node: SgNode, offset: number, imports: ImportFact[]): void
     if (kind === 'identifier') {
       names.push('default')
       allTypes = false
-    } else if (kind === 'namespace_import') allTypes = false
+    } else if (kind === 'namespace_import') {
+      allTypes = false
+      local = part.children().find((child) => child.kind() === 'identifier')?.text()
+    }
     else if (kind === 'named_imports') {
       for (const specifier of part.children()) {
         if (specifier.kind() !== 'import_specifier') continue
@@ -171,7 +285,7 @@ function scriptImport(node: SgNode, offset: number, imports: ImportFact[]): void
       }
     }
   }
-  imports.push({ specifier: unquote(source), line, names, kind: typeOnly || (specifiers > 0 && allTypes) ? 'type' : 'import' })
+  imports.push({ specifier: unquote(source), line, names, kind: typeOnly || (specifiers > 0 && allTypes) ? 'type' : 'import', ...(local ? { local } : {}) })
 }
 
 function exportClauseNames(node: SgNode): string[] {
@@ -257,7 +371,8 @@ function pythonFacts(root: SgNode, facts: FileFacts): void {
     if (node.kind() === 'import_statement') {
       for (const name of node.fieldChildren('name')) {
         const module = moduleOf(name)
-        if (module) facts.imports.push({ specifier: compact(module.text()), line, names: [], kind: 'import' })
+        const local = name.kind() === 'aliased_import' ? name.field('alias')?.text() : undefined
+        if (module) facts.imports.push({ specifier: compact(module.text()), line, names: [], kind: 'import', ...(local ? { local } : {}) })
       }
       continue
     }
@@ -320,7 +435,8 @@ function goFacts(root: SgNode, facts: FileFacts): void {
         for (const child of node.children()) {
           for (const spec of child.kind() === 'import_spec_list' ? child.children() : [child]) {
             const path = spec.kind() === 'import_spec' ? spec.field('path') : null
-            if (path) facts.imports.push({ specifier: unquote(path), line: lineOf(spec), names: [], kind: 'import' })
+            const local = spec.kind() === 'import_spec' ? spec.field('name')?.text() : undefined
+            if (path) facts.imports.push({ specifier: unquote(path), line: lineOf(spec), names: [], kind: 'import', ...(local && local !== '_' && local !== '.' ? { local } : {}) })
           }
         }
         break

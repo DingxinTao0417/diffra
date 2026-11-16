@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import { languageOf as codeLanguageOf } from '../rules/languages.js'
 import { buildResolverConfig, sourceEntry } from './config.js'
+import { resolveCalls } from './calls.js'
 import { extractFacts, sourceLanguageOf } from './extract.js'
 import { filesFingerprint, gitFingerprint, gitState, readChurn, streamLines } from './history.js'
 import { readManifests } from './manifests.js'
@@ -180,7 +181,8 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     const stale = batch.filter((file) => {
       const cached = previous[file.path]
       // 以前的结果里 Java 文件没有注解（v2 的 Java 适配器才加）：重新解析一次
-      return !cached || cached.mtimeMs !== file.mtimeMs || cached.size !== file.size || (cached.facts?.language === 'java' && cached.facts.annotations === undefined)
+      // 以前的结果没有函数调用（v2 的调用图才加）：也重新解析一次
+      return !cached || cached.mtimeMs !== file.mtimeMs || cached.size !== file.size || (cached.facts?.language === 'java' && cached.facts.annotations === undefined) || (cached.facts !== null && cached.facts.calls === undefined)
     })
     const texts = new Map(await Promise.all(stale.map(async (file) => [file.path, await readFile(join(root, file.path), 'utf8').catch(() => null)] as const)))
     for (const file of batch) {
@@ -292,7 +294,7 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     const from = index.get(file.path)!
     for (const fact of facts.imports) {
       const result = resolver.resolve(file.path, facts.language, fact)
-      const item: EdgeImport = { line: fact.line, specifier: fact.specifier, names: fact.names, kind: fact.kind }
+      const item: EdgeImport = { line: fact.line, specifier: fact.specifier, names: fact.names, kind: fact.kind, ...(fact.local ? { local: fact.local } : {}) }
       if (result.kind === 'internal') {
         for (const target of result.files) {
           const to = index.get(target)
@@ -321,6 +323,15 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
   const edges: FileEdge[] = []
   for (const [from, targets] of edgeMap) for (const [to, imports] of targets) edges.push({ from, to, imports })
   edges.sort((a, b) => a.from - b.from || a.to - b.to)
+  const calls = await resolveCalls(
+    files,
+    files.map((file) => {
+      const facts = cache.files[file.path]!.facts
+      return facts?.calls ? { language: facts.language, calls: facts.calls } : null
+    }),
+    edges,
+    () => slicer.tick(),
+  )
 
   // 入口文件：清单里写的，加上各语言的惯例
   const entries = new Set<string>()
@@ -418,6 +429,7 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     commits: churn?.commits ?? [],
     unresolved,
     resolver: resolverConfig,
+    calls,
   }
   return { analysis, cache }
 }

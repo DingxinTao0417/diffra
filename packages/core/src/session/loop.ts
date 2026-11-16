@@ -65,6 +65,7 @@ import { type PluginHookContext, postToolHooks, preToolHooks, promptSubmitHooks,
 import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinReminders } from './spin.js'
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { COMPUTER_TOOL, computerPermission, computerTitle, rememberComputerChoice, toComputerAction } from './computer.js'
+import { ARCHITECTURE_TOOL, runArchitectureTool } from './architecture-tool.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
 import { historySecretValues, projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
@@ -1071,6 +1072,7 @@ export async function runToolCall(
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
   if (name === SHOW_VISUAL_TOOL) return runShowVisual(call, io)
+  if (name === ARCHITECTURE_TOOL && session.architecture && !call.invalid) return runArchitectureTool(session, call, io)
   // 步骤清单和提问只给主智能体：子智能体的进度看它的卡片，它也不能替主智能体去问用户
   if (name === TODO_TOOL && !scope) return runTodoWrite(session, call, io)
   if (name === ASK_USER_TOOL && !scope) return runAskUser(session, call, signal, io)

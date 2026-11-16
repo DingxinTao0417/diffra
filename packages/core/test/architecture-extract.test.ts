@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { extractFacts, sourceLanguageOf } from '../src/architecture/extract.js'
 import type { FileFacts, ImportFact, ImportKind, SymbolFact, SymbolKind } from '../src/architecture/model.js'
 
-const imp = (line: number, specifier: string, names: string[], kind: ImportKind): ImportFact => ({ specifier, line, names, kind })
+const imp = (line: number, specifier: string, names: string[], kind: ImportKind, local?: string): ImportFact => ({ specifier, line, names, kind, ...(local ? { local } : {}) })
 
 const sym = (name: string, kind: SymbolKind, line: number, endLine: number, exported: boolean, parent: string | null = null): SymbolFact => ({
   name,
@@ -69,7 +69,7 @@ describe('架构分析：TS / JS / Vue', () => {
     expect(result.imports).toEqual([
       imp(1, './a', ['default'], 'import'),
       imp(2, 'pkg', ['b', 'd'], 'import'),
-      imp(3, './n', [], 'import'),
+      imp(3, './n', [], 'import', 'n'),
       imp(4, './side', [], 'import'),
       imp(5, './types', ['A'], 'type'),
       imp(6, './types2', ['B', 'C'], 'type'),
@@ -79,7 +79,7 @@ describe('架构分析：TS / JS / Vue', () => {
       imp(10, './def', ['default'], 'reexport'),
       imp(11, './lazy', [], 'dynamic'),
       imp(12, 'node:fs', [], 'require'),
-      imp(16, './both', ['default'], 'import'),
+      imp(16, './both', ['default'], 'import', 'ns'),
       imp(17, './space', [], 'reexport'),
       imp(18, './legacy', [], 'require'),
       imp(19, './chunk', [], 'dynamic'),
@@ -192,7 +192,7 @@ describe('架构分析：Python', () => {
     expect(result.imports).toEqual([
       imp(1, 'os', [], 'import'),
       imp(1, 'a.b.c', [], 'import'),
-      imp(2, 'a.b', [], 'import'),
+      imp(2, 'a.b', [], 'import', 'x'),
       imp(3, 'a.b', ['c', 'd'], 'import'),
       imp(4, '.', ['y'], 'import'),
       imp(5, '..pkg.mod', ['z'], 'import'),
@@ -271,7 +271,7 @@ describe('架构分析：Go', () => {
     expect(result.imports).toEqual([
       imp(3, 'fmt', [], 'import'),
       imp(5, 'os', [], 'import'),
-      imp(6, 'path/filepath', [], 'import'),
+      imp(6, 'path/filepath', [], 'import', 'f'),
       imp(7, 'github.com/a/b/c', [], 'import'),
       imp(8, 'raw/path', [], 'import'),
     ])
