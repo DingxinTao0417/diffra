@@ -3,6 +3,7 @@ import { authPayload, CLOSE, encodeFrame, decodeFrame, type FrameKind, MAX_FRAME
 import type { RemoteRelayStatus } from '../../shared/remote'
 import { logRemote } from '../app-log'
 import type { DeviceIdentity } from './identity'
+import type { RemoteTransport, TransportEvents } from './transport'
 
 // 主进程连中转的那条 WebSocket（Node 自带的客户端）：登录、白名单、在线状态、会合点、收发帧。
 // 断了按 1 秒到 60 秒指数退避加抖动重连，重连后重新登记白名单和还没过期的会合点；中转说签名不对、版本不对就不再重试
@@ -45,15 +46,9 @@ class Bucket {
   }
 }
 
-export interface RelayEvents {
-  status(status: RemoteRelayStatus): void
-  presence(deviceId: string, online: boolean): void
-  frame(kind: FrameKind, from: string, payload: Buffer): void
-  undeliverable(to: string): void
-  rendezvous(id: string, opened: boolean): void
-}
+export type RelayEvents = TransportEvents
 
-export class RelayClient {
+export class RelayClient implements RemoteTransport {
   private socket: WebSocket | null = null
   private running = false
   private ready = false

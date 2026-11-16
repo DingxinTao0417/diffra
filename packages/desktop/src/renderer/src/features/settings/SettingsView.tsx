@@ -94,7 +94,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
   {
     name: '连接',
     items: REMOTE_DEVICE_CONNECTION_ENABLED
-      ? [{ id: 'devices' as const, label: '设备连接', icon: MonitorSmartphone, keywords: '远程 设备 配对 邀请串 互联网 中转 同步 会话 授权 指纹' }]
+      ? [{ id: 'devices' as const, label: '设备连接', icon: MonitorSmartphone, keywords: '远程 设备 配对 配对码 局域网 同步 会话 授权 指纹 证书' }]
       : [],
   },
   {

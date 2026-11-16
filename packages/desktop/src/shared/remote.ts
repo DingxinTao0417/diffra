@@ -6,9 +6,10 @@ import type { ModelRef } from './settings'
 // 设备连接（docs/decisions.md「设备连接」）：主进程和界面之间交换的状态。
 // 被连接端 = 数据所在、「允许连接本机」那台；连接端 = 「连接其他设备」那台
 
-// 2026-11-15 起整体下线：网络安全问题尚未彻底解决，代码保留但默认关闭。
-// 恢复时改回 true，并同时恢复官网隐私政策和快速开始的说明（docs/decisions.md「设备连接下线」）。
-export const REMOTE_DEVICE_CONNECTION_ENABLED = false
+// 2026-11-15 起经中转的互联网版整体下线（网络安全问题尚未彻底解决）；v2 起只在局域网里直连（docs/decisions.md「局域网设备连接」）。
+// 互联网中转要恢复时把 DEVICE_TRANSPORT 改回 relay，并同时恢复官网隐私政策和快速开始的说明（「设备连接下线」）
+export const REMOTE_DEVICE_CONNECTION_ENABLED = true
+export const DEVICE_TRANSPORT: 'lan' | 'relay' = 'lan'
 
 // 被连接端在列表里报的设备连接接口版本：2 起认 session.details、session.diff 这些新请求（0.3.x 不报，按 1 算）。
 // 连接端按它决定发不发新请求：老版本被连接端收到不认识的请求会当成格式不对、断开通道
@@ -66,10 +67,27 @@ export interface RemoteView {
   name: string
   allowIncoming: boolean
   relay: RemoteRelayStatus
+  // 局域网版：invite.text 是 6 位配对码
   invite: { text: string; expiresAt: string } | null
   requests: RemotePairRequest[]
   grants: RemoteGrantView[]
   peers: RemoteDeviceView[]
+  // 局域网版（v2）：本机证书的指纹（配对时给对方核对）和局域网里看到的设备；中转版是 null
+  lan: { certificate: string | null; discovered: RemoteDiscoveredDevice[] } | null
+}
+
+// 局域网里看到的一台设备（发现服务报的，谁都能冒充；配对时核对证书指纹）
+export interface RemoteDiscoveredDevice {
+  deviceId: string
+  name: string
+  // 设备 ID 的指纹和证书指纹，给人看的写法
+  fingerprint: string
+  certificate: string
+  address: string
+  // 对方生成了配对码，正等着配对
+  pairing: boolean
+  // 已经是本机连接的设备
+  paired: boolean
 }
 
 export type RemoteAddResult = { ok: true; device: RemoteDeviceView } | { ok: false; error: string }

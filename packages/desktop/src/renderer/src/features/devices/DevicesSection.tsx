@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Copy, MonitorSmartphone, ShieldCheck } from 'lucide-react'
-import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAuditEntry, type RemoteDeviceView, type RemoteGrantView, type RemoteProjectGrant, type RemoteRelayStatus, type RemoteView } from '../../../../shared/remote'
+import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAuditEntry, type RemoteDeviceView, type RemoteDiscoveredDevice, type RemoteGrantView, type RemoteProjectGrant, type RemoteRelayStatus, type RemoteView } from '../../../../shared/remote'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import { Field } from '@/components/ui/field'
 import { SettingsGroup, SettingsHeader, SettingsRow } from '@/features/settings/SettingsLayout'
 import { errorMessage } from '@/lib/errors'
 import { formatTime } from '@/lib/format'
+import { cn } from 'cn'
 import { showToast, useAppState } from '@/state/store'
 import { describeGrants, ProjectGrantPicker } from './ProjectGrantPicker'
 
@@ -36,8 +37,12 @@ export function DevicesSection() {
     <>
       <SettingsHeader
         title="设备连接"
-        description="连接其他电脑上的 Diffra，或者允许其他电脑上的 Diffra 连接本机。经 relay.diffra.dev 中转，内容端到端加密，服务器看不到。"
-        actions={<RelayBadge status={remote.relay} />}
+        description={
+          remote.lan
+            ? '和同一个局域网里其他电脑上的 Diffra 直接连接，不经过任何服务器、只连局域网地址。连接用 TLS 加密，配对时核对证书指纹，内容另外端到端加密。'
+            : '连接其他电脑上的 Diffra，或者允许其他电脑上的 Diffra 连接本机。经 relay.diffra.dev 中转，内容端到端加密，服务器看不到。'
+        }
+        actions={<RelayBadge status={remote.relay} lan={remote.lan !== null} />}
       />
       {remote.unavailable && (
         <Alert variant="destructive" className="mb-6">
@@ -50,9 +55,10 @@ export function DevicesSection() {
   )
 }
 
-function RelayBadge({ status }: { status: RemoteRelayStatus }) {
+function RelayBadge({ status, lan }: { status: RemoteRelayStatus; lan: boolean }) {
+  const labels = lan ? { online: '局域网服务已开', connecting: '正在开局域网服务…', off: '局域网服务没开' } : { online: '已连上中转', connecting: '正在连接中转…', off: '没连中转' }
   const [variant, text] =
-    status.state === 'online' ? (['secondary', '已连上中转'] as const) : status.state === 'connecting' ? (['outline', '正在连接中转…'] as const) : status.state === 'error' ? (['warning', status.message] as const) : (['outline', '没连中转'] as const)
+    status.state === 'online' ? (['secondary', labels.online] as const) : status.state === 'connecting' ? (['outline', labels.connecting] as const) : status.state === 'error' ? (['warning', status.message] as const) : (['outline', labels.off] as const)
   return (
     <Badge variant={variant} data-testid="relay-status" data-state={status.state}>
       {text}
@@ -82,7 +88,15 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
   return (
     <>
       <SettingsGroup title="已添加的设备" data-testid="peers">
-        {remote.peers.length === 0 && <EmptyState icon={MonitorSmartphone} title="还没有添加设备" description="在对方电脑的「允许连接本机」里生成邀请串，再点下面的「添加设备」粘贴进来。" variant="plain" className="py-8" />}
+        {remote.peers.length === 0 && (
+          <EmptyState
+            icon={MonitorSmartphone}
+            title="还没有添加设备"
+            description={remote.lan ? '在对方电脑的「允许连接本机」里生成配对码，再点下面的「添加设备」，选中对方、输入配对码。' : '在对方电脑的「允许连接本机」里生成邀请串，再点下面的「添加设备」粘贴进来。'}
+            variant="plain"
+            className="py-8"
+          />
+        )}
         {remote.peers.map((peer) => (
           <SettingsRow
             key={peer.deviceId}
@@ -103,12 +117,16 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
       <Button className="mt-4" disabled={remote.unavailable !== null} onClick={() => setAdding(true)}>
         添加设备
       </Button>
-      <AddDeviceDialog open={adding} onOpenChange={setAdding} fingerprint={remote.self?.fingerprint ?? null} />
+      {remote.lan ? (
+        <AddLanDeviceDialog open={adding} onOpenChange={setAdding} discovered={remote.lan.discovered} fingerprint={remote.self?.fingerprint ?? null} />
+      ) : (
+        <AddDeviceDialog open={adding} onOpenChange={setAdding} fingerprint={remote.self?.fingerprint ?? null} />
+      )}
       <AlertDialog open={removing !== null} onOpenChange={(open) => !open && setRemoving(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除设备「{removing?.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>本机不再连接它，对方在线时会一起撤销对方给本机的授权（不在线的话要对方自己撤销）。要再连，得请对方重新生成邀请串。</AlertDialogDescription>
+            <AlertDialogDescription>本机不再连接它，对方在线时会一起撤销对方给本机的授权（不在线的话要对方自己撤销）。要再连，得请对方重新生成{remote.lan ? '配对码' : '邀请串'}。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
@@ -200,6 +218,122 @@ function AddDeviceDialog({ open, onOpenChange, fingerprint }: { open: boolean; o
   )
 }
 
+// 局域网版（v2）：在局域网里看到的设备里选一台，输入它屏幕上的 6 位配对码；先核对对方页面上的证书指纹
+function AddLanDeviceDialog({ open, onOpenChange, discovered, fingerprint }: { open: boolean; onOpenChange(open: boolean): void; discovered: RemoteDiscoveredDevice[]; fingerprint: string | null }) {
+  const [selected, setSelected] = useState<string | null>(null)
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [waiting, setWaiting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setSelected(null)
+      setCode('')
+      setName('')
+      setError(null)
+      return
+    }
+    void run(() => window.diffra.browseRemoteDevices(true))
+    return () => void run(() => window.diffra.browseRemoteDevices(false))
+  }, [open])
+
+  const target = discovered.find((device) => device.deviceId === selected) ?? null
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!target) return
+    setWaiting(true)
+    setError(null)
+    try {
+      const result = await window.diffra.addRemoteLanDevice(target.deviceId, code, name.trim() || null)
+      if (result.ok) {
+        showToast(`已添加「${result.device.name}」`)
+        onOpenChange(false)
+      } else setError(result.error)
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setWaiting(false)
+    }
+  }
+  const close = (next: boolean) => {
+    if (!next && waiting) void run(() => window.diffra.cancelAddRemoteDevice())
+    onOpenChange(next)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>添加设备</DialogTitle>
+          <DialogDescription>对方在「设置 → 设备连接 → 允许连接本机」里生成配对码后，会出现在下面。选中它，输入对方屏幕上的 6 位配对码。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5" role="radiogroup" aria-label="局域网里的设备" data-testid="lan-devices">
+          {discovered.length === 0 ? (
+            <p className="rounded-lg bg-soft px-3 py-4 text-center text-sm text-muted-foreground">局域网里还没看到开着「允许连接本机」的 Diffra。确认两台电脑在同一个局域网（同一个路由器、没开访客网络隔离）。</p>
+          ) : (
+            discovered.map((device) => (
+              <button
+                key={device.deviceId}
+                type="button"
+                role="radio"
+                aria-checked={device.deviceId === selected}
+                disabled={waiting}
+                onClick={() => setSelected(device.deviceId)}
+                // primary-color-allow: 选中标记（单选列表里选中的那台设备）
+                className={cn('flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring', device.deviceId === selected ? 'border-primary bg-soft' : 'hover:bg-accent')}
+                data-testid="lan-device"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate font-medium">{device.name}</span>
+                    {device.pairing ? <Badge variant="secondary">等配对</Badge> : <Badge variant="outline">没生成配对码</Badge>}
+                    {device.paired && <Badge variant="outline">已添加</Badge>}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {device.address} · 证书指纹 <span className="font-mono">{device.certificate}</span>
+                  </span>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+        <form id="add-lan-device" onSubmit={(event) => void submit(event)} className="space-y-4">
+          <Field id="remote-code" label="配对码" hint={target ? `先核对：对方「允许连接本机」页上的证书指纹应该是 ${target.certificate}。` : '先在上面选中对方。'}>
+            <Input id="remote-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder="123 456" inputMode="numeric" maxLength={7} className="w-40 font-mono tracking-widest" disabled={waiting || !target} required />
+          </Field>
+          <Field id="remote-name" label="显示名称" hint="不填就用对方给自己起的名字。">
+            <Input id="remote-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} disabled={waiting} />
+          </Field>
+        </form>
+        {waiting && (
+          <p className="rounded-lg bg-soft px-3 py-2 text-sm" role="status">
+            正在连接对方，等对方点允许…
+            {fingerprint && (
+              <>
+                对方会看到本机的指纹 <span className="font-mono font-bold" data-testid="self-fingerprint">{fingerprint}</span>，可以念给对方核对。
+              </>
+            )}
+          </p>
+        )}
+        {error && (
+          <p className="text-sm break-words text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => close(false)}>
+            取消
+          </Button>
+          <Button type="submit" form="add-lan-device" disabled={waiting || !target || code.replace(/\s+/g, '').length !== 6}>
+            {waiting ? '等对方确认…' : '添加'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function AllowTab({ remote }: { remote: RemoteView }) {
   const [editing, setEditing] = useState<RemoteGrantView | null>(null)
   const [revoking, setRevoking] = useState<RemoteGrantView | null>(null)
@@ -209,7 +343,10 @@ function AllowTab({ remote }: { remote: RemoteView }) {
   return (
     <>
       <SettingsGroup title="连接方式">
-        <SettingsRow label="允许连接本机" hint="打开后，你授权过的设备可以经中转连接本机；关掉后它们都看到本机离线。">
+        <SettingsRow
+          label="允许连接本机"
+          hint={remote.lan ? '打开后，同一局域网里你授权过的设备可以直接连接本机（系统可能问要不要让 Diffra 使用网络，选允许专用网络）；关掉后它们都看到本机离线。' : '打开后，你授权过的设备可以经中转连接本机；关掉后它们都看到本机离线。'}
+        >
           <Switch label="允许连接本机" checked={remote.allowIncoming} disabled={disabled} onChange={(enabled) => void run(() => window.diffra.setRemoteAllowIncoming(enabled))} />
         </SettingsRow>
       </SettingsGroup>
@@ -220,16 +357,40 @@ function AllowTab({ remote }: { remote: RemoteView }) {
             {remote.self?.fingerprint ?? '打开「允许连接本机」后生成'}
           </span>
         </SettingsRow>
+        {remote.lan && (
+          <SettingsRow label="证书指纹" hint="对方添加本机前，在它的列表里核对这一串，一样才输入配对码。">
+            <span className="font-mono text-sm" data-testid="host-certificate">
+              {remote.lan.certificate ?? '打开「允许连接本机」后生成'}
+            </span>
+          </SettingsRow>
+        )}
       </SettingsGroup>
       <SettingsGroup title="配对新设备">
-        <SettingsRow label="邀请串" hint="发给对方，在对方 Diffra 的「连接其他设备 → 添加设备」里粘贴。10 分钟内有效，只能用一次；对方连上后你还要在弹窗里点允许，并选开放哪些项目。">
+        <SettingsRow
+          label={remote.lan ? '配对码' : '邀请串'}
+          hint={
+            remote.lan
+              ? '对方在它的「连接其他设备 → 添加设备」里选中本机，输入这 6 位数字。10 分钟内有效，输错 3 次作废；对方连上后你还要核对对方的名称和指纹，点允许并选开放哪些项目。'
+              : '发给对方，在对方 Diffra 的「连接其他设备 → 添加设备」里粘贴。10 分钟内有效，只能用一次；对方连上后你还要在弹窗里点允许，并选开放哪些项目。'
+          }
+        >
           {!remote.invite && (
             <Button variant="outline" size="sm" disabled={disabled || !remote.allowIncoming} onClick={() => void run(() => window.diffra.createRemoteInvite())}>
-              生成邀请串
+              {remote.lan ? '生成配对码' : '生成邀请串'}
             </Button>
           )}
         </SettingsRow>
-        {remote.invite && (
+        {remote.invite && remote.lan && (
+          <div className="flex items-center gap-3 px-4 py-3">
+            <code className="rounded-md bg-soft px-3 py-1.5 font-mono text-2xl font-bold tracking-widest select-all" data-testid="invite-text">
+              {remote.invite.text}
+            </code>
+            <Button variant="outline" size="sm" onClick={() => void run(() => window.diffra.cancelRemoteInvite())}>
+              作废
+            </Button>
+          </div>
+        )}
+        {remote.invite && !remote.lan && (
           <div className="flex items-start gap-2 px-4 py-3">
             <code className="min-w-0 flex-1 rounded-md bg-soft px-2 py-1.5 font-mono text-sm break-all select-all" data-testid="invite-text">
               {remote.invite.text}
@@ -257,7 +418,7 @@ function AllowTab({ remote }: { remote: RemoteView }) {
         {remote.invite && <div className="px-4 pb-3 text-xs text-muted-foreground">{formatTime(remote.invite.expiresAt)} 前有效</div>}
       </SettingsGroup>
       <SettingsGroup title="已授权设备" data-testid="grants">
-        {remote.grants.length === 0 && <EmptyState icon={ShieldCheck} title="还没有设备与本机配对" description="生成邀请串后，在另一台设备上添加本机。" variant="plain" className="py-8" />}
+        {remote.grants.length === 0 && <EmptyState icon={ShieldCheck} title="还没有设备与本机配对" description={remote.lan ? '生成配对码后，在另一台设备上添加本机。' : '生成邀请串后，在另一台设备上添加本机。'} variant="plain" className="py-8" />}
         {remote.grants.map((grant) => (
           <SettingsRow
             key={grant.deviceId}

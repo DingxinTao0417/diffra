@@ -125,21 +125,22 @@ test('侧栏、搜索、重命名、归档、外观；重启后任务和外观�
   }
 })
 
-test('设备连接已下线：侧栏和设置里没有可见入口', async () => {
+test('设备连接（v2 起只在局域网里直连）：设置里有入口；默认不开，启动时不开局域网服务、不监听网络；侧栏没有远程项目', async () => {
   const userDataDir = makeUserDataDir()
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
     await expect(window.getByText('要做什么？')).toBeVisible()
-    await expect(window.getByTestId('devices-button')).toHaveCount(0)
-    await expect(window.getByTestId('sidebar-footer').getByRole('button', { name: /设备/ })).toHaveCount(0)
     await expect(window.getByTestId('remote-control-indicator')).toHaveCount(0)
     await expect(window.getByTestId('sidebar-remote-project')).toHaveCount(0)
 
     await window.keyboard.press('ControlOrMeta+,')
-    await expect(settingsNav(window).getByRole('button', { name: '设备连接' })).toHaveCount(0)
-    await settingsNav(window).getByLabel('搜索设置').fill('设备')
-    await expect(settingsNav(window).getByText('没有匹配的设置')).toBeVisible()
+    await settingsNav(window).getByLabel('搜索设置').fill('配对码')
+    await settingsNav(window).getByRole('button', { name: '设备连接' }).click()
+    await expect(window.getByRole('heading', { name: '设备连接', exact: true })).toBeVisible()
+    await expect(window.getByText('不经过任何服务器、只连局域网地址')).toBeVisible()
+    await expect(window.getByTestId('relay-status')).toHaveText('局域网服务没开')
+    await expect(window.getByTestId('relay-status')).toHaveAttribute('data-state', 'off')
   } finally {
     await app.close()
     rmSync(userDataDir, { recursive: true, force: true })

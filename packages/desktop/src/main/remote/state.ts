@@ -20,6 +20,10 @@ const deviceSchema = z.object({
   noiseKey: key,
   pairedAt: z.string(),
   lastSeenAt: z.string().nullable().default(null),
+  // 局域网版（v2）：配对时记下的对方证书指纹，以后只认这张证书；中转版配的没有，要重新配对
+  tls: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  // 局域网版：本机去连的设备上次在哪（发现服务看不到它时先试这个）
+  lan: z.object({ address: z.string().max(64), port: z.number().int().min(1).max(65535) }).optional(),
 })
 
 const stateSchema = z.object({

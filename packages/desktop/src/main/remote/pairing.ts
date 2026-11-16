@@ -1,10 +1,11 @@
 import { deviceIdOf, FRAME } from '@diffra/relay/protocol'
+import { hkdfSync, randomInt } from 'node:crypto'
 import { createInvite, decodeInvite, encodeInvite, Handshake, pairingPskOf, rendezvousIdOf } from '@diffra/remote'
 import { eventSchema, type Hello, helloSchema, REMOTE_PROLOGUE } from '@diffra/remote/messages'
 import { logRemote } from '../app-log'
 import { DIRECT, SecureChannel, withKind } from './channel'
 import type { DeviceIdentity } from './identity'
-import type { RelayClient } from './relay-client'
+import type { RemoteTransport } from './transport'
 
 // 配对（docs/decisions.md「设备连接」）：被连接端生成邀请串、在中转上开会合点；连接端粘贴邀请串，经会合点用 Noise XXpsk3 握手。
 // 握手后两边各发一条 hello（名称和 Ed25519 公钥），用「Ed25519 公钥 + 握手里的 X25519 长期公钥」算出设备 ID 核对：
@@ -14,6 +15,16 @@ const HANDSHAKE_TIMEOUT_MS = 20_000
 // 一个邀请串上同时握手的设备数、握手失败几次作废（中转那边也限每个会合点 3 台设备）
 const MAX_GUESTS = 3
 const MAX_FAILURES = 3
+
+// 局域网版（v2）的配对码：6 位数字，和被连接端的设备 ID 一起派生出邀请密钥，后面的 XXpsk3 握手和邀请串一样。
+// 码很短，靠两点撑住：猜错 3 次这个码就作废（每猜一次都要完整连一次、握一次手，不能离线试）；被连接端的人还要核对对方名称、指纹点允许
+export function lanPairingSecret(code: string, hostDeviceId: string): Uint8Array {
+  return Buffer.from(hkdfSync('sha256', Buffer.from(code, 'utf8'), Buffer.from(hostDeviceId, 'hex'), 'diffra lan pairing code', 16))
+}
+
+export function formatPairingCode(code: string): string {
+  return `${code.slice(0, 3)} ${code.slice(3)}`
+}
 
 export interface PairedDevice {
   deviceId: string
@@ -43,7 +54,9 @@ interface Guest {
 
 export interface PairingHostDeps {
   identity: DeviceIdentity
-  relay: RelayClient
+  relay: RemoteTransport
+  // 局域网版：生成 6 位配对码，不生成邀请串
+  code?: boolean
   hello(): Hello
   ttlMs: number
   // 邀请串、待确认的请求变了
@@ -72,10 +85,11 @@ export class PairingHost {
 
   create(): void {
     this.cancel()
-    const invite = createInvite(Buffer.from(this.deps.identity.deviceId, 'hex'))
+    const code = this.deps.code ? String(randomInt(0, 1_000_000)).padStart(6, '0') : null
+    const invite = code ? { secret: lanPairingSecret(code, this.deps.identity.deviceId), deviceId: Buffer.from(this.deps.identity.deviceId, 'hex') } : createInvite(Buffer.from(this.deps.identity.deviceId, 'hex'))
     const expiresAt = Date.now() + this.deps.ttlMs
     const rendezvous = Buffer.from(rendezvousIdOf(invite.secret)).toString('hex')
-    this.invite = { text: encodeInvite(invite), psk: pairingPskOf(invite.secret), rendezvous, expiresAt, failures: 0, used: false, timer: setTimeout(() => this.cancel(), this.deps.ttlMs) }
+    this.invite = { text: code ? formatPairingCode(code) : encodeInvite(invite), psk: pairingPskOf(invite.secret), rendezvous, expiresAt, failures: 0, used: false, timer: setTimeout(() => this.cancel(), this.deps.ttlMs) }
     this.deps.relay.openRendezvous(rendezvous, expiresAt)
     this.deps.changed()
   }
@@ -147,7 +161,7 @@ export class PairingHost {
 
 export interface PairWithInviteDeps {
   identity: DeviceIdentity
-  relay: RelayClient
+  relay: RemoteTransport
   hello(): Hello
   // 收被连接端直发过来的配对帧（已经去掉第一个字节）；null 是不收了
   listen(from: string, handler: ((payload: Buffer) => void) | null): void
@@ -191,7 +205,7 @@ export async function pairWithInvite(text: string, deps: PairWithInviteDeps): Pr
     return inbox.shift()!
   }
   const send = (kind: typeof FRAME.direct | typeof FRAME.rendezvous, to: string, payload: Uint8Array) => {
-    if (!deps.relay.send(kind, to, payload)) throw new Error('和中转服务断开了，稍后再试')
+    if (!deps.relay.send(kind, to, payload)) throw new Error('连接断开了，稍后再试')
   }
 
   deps.allowHost(host)
@@ -208,7 +222,7 @@ export async function pairWithInvite(text: string, deps: PairWithInviteDeps): Pr
     send(FRAME.rendezvous, rendezvous, handshake.writeMessage())
     const opened = new SecureChannel(handshake.split(), (data) => deps.relay.send(FRAME.rendezvous, rendezvous, data))
     channel = opened
-    if (!opened.send(deps.hello())) throw new Error('和中转服务断开了，稍后再试')
+    if (!opened.send(deps.hello())) throw new Error('连接断开了，稍后再试')
 
     const read = async (timeoutMs: number, timeoutMessage: string): Promise<unknown> => {
       for (;;) {

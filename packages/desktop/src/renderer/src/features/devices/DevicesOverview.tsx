@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Eye, MonitorSmartphone, ShieldAlert, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
-import { canControl, REMOTE_DEVICE_CONNECTION_ENABLED, REMOTE_LEVEL_LABELS, type RemoteLevel, type RemoteView } from '../../../../shared/remote'
+import { canControl, DEVICE_TRANSPORT, REMOTE_DEVICE_CONNECTION_ENABLED, REMOTE_LEVEL_LABELS, type RemoteLevel, type RemoteView } from '../../../../shared/remote'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -179,7 +179,7 @@ function DevicesPanel({ entries, recent }: { entries: DeviceEntry[]; recent(entr
   const incoming = entries.filter((entry) => entry.incoming)
   const outgoing = entries.filter((entry) => !entry.incoming)
   // 中转只在连不上、出错时说一句；关着设备连接（没有要连的设备）时不提
-  const relayProblem = relay?.state === 'error' ? relay.message : relay?.state === 'connecting' ? '中转连不上，正在重连…' : null
+  const relayProblem = relay?.state === 'error' ? relay.message : relay?.state === 'connecting' ? (DEVICE_TRANSPORT === 'lan' ? '局域网服务还没开好…' : '中转连不上，正在重连…') : null
 
   const sub = (entry: DeviceEntry): string => {
     const seen = entry.lastSeenAt ? `${formatTime(entry.lastSeenAt)} 在线过` : '不在线'

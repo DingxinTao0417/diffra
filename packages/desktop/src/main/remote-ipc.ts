@@ -7,13 +7,14 @@ import { askAnswersSchema, requestCallSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult } from '../shared/remote'
+import { DEVICE_TRANSPORT, REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult } from '../shared/remote'
 import { coreConnection } from './core-process'
 import { listBranches, switchBranch } from './project-branch'
 import { parse } from './ipc-input'
 import { onSessionEvent } from './session-events'
 import { settlePermission } from './session-ipc'
-import { RemoteService } from './remote/service'
+import { DISCOVERY_PORT } from './remote/lan-discovery'
+import { type LanOptions, RemoteService } from './remote/service'
 import { testOverridesAllowed } from './test-overrides'
 import { deviceNameSchema, projectGrantSchema } from './remote/state'
 
@@ -97,6 +98,23 @@ function relayUrl(): string {
   return override || `wss://${RELAY_HOST}${RELAY_PATH}`
 }
 
+// 局域网版的监听和发现。测试（只在测试数据目录里认）：DIFFRA_LAN_BIND 换成 127.0.0.1 不惊动防火墙，DIFFRA_LAN_DISCOVERY_PORT 各用各的端口，
+// DIFFRA_LAN_ANNOUNCE_TO（「地址:端口」逗号分隔）单独发给另一个实例，DIFFRA_LAN_BROADCAST=0 不发组播、广播
+function lanOptions(): LanOptions {
+  const env = testOverridesAllowed() ? process.env : {}
+  const discoveryPort = Number(env.DIFFRA_LAN_DISCOVERY_PORT)
+  return {
+    bind: env.DIFFRA_LAN_BIND || '0.0.0.0',
+    port: 0,
+    discoveryPort: Number.isInteger(discoveryPort) && discoveryPort > 0 ? discoveryPort : DISCOVERY_PORT,
+    discoveryTargets: (env.DIFFRA_LAN_ANNOUNCE_TO ?? '').split(',').flatMap((item) => {
+      const match = /^([\d.]+):(\d+)$/.exec(item.trim())
+      return match ? [{ address: match[1]!, port: Number(match[2]) }] : []
+    }),
+    broadcast: env.DIFFRA_LAN_BROADCAST !== '0',
+  }
+}
+
 function inviteTtlMs(): number {
   const override = testOverridesAllowed() ? Number(process.env.DIFFRA_INVITE_TTL_SECONDS) : NaN
   return (Number.isFinite(override) && override > 0 ? override : INVITE_TTL_SECONDS) * 1000
@@ -106,6 +124,8 @@ export function registerRemoteIpc(userDataDir: string): void {
   // 设备连接已下线：不启动中转连接，也不注册任何远程 IPC 接口。恢复时见 shared/remote.ts 的开关
   if (!REMOTE_DEVICE_CONNECTION_ENABLED) return
   const opening = RemoteService.open(userDataDir, {
+    transport: DEVICE_TRANSPORT,
+    lan: lanOptions(),
     relayUrl: relayUrl(),
     appVersion: app.getVersion(),
     inviteTtlMs: inviteTtlMs(),
@@ -145,7 +165,12 @@ export function registerRemoteIpc(userDataDir: string): void {
     const name = parse(z.string().trim().max(60).nullable(), rawName)
     return (await service()).addDevice(parse(z.string().max(200), rawInvite), name || null)
   })
+  ipcMain.handle(IPC_CHANNELS.remoteAddLanDevice, async (_event, rawId: unknown, rawCode: unknown, rawName: unknown) => {
+    const name = parse(z.string().trim().max(60).nullable(), rawName)
+    return (await service()).addLanDevice(parse(deviceId, rawId), parse(z.string().max(20), rawCode), name || null)
+  })
   ipcMain.handle(IPC_CHANNELS.remoteCancelAdd, async () => (await service()).cancelAdd())
+  ipcMain.handle(IPC_CHANNELS.remoteBrowse, async (_event, raw: unknown) => (await service()).browse(parse(z.boolean(), raw)))
   ipcMain.handle(IPC_CHANNELS.remoteRemovePeer, async (_event, rawId: unknown) => (await service()).removePeer(parse(deviceId, rawId)))
   ipcMain.handle(IPC_CHANNELS.remoteResetIdentity, async () => (await service()).resetIdentity())
   ipcMain.handle(IPC_CHANNELS.remoteAudit, async () => (await service()).recentAudit())

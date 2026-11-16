@@ -4,7 +4,7 @@ import { REMOTE_PROLOGUE } from '@diffra/remote/messages'
 import { logRemote } from '../app-log'
 import { DIRECT, SecureChannel, withKind } from './channel'
 import type { DeviceIdentity } from './identity'
-import type { RelayClient } from './relay-client'
+import type { RemoteTransport } from './transport'
 
 // 配对之后的会话通道：两边都知道对方的长期公钥，用 Noise KK 握手，每次连接一把新的临时密钥。
 // 连接端（看对方的一方）发起；被连接端只认还被授权的设备，不认的明确回「拒绝」和原因（不沉默，否则连接端只能干等 10 秒，
@@ -23,7 +23,7 @@ export type OpenResult = { ok: true } | { ok: false; reason: OpenFailure }
 
 export interface LinksDeps {
   identity: DeviceIdentity
-  relay: RelayClient
+  relay: RemoteTransport
   // 本机是被连接端：这台设备现在还能看本机吗（总开关开着、在授权列表里），能的话给它配对时的长期公钥
   guestKey(deviceId: string): Buffer | null
   // 不能看本机时为什么

@@ -35,7 +35,7 @@ const REQUEST_TIMEOUT_MS = 30_000
 
 // 建不起通道时照实说原因
 const OPEN_FAILURES: Record<OpenFailure, string> = {
-  relay: '和中转服务断开了，或者对方刚掉线，正在重连',
+  relay: '连接断开了，或者对方刚掉线，正在重连',
   offline: '对方现在不在线，等对方上线后再试',
   timeout: '对方 10 秒没有回应：可能刚掉线，或者网络不好',
   handshake: '和对方的加密握手失败：对方可能重置过本机身份，要重新配对',
@@ -182,7 +182,7 @@ export class GuestSync {
       if (!this.deps.send(deviceId, { type: 'request', id, call })) {
         clearTimeout(timer)
         waiting.delete(id)
-        reject(new Error('和中转服务断开了'))
+        reject(new Error('连接断开了'))
       }
     })
     if (!schema) return value as T

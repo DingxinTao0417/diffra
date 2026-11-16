@@ -6,6 +6,7 @@ import { fingerprintOf, generateKeyPair, type KeyPair, keyPairOf } from '@diffra
 import { safeStorage } from 'electron'
 import { z } from 'zod'
 import { readJsonFile, writeJsonFileAtomic } from '../json-file'
+import { createLanCertificate, fingerprintOfPem, type LanCertificate } from './lan-tls'
 
 // 本机的设备身份：Ed25519 登录中转，X25519 做加密通道的长期密钥；设备 ID 由两把公钥算出来。
 // 私钥用 safeStorage（Windows 上是 DPAPI）加密后存在 remote/identity.json，系统加密不可用时不生成、不保存，和 API Key 一样
@@ -54,8 +55,25 @@ export async function createIdentity(dir: string): Promise<DeviceIdentity> {
   return identityOf(signingPrivate, noise)
 }
 
-export function deleteIdentity(dir: string): Promise<void> {
-  return rm(fileOf(dir), { force: true })
+export async function deleteIdentity(dir: string): Promise<void> {
+  await rm(fileOf(dir), { force: true })
+  await rm(certificateFileOf(dir), { force: true })
+}
+
+// 局域网版（v2）的 TLS 证书：私钥和设备密钥一样用 safeStorage 加密后存在 remote/tls.json；换设备密钥时一起换
+const certificateSchema = z.object({ version: z.literal(1), cert: z.string().min(1), key: z.string().min(1) })
+const certificateFileOf = (dir: string) => join(dir, 'tls.json')
+
+export async function loadOrCreateCertificate(dir: string, identity: DeviceIdentity): Promise<LanCertificate> {
+  const content = await readJsonFile(certificateFileOf(dir), certificateSchema)
+  if (content.state === 'loaded') {
+    const key = (await safeStorage.decryptStringAsync(Buffer.from(content.value.key, 'base64'))).result
+    return { cert: content.value.cert, key, fingerprint: fingerprintOfPem(content.value.cert) }
+  }
+  if (content.state === 'invalid') throw new Error(`证书文件无法解析：${certificateFileOf(dir)}`)
+  const certificate = createLanCertificate(`Diffra ${identity.deviceId.slice(0, 8)}`)
+  await writeJsonFileAtomic(certificateFileOf(dir), { version: 1, cert: certificate.cert, key: (await safeStorage.encryptStringAsync(certificate.key)).toString('base64') })
+  return certificate
 }
 
 function identityOf(signingPrivate: KeyObject, noise: KeyPair): DeviceIdentity {

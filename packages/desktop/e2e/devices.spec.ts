@@ -9,10 +9,11 @@ import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel, openModelCapabilities, openModelsPage } from './model-setup'
 import { exec, read, replaceLines, startScriptedModel } from './scripted-model'
 import { IPC_CHANNELS } from '../src/shared/ipc'
-import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../src/shared/remote'
+import { DEVICE_TRANSPORT, REMOTE_DEVICE_CONNECTION_ENABLED } from '../src/shared/remote'
 
 // 设备连接：两个开发版实例（各自的临时数据目录）经测试进程里起的本机中转配对。不连真实的 relay.diffra.dev
-test.skip(!REMOTE_DEVICE_CONNECTION_ENABLED, '设备连接已下线；恢复 REMOTE_DEVICE_CONNECTION_ENABLED 后再运行')
+// 这些是经中转（互联网）的用例；v2 起只做局域网（devices-lan.spec.ts），中转恢复（DEVICE_TRANSPORT 改回 relay）后再运行
+test.skip(!REMOTE_DEVICE_CONNECTION_ENABLED || DEVICE_TRANSPORT !== 'relay', '经中转的设备连接已下线；v2 的局域网版见 devices-lan.spec.ts')
 
 interface Device {
   app: ElectronApplication

@@ -247,6 +247,8 @@ export const IPC_CHANNELS = {
   remoteUpdateGrant: 'remote:update-grant',
   remoteRevoke: 'remote:revoke',
   remoteAddDevice: 'remote:add-device',
+  remoteAddLanDevice: 'remote:add-lan-device',
+  remoteBrowse: 'remote:browse',
   remoteCancelAdd: 'remote:cancel-add',
   remoteRemovePeer: 'remote:remove-peer',
   remoteResetIdentity: 'remote:reset-identity',
@@ -779,6 +781,10 @@ export interface DiffraApi {
   revokeRemoteDevice(deviceId: string): Promise<void>
   // 粘贴邀请串添加设备：对方点了允许或拒绝、或者出错才返回
   addRemoteDevice(invite: string, name: string | null): Promise<RemoteAddResult>
+  // 局域网版（v2）：在局域网里看到的设备上输入它的 6 位配对码
+  addRemoteLanDevice(deviceId: string, code: string, name: string | null): Promise<RemoteAddResult>
+  // 「添加设备」开着时找局域网里的设备
+  browseRemoteDevices(on: boolean): Promise<void>
   cancelAddRemoteDevice(): Promise<void>
   removeRemotePeer(deviceId: string): Promise<void>
   resetRemoteIdentity(): Promise<void>
