@@ -1,6 +1,7 @@
 import { access, readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import type { CheckDetection, DetectedCheck } from '../protocol.js'
+import { locateCommand } from '../external/spawn.js'
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun'
 
@@ -33,12 +34,14 @@ async function readText(path: string): Promise<string | null> {
   }
 }
 
-// 只读项目文件，不执行任何命令；识别结果要用户确认后才会保存成检查命令
-export async function detectChecks(cwd: string): Promise<CheckDetection> {
+// 只读项目文件，不执行任何命令；识别结果要用户确认后才会保存成检查命令。
+// env 只用来在 PATH 里找 mvn、gradle、java 这些命令在不在（测试时传进来）
+export async function detectChecks(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<CheckDetection> {
   const checks: DetectedCheck[] = []
   const notes: string[] = []
   await detectNode(cwd, checks, notes)
   await detectPython(cwd, checks, notes)
+  await detectJava(cwd, checks, notes, env)
   const chain = (items: DetectedCheck[]) => (items.length > 0 ? items.map((item) => item.command).join(' && ') : null)
   const quick = checks.filter((item) => item.kind !== 'test')
   const tests = checks.filter((item) => item.kind === 'test')
@@ -237,4 +240,65 @@ async function venvPython(cwd: string, venv: string): Promise<string | null> {
     if (await exists(join(cwd, relative))) return relative
   }
   return null
+}
+
+// ---------- Java（v2 的 Java 适配器）：Maven、Gradle ----------
+
+const GRADLE_FILES = ['build.gradle.kts', 'build.gradle', 'settings.gradle.kts', 'settings.gradle']
+
+// p3c-pmd（阿里巴巴 Java 开发手册的检查规则）不是必须的：项目没配时只说明怎么加，不拿它当检查命令，免得没装就一直失败
+const P3C_MAVEN_HINT =
+  '可选：p3c-pmd（阿里巴巴 Java 开发手册的规则）没有配置。要用的话在 pom.xml 的 maven-pmd-plugin 里加 com.alibaba.p3c:p3c-pmd 依赖和 rulesets/java/ali-*.xml 规则，再把 mvn pmd:check 加进检查命令；不用也行，项目自己的编译和测试照常检查'
+const P3C_GRADLE_HINT =
+  '可选：p3c-pmd（阿里巴巴 Java 开发手册的规则）没有配置。要用的话启用 Gradle 的 pmd 插件，在 dependencies 里加 pmd "com.alibaba.p3c:p3c-pmd:<版本>"、ruleSetFiles 指向 rulesets/java/ali-*.xml，再把 pmdMain 加进检查命令；不用也行，项目自己的编译和测试照常检查'
+
+async function detectJava(cwd: string, checks: DetectedCheck[], notes: string[], env: NodeJS.ProcessEnv): Promise<void> {
+  const pom = await readText(join(cwd, 'pom.xml'))
+  const gradleFiles = (await Promise.all(GRADLE_FILES.map(async (name) => ({ name, text: await readText(join(cwd, name)) })))).filter((item) => item.text !== null)
+  if (pom === null && gradleFiles.length === 0) return
+  if (!(await locateCommand('java', env)) && !env.JAVA_HOME) notes.push('没找到 java（JDK）：Maven、Gradle 跑不起来，检查命令会失败。装好 JDK 并加进 PATH，或者设置 JAVA_HOME')
+  const hasTests = (await exists(join(cwd, 'src', 'test'))) || (pom ?? gradleFiles.map((item) => item.text).join('\n')).match(/junit|testng|spock|assertj/i) !== null
+  if (pom !== null) {
+    if (gradleFiles.length > 0) notes.push('同时有 pom.xml 和 Gradle 配置，按 Maven 识别')
+    await detectMaven(cwd, pom, hasTests, checks, notes, env)
+    return
+  }
+  await detectGradle(cwd, gradleFiles.map((item) => item.text!).join('\n'), hasTests, checks, notes, env)
+}
+
+async function detectMaven(cwd: string, pom: string, hasTests: boolean, checks: DetectedCheck[], notes: string[], env: NodeJS.ProcessEnv): Promise<void> {
+  // 有 Maven Wrapper 就用它（版本跟着项目走）；检查命令在 Git Bash 里跑，mvnw 是 sh 脚本，Windows 上也能直接跑
+  const wrapper = await exists(join(cwd, 'mvnw'))
+  if (!wrapper && !(await locateCommand('mvn', env))) notes.push('没找到 mvn，项目里也没有 mvnw：装好 Maven，或者在项目里加 Maven Wrapper（mvn wrapper:wrapper）')
+  const mvn = `${wrapper ? './mvnw' : 'mvn'} -q -B`
+  const modules = [...pom.matchAll(/<module>\s*([^<\s]+)\s*<\/module>/g)].map((match) => match[1]!)
+  notes.push(modules.length > 0 ? `Maven 多模块项目：${modules.join('、')}` : 'Maven 项目：源码在 src/main/java，测试在 src/test/java')
+  checks.push({ kind: 'typecheck', command: `${mvn} -DskipTests test-compile`, source: 'pom.xml（Maven：编译主代码和测试代码）', script: null })
+  if (/maven-checkstyle-plugin/.test(pom)) checks.push({ kind: 'lint', command: `${mvn} checkstyle:check`, source: 'pom.xml 里配了 maven-checkstyle-plugin', script: null })
+  if (/maven-pmd-plugin/.test(pom)) {
+    const p3c = /p3c-pmd/.test(pom)
+    checks.push({ kind: 'lint', command: `${mvn} pmd:check`, source: p3c ? 'pom.xml 里配了 maven-pmd-plugin 和 p3c-pmd（阿里巴巴 Java 开发手册的规则）' : 'pom.xml 里配了 maven-pmd-plugin', script: null })
+    if (!p3c) notes.push(P3C_MAVEN_HINT)
+  } else notes.push(P3C_MAVEN_HINT)
+  if (hasTests) checks.push({ kind: 'test', command: `${mvn} test`, source: 'pom.xml（Maven：跑单元测试）', script: null })
+  else notes.push('没找到测试（src/test、JUnit、TestNG），没有选用 mvn test')
+}
+
+async function detectGradle(cwd: string, scripts: string, hasTests: boolean, checks: DetectedCheck[], notes: string[], env: NodeJS.ProcessEnv): Promise<void> {
+  const wrapper = await exists(join(cwd, 'gradlew'))
+  if (!wrapper && !(await locateCommand('gradle', env))) notes.push('没找到 gradle，项目里也没有 gradlew：装好 Gradle，或者在项目里加 Gradle Wrapper（gradle wrapper）')
+  const gradle = `${wrapper ? './gradlew' : 'gradle'} -q`
+  // settings.gradle 的 include 'a', 'b' 或 include("a", ":b")
+  const modules = [...scripts.matchAll(/^\s*include\s*\(?([^\n)]+)\)?/gm)].flatMap((match) => [...match[1]!.matchAll(/["']:?([^"']+)["']/g)].map((item) => item[1]!))
+  notes.push(modules.length > 0 ? `Gradle 多模块项目：${modules.join('、')}` : 'Gradle 项目：源码在 src/main/java，测试在 src/test/java')
+  checks.push({ kind: 'typecheck', command: `${gradle} testClasses`, source: 'Gradle 配置（编译主代码和测试代码）', script: null })
+  const plugin = (name: string) => new RegExp(`id\\s*\\(?\\s*["']${name}["']|apply\\s+plugin:\\s*["']${name}["']|^\\s*${name}\\s*$`, 'm').test(scripts)
+  if (plugin('checkstyle')) checks.push({ kind: 'lint', command: `${gradle} checkstyleMain`, source: 'Gradle 配置里启用了 checkstyle 插件', script: null })
+  if (plugin('pmd')) {
+    const p3c = /p3c-pmd/.test(scripts)
+    checks.push({ kind: 'lint', command: `${gradle} pmdMain`, source: p3c ? 'Gradle 配置里启用了 pmd 插件和 p3c-pmd（阿里巴巴 Java 开发手册的规则）' : 'Gradle 配置里启用了 pmd 插件', script: null })
+    if (!p3c) notes.push(P3C_GRADLE_HINT)
+  } else notes.push(P3C_GRADLE_HINT)
+  if (hasTests) checks.push({ kind: 'test', command: `${gradle} test`, source: 'Gradle 配置（跑单元测试）', script: null })
+  else notes.push('没找到测试（src/test、JUnit、TestNG），没有选用 gradle test')
 }

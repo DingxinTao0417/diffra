@@ -7,7 +7,7 @@ import { delimiter, dirname, extname, isAbsolute, join } from 'node:path'
 // 命令行智能体常见的安装位置：图形界面启动的 Diffra 拿到的 PATH 可能不全（Mac 从访达打开时没有 shell 里加的路径），
 // npm 全局目录、Claude Code 的原生安装目录、Homebrew 这些不在 PATH 里时也找一遍
 export function commonBinDirs(env: NodeJS.ProcessEnv = process.env): string[] {
-  const home = homedir()
+  const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir()
   if (process.platform === 'win32') {
     const appData = env.APPDATA ?? join(home, 'AppData', 'Roaming')
     const localAppData = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')

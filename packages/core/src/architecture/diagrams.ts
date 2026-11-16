@@ -9,6 +9,11 @@ import {
   type DiagramGroup,
   type DiagramKind,
   type DiagramLayer,
+  JAVA_LAYER_NAMES,
+  JAVA_LAYER_ORDER,
+  type JavaLayout,
+  javaLayout,
+  type JavaPackageView,
   pathMatcher,
   stronglyConnected,
 } from './model.js'
@@ -73,9 +78,65 @@ export function rankNodes(count: number, edges: Iterable<[number, number]>): num
   return Array.from({ length: count }, (_, at) => depth(group[at]!))
 }
 
+// ---------- 应用架构（Java，v2 的 Java 适配器）：按包名和类上的注解分成接口层、业务层、数据访问层、领域模型，
+// 配置、通用、测试放竖栏；包是方块。分得出层的包不到两个时（按功能分包、没有注解）退回下面按目录排的画法 ----------
+
+function javaApplication(analysis: ArchitectureAnalysis, layout: JavaLayout): BlockDiagram | null {
+  const main = layout.packages.filter((item) => !item.test)
+  if (main.filter((item) => item.layer && JAVA_LAYER_ORDER.includes(item.layer)).length < 2) return null
+  const diagram = emptyDiagram('application', analysis)
+  const ids = new IdMaker()
+  // 一个包的文件在它自己的目录里（子包是别的方块），多模块时可能在几个模块各有一份
+  const pathsOf = (item: JavaPackageView) => [...new Set(item.files.map((index) => analysis.files[index]!.module))].sort().map((dir) => `${dir}/*`)
+  const moduleOf = (item: JavaPackageView) => {
+    const dir = analysis.files[item.files[0]!]!.package
+    return analysis.packages.find((info) => info.dir === dir)?.name ?? (dir || '根目录')
+  }
+  const modules = new Set(main.map(moduleOf))
+  const blockOf = (item: JavaPackageView) => block(ids, item.short, 'code', { paths: pathsOf(item), description: `${item.name}${item.by === 'annotation' ? '（按类上的注解判断的层）' : ''}` })
+  // 分组按模块（Maven、Gradle 的子项目）；只有一个模块时就是项目名
+  const groupsOf = (items: JavaPackageView[]): DiagramGroup[] => {
+    if (modules.size <= 1) return [{ id: ids.next('group'), name: [...modules][0] ?? '', blocks: items.map(blockOf), pinned: false }]
+    return [...modules].flatMap((module) => {
+      const own = items.filter((item) => moduleOf(item) === module)
+      return own.length > 0 ? [{ id: ids.next('group'), name: module, blocks: own.map(blockOf), pinned: false }] : []
+    })
+  }
+  const bands: Array<{ name: string; description: string; items: JavaPackageView[] }> = [
+    // 分不出层的（常见的是启动类所在的根包）放在最上面
+    { name: '其他', description: '按包名和注解分不出层的包', items: main.filter((item) => item.layer === null) },
+    ...JAVA_LAYER_ORDER.map((layer) => ({ name: JAVA_LAYER_NAMES[layer], description: '', items: main.filter((item) => item.layer === layer) })),
+  ]
+  for (const band of bands) {
+    if (band.items.length === 0) continue
+    diagram.layers.push({ id: ids.next('layer'), name: band.name, description: band.description, groups: groupsOf(band.items), pinned: false })
+  }
+  const top = diagram.layers[0]!.id
+  const bottom = diagram.layers.at(-1)!.id
+  for (const layer of ['config', 'common'] as const) {
+    const items = main.filter((item) => item.layer === layer)
+    if (items.length > 0) diagram.sides.push({ id: ids.next('side'), name: JAVA_LAYER_NAMES[layer], description: '', from: top, to: bottom, blocks: items.map(blockOf), pinned: false })
+  }
+  const tests = layout.packages.filter((item) => item.test)
+  if (tests.length > 0) diagram.sides.push({ id: ids.next('side'), name: '测试', description: '', from: top, to: bottom, blocks: [block(ids, '测试代码', 'code', { paths: [...new Set(tests.flatMap(pathsOf))] })], pinned: false })
+  // 上下两层之间写依赖了几处
+  const layerOfPackage = new Map(main.map((item) => [item.name, bands.findIndex((band) => band.items.includes(item))]))
+  const shown = bands.map((band, at) => (band.items.length > 0 ? at : -1)).filter((at) => at >= 0)
+  for (let at = 0; at + 1 < diagram.layers.length; at++) {
+    const upper = shown[at]!
+    const lower = shown[at + 1]!
+    const count = main.filter((item) => layerOfPackage.get(item.name) === upper).reduce((sum, item) => sum + item.dependsOn.filter((target) => layerOfPackage.get(target.name) === lower).reduce((total, target) => total + target.count, 0), 0)
+    diagram.connectors.push({ from: diagram.layers[at]!.id, to: diagram.layers[at + 1]!.id, label: count > 0 ? `${count} 处引用` : '' })
+  }
+  return diagram
+}
+
 // ---------- 应用架构：顶层的包或目录按依赖分层，下一级目录是方块 ----------
 
 function staticApplication(analysis: ArchitectureAnalysis): BlockDiagram {
+  const java = javaLayout(analysis)
+  const javaDiagram = java ? javaApplication(analysis, java) : null
+  if (javaDiagram) return javaDiagram
   const diagram = emptyDiagram('application', analysis)
   const ids = new IdMaker()
   const groups = topLevelGroups(analysis)

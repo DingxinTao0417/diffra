@@ -155,6 +155,87 @@ describe('静态检查：Python', () => {
 // 测试用的假密钥在运行时拼出来，仓库里不出现完整的密钥格式，免得被代码托管平台的密钥扫描拦下
 const fakeKey = (prefix: string, body: string) => `${prefix}${body}`
 
+describe('静态检查：Java（v2 的 Java 适配器）', () => {
+  test('该报的都报，安全写法不报', async () => {
+    const added: AddedLines = new Map()
+    write(added, 'src/main/java/demo/UserDao.java', [
+      'package demo;',
+      'import org.apache.http.conn.ssl.NoopHostnameVerifier;',
+      'class UserDao {',
+      '  void find(String id, String name) throws Exception {',
+      '    stmt.executeQuery("SELECT * FROM users WHERE id = " + id);',
+      '    jdbc.queryForList(String.format("select * from t where name = \'%s\'", name));',
+      '    PreparedStatement ok = conn.prepareStatement("SELECT * FROM users WHERE id = ?");',
+      '    log.info("select " + id + " from cache");',
+      '    Runtime.getRuntime().exec("git log " + name);',
+      '    Runtime.getRuntime().exec(new String[] {"git", "log", name});',
+      '    new ProcessBuilder("sh", "-c", "ls " + name).start();',
+      '    new ProcessBuilder("ls", name).start();',
+      '    Object o = new ObjectInputStream(input).readObject();',
+      '    engine.eval(script);',
+      '    engine.eval("1 + 1");',
+      '    conn.setHostnameVerifier((host, session) -> true);',
+      '    HttpClients.custom().setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE);',
+      '    response.getWriter().write("<p>" + name + "</p>");',
+      '    response.getWriter().write("ok");',
+      '  }',
+      '  public void checkServerTrusted(X509Certificate[] chain, String authType) {}',
+      '  String hashPassword(String password) throws Exception {',
+      '    return hex(MessageDigest.getInstance("MD5").digest(password.getBytes()));',
+      '  }',
+      '  String checksum(byte[] data) throws Exception {',
+      '    return hex(MessageDigest.getInstance("MD5").digest(data));',
+      '  }',
+      '  String newToken() {',
+      '    return Long.toHexString(new Random().nextLong());',
+      '  }',
+      '  int dice() { return new Random().nextInt(6); }',
+      '  Document parse(InputStream in) throws Exception {',
+      '    return DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(in);',
+      '  }',
+      '  Document parseSafely(InputStream in) throws Exception {',
+      '    DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();',
+      '    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);',
+      '    return factory.newDocumentBuilder().parse(in);',
+      '  }',
+      '}',
+    ])
+    expect(summary(await staticScan(project, added))).toEqual([
+      '5 SEC-INJ-1 high',
+      '6 SEC-INJ-1 high',
+      '9 SEC-INJ-2 high',
+      '11 SEC-INJ-2 high',
+      '13 SEC-INJ-6 high',
+      '14 SEC-INJ-2 high',
+      '16 SEC-KEY-4 high',
+      '17 SEC-KEY-4 high',
+      '18 SEC-OUT-1 medium',
+      '21 SEC-KEY-4 high',
+      '23 SEC-KEY-2 medium',
+      '29 SEC-KEY-3 medium',
+      '33 SEC-INJ-6 medium',
+    ])
+  })
+
+  test('只看本轮新增的行；放行注释照样认', async () => {
+    const added: AddedLines = new Map()
+    write(
+      added,
+      'src/main/java/demo/Legacy.java',
+      [
+        'class Legacy {',
+        '  void a(String id) throws Exception { stmt.executeQuery("select * from t where id = " + id); }',
+        '  // diffra-allow SEC-INJ-6: 只读本机自己写的缓存文件',
+        '  Object b() throws Exception { return new ObjectInputStream(cache).readObject(); }',
+        '}',
+      ],
+      [3, 4],
+    )
+    const { findings } = await staticScan(project, added)
+    expect(findings.map((item) => [item.line, item.ruleId, item.suppressed])).toEqual([[4, 'SEC-INJ-6', '只读本机自己写的缓存文件']])
+  })
+})
+
 describe('硬写的密钥', () => {
   test('格式明确的密钥高危，像密码的固定值提醒，示例值和锁文件不报', async () => {
     const added: AddedLines = new Map()

@@ -6,8 +6,8 @@ import java from '@ast-grep/lang-java'
 import python from '@ast-grep/lang-python'
 import rust from '@ast-grep/lang-rust'
 
-// ast-grep 能解析的语言：内置的 TS/JS，加上动态加载的 Python。静态安全检查和代码大纲共用
-export type Language = Lang | 'python'
+// ast-grep 能解析的语言：内置的 TS/JS，加上动态加载的 Python、Java（v2 的 Java 适配器）。静态安全检查用
+export type Language = Lang | 'python' | 'java'
 
 export type DynamicLanguage = 'python' | 'go' | 'rust' | 'java'
 
@@ -78,6 +78,8 @@ export function languageOf(path: string): Language | 'vue' | null {
       return 'vue'
     case '.py':
       return pythonAvailable() ? 'python' : null
+    case '.java':
+      return dynamicLanguageAvailable('java') ? 'java' : null
     default:
       return null
   }

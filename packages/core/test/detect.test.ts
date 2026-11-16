@@ -85,6 +85,71 @@ describe('识别检查命令', () => {
   })
 })
 
+describe('识别检查命令：Java（v2 的 Java 适配器）', () => {
+  // 不依赖本机装没装 JDK、Maven、Gradle：PATH 指到一个造出来的目录
+  function fakeBin(...names: string[]): NodeJS.ProcessEnv {
+    const bin = mkdtempSync(join(tmpdir(), 'diffra-detect-bin-'))
+    for (const name of names) {
+      const file = join(bin, process.platform === 'win32' ? `${name}.cmd` : name)
+      writeFileSync(file, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 })
+    }
+    // 常见安装位置也指到这里，不受本机用户目录里装的东西影响
+    return { PATH: bin, PATHEXT: '.CMD;.EXE', HOME: bin, USERPROFILE: bin, APPDATA: bin, LOCALAPPDATA: bin, ProgramFiles: bin }
+  }
+
+  test('Maven：有 mvnw 用 mvnw；编译、配了的 PMD（带 p3c）和测试都选上；多模块写进说明', async () => {
+    write('mvnw', '#!/bin/sh\n')
+    write(
+      'pom.xml',
+      `<project><modules><module>shop-api</module><module>shop-service</module></modules>
+      <build><plugins><plugin><artifactId>maven-pmd-plugin</artifactId><dependencies><dependency><groupId>com.alibaba.p3c</groupId><artifactId>p3c-pmd</artifactId></dependency></dependencies></plugin></plugins></build>
+      <dependencies><dependency><artifactId>junit-jupiter</artifactId></dependency></dependencies></project>`,
+    )
+    const result = await detectChecks(project, fakeBin('java'))
+    expect(result.checks.map((item) => [item.kind, item.command])).toEqual([
+      ['typecheck', './mvnw -q -B -DskipTests test-compile'],
+      ['lint', './mvnw -q -B pmd:check'],
+      ['test', './mvnw -q -B test'],
+    ])
+    expect(result.checks[1]!.source).toContain('p3c-pmd')
+    expect(result.afterEdit).toBe('./mvnw -q -B -DskipTests test-compile && ./mvnw -q -B pmd:check')
+    expect(result.notes).toContain('Maven 多模块项目：shop-api、shop-service')
+    expect(result.notes.join('\n')).not.toContain('p3c-pmd（阿里巴巴 Java 开发手册的规则）没有配置')
+  })
+
+  test('Maven 没配 p3c：不拿它当检查，说明怎么加；没装 mvn、java 时说明，不报错', async () => {
+    write('pom.xml', '<project><artifactId>demo</artifactId></project>')
+    write('src/test/java/demo/AppTest.java', 'class AppTest {}')
+    const result = await detectChecks(project, fakeBin())
+    expect(result.checks.map((item) => item.command)).toEqual(['mvn -q -B -DskipTests test-compile', 'mvn -q -B test'])
+    const notes = result.notes.join('\n')
+    expect(notes).toContain('没找到 java（JDK）')
+    expect(notes).toContain('没找到 mvn，项目里也没有 mvnw')
+    expect(notes).toContain('可选：p3c-pmd')
+  })
+
+  test('Gradle（Kotlin DSL）多模块：用 gradlew，checkstyle 插件选上，没有测试时不选 test', async () => {
+    write('gradlew', '#!/bin/sh\n')
+    write('settings.gradle.kts', 'rootProject.name = "shop"\ninclude("api", ":service")\n')
+    write('build.gradle.kts', 'plugins {\n  java\n  id("checkstyle")\n}\n')
+    const result = await detectChecks(project, fakeBin('java'))
+    expect(result.checks.map((item) => [item.kind, item.command])).toEqual([
+      ['typecheck', './gradlew -q testClasses'],
+      ['lint', './gradlew -q checkstyleMain'],
+    ])
+    expect(result.notes).toContain('Gradle 多模块项目：api、service')
+    expect(result.notes.join('\n')).toContain('没有选用 gradle test')
+    expect(result.notes.join('\n')).toContain('可选：p3c-pmd')
+  })
+
+  test('Groovy 的 apply plugin 写法也认；配了 p3c 的 pmd 插件选上 pmdMain', async () => {
+    write('build.gradle', "apply plugin: 'java'\napply plugin: 'pmd'\ndependencies {\n  pmd 'com.alibaba.p3c:p3c-pmd:2.1.1'\n  testImplementation 'junit:junit:4.13'\n}\n")
+    const result = await detectChecks(project, fakeBin('java', 'gradle'))
+    expect(result.checks.map((item) => item.command)).toEqual(['gradle -q testClasses', 'gradle -q pmdMain', 'gradle -q test'])
+    expect(result.notes.join('\n')).not.toContain('没找到')
+  })
+})
+
 describe('识别前端项目', () => {
   test('有组件、页面模板或样式文件就算，扩展名不分大小写', () => {
     expect(hasFrontend(['src/App.tsx'])).toBe(true)

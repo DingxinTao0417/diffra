@@ -220,3 +220,120 @@ export const PYTHON_RULES: StaticRule[] = [
     },
   },
 ]
+
+// Java（v2 的 Java 适配器）：字符串和变量相加，或者 String.format 拼出来的
+const JAVA_DYNAMIC_STRING: Rule = {
+  any: [
+    { kind: 'binary_expression', has: { kind: 'string_literal', stopBy: 'end' } },
+    { kind: 'method_invocation', regex: '^String\\.format\\(' },
+  ],
+}
+
+const javaName = (name: string): Relation => ({ field: 'name', regex: `^(${name})$` })
+const javaFirstArg = (rule: Rule): Relation => ({ field: 'arguments', has: { nthChild: 1, ...rule } })
+// 方法体里一句实际的代码都没有（只有空的花括号或注释）
+const JAVA_STATEMENTS = ['expression_statement', 'throw_statement', 'if_statement', 'local_variable_declaration', 'return_statement', 'try_statement', 'for_statement', 'enhanced_for_statement', 'while_statement', 'switch_expression']
+
+export const JAVA_RULES: StaticRule[] = [
+  {
+    ruleId: 'SEC-INJ-1',
+    severity: 'high',
+    message: 'SQL 语句里拼接了变量，改用 PreparedStatement 的 ? 占位符或 ORM 的参数绑定',
+    rule: {
+      kind: 'method_invocation',
+      all: [
+        { has: javaName('executeQuery|executeUpdate|execute|executeLargeUpdate|addBatch|prepareStatement|prepareCall|createQuery|createNativeQuery|createSQLQuery|query|queryForObject|queryForList|queryForMap|update|batchUpdate') },
+        { has: javaFirstArg({ regex: SQL_TEXT, ...JAVA_DYNAMIC_STRING }) },
+      ],
+    },
+  },
+  {
+    ruleId: 'SEC-INJ-2',
+    severity: 'high',
+    message: '执行命令时拼接了变量，改用 ProcessBuilder 逐个传参数，不经过 shell',
+    rule: {
+      any: [
+        { kind: 'method_invocation', all: [{ has: javaName('exec') }, { has: { field: 'object', regex: 'getRuntime\\(\\)' } }, { has: javaFirstArg(JAVA_DYNAMIC_STRING) }] },
+        {
+          kind: 'object_creation_expression',
+          all: [
+            { has: { field: 'type', regex: '^ProcessBuilder$' } },
+            { has: { field: 'arguments', has: { kind: 'string_literal', regex: '^"(-c|/c|/C)"$' } } },
+            { has: { field: 'arguments', has: JAVA_DYNAMIC_STRING } },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    ruleId: 'SEC-INJ-2',
+    severity: 'high',
+    message: '脚本引擎执行了动态拼出来的代码，换成不执行代码的写法',
+    rule: { kind: 'method_invocation', all: [{ has: javaName('eval') }, { has: { field: 'object', regex: '(?i)engine' } }, { not: { has: javaFirstArg({ kind: 'string_literal' }) } }] },
+  },
+  {
+    ruleId: 'SEC-INJ-6',
+    severity: 'high',
+    message: 'ObjectInputStream、XMLDecoder 反序列化可能来自外部的数据，换成 JSON 这类只含数据的格式，或者加类型白名单',
+    rule: { kind: 'object_creation_expression', has: { field: 'type', regex: '^(ObjectInputStream|XMLDecoder)$' } },
+  },
+  {
+    ruleId: 'SEC-INJ-6',
+    severity: 'medium',
+    message: 'SnakeYAML 默认的 load 能构造任意类，用 SafeConstructor 或换成只读数据的方式',
+    rule: { kind: 'method_invocation', all: [{ has: javaName('load|loadAll|loadAs') }, { has: { field: 'object', regex: '(?i)yaml' } }] },
+  },
+  {
+    ruleId: 'SEC-INJ-6',
+    severity: 'medium',
+    message: '解析 XML 没关掉外部实体（XXE），用 setFeature 禁用 DOCTYPE 或外部实体',
+    rule: {
+      kind: 'method_invocation',
+      regex: '^(DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|TransformerFactory|SchemaFactory)\\.newInstance\\(',
+      inside: { kind: 'method_declaration', stopBy: 'end', not: { has: { regex: 'setFeature|ACCESS_EXTERNAL|setExpandEntityReferences|SUPPORT_DTD|IS_SUPPORTING_EXTERNAL_ENTITIES', stopBy: 'end' } } },
+    },
+  },
+  {
+    ruleId: 'SEC-KEY-4',
+    severity: 'high',
+    message: '关闭了 TLS 证书或主机名校验，去掉信任全部证书、跳过主机名校验的写法',
+    rule: {
+      any: [
+        { kind: 'method_declaration', all: [{ has: javaName('checkServerTrusted') }, { has: { field: 'body', kind: 'block', not: { has: { any: JAVA_STATEMENTS.map((kind) => ({ kind })) } } } }] },
+        { kind: 'lambda_expression', has: { field: 'body', kind: 'true' }, inside: { kind: 'method_invocation', has: javaName('setHostnameVerifier|setDefaultHostnameVerifier|hostnameVerifier'), stopBy: 'end' } },
+        { kind: 'identifier', regex: '^(NoopHostnameVerifier|ALLOW_ALL_HOSTNAME_VERIFIER|TrustAllStrategy)$', not: { inside: { kind: 'import_declaration', stopBy: 'end' } } },
+      ],
+    },
+  },
+  {
+    ruleId: 'SEC-KEY-2',
+    severity: 'medium',
+    message: '用 MD5 或 SHA-1 处理密码，改用 BCrypt、SCrypt 或 Argon2',
+    rule: { kind: 'method_invocation', regex: '(?i)getInstance\\(\\s*"(MD5|SHA-?1)"', inside: { kind: 'method_declaration', regex: PASSWORD_TEXT, stopBy: 'end' } },
+  },
+  {
+    ruleId: 'SEC-KEY-3',
+    severity: 'medium',
+    message: '用 Random、Math.random 生成令牌、密钥这类值，改用 SecureRandom',
+    rule: {
+      any: [
+        { kind: 'object_creation_expression', has: { field: 'type', regex: '^Random$' } },
+        { kind: 'method_invocation', regex: '^Math\\.random\\(' },
+      ],
+      inside: {
+        any: [
+          { kind: 'variable_declarator', has: { field: 'name', regex: SECRET_NAME } },
+          { kind: 'assignment_expression', has: { field: 'left', regex: SECRET_NAME } },
+          { kind: 'method_declaration', has: { field: 'name', regex: SECRET_NAME } },
+        ],
+        stopBy: 'end',
+      },
+    },
+  },
+  {
+    ruleId: 'SEC-OUT-1',
+    severity: 'medium',
+    message: '把拼接的内容直接写进响应，确认外部数据已经按 HTML 转义',
+    rule: { kind: 'method_invocation', all: [{ has: javaName('write|print|println|append') }, { has: { field: 'object', regex: 'getWriter\\(\\)' } }, { has: javaFirstArg(JAVA_DYNAMIC_STRING) }] },
+  },
+]

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Lang, parse, type SgRoot } from '@ast-grep/napi'
 import { type Language, languageOf, vueScripts } from '../syntax.js'
-import { JS_RULES, JSX_RULES, PYTHON_RULES, type StaticRule } from './rules.js'
+import { JAVA_RULES, JS_RULES, JSX_RULES, PYTHON_RULES, type StaticRule } from './rules.js'
 import { scanSecrets } from './secrets.js'
 import type { AddedLines, SecurityFinding } from './types.js'
 
@@ -19,6 +19,7 @@ export interface StaticScanNotes {
 
 function rulesFor(language: Language): StaticRule[] {
   if (language === 'python') return PYTHON_RULES
+  if (language === 'java') return JAVA_RULES
   return language === Lang.TypeScript ? JS_RULES : [...JS_RULES, ...JSX_RULES]
 }
 

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { BookOpen, CircleAlert, Globe, LoaderCircle, LogIn, Sparkles } from 'lucide-react'
+import { JAVA_LAYER_NAMES, JAVA_LAYER_ORDER, javaLayout } from '@diffra/core/architecture'
+import { BookOpen, CircleAlert, Globe, Layers, LoaderCircle, LogIn, Sparkles } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatTime } from '@/lib/format'
@@ -16,6 +17,8 @@ export function OverviewView() {
   const hasSummary = Boolean(interpretation?.summary)
   const outdated = Boolean(interpretation?.generatedAt && interpretation.fingerprint !== analysis.fingerprint)
   const externals = useMemo(() => analysis.externals.filter((item) => !item.builtin), [analysis])
+  // Java 为主的项目（v2 的 Java 适配器）：按包名和注解判断的分层，和下层反过来依赖上层的地方
+  const java = useMemo(() => javaLayout(analysis), [analysis])
   const entries = interpretation?.entryPoints.length ? interpretation.entryPoints : analysis.files.filter((file) => file.entry).map((file) => ({ path: file.path, description: '' }))
   const focusPath = (path: string) => {
     const file = index.file(path)
@@ -120,6 +123,54 @@ export function OverviewView() {
             </section>
           )}
         </div>
+
+        {java && (
+          <section className="space-y-2" data-testid="java-layers">
+            <h2 className="flex items-center gap-1.5 text-sm font-bold">
+              <Layers className="size-4 text-muted-foreground" />
+              Java 分层
+              <span className="text-xs font-normal text-muted-foreground">按包名和类上的注解判断{java.prefix ? `，包名省略了 ${java.prefix}` : ''}</span>
+            </h2>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[...JAVA_LAYER_ORDER, 'config' as const, 'common' as const].map((layer) => {
+                const packages = java.packages.filter((item) => !item.test && item.layer === layer)
+                if (packages.length === 0) return null
+                return (
+                  <div key={layer} className="rounded-lg border p-3">
+                    <div className="text-xs font-bold">{JAVA_LAYER_NAMES[layer]}</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {packages.map((item) => (
+                        <button key={item.name} type="button" title={`${item.name}${item.by === 'annotation' ? '（按类上的注解判断）' : ''}`} className="rounded-md bg-muted/60 px-1.5 py-0.5 font-mono text-xs hover:bg-accent" onClick={() => focusPath(analysis.files[item.files[0]!]!.module)}>
+                          {item.short}
+                          <span className="ml-1 text-muted-foreground">{item.files.length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {java.violations.length === 0 ? (
+              <p className="text-xs text-muted-foreground">没有下层反过来依赖上层的地方</p>
+            ) : (
+              <ul className="space-y-1.5" data-testid="java-layer-violations">
+                {java.violations.map((violation) => (
+                  <li key={`${violation.from}>${violation.to}`} className="rounded-md bg-warning-soft px-3 py-2 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <CircleAlert className="size-3.5 shrink-0 text-warning" />
+                      {violation.message}
+                    </div>
+                    {violation.edges.map((edge) => (
+                      <button key={`${edge.file}:${edge.line}`} type="button" className="mt-0.5 block truncate pl-5 text-left font-mono text-muted-foreground hover:text-foreground" onClick={() => focusPath(edge.file)}>
+                        {edge.file}:{edge.line}
+                      </button>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         {interpretation && interpretation.externalSystems.length > 0 && (
           <section className="space-y-2">

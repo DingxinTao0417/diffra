@@ -443,6 +443,24 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 它的 token 用量不进用量统计（ACP 没有标准的用量数字）；任务互通（`task_create`）建的仍是 Diffra 自己的任务；远程设备连接的远程任务页不区分外接智能体。
 - 验证：core `test/external.test.ts` 20 个用例（假 ACP 服务端 `test/fixtures/fake-acp-agent.mjs`，不依赖 SDK）：检测的五种结果、`.cmd` 启动和参数转义、常见安装位置、一问一答、改文件和撤销、确认（含完全放行）、停止（含不理停止的）、等确认时停止、很久没输出、中途崩溃后重起并接上会话、重启 core 后打开旧任务、不支持接上时的提示、没登录、智能体被删、步骤卡片和去掉 `_meta.diffra`、不支持的操作。e2e `external-agents.spec.ts`：设置里检测出没装、版本不对、可用，添加（环境变量值不落明文）、编辑、删除；不配 Diffra 模型用它建任务，对话、确认、改文件、停止、很久没输出、崩溃、任务监控、重启应用后打开旧任务接上会话、智能体删了再发消息。手动确认：在登录过的机器上添加 Claude Code、Codex 预设，检测、跑一个改文件的任务、停止一次。
 
+## Java 适配器（v2 · M3）
+
+- 检查命令（`project/detect.ts` 的 `detectJava`，只读项目文件、不运行命令，和别的语言一样要用户在项目设置里确认）：
+  - 有 `pom.xml` 按 Maven，否则有 `build.gradle(.kts)`、`settings.gradle(.kts)` 按 Gradle；两样都有时按 Maven 并说明。项目里有 `mvnw`、`gradlew` 就用（检查命令在 Git Bash 里跑，wrapper 是 sh 脚本，Windows 上也能跑），没有就用 `mvn`、`gradle`。
+  - 快速检查是编译主代码和测试代码（`mvn -q -B -DskipTests test-compile`、`gradle -q testClasses`）；配了 checkstyle、PMD 插件的加上 `checkstyle:check`、`pmd:check`（Gradle 是 `checkstyleMain`、`pmdMain`）；有测试（`src/test` 或依赖里有 JUnit、TestNG）时完成检查加 `test`。
+  - p3c-pmd（阿里巴巴 Java 开发手册的规则）是可选的：项目的 PMD 配置里用了它就跟着 `pmd:check` / `pmdMain` 跑，来源里写明；没配的不拿它当检查命令（没装就会一直失败），说明里写怎么在 Maven、Gradle 里加，不加也不影响编译和测试。不去找本机的 PMD 命令行：p3c 规则要它的 jar 在 PMD 的类路径上，命令行版拼不对就只会报错。
+  - 本机没装 JDK（PATH 里没有 java，也没有 JAVA_HOME）、没装 mvn 又没有 mvnw 时在说明里写清楚，不报错；多模块写出模块名（Maven 的 `<modules>`、Gradle 的 `include`）。
+- 规范审查：本来就按扩展名认出 `.java`、选内置的 Java 规则包（《Java 开发手册（黄山版）》改写），v2 补了测试确认。
+- 静态检查（`security/rules.ts` 的 `JAVA_RULES`，ast-grep 的 Java 语法，`syntax.ts` 的 `languageOf` 认 `.java`）：SQL 拼接（Statement、JdbcTemplate、JPA 的 createQuery 这类，字符串相加或 `String.format`）、命令拼接（`Runtime.exec`、`ProcessBuilder("sh", "-c", …)`）、脚本引擎执行动态代码、`ObjectInputStream` / `XMLDecoder` 反序列化、SnakeYAML 的 `load`、XML 解析没关外部实体（同一个方法里没有 `setFeature` 这类）、关闭 TLS 校验（空的 `checkServerTrusted`、主机名校验总返回 true、`NoopHostnameVerifier`）、MD5/SHA-1 处理密码、`Random` / `Math.random` 生成令牌、把拼接的内容写进响应。规则号对应安全规则包，安全写法（预编译语句、参数数组、ProcessBuilder 逐个传参、字面量脚本、校验和用的 MD5、骰子用的 Random、关了外部实体的解析）单测确认不报，import 行不报，放行注释照样认。
+- 架构分析：
+  - 解析时记下 Java 顶层类型上的注解（`FileFacts.annotations`，可选字段）；缓存里以前的 Java 结果没有这一项，下次分析时重新解析一次。
+  - 入口：除了 `public static void main`，标着 `@SpringBootApplication`、`@QuarkusMain`、`@MicronautApplication` 的类也算（启动类不一定自己写 main）。
+  - 分层（`architecture/model.ts` 的 `javaLayout`，纯函数，界面和 core 共用）：Java 文件占解析过的代码一半以上才做。按 package 分包（`src/test` 下的单独算），去掉公共前缀；先按包名里的词判断层（controller/web/api → 接口层，service/application/biz → 业务层，repository/dao/mapper → 数据访问层，entity/model/dto/vo → 领域模型，config → 配置，util/common/exception → 通用），包名看不出来按类上的注解投票（`@RestController`、`@Service`、`@Repository`、`@Entity`、`@Configuration`…）。包之间的依赖按文件依赖汇总带次数；下层反过来依赖上层（数据访问层依赖业务层这类）列成问题，带最多 5 处文件和行。
+  - 应用架构图：能分出层的包有两个以上时按层画（分不出层的在最上面，接口层、业务层、数据访问层、领域模型往下，配置、通用、测试放竖栏，层之间写引用了几处），包是方块、认领包自己的目录（不含子包），多模块时按模块分组；按功能分包、没有注解的项目退回原来按目录排的画法。
+  - 概览页多一块「Java 分层」：各层有哪些包、每个包几个文件，下层反过来依赖上层的地方，点文件和行跳到依赖图。
+- 没做 / 已知限制：Java 依赖的漏洞审计（OWASP dependency-check 要下载很大的漏洞库，SNYK 要账号）；Kotlin、Scala 的解析；按功能分包（`order/OrderController`）时每个功能里的分层只在包名带层名时认得出；Lombok、注解处理器生成的代码看不到。
+- 验证：core `security.test.ts` 的 Java 静态检查（13 处该报的、9 种安全写法不报、只看新增行、放行注释）；`detect.test.ts` 的 Maven（wrapper、带 p3c 的 PMD、多模块）、没配 p3c 和没装工具时的说明、Gradle Kotlin DSL 和 Groovy 写法；`rules.test.ts` 的 Java 规范审查；`architecture-java.test.ts` 用 `test/fixtures/java-shop`（Spring 风格的 Maven 项目，repository 故意反过来依赖 service）测入口、注解、分层、包依赖、违规、分层的应用架构图、旧缓存重新解析、整个项目过静态检查不误报。e2e `architecture-languages.spec.ts` 加了 Java 项目：概览的分层和违规、应用架构图按层画、点违规跳到依赖图。没有用真的 JDK、Maven、PMD 跑过检查命令（测试不依赖本机环境）。
+
 ## 外观与模型配置界面
 
 - 外观采用主题缩略图卡片、亮暗下拉框和紧凑设置行；保留现有四种配色，支持对话无衬线/衬线字体，终端保持等宽。旧配置没有 fontStyle 时按无衬线显示。
@@ -1443,7 +1461,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
 ## 编码规范
 
 - 不把整本规范塞进提示词：系统提示词每一步都要重发；弱模型对长规则清单的遵守率低，对具体的报错和审查意见修得最好。所以规范分三层接入：
-  - 能用工具查的交给 lint，配成项目的检查命令。自动识别项目已有的 lint 配置属于第 5 步；p3c-pmd 跟 Java 适配器一起放在 v2。
+  - 能用工具查的交给 lint，配成项目的检查命令。自动识别项目已有的 lint 配置属于第 5 步；p3c-pmd 随 v2 的 Java 适配器做了（项目配了就用，没配只说明怎么加），见「Java 适配器」。
   - 查不了的写成规则包，按项目语言挑选后写进系统提示词。
   - 完成前审查：评审模型按规则审这一轮的 diff，有违规就打回。
 - 内置规则包全部强制生效，没有设置页：强制级和推荐级都写进提示词，完成前审查一直开着（`packages/desktop/src/main/rule-packs.ts` 的 `SESSION_RULES`）。不能按项目关包、关单条规则，也不能导入自己的规则包。
@@ -1653,7 +1671,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 同一次 finish 里检查命令也没过时，按检查命令的失败计数（按进展判定卡住），不再另算一次打回。
 - 对话卡片的标题和设置页、任务监控用同一套名字：「静态检查」「轻量扫描」（core 发的 tool_call 标题）。旧记录里的「安全检查」「安全扫描」由界面映射成新名字显示（`Conversation.tsx` 的 `SECURITY_TITLES`）。
 - 静态检查（`packages/core/src/security/`）：
-  - 只看本轮新增的行，在本机运行，不调用模型。用 ast-grep（`@ast-grep/napi`，按语法树匹配，字符串和注释里的写法不会误报），覆盖 TS、TSX、JS、Vue 的 `<script>` 和 Python。Java 等 v2 的 Java 适配器。
+  - 只看本轮新增的行，在本机运行，不调用模型。用 ast-grep（`@ast-grep/napi`，按语法树匹配，字符串和注释里的写法不会误报），覆盖 TS、TSX、JS、Vue 的 `<script>`、Python，v2 起还有 Java（见「Java 适配器」）。
   - 规则都对应「安全」规则包里的规则号：SQL 拼接、命令拼接、eval、写入 HTML、关闭 TLS 校验、反序列化、MD5/SHA-1 处理密码、用普通随机数生成令牌。另外按正则查所有文件新增行里硬写的密钥。
   - 高危打回，中危只在卡片上提醒。
   - 误报时，代码里可以写带理由的放行注释 `diffra-allow 规则号: 理由`（写在那一行或上一行）。没写理由或规则号不对的不算。所有放行都列在卡片上给用户看。

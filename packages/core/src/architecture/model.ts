@@ -39,6 +39,8 @@ export interface FileFacts {
   namespace: string | null
   // Java 同一个包里的类不用 import 就能用：记下文件里出现的类型名，按同包的类名对上
   typeRefs: string[]
+  // Java 顶层类型上的注解名（SpringBootApplication、RestController…），v2 的 Java 适配器加的；其他语言没有
+  annotations?: string[]
 }
 
 export type Ecosystem = 'npm' | 'go' | 'cargo' | 'maven' | 'gradle' | 'python' | 'none'
@@ -86,6 +88,8 @@ export interface FileInfo {
   // 最近几次提交在 commits 里的下标，新的在前
   commits: number[]
   entry: boolean
+  // Java 顶层类型上的注解名（见 FileFacts.annotations）；旧的分析结果没有
+  annotations?: string[]
 }
 
 export interface EdgeImport {
@@ -732,4 +736,152 @@ export function evaluateTarget(analysis: Pick<ArchitectureAnalysis, 'files' | 'e
 export function targetGapCount(analysis: Pick<ArchitectureAnalysis, 'files'>, evaluation: TargetEvaluation): { violations: number; gaps: number } {
   const unassignedDirs = new Set(evaluation.unassigned.map((index) => analysis.files[index]!.module))
   return { violations: evaluation.violations.length, gaps: evaluation.violations.length + unassignedDirs.size + evaluation.planned.length }
+}
+
+// ---------- Java 分层（v2 的 Java 适配器）：按包名和类上的注解判断每个包在哪一层，查下层反过来依赖上层 ----------
+
+export type JavaLayer = 'web' | 'service' | 'data' | 'model' | 'config' | 'common'
+
+export const JAVA_LAYER_NAMES: Record<JavaLayer, string> = { web: '接口层', service: '业务层', data: '数据访问层', model: '领域模型', config: '配置', common: '通用' }
+
+// 从上到下；配置、通用是竖栏，谁都能用，不参与上下判断
+export const JAVA_LAYER_ORDER: JavaLayer[] = ['web', 'service', 'data', 'model']
+
+const JAVA_LAYER_WORDS: Array<[JavaLayer, RegExp]> = [
+  ['web', /^(controller|controllers|web|api|rest|resource|resources|endpoint|endpoints|handler|handlers|interfaces|facade|gateway)$/],
+  ['service', /^(service|services|application|usecase|usecases|biz|business|manager|logic)$/],
+  ['data', /^(repository|repositories|repo|dao|daos|mapper|mappers|persistence|infrastructure|infra|db|store|storage)$/],
+  ['model', /^(entity|entities|model|models|domain|dto|dtos|vo|vos|po|pojo|bean|beans|bo|dataobject|enums?)$/],
+  ['config', /^(config|configs|configuration|conf|settings|properties)$/],
+  ['common', /^(util|utils|common|support|helper|helpers|constant|constants|exception|exceptions|shared|tool|tools)$/],
+]
+
+const JAVA_LAYER_ANNOTATIONS: Array<[JavaLayer, RegExp]> = [
+  ['web', /^(RestController|Controller|ControllerAdvice|RestControllerAdvice|Path|WebServlet)$/],
+  ['service', /^Service$/],
+  ['data', /^(Repository|Mapper|Dao)$/],
+  ['model', /^(Entity|Table|Embeddable|Document|Data|Value)$/],
+  ['config', /^(Configuration|ConfigurationProperties|EnableWebSecurity)$/],
+]
+
+// 标着这些注解的类是程序入口（另外 public static void main 也算）
+export const JAVA_APP_ANNOTATIONS = /^(SpringBootApplication|QuarkusMain|MicronautApplication)$/
+
+export interface JavaPackageView {
+  // 完整包名 com.acme.shop.service
+  name: string
+  // 去掉公共前缀之后的名字（service）；就是公共前缀那个包时是它的最后一段
+  short: string
+  // analysis.files 的下标
+  files: number[]
+  layer: JavaLayer | null
+  // 判断依据：包名，还是类上的注解
+  by: 'name' | 'annotation' | null
+  test: boolean
+  // 依赖的项目内其他包和引用次数，多的在前
+  dependsOn: Array<{ name: string; count: number }>
+}
+
+export interface JavaLayerViolation {
+  from: string
+  to: string
+  fromLayer: JavaLayer
+  toLayer: JavaLayer
+  message: string
+  // 最多几处，到文件和行
+  edges: Array<{ file: string; line: number; specifier: string }>
+}
+
+export interface JavaLayout {
+  // 主代码包名的公共前缀（com.acme.shop），没有公共前缀是空串
+  prefix: string
+  packages: JavaPackageView[]
+  violations: JavaLayerViolation[]
+}
+
+const MAX_VIOLATION_EDGES = 5
+
+function javaLayerOf(short: string, annotations: string[][]): { layer: JavaLayer | null; by: JavaPackageView['by'] } {
+  for (const segment of short.toLowerCase().split('.')) {
+    const match = JAVA_LAYER_WORDS.find(([, words]) => words.test(segment))
+    if (match) return { layer: match[0], by: 'name' }
+  }
+  const votes = new Map<JavaLayer, number>()
+  for (const list of annotations) {
+    for (const annotation of list) {
+      const match = JAVA_LAYER_ANNOTATIONS.find(([, pattern]) => pattern.test(annotation))
+      if (match) votes.set(match[0], (votes.get(match[0]) ?? 0) + 1)
+    }
+  }
+  const best = [...votes].sort((a, b) => b[1] - a[1])[0]
+  return best ? { layer: best[0], by: 'annotation' } : { layer: null, by: null }
+}
+
+// Java 为主的项目（解析过的代码文件一半以上是 Java）才有；包按 package 声明分，测试代码（src/test 下）单独算
+export function javaLayout(analysis: Pick<ArchitectureAnalysis, 'files' | 'edges'>): JavaLayout | null {
+  const parsed = analysis.files.filter((file) => file.parsed).length
+  const javaFiles = analysis.files.flatMap((file, index) => (file.language === 'java' && file.parsed && file.namespace ? [index] : []))
+  if (javaFiles.length < 2 || javaFiles.length * 2 < parsed) return null
+  const isTest = (path: string) => /(^|\/)src\/test\//.test(path)
+  const keyOf = (index: number) => {
+    const file = analysis.files[index]!
+    return `${isTest(file.path) ? 'test:' : ''}${file.namespace}`
+  }
+  const groups = new Map<string, number[]>()
+  for (const index of javaFiles) groups.set(keyOf(index), [...(groups.get(keyOf(index)) ?? []), index])
+  const mainNames = [...groups.keys()].filter((key) => !key.startsWith('test:'))
+  // 公共前缀按段算；只有一个包时前缀是它的上一级，免得名字是空的
+  let prefix = (mainNames[0] ?? '').split('.')
+  for (const name of mainNames.slice(1)) {
+    const parts = name.split('.')
+    let at = 0
+    while (at < prefix.length && at < parts.length && prefix[at] === parts[at]) at++
+    prefix = prefix.slice(0, at)
+  }
+  if (mainNames.length === 1) prefix = prefix.slice(0, -1)
+  const prefixText = prefix.join('.')
+  const shortOf = (name: string) => (prefixText && name.startsWith(`${prefixText}.`) ? name.slice(prefixText.length + 1) : name === prefixText ? (name.split('.').at(-1) ?? name) : name)
+  const counts = new Map<string, Map<string, number>>()
+  const examples = new Map<string, JavaLayerViolation['edges']>()
+  for (const edge of analysis.edges) {
+    const from = analysis.files[edge.from]!
+    const to = analysis.files[edge.to]!
+    if (from.language !== 'java' || to.language !== 'java' || !from.namespace || !to.namespace) continue
+    const fromKey = keyOf(edge.from)
+    const toKey = keyOf(edge.to)
+    if (fromKey === toKey || !groups.has(fromKey) || !groups.has(toKey)) continue
+    const row = counts.get(fromKey) ?? new Map<string, number>()
+    row.set(toKey, (row.get(toKey) ?? 0) + 1)
+    counts.set(fromKey, row)
+    const list = examples.get(`${fromKey}>${toKey}`) ?? []
+    if (list.length < MAX_VIOLATION_EDGES) list.push({ file: from.path, line: edge.imports[0]?.line ?? 1, specifier: edge.imports[0]?.specifier ?? to.path })
+    examples.set(`${fromKey}>${toKey}`, list)
+  }
+  const packages: JavaPackageView[] = [...groups].map(([key, files]) => {
+    const test = key.startsWith('test:')
+    const name = test ? key.slice(5) : key
+    const short = shortOf(name)
+    const { layer, by } = test ? { layer: null, by: null } : javaLayerOf(short, files.map((index) => analysis.files[index]!.annotations ?? []))
+    const dependsOn = [...(counts.get(key) ?? [])].map(([target, count]) => ({ name: target.replace(/^test:/, ''), count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    return { name, short, files, layer, by, test, dependsOn }
+  })
+  packages.sort((a, b) => Number(a.test) - Number(b.test) || a.name.localeCompare(b.name))
+  const rank = (layer: JavaLayer | null) => (layer ? JAVA_LAYER_ORDER.indexOf(layer) : -1)
+  const violations: JavaLayerViolation[] = []
+  for (const from of packages) {
+    if (from.test || rank(from.layer) < 0) continue
+    for (const target of from.dependsOn) {
+      const to = packages.find((item) => !item.test && item.name === target.name)
+      if (!to || rank(to.layer) < 0 || rank(from.layer) <= rank(to.layer)) continue
+      violations.push({
+        from: from.name,
+        to: to.name,
+        fromLayer: from.layer!,
+        toLayer: to.layer!,
+        message: `${JAVA_LAYER_NAMES[from.layer!]}的 ${from.short} 反过来依赖${JAVA_LAYER_NAMES[to.layer!]}的 ${to.short}`,
+        edges: examples.get(`${from.name}>${to.name}`) ?? [],
+      })
+    }
+  }
+  return { prefix: prefixText, packages, violations }
 }

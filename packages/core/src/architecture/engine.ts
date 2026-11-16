@@ -15,6 +15,7 @@ import {
   type FileEdge,
   type FileFacts,
   type FileInfo,
+  JAVA_APP_ANNOTATIONS,
   type LanguageStat,
   MAX_EXTERNAL_USES,
   type ModuleInfo,
@@ -178,7 +179,8 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     const batch = codeFiles.slice(index, index + READ_BATCH)
     const stale = batch.filter((file) => {
       const cached = previous[file.path]
-      return !cached || cached.mtimeMs !== file.mtimeMs || cached.size !== file.size
+      // 以前的结果里 Java 文件没有注解（v2 的 Java 适配器才加）：重新解析一次
+      return !cached || cached.mtimeMs !== file.mtimeMs || cached.size !== file.size || (cached.facts?.language === 'java' && cached.facts.annotations === undefined)
     })
     const texts = new Map(await Promise.all(stale.map(async (file) => [file.path, await readFile(join(root, file.path), 'utf8').catch(() => null)] as const)))
     for (const file of batch) {
@@ -250,6 +252,7 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
       churn: 0,
       commits: [],
       entry: false,
+      ...(entry.facts?.annotations?.length ? { annotations: entry.facts.annotations } : {}),
     }
   })
 
@@ -336,6 +339,8 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     if (facts?.language === 'rust' && /(^|\/)src\/(main|lib)\.rs$|(^|\/)src\/bin\/[^/]+\.rs$/.test(file.path)) entries.add(file.path)
     if (facts?.language === 'python' && name === '__main__.py') entries.add(file.path)
     if (facts?.language === 'java' && facts.symbols.some((symbol) => symbol.kind === 'method' && symbol.name === 'main' && symbol.exported)) entries.add(file.path)
+    // Spring Boot 这类框架的启动类：main 可能写在别处（或者没有，交给框架起）
+    if (facts?.language === 'java' && facts.annotations?.some((name) => JAVA_APP_ANNOTATIONS.test(name))) entries.add(file.path)
   }
   for (const path of entries) {
     const position = index.get(path)

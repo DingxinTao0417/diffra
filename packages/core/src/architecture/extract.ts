@@ -497,8 +497,20 @@ function javaFacts(root: SgNode, facts: FileFacts): void {
         names: wildcard ? [] : [path.slice(path.lastIndexOf('.') + 1)],
         kind: children.some((child) => child.kind() === 'static') ? 'static' : 'import',
       })
-    } else if (JAVA_TYPES.has(kind)) javaType(node, null, facts.symbols)
+    } else if (JAVA_TYPES.has(kind)) {
+      javaType(node, null, facts.symbols)
+      // 顶层类型上的注解（判断入口和分层用）：@SpringBootApplication、@RestController、@Service…
+      const modifiers = node.child(0)
+      if (modifiers?.kind() === 'modifiers') {
+        for (const annotation of modifiers.children()) {
+          if (annotation.kind() !== 'marker_annotation' && annotation.kind() !== 'annotation') continue
+          const name = annotation.field('name')?.text()
+          if (name) facts.annotations = [...(facts.annotations ?? []), name.slice(name.lastIndexOf('.') + 1)]
+        }
+      }
+    }
   }
+  facts.annotations ??= []
   const refs = new Set(root.findAll(TYPE_IDENTIFIER).map((node) => node.text()))
   // Helper.call()、Helper.CONST 里的 Helper 是 identifier 不是 type_identifier：首字母大写的按类名算
   for (const node of root.findAll({ rule: { any: [{ kind: 'method_invocation' }, { kind: 'field_access' }] } })) {

@@ -221,6 +221,22 @@ describe('审查用的 diff 和审查意见', () => {
   })
 })
 
+describe('规范审查：Java（v2 的 Java 适配器）', () => {
+  test('Java 文件的改动进审查，按 Java 规则包审；内置 Java 包能解析、规则编号对得上', () => {
+    const packsDir = join(import.meta.dirname, '..', 'rules', 'packs')
+    const packs = readdirSync(packsDir).map((name) => parseRulePack(readFileSync(join(packsDir, name), 'utf8')))
+    const java = packs.find((pack) => pack.languages.includes('java'))!
+    expect(java.rules.filter((rule) => rule.level === 'required').length).toBeGreaterThan(10)
+    const diff = annotateDiff(['--- a/src/main/java/demo/App.java', '+++ b/src/main/java/demo/App.java', '@@ -0,0 +1,2 @@', '+public class App {', '+}'].join('\n'))
+    expect([...diff.addedLines]).toEqual([['src/main/java/demo/App.java', new Set([1, 2])]])
+    const selected = packsForPaths(packs, [...diff.addedLines.keys()])
+    expect(selected.map((pack) => pack.id)).toContain(java.id)
+    expect(selected.some((pack) => pack.languages.includes('typescript'))).toBe(false)
+    const { system } = buildReviewRequest(selected, diff, '')
+    expect(system).toContain(java.rules.find((rule) => rule.level === 'required')!.id)
+  })
+})
+
 describe('审查请求', () => {
   test('写明只报告改动本身负责的事；超时规则不套用到调用方传入的接口', () => {
     const universal = parseRulePack(readFileSync(join(import.meta.dirname, '..', 'rules', 'packs', 'universal.md'), 'utf8'))
