@@ -6,6 +6,7 @@ import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { LspServerSpec } from '../lsp/config.js'
+import type { ParsedCheck } from './check-progress.js'
 import type { LspPool } from '../lsp/pool.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
@@ -83,6 +84,11 @@ export interface SessionEnvironment {
 export interface UnresolvedCheck {
   command: string
   lines: string[]
+}
+
+export interface KnownCheckFailure {
+  command: string
+  parsed: ParsedCheck
 }
 
 export interface SessionOptions {
@@ -204,6 +210,9 @@ export class Session {
   unresolvedCheck: UnresolvedCheck | null = null
   // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到
   readonly consumedChecks = new Map<string, UnresolvedCheck>()
+  // 最近一轮结束时完成检查还没过的错误：之后的轮次失败的都在里面、没有新增时，不再交回模型反复修（见 runEndGate）。
+  // 检查通过、撤销、重新生成后清掉；只在内存里，重新打开任务后从头算
+  knownCheckFailure: KnownCheckFailure | null = null
   // 重新生成（第 676 步）：撤掉的那一轮留成版本，等同样提问的下一轮开始时挂上去
   private regenerated: { prompt: string; versions: TurnVersion[] } | null = null
   taskState: TaskState = newTaskState()
@@ -537,6 +546,7 @@ export class Session {
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
     this.unresolvedCheck = this.consumedChecks.get(turnId) ?? null
+    this.knownCheckFailure = null
     for (const turn of this.turns.splice(index)) {
       this.turnCheckpoints.delete(turn.id)
       this.turnGitBases.delete(turn.id)
@@ -570,6 +580,7 @@ export class Session {
     // 文件回到这一轮开始时（那一次没改文件），待验证取那时的值，和重新生成一样
     this.taskState = { ...newTaskState(), needsVerification: taskStateBefore(this.turns, position).needsVerification }
     this.unresolvedCheck = null
+    this.knownCheckFailure = null
     return { filesRestored: Boolean(changes && changes.length > 0) }
   }
 
@@ -588,6 +599,7 @@ export class Session {
     await this.checkpoints.restore(base, changes)
     // 文件已经变了，之前的检查结论作废，并告诉模型
     this.unresolvedCheck = null
+    this.knownCheckFailure = null
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
     const needsVerification = target ? needsVerificationBefore(this.turns, index) : false

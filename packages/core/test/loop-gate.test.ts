@@ -251,6 +251,65 @@ describe('主循环', () => {
     expect(lastTaskState(io)).toMatchObject({ status: 'blocked', needsVerification: true, reason: STOPPED_REASON })
   }, 30_000)
 
+  test('之前的轮次停下时就没过的检查：之后失败的都在里面、没有新增时不再交回模型修；有新的照常打回，检查通过后清掉', async () => {
+    // 输出照 node --test 的样子，耗时每次不同；有 new.ts 时多一条新的失败，有 pass.txt 时通过
+    writeFileSync(
+      join(project, 'check.mjs'),
+      [
+        "import { existsSync } from 'node:fs'",
+        "if (existsSync('pass.txt')) process.exit(0)",
+        "console.log('✖ 旧的失败 (' + Math.random().toFixed(4) + 'ms)')",
+        "console.log('ℹ duration_ms ' + (Math.random() * 100).toFixed(4))",
+        "if (existsSync('new.ts')) console.log('✖ 新的失败 (1ms)')",
+        'process.exit(1)',
+      ].join('\n'),
+    )
+    const check = 'node check.mjs'
+    const model = scriptedModel([
+      // 第一轮：改了代码，失败的一直是旧的那一条，连续 3 次没进展停下
+      { toolCalls: [addFile('a.ts', 'export const a = 1\n')] },
+      { text: '改好了' },
+      { text: '还是改好了' },
+      { text: '结束' },
+      // 第二轮：又改了代码，失败的还是那一条
+      { toolCalls: [addFile('b.ts', 'export const b = 1\n')] },
+      { text: 'b 也改好了' },
+      // 第三轮：多出一条新的失败，照常打回；去掉之后只剩旧的
+      { toolCalls: [addFile('new.ts', 'export const n = 1\n')] },
+      { text: 'n 好了' },
+      { toolCalls: [deleteFile('new.ts')] },
+      { text: '去掉了' },
+      // 第四轮：检查通过
+      { toolCalls: [addFile('pass.txt', 'ok\n')] },
+      { text: '都好了' },
+    ])
+    const session = await makeSession(model, { afterEdit: null, beforeFinish: check })
+
+    const first = recordingIO()
+    await runTurn(session, { id: 't1', text: '改 a' }, first)
+    expect(checkResults(first, '完成检查')).toEqual(['failed', 'failed', 'failed'])
+    expect(session.knownCheckFailure?.command).toBe(check)
+
+    const second = recordingIO()
+    await runTurn(session, { id: 't2', text: '改 b' }, second)
+    expect(model.doStreamCalls).toHaveLength(6)
+    expect(checkResults(second, '完成检查')).toEqual(['failed'])
+    expect(finishCards(second)[0]).toMatchObject({ content: [{ type: 'content', content: { type: 'text', text: `完成检查没有通过：${check}；失败的都是之前就有的，没有新增` } }] })
+    expect(turnOutcomes(second)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(second)).toMatchObject({ status: 'completed', needsVerification: true })
+
+    const third = recordingIO()
+    await runTurn(session, { id: 't3', text: '加 n' }, third)
+    expect(model.doStreamCalls).toHaveLength(10)
+    expect(checkResults(third, '完成检查')).toEqual(['failed', 'failed'])
+    expect(gateFeedback(session).at(-1)).toContain('新的失败')
+
+    const fourth = recordingIO()
+    await runTurn(session, { id: 't4', text: '收尾' }, fourth)
+    expect(checkResults(fourth, '完成检查')).toEqual(['passed'])
+    expect(session.knownCheckFailure).toBeNull()
+  }, 60_000)
+
   test('安全检查连续 3 次打回时停下记 gate-exhausted：结束时的任务状态受阻、带着待验证', async () => {
     const model = scriptedModel([
       { toolCalls: [addFile('run.js', 'export const run = (input) => eval(input)')] },

@@ -4,6 +4,7 @@ import {
   compareCheckErrors,
   MAX_CHECK_FAILURES_PER_TURN,
   newCheckTracker,
+  onlyKnownErrors,
   parseCheckErrors,
   progressSummary,
   recordCheckFailure,
@@ -130,6 +131,39 @@ describe('整理检查输出', () => {
   test('go：文件:行:列: 内容，go test 的 FAIL 行', () => {
     const output = ['# example.com/demo', './main.go:12:5: undefined: foo', '--- FAIL: TestAdd (0.00s)', '    add_test.go:9: got 3, want 4', 'FAIL\texample.com/demo\t0.012s'].join('\n')
     expect(keys(output)).toEqual(['main.go: undefined: foo', 'FAIL TestAdd', 'add_test.go: got 3, want 4'])
+  })
+
+  // 这个项目自己的完成检查（pnpm -r test 里 desktop 的 node --test）：以前认不出失败的用例，汇总里的 duration_ms 每次不一样，
+  // 一模一样的失败也算「有进展」，卡住永远判不出来，要失败满每轮上限才停
+  test('node --test：「✖ 用例名 (耗时)」算一条错误，汇总标题不算；duration_ms 不同不算有进展', () => {
+    const run = (ms: string, total: string) =>
+      [
+        `packages/desktop test: ✖ 读得到鼠标位置 (${ms}ms)`,
+        'packages/desktop test: ✔ 别的都好 (0.09ms)',
+        'packages/desktop test: ℹ tests 2',
+        'packages/desktop test: ℹ fail 1',
+        `packages/desktop test: ℹ duration_ms ${total}`,
+        'packages/desktop test: ✖ failing tests:',
+        'packages/desktop test: test at scripts/computer.test.ts:40:1',
+        `packages/desktop test: ✖ 读得到鼠标位置 (${ms}ms)`,
+        "packages/desktop test:   AssertionError [ERR_ASSERTION]: {\"fx\":1.37,\"fy\":0.68}",
+      ].join('\n')
+    const first = parseCheckErrors(run('0.7113', '49.8789'))
+    expect(first.errors?.map((error) => error.key)).toEqual(['✖ 读得到鼠标位置', '✖ 读得到鼠标位置'])
+    expect(compareCheckErrors(first, parseCheckErrors(run('0.6993', '48.1538'))).progress).toBe(false)
+    // eslint 的总数行不是一条错误
+    expect(keys('✖ 3 problems (3 errors, 0 warnings)')).toBeNull()
+  })
+
+  test('都是之前就有的错误：认出的按条比，修好几条也算；有新的一条就不算；认不出时整段比', () => {
+    const known = parseCheckErrors(['✖ 旧的一 (1ms)', '✖ 旧的二 (1ms)'].join('\n'))
+    expect(onlyKnownErrors(known, parseCheckErrors('✖ 旧的二 (3ms)'))).toBe(true)
+    expect(onlyKnownErrors(known, parseCheckErrors(['✖ 旧的一 (1ms)', '✖ 新的 (1ms)'].join('\n')))).toBe(false)
+    const crash = (ms: number) => `Exit code: 1\nSegmentation fault after ${ms}ms`
+    expect(onlyKnownErrors(parseCheckErrors(crash(10)), parseCheckErrors(crash(20)))).toBe(true)
+    expect(onlyKnownErrors(parseCheckErrors(crash(10)), parseCheckErrors('Exit code: 1\nBus error'))).toBe(false)
+    // 一次认出一次没认出：说不清，按有新问题算
+    expect(onlyKnownErrors(known, parseCheckErrors(crash(10)))).toBe(false)
   })
 
   test('认不出格式时按规范化后的整段输出比较：只是耗时、行号变了算没进展，内容变了算有进展', () => {

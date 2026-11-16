@@ -54,6 +54,11 @@ const ESLINT_FILE = /^(?:[A-Za-z]:)?[^\s:]+\.\w+$/
 const ESLINT_ITEM = /^\s+\d+:\d+\s+((error|warning)\s+.*)$/
 const GO_FAIL = /^\s*--- FAIL: (\S+)/
 const VITEST_FAIL = /^\s*FAIL\s+(\S+\.\w+)\s+>\s+(.+)$/
+// node --test 的失败用例：「✖ 用例名 (耗时)」；「✖ failing tests:」是汇总的标题，eslint 的「✖ 3 problems」是总数，都不算一条错误
+const NODE_TEST_FAIL = /^\s*✖\s+(.+?)(?:\s+\(\d+(?:\.\d+)?\s?m?s\))?\s*$/
+const NOT_NODE_TEST = /^(?:failing tests:|\d+ problems?\b)/
+// node --test 的汇总行「ℹ duration_ms 49.87」不带单位，每次都不一样
+const NODE_TEST_DURATION = /\bduration_ms:?\s*\d+(?:\.\d+)?/g
 const LOCATED = /^\s*((?:[A-Za-z]:)?[^\s:]+\.\w+):\d+(?::\d+)?:?\s+(.+)$/
 const WARNING = /^warning\b/i
 
@@ -107,6 +112,12 @@ export function parseCheckErrors(output: string, root?: string): ParsedCheck {
       add(vitest[1]!, vitest[2]!, line)
       continue
     }
+    const nodeTest = NODE_TEST_FAIL.exec(line)
+    if (nodeTest && !NOT_NODE_TEST.test(nodeTest[1]!)) {
+      recognized.add(index)
+      errors.push({ key: `✖ ${normalizeMessage(nodeTest[1]!)}`, text: line.trim() })
+      continue
+    }
     const located = LOCATED.exec(line)
     if (located) {
       recognized.add(index)
@@ -137,6 +148,16 @@ export function compareCheckErrors(previous: ParsedCheck, next: ParsedCheck): Ch
   const progress = resolved.length > 0 || previous.fingerprint !== next.fingerprint
   if (!previous.errors || !next.errors) return { progress, resolved: null, added: null, remaining: null }
   return { progress, resolved, added, remaining }
+}
+
+// 这次失败的都是 known 里就有的：认出了错误时按条比，只要没有 known 里没有的错误（修好几条也算）；
+// 两次都没认出错误时按其余输出整体比；一次认出一次没认出，说不清，按有新问题算
+export function onlyKnownErrors(known: ParsedCheck, next: ParsedCheck): boolean {
+  if (known.errors && next.errors) {
+    const keys = new Set(known.errors.map((error) => error.key))
+    return next.errors.every((error) => keys.has(error.key))
+  }
+  return !known.errors && !next.errors && known.fingerprint === next.fingerprint
 }
 
 export function newCheckTracker(): CheckTracker {
@@ -206,6 +227,7 @@ function normalizeMessage(message: string): string {
 
 function fingerprintOf(text: string): string {
   return text
+    .replace(NODE_TEST_DURATION, '')
     .replace(DURATION, '')
     .replace(PERCENT, '')
     .replace(CLOCK, '')

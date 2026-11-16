@@ -108,6 +108,7 @@ import {
   MAX_CHECK_FAILURES_PER_TURN,
   MAX_CHECKS_WITHOUT_PROGRESS,
   newCheckTracker,
+  onlyKnownErrors,
   parseCheckErrors,
   progressSummary,
   recordCheckFailure,
@@ -446,8 +447,8 @@ export async function runTurn(
           continue
         }
         if (gate.verification) turnFinish = mergeFinish(turnFinish, gate.verification)
-        // 这一轮没改文件（只是回答/只读）时不跑门禁，也不把之前留下的待验证清掉
-        if (changes !== 'none') session.taskState.needsVerification = false
+        // 这一轮没改文件（只是回答/只读）时不跑门禁，也不把之前留下的待验证清掉；检查因为之前就有的错误没过时改动也还没验证
+        if (changes !== 'none' && gate.verification !== 'failed') session.taskState.needsVerification = false
         if (goal === null || goal === 'complete') {
           // 插件的 Stop 钩子拦下：把理由交回去接着做，结束门禁下次停下时再过
           const held = session.pluginHooks.length > 0 && stopContinues < MAX_STOP_HOOK_CONTINUES ? await stopHooks(session.pluginHooks, stopContinues > 0, hookContext(session, signal)) : null
@@ -636,6 +637,9 @@ export async function runTurn(
       session.messages.push({ role: 'user', content: TURN_ABORTED_NOTE })
     } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '这一轮没有走完就停了，任务还没完成；可以接着执行剩余步骤。' }
     session.activeTurn = null
+    // 这一轮最后一次完成检查没过（卡住停下、用户停止、或者失败的都是之前就有的）：记下来，之后的轮次同样的错误不再交回模型反复修
+    const checkCommand = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
+    if (endChecks.last && checkCommand) session.knownCheckFailure = { command: checkCommand, parsed: endChecks.last }
     // 设计页收起主智能体的光标
     if (session.design) await endDesignAgent(io)
     await publishTaskState(session, io, { finish: turnFinish, stop, ...(errorKind ? { errorKind } : {}) })
@@ -1550,6 +1554,7 @@ async function runEndGate(
   // 每类问题一张卡片上的说明和一段给模型的说明
   const rejected: Array<{ card: string; text: string }> = []
   let failedCheck: string | null = null
+  let onlyKnown = false
   if (command && checkResult.status === 'rejected') {
     const reason = checkResult.reason instanceof Error ? checkResult.reason.message : String(checkResult.reason)
     rejected.push({
@@ -1559,12 +1564,20 @@ async function runEndGate(
   } else if (command && check && !check.passed) {
     const parsed = parseCheckErrors(check.full, session.cwd)
     const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
-    failedCheck = command
-    rejected.push({
-      card: `完成检查没有通过：${command}`,
-      text: `The check \`${command}\` failed.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}`,
-    })
-  } else if (check) recordCheckPass(checks)
+    const known = session.knownCheckFailure
+    // 失败的都是之前的轮次停下时就没过的（比如和这次改动无关、用户说先不改的测试），没有新增：不交回模型反复修
+    if (known && known.command === command && onlyKnownErrors(known.parsed, parsed)) onlyKnown = true
+    else {
+      failedCheck = command
+      rejected.push({
+        card: `完成检查没有通过：${command}`,
+        text: `The check \`${command}\` failed.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}`,
+      })
+    }
+  } else if (check) {
+    recordCheckPass(checks)
+    session.knownCheckFailure = null
+  }
   const blockers = blocking(security)
   if (blockers.length > 0) {
     const list = blockers.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
@@ -1608,6 +1621,11 @@ async function runEndGate(
         `Fix the problems below and continue; the checks run again the next time you end your turn.\n\n${rejected.map((item) => item.text).join('\n\n')}`,
       ...(failedCheck ? { failedCheck } : {}),
     }
+  }
+  if (onlyKnown) {
+    await notice(io, 'info', '完成检查没通过，失败的都是之前就有的', '这一轮没有新增的错误，不再交给智能体修；要修的话发消息让它处理。')
+    await showFinishCard(io, cardId, 'failed', `完成检查没有通过：${command}；失败的都是之前就有的，没有新增`)
+    return { passed: true, verification: 'failed' }
   }
   if (docsOnly) {
     await notice(io, 'info', '这一轮只改了文档，跳过完成检查')
