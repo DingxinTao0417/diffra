@@ -22,6 +22,8 @@ const announcementSchema = z.object({
   tls: z.string().regex(/^[0-9a-f]{64}$/),
   // 正在等配对（本机的人生成了配对码）
   pairing: z.boolean(),
+  // 设备连接的协议版本（REMOTE_PROTOCOL）：和本机不一样时界面上标出来，配不了
+  protocol: z.number().int().optional(),
 })
 
 export type Announcement = Omit<z.infer<typeof announcementSchema>, 't' | 'v'>

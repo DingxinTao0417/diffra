@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { FRAME, type FrameKind } from '@diffra/relay/protocol'
 import { LanDiscovery } from '../src/main/remote/lan-discovery.ts'
 import { createLanCertificate, isPrivateAddress, shortFingerprint } from '../src/main/remote/lan-tls.ts'
-import { LanError, LanTransport } from '../src/main/remote/lan-transport.ts'
+import { LanError, LanTransport, VERSION_MISMATCH } from '../src/main/remote/lan-transport.ts'
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(check: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -47,13 +47,13 @@ test('发现：开着的设备报自己，另一台在列表里看到它（地�
   const [portA, portB] = [await freePort(), await freePort()]
   let announcing = true
   const changes: string[] = []
-  const a = new LanDiscovery({ port: portA, bind: '127.0.0.1', targets: [{ address: '127.0.0.1', port: portB }], broadcast: false, self: () => 'a'.repeat(32), announcement: () => (announcing ? { id: 'a'.repeat(32), name: '甲', port: 5555, tls: 'f'.repeat(64), pairing: true } : null), changed: () => {} })
+  const a = new LanDiscovery({ port: portA, bind: '127.0.0.1', targets: [{ address: '127.0.0.1', port: portB }], broadcast: false, self: () => 'a'.repeat(32), announcement: () => (announcing ? { id: 'a'.repeat(32), name: '甲', port: 5555, tls: 'f'.repeat(64), pairing: true, protocol: 7 } : null), changed: () => {} })
   const b = new LanDiscovery({ port: portB, bind: '127.0.0.1', targets: [{ address: '127.0.0.1', port: portA }], broadcast: false, self: () => 'b'.repeat(32), announcement: () => null, changed: () => changes.push('b') })
   try {
     a.start()
     b.start()
     await until(() => b.list().length === 1)
-    assert.deepEqual({ ...b.get('a'.repeat(32)), seenAt: 0 }, { id: 'a'.repeat(32), name: '甲', port: 5555, tls: 'f'.repeat(64), pairing: true, address: '127.0.0.1', seenAt: 0 })
+    assert.deepEqual({ ...b.get('a'.repeat(32)), seenAt: 0 }, { id: 'a'.repeat(32), name: '甲', port: 5555, tls: 'f'.repeat(64), pairing: true, protocol: 7, address: '127.0.0.1', seenAt: 0 })
     assert.deepEqual(a.list(), [])
     // 乱写的包、超长的包不理
     const raw = createSocket('udp4')
@@ -77,7 +77,7 @@ interface Recorder {
   undeliverable: string[]
 }
 
-function transport(id: string, pins: Map<string, string>) {
+function transport(id: string, pins: Map<string, string>, protocol?: number) {
   const certificate = createLanCertificate(`Diffra ${id.slice(0, 4)}`)
   const recorder: Recorder = { frames: [], presence: [], undeliverable: [] }
   const lan = new LanTransport({
@@ -86,6 +86,7 @@ function transport(id: string, pins: Map<string, string>) {
     bind: '127.0.0.1',
     port: 0,
     pinned: (deviceId) => pins.get(deviceId) ?? null,
+    protocol: protocol ?? 1,
     events: {
       status: () => {},
       presence: (deviceId, online) => recorder.presence.push([deviceId, online]),
@@ -161,7 +162,7 @@ test('传输：凭配对码的会合点连进来，只收这个会合点的帧�
     host.lan.stop()
     await until(() => !guest.lan.isOnline(hostId))
     // 同一台设备重启：证书不变
-    const again = new LanTransport({ deviceId: hostId, certificate: host.certificate, bind: '127.0.0.1', port, pinned: (deviceId) => hostPins.get(deviceId) ?? null, events: { status: () => {}, presence: () => {}, frame: () => {}, undeliverable: () => {}, rendezvous: () => {} } })
+    const again = new LanTransport({ deviceId: hostId, certificate: host.certificate, bind: '127.0.0.1', port, pinned: (deviceId) => hostPins.get(deviceId) ?? null, protocol: 1, events: { status: () => {}, presence: () => {}, frame: () => {}, undeliverable: () => {}, rendezvous: () => {} } })
     again.setAllow([guestId])
     again.start()
     try {
@@ -188,6 +189,36 @@ test('传输：证书和钉住的对不上时拒绝（被冒充）；连接端�
     await host.lan.waitOnline(5000)
     await guest.lan.waitOnline(5000)
     hostPins.set(guestId, '1'.repeat(64))
+    guestPins.set(hostId, host.certificate.fingerprint)
+    host.lan.setAllow([guestId])
+    guest.lan.setTargets([{ deviceId: hostId, address: '127.0.0.1', port: host.lan.port }])
+    await sleep(1500)
+    assert.equal(guest.lan.isOnline(hostId), false)
+    assert.equal(host.lan.isOnline(guestId), false)
+  } finally {
+    host.lan.stop()
+    guest.lan.stop()
+  }
+})
+
+test('传输：两边的设备连接协议版本不一样时，配对和重连都被拒，原因写明是版本问题', async () => {
+  const hostId = 'a'.repeat(32)
+  const guestId = 'b'.repeat(32)
+  const hostPins = new Map<string, string>()
+  const guestPins = new Map<string, string>()
+  const host = transport(hostId, hostPins)
+  const guest = transport(guestId, guestPins, 99)
+  host.lan.start()
+  guest.lan.start()
+  try {
+    await host.lan.waitOnline(5000)
+    await guest.lan.waitOnline(5000)
+    const rendezvous = 'c'.repeat(32)
+    host.lan.openRendezvous(rendezvous, Date.now() + 60_000)
+    const target = { deviceId: hostId, address: '127.0.0.1', port: host.lan.port, tls: host.certificate.fingerprint }
+    await assert.rejects(guest.lan.pair(target, rendezvous), (error: unknown) => error instanceof LanError && error.message === VERSION_MISMATCH)
+    // 配过对的也一样：证书钉住、授权都对，版本不对照样连不上
+    hostPins.set(guestId, guest.certificate.fingerprint)
     guestPins.set(hostId, host.certificate.fingerprint)
     host.lan.setAllow([guestId])
     guest.lan.setTargets([{ deviceId: hostId, address: '127.0.0.1', port: host.lan.port }])

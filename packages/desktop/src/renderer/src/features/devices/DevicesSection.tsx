@@ -105,11 +105,17 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
               <span className="flex items-center gap-2" data-testid="peer">
                 {peer.name}
                 <OnlineBadge device={peer} />
+                {peer.versionMismatch && (
+                  <Badge variant="warning" data-testid="peer-version-mismatch">
+                    版本不一致
+                  </Badge>
+                )}
               </span>
             }
             hint={
               <>
                 {deviceHint(peer, `配对于 ${formatTime(peer.pairedAt)}`)}
+                {peer.versionMismatch && <span className="block text-warning">对方的 Diffra 版本和本机的不一样，连不上；两边都更新到最新版后会自动连回来。</span>}
                 {peer.todos && (
                   <span className={cn('block', peer.todosSync.error && 'text-warning')} data-testid="peer-todos-sync">
                     {peer.todosSync.error ? `待办没同步成：${peer.todosSync.error}` : peer.todosSync.at ? `待办 ${formatTime(peer.todosSync.at)} 同步过` : '待办还没同步过（对方在线时同步）'}
@@ -290,18 +296,19 @@ function AddLanDeviceDialog({ open, onOpenChange, discovered, fingerprint }: { o
                 type="button"
                 role="radio"
                 aria-checked={device.deviceId === selected}
-                disabled={waiting}
+                disabled={waiting || device.versionMismatch === true}
                 onClick={() => setSelected(device.deviceId)}
                 // primary-color-allow: 选中标记（单选列表里选中的那台设备）
-                className={cn('flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring', device.deviceId === selected ? 'border-primary bg-soft' : 'hover:bg-accent')}
+                className={cn('flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-70', device.deviceId === selected ? 'border-primary bg-soft' : 'hover:bg-accent')}
                 data-testid="lan-device"
               >
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
                     <span className="truncate font-medium">{device.name}</span>
-                    {device.pairing ? <Badge variant="secondary">等配对</Badge> : <Badge variant="outline">没生成配对码</Badge>}
+                    {device.versionMismatch ? <Badge variant="warning">版本不一致</Badge> : device.pairing ? <Badge variant="secondary">等配对</Badge> : <Badge variant="outline">没生成配对码</Badge>}
                     {device.paired && <Badge variant="outline">已添加</Badge>}
                   </span>
+                  {device.versionMismatch && <span className="mt-0.5 block text-xs text-warning">对方的 Diffra 版本和本机的不一样，配不了；两边都更新到最新版再配。</span>}
                   <span className="mt-0.5 block text-xs text-muted-foreground">
                     {device.address} · 证书指纹 <span className="font-mono">{device.certificate}</span>
                   </span>

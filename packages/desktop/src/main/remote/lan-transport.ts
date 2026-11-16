@@ -25,12 +25,16 @@ const MAX_ENVELOPE_BYTES = 1 + MAX_FRAME_BYTES
 
 const ENVELOPE = { hello: 0, frame: 1, ping: 2, pong: 3, welcome: 4 } as const
 
+// v 是这层信封的版本，protocol 是设备连接的协议版本（REMOTE_PROTOCOL）。先宽松地读，对不上时说清楚是版本问题，不默默断开
 const helloSchema = z.object({
   t: z.literal('hello'),
-  v: z.literal(1),
+  v: z.number().int(),
+  protocol: z.number().int().optional(),
   id: z.string().regex(/^[0-9a-f]{32}$/),
   rendezvous: z.string().regex(/^[0-9a-f]{32}$/).nullable(),
 })
+
+export const VERSION_MISMATCH = '两边的 Diffra 版本对不上（设备连接的协议不一样），请两边都更新到最新版再连'
 
 const welcomeSchema = z.object({ ok: z.boolean(), reason: z.string().max(200).nullable() })
 
@@ -52,6 +56,8 @@ export interface LanTransportOptions {
   // 配过对的设备记下的证书指纹；没配过的是 null
   pinned(deviceId: string): string | null
   events: TransportEvents
+  // 设备连接的协议版本（REMOTE_PROTOCOL），连上时先对一下
+  protocol: number
 }
 
 class Connection {
@@ -118,9 +124,11 @@ export class LanTransport implements RemoteTransport {
   private readonly retry = new Map<string, { attempts: number; timer: NodeJS.Timeout | null; connecting: boolean }>()
   private pingTimer: NodeJS.Timeout | null = null
   private readonly options: LanTransportOptions
+  private readonly protocol: number
 
   constructor(options: LanTransportOptions) {
     this.options = options
+    this.protocol = options.protocol
   }
 
   get state(): RemoteRelayStatus {
@@ -334,6 +342,7 @@ export class LanTransport implements RemoteTransport {
       connection.writeJson(ENVELOPE.welcome, { ok: false, reason })
       connection.socket.end()
     }
+    if (hello.v !== 1 || (hello.protocol ?? 0) !== this.protocol) return refuse(VERSION_MISMATCH)
     if (hello.id === this.options.deviceId) return refuse('这是本机自己')
     if (hello.rendezvous) {
       const expiresAt = this.rendezvous.get(hello.rendezvous)
@@ -401,7 +410,7 @@ export class LanTransport implements RemoteTransport {
           finish(null)
         })
         this.track(connection)
-        connection.writeJson(ENVELOPE.hello, { t: 'hello', v: 1, id: this.options.deviceId, rendezvous })
+        connection.writeJson(ENVELOPE.hello, { t: 'hello', v: 1, protocol: this.protocol, id: this.options.deviceId, rendezvous })
       })
     })
   }

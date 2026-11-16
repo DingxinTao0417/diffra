@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { AskAnswer, PromptImage, RemoteSnapshot, StoredSessionSummary } from '@diffra/core/types'
 import { FRAME } from '@diffra/relay/protocol'
 import { encodeInvite, fingerprintOf, InviteError, rendezvousIdOf } from '@diffra/remote'
-import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
+import { REMOTE_PROTOCOL, type RemoteResumed, type RemoteSnapshotPage, type RemoteToolOutput, type RequestCall, type SessionList } from '@diffra/remote/messages'
 import { REMOTE_LEVEL_LABELS, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteAddResult, type RemoteAuditEntry, type RemoteDeviceView, type RemoteProjectGrant, type RemoteRelayStatus, type RemoteSyncEvent, type RemoteView } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { logRemote } from '../app-log'
@@ -260,6 +260,7 @@ export class RemoteService {
     const state = this.store.get()
     const online = (deviceId: string) => this.relay?.isOnline(deviceId) ?? false
     const device = (item: StoredDevice): RemoteDeviceView => ({ deviceId: item.deviceId, fingerprint: fingerprintOf(Buffer.from(item.deviceId, 'hex')), name: item.name, pairedAt: item.pairedAt, online: online(item.deviceId), lastSeenAt: item.lastSeenAt })
+    const discovered = this.discovery?.list() ?? []
     return {
       unavailable: this.unavailable,
       self: this.identity ? { deviceId: this.identity.deviceId, fingerprint: this.identity.fingerprint } : null,
@@ -274,12 +275,17 @@ export class RemoteService {
         previous: state.grants.find((grant) => grant.deviceId === request.deviceId)?.projects ?? null,
       })),
       grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, todos: grant.todos === true, ...this.hostSync.activity(grant.deviceId) })),
-      peers: state.peers.map((peer) => ({ ...device(peer), todos: peer.todos === true, todosSync: this.todoSyncs.get(peer.deviceId) ?? { at: null, error: null } })),
+      peers: state.peers.map((peer) => ({
+        ...device(peer),
+        todos: peer.todos === true,
+        todosSync: this.todoSyncs.get(peer.deviceId) ?? { at: null, error: null },
+        ...(discovered.some((found) => found.id === peer.deviceId && found.protocol !== REMOTE_PROTOCOL) ? { versionMismatch: true } : {}),
+      })),
       lan:
         this.options.transport === 'lan'
           ? {
               certificate: this.certificate ? shortFingerprint(this.certificate.fingerprint) : null,
-              discovered: (this.discovery?.list() ?? []).map((found) => ({
+              discovered: discovered.map((found) => ({
                 deviceId: found.id,
                 name: found.name,
                 fingerprint: fingerprintOf(Buffer.from(found.id, 'hex')),
@@ -287,6 +293,7 @@ export class RemoteService {
                 address: found.address,
                 pairing: found.pairing,
                 paired: state.peers.some((peer) => peer.deviceId === found.id),
+                ...(found.protocol !== REMOTE_PROTOCOL ? { versionMismatch: true } : {}),
               })),
             }
           : null,
@@ -562,7 +569,7 @@ export class RemoteService {
     }
     const certificate = this.certificate
     if (!certificate) throw new Error('本机的证书还没准备好')
-    const lan = new LanTransport({ deviceId: identity.deviceId, certificate, bind: this.options.lan.bind, port: this.options.lan.port, pinned: (deviceId) => this.pinned(deviceId), events })
+    const lan = new LanTransport({ deviceId: identity.deviceId, certificate, bind: this.options.lan.bind, port: this.options.lan.port, pinned: (deviceId) => this.pinned(deviceId), protocol: REMOTE_PROTOCOL, events })
     this.lan = lan
     this.relay = lan
     this.discovery = new LanDiscovery({
@@ -572,7 +579,7 @@ export class RemoteService {
       broadcast: this.options.lan.broadcast,
       self: () => identity.deviceId,
       // 开着「允许连接本机」才报自己；没生成配对码时也报，配过对的设备换了地址能找回来
-      announcement: () => (this.store.get().allowIncoming && lan.port ? { id: identity.deviceId, name: this.store.get().name, port: lan.port, tls: certificate.fingerprint, pairing: this.host?.current !== null && this.host?.current !== undefined } : null),
+      announcement: () => (this.store.get().allowIncoming && lan.port ? { id: identity.deviceId, name: this.store.get().name, port: lan.port, tls: certificate.fingerprint, pairing: this.host?.current !== null && this.host?.current !== undefined, protocol: REMOTE_PROTOCOL } : null),
       changed: () => {
         this.updateTargets()
         this.changed()

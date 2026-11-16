@@ -90,12 +90,16 @@ export interface RemoteDiscoveredDevice {
   pairing: boolean
   // 已经是本机连接的设备
   paired: boolean
+  // 对方的 Diffra 版本和本机的设备连接协议不一样（v2）：配不了、连不上，两边都要更新
+  versionMismatch?: boolean
 }
 
 // 本机去连的设备：和它同步待办（v2）、上次同步的时刻和没成的原因
 export interface RemotePeerView extends RemoteDeviceView {
   todos: boolean
   todosSync: { at: string | null; error: string | null }
+  // 局域网里看到它，但它的 Diffra 版本和本机的设备连接协议不一样（v2）：连不上，两边都要更新
+  versionMismatch?: boolean
 }
 
 export type RemoteAddResult = { ok: true; device: RemoteDeviceView } | { ok: false; error: string }
