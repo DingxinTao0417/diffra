@@ -184,12 +184,14 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 先只出 Apple 芯片（arm64）：ripgrep、ast-grep 的原生文件按本机架构装，Intel 版要在 Intel 机器或 CI 上另打，universal 包要两套原生文件，以后再说。
   - ripgrep 按平台放进 `extraResources`（Windows 还是 `rg.exe`，Mac 是 `rg`），Windows 打出来的东西不变。
   - 图标 `build/icon.icns`：Windows 的 `icon.ico` 是透明底的标志，Mac 程序坞里习惯带底板，所以按 Apple 模板单独做（1024 画布、824 的白色圆角方块、中间放 `build/brand/icon.svg`）。`pnpm --filter @diffra/desktop icon:mac`（`scripts/mac-icon.ts`）生成，只能在 Mac 上跑；品牌图形改了就重跑。
-  - 签名：开 hardened runtime（公证要求），权限在 `build/entitlements.mac.plist`（JIT，和关掉库校验让 node-pty、ast-grep 这些原生模块能加载）。有 Developer ID 证书时（`CSC_LINK` 或 `CSC_NAME`）用证书签名并公证，没有就临时签名（ad-hoc）。临时签名的包只能自己用：发给别人会被 Gatekeeper 拦。
+  - 签名：开 hardened runtime（公证要求），权限在 `build/entitlements.mac.plist`（JIT，和关掉库校验让 node-pty、ast-grep 这些原生模块能加载）。有 Developer ID 证书时用证书签名并公证：CI 用 `CSC_LINK`，本机用 `CSC_NAME`，或者钥匙串里装了「Developer ID Application」证书就自动用；没有就临时签名（ad-hoc），临时签名的包只能自己用，发给别人会被 Gatekeeper 拦。`DIFFRA_MAC_ADHOC=1` 强制临时签名，`test:packaged:mac` 用它，跑测试不用等公证。
+  - 证书（2026-11-16 起）：个人账号，团队「dingxin tao」，Team ID `QDSZ22U497`，账号持有人是报名用的 Apple ID。「Developer ID Application」证书只有持有人能建；Xcode 当时误报「只有持有人能操作」，改在开发者网站用证书请求（CSR）建的。私钥只在开发用的这台 Mac 的登录钥匙串里，换电脑或上 CI 要先从钥匙串导出成 p12。
+  - 公证：用 App Store Connect 的 API 密钥，`xcrun notarytool store-credentials diffra-notary …` 存进登录钥匙串，打包配置默认用这个名字（`APPLE_KEYCHAIN_PROFILE`）；CI 改用 `APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`。有证书却没有凭据时公证直接失败，不会悄悄打出没公证的包。
   - 更新源 `https://update.diffra.dev/mac/`（`mac.publish`，写进包里，发布后不能改）。
-- 自动更新：Mac 的自动更新要求新旧版本用同一个 Developer ID 签名，临时签名的包一更新就失败，所以现在 Mac 打包版不检查更新，「更新与关于」显示「Mac 预览版暂不自动更新，新版本请到官网下载」（`updater.ts` 的 `mac-preview`）。正式发 Mac 版时去掉。
+- 自动更新：Mac 的自动更新要求新旧版本用同一个 Developer ID 签名。打包时有证书才在包里的 package.json 写 `macDeveloperId: true`（`electron-builder.config.ts` 的 `extraMetadata`），`updater.ts` 只在有这一项时检查更新；临时签名的包（本地试打包、打包版 e2e）显示「这个 Mac 版没有正式签名，不自动更新」（`mac-unsigned`）。0.6.2 起的签名版自动更新；0.5.2 预览版是临时签名，不会更新，要手动重新下载一次，第一次打开签名版时系统会问一次能不能读钥匙串里的「Diffra Safe Storage」。
 - 钥匙串：Mac 上 safeStorage 用钥匙串里的「Diffra Safe Storage」加密 API Key，开发版和打包版共用这个名字。签名不同的程序第一次读它会弹系统授权框；临时签名每次打包都不一样，所以每装一个新包都会问一次，有了 Developer ID 就不会。e2e 在 Mac 上加 `--use-mock-keychain`，不碰用户真实的钥匙串。
-- 发布（2026-11-15 起，从 0.5.2 开始，Mac 版叫「预览版」）：
-  - 还没有 Developer ID 证书，先发临时签名、没公证的包。用户第一次打开会被 Gatekeeper 拦，要到「系统设置 → 隐私与安全性」点「仍要打开」；下载页、首页常见问题、快速开始里写了步骤，和 Windows 没签名时教用户点「仍要运行」一样。有了证书以后改成签名公证的包，再去掉这些说明。
+- 发布（2026-11-15 起；0.5.2 是临时签名的预览版，2026-11-16 起 0.6.2 是签名、公证的正式版）：
+  - 0.5.2 预览版没有 Developer ID 证书，发的是临时签名、没公证的包，用户第一次打开要在「系统设置 → 隐私与安全性」点「仍要打开」。0.6.2 起签名、公证，官网去掉了这些说明，只留给 0.5.2 用户的重新下载提示。
   - 流程：在 Mac 上 `package:mac`（先 `pnpm install`），把 `release/` 里的 dmg、zip、两个 `.blockmap`、`latest-mac.yml` 用 `gh release upload v<版本> … --clobber` 传到这一版的 GitHub Release；然后在有 `publish.config.json` 的电脑上 `pnpm --filter @diffra/desktop publish:mac`（`scripts/publish-mac.ts`），再 `publish:website`。Windows 的 `publish:release` 不变，两边各发各的。
   - 服务器目录：`publish.config.json` 的 `macRemoteDir`，不写就是 `remoteDir` 旁边的 `mac`（`/var/www/diffra-update/mac`），脚本自己建。官网的下载按钮用 `Diffra-latest-arm64.dmg`（软链接，和 Windows 的 `Diffra-Setup-latest.exe` 一样）。
   - 官网：下载页两块卡片，Windows 读 `win/latest.yml`、Mac 读 `mac/latest-mac.yml` 里 dmg 那一项（顶层的 sha512 是 zip 的）。首页的下载按钮和版本说明标了 `data-follow-platform`，用 Mac 打开时换成 Mac 版（iPad 也自称 Mac，按触点数排除）。Intel 芯片的 Mac 浏览器认不出来，下载页写明暂不支持。跨域读 `.yml` 要 nginx 给 `/mac/` 也加 `Access-Control-Allow-Origin: https://diffra.dev`，`publish:mac` 发完会检查，没有就提醒（不影响下载）。

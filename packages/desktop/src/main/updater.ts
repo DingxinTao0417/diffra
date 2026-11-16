@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
@@ -12,11 +12,19 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // 更新包只会装到已安装的那份，免安装版下载、安装了也换不掉自己，重开还是旧版，还会一直提示有新版本
 const UNINSTALLER = 'Uninstall Diffra.exe'
 
-function disabledReason(): 'development' | 'portable' | 'mac-preview' | null {
+// Mac 上的自动更新要求新旧版本用同一个 Developer ID 签名。打包时有证书才在包里的 package.json 写 macDeveloperId（electron-builder.config.ts），
+// 临时签名（ad-hoc）的包（本地试打包、打包版 e2e）更新必然失败，不检查
+function macDeveloperIdSigned(): boolean {
+  try {
+    return (JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')) as { macDeveloperId?: boolean }).macDeveloperId === true
+  } catch {
+    return false
+  }
+}
+
+function disabledReason(): 'development' | 'portable' | 'mac-unsigned' | null {
   if (!app.isPackaged) return 'development'
-  // Mac 上的自动更新要求新旧版本用同一个 Developer ID 签名；现在的包只有临时签名（ad-hoc），更新必然失败。
-  // 有了证书、正式发 Mac 版时去掉这一行（见 docs/decisions.md「macOS」）
-  if (process.platform === 'darwin') return 'mac-preview'
+  if (process.platform === 'darwin') return macDeveloperIdSigned() ? null : 'mac-unsigned'
   return existsSync(join(dirname(app.getPath('exe')), UNINSTALLER)) ? null : 'portable'
 }
 

@@ -882,8 +882,8 @@ function useCoreStatus(): CoreStatus | null {
   return status
 }
 
-function disabledUpdateText(reason: 'development' | 'portable' | 'mac-preview'): string {
-  if (reason === 'mac-preview') return 'Mac 预览版暂不自动更新，新版本请到官网下载'
+function disabledUpdateText(reason: 'development' | 'portable' | 'mac-unsigned'): string {
+  if (reason === 'mac-unsigned') return '这个 Mac 版没有正式签名，不自动更新，新版本请到官网下载'
   return reason === 'portable' ? '免安装版不检查更新，请用安装版' : '开发模式不检查更新'
 }
 

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -9,9 +10,24 @@ import { type ChangelogRelease, formatNotes } from './src/shared/changelog.ts'
 const updateUrl = process.env.DIFFRA_UPDATE_URL || 'https://update.diffra.dev/win/'
 // Mac 版的更新源单独一个目录（latest-mac.yml 和 zip 包），同样发布后不能改。现在 Mac 版还不自动更新（见 updater.ts）
 const macUpdateUrl = process.env.DIFFRA_UPDATE_URL || 'https://update.diffra.dev/mac/'
-// 有 Developer ID 证书时（CSC_LINK 是 CI 里的 p12，CSC_NAME 是钥匙串里的证书名）用证书签名，
-// 没有就临时签名（ad-hoc）：Apple 芯片要求程序至少有签名才能运行；临时签名的包只能自己用，发给别人会被 Gatekeeper 拦
-const macCertificate = Boolean(process.env.CSC_LINK || process.env.CSC_NAME)
+// 有 Developer ID 证书时用证书签名并公证：CI 里用 CSC_LINK（p12），本机用 CSC_NAME 指定，或者钥匙串里装了 Developer ID Application 证书就直接用。
+// 没有就临时签名（ad-hoc）：Apple 芯片要求程序至少有签名才能运行；临时签名的包只能自己用，发给别人会被 Gatekeeper 拦。
+// DIFFRA_MAC_ADHOC=1 强制临时签名（本机试打包、跑打包版 e2e 时不用等公证）
+function keychainHasDeveloperId(): boolean {
+  if (process.platform !== 'darwin') return false
+  try {
+    return execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' }).includes('"Developer ID Application:')
+  } catch {
+    return false
+  }
+}
+const macCertificate = process.env.DIFFRA_MAC_ADHOC !== '1' && (Boolean(process.env.CSC_LINK || process.env.CSC_NAME) || keychainHasDeveloperId())
+// 公证凭据：CI 用 APPLE_API_KEY、APPLE_API_KEY_ID、APPLE_API_ISSUER；本机用 notarytool store-credentials 存进钥匙串的 diffra-notary。
+// electron-builder 找不到凭据时只警告、不公证，悄悄打出发给别人会被拦的包；默认指向 diffra-notary，钥匙串里没有这份凭据时公证直接失败
+const MAC_NOTARY_PROFILE = 'diffra-notary'
+if (macCertificate && process.platform === 'darwin' && !process.env.APPLE_API_KEY && !process.env.APPLE_ID) {
+  process.env.APPLE_KEYCHAIN_PROFILE ??= MAC_NOTARY_PROFILE
+}
 
 // rg 二进制随 core 的依赖 @vscode/ripgrep 按平台下载；打包时拷到 resources，主进程通过 DIFFRA_RG_PATH 告诉 core
 const requireFromCore = createRequire(fileURLToPath(new URL('../core/package.json', import.meta.url)))
@@ -31,7 +47,8 @@ const config: Configuration = {
   appId: 'dev.diffra.desktop',
   // 每用户安装的目录名（%LOCALAPPDATA%\Programs\diffra）和更新缓存目录名都取自包名，
   // workspace 包名 @diffra/desktop 会变成 @diffradesktop。和 appId 一样，发布后不能改。
-  extraMetadata: { name: 'diffra' },
+  // macDeveloperId：Mac 上用 Developer ID 签名的包才自动更新（见 updater.ts）；Windows 打包时没有这一项，和原来一样
+  extraMetadata: { name: 'diffra', ...(process.platform === 'darwin' && macCertificate ? { macDeveloperId: true } : {}) },
   directories: { output: 'release' },
   files: ['out/**/*'],
   // 唯一的原生依赖 node-pty 自带 N-API 预编译文件，Electron 直接能用；重编要装 VS 编译工具，而且会失败
@@ -63,7 +80,7 @@ const config: Configuration = {
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
     identity: macCertificate ? undefined : '-',
-    // 公证要 Apple 账号的凭据（APPLE_API_KEY 等），没有证书时也没法公证
+    // 公证要 Apple 账号的凭据（见上面 MAC_NOTARY_PROFILE），没有证书时也没法公证
     notarize: macCertificate,
     publish: [{ provider: 'generic', url: macUpdateUrl }],
   },

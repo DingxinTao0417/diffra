@@ -21,7 +21,7 @@
     "publish:extension": "node scripts/publish-extension.ts",
     "test": "node --test scripts/*.test.ts && electron-vite build && node scripts/changelog.ts && node scripts/build-extension.ts && playwright test --project=dev",
     "test:packaged": "pnpm run package && node scripts/build-extension.ts && playwright test --project=packaged",
-    "test:packaged:mac": "pnpm run package:mac && node scripts/build-extension.ts && playwright test --project=packaged",
+    "test:packaged:mac": "DIFFRA_MAC_ADHOC=1 pnpm run package:mac && node scripts/build-extension.ts && playwright test --project=packaged",
     "publish:release": "node scripts/publish-release.ts",
     "publish:mac": "node scripts/publish-mac.ts",
     "publish:relay": "node scripts/publish-relay.ts",
