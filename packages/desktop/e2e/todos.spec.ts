@@ -41,9 +41,12 @@ test('待办：记下、快捷键快速记、重启后还在；派给新任务�
     const input = window.getByLabel('新待办')
     await input.fill('给首页加暗色模式开关')
     await input.press('Enter')
+    let rows = window.getByTestId('todo-row')
+    // 等第一条真的进了列表再记第二条：上一条还在保存时输入框不接受新的回车
+    await expect(rows).toHaveCount(1)
+    await expect(input).toBeEnabled()
     await input.fill('设置页加导出按钮')
     await input.press('Enter')
-    let rows = window.getByTestId('todo-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('设置页加导出按钮')
     await expect(rows.filter({ hasText: '给首页加暗色模式开关' })).toContainText(basename(project))
