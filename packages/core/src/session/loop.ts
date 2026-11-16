@@ -1075,7 +1075,8 @@ export async function runToolCall(
   const mcp = session.mcpTools?.byName.get(name)
   if (mcp && !call.invalid) return runMcpToolCall(session, call, mcp, signal, io)
   if (isBrowserTool(name) && session.config.browser && !call.invalid) return runBrowserToolCall(session, call, name, signal, io)
-  if (name === COMPUTER_TOOL && session.config.computer && !call.invalid) return runComputerToolCall(session, call, signal, io)
+  // 电脑操控只给主智能体：子智能体（含只读的）的工具里没有它，模型硬调也不执行
+  if (name === COMPUTER_TOOL && session.config.computer && !scope && !call.invalid) return runComputerToolCall(session, call, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
   if (name === FIND_PHOTOS_TOOL && findPhotosEnabled(session) && !call.invalid) return runFindPhotos(session, call, signal, io)

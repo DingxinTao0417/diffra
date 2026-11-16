@@ -4,7 +4,7 @@ import type { MockLanguageModelV4 } from 'ai/test'
 import { describe, expect, test } from 'vitest'
 import { type ComputerAction, type ComputerActionResult, LOCAL_ONLY_META_KEY, PERMISSION_OPTIONS, type PromptImage } from '../src/protocol.js'
 import { toComputerAction } from '../src/session/computer.js'
-import { runTurn } from '../src/session/loop.js'
+import { runToolCall, runTurn } from '../src/session/loop.js'
 import type { Session } from '../src/session/session.js'
 import { makeSession, recordingIO, scriptedModel, useTempProject } from './loop-helpers.js'
 
@@ -55,6 +55,16 @@ describe('电脑操控', () => {
     expect(Object.keys((await withComputer(scriptedModel([]), { computer: false })).toolSet())).not.toContain('computer')
     expect(Object.keys((await withComputer(scriptedModel([]), { images: false })).toolSet())).not.toContain('computer')
     expect(Object.keys((await makeSession(scriptedModel([]))).toolSet())).not.toContain('computer')
+  })
+
+  test('只给主智能体：子智能体（带 scope）调了也不执行、不问', async () => {
+    const session = await withComputer(scriptedModel([]))
+    const fake = fakeComputer()
+    const { io, asked } = askingIO([PERMISSION_OPTIONS.allowOnce])
+    const scope = { beforeWrite: () => {}, onEdited: () => {} }
+    await runToolCall(session, { toolCallId: 'c1', toolName: 'computer', input: { action: 'click', x: 1, y: 1 }, invalid: null }, new AbortController().signal, { ...io, computer: fake.computer }, scope)
+    expect(fake.actions).toEqual([])
+    expect(asked).toEqual([])
   })
 
   test('参数：点击、双击、右键、拖动、输入、按键、滚动；缺坐标、负坐标、乱写的按键报错', () => {
