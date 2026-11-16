@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, type FSWatcher, watch } from 'node:fs'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { keepPinned, staticDiagram, thumbnailOf, verifyDiagram } from './diagrams.js'
-import { AnalysisCancelled, analyzeProject, currentFingerprint, digestOf, type ParseCache } from './engine.js'
+import { AnalysisCancelled, analyzeProject, codeLanguage, currentFingerprint, digestOf, type ParseCache } from './engine.js'
 import {
   type AnalysisDigest,
   type AnalysisPhase,
@@ -28,6 +28,30 @@ import {
 const PROJECTS_FILE = 'projects.json'
 const MAX_PROJECTS = 200
 
+// 监听文件变化（v2 · M9）：同时最多盯几个项目；改动停下多久后核对一次指纹；自动重新分析再多等一会儿
+const MAX_WATCHED = 4
+const SETTLE_MS = 800
+const AUTO_DELAY_MS = 1500
+// 依赖、构建产物、版本库这些目录里的变化不算（分析本来就跳过它们）
+const IGNORED_SEGMENTS = new Set(['node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'target', '.next', '.nuxt', '.svelte-kit', 'coverage', '__pycache__', '.venv', 'venv', '.gradle', '.idea', '.vscode', 'vendor', 'Pods', '.dart_tool', 'bin', 'obj'])
+const MANIFESTS = new Set(['package.json', 'pnpm-workspace.yaml', 'tsconfig.json', 'go.mod', 'Cargo.toml', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'pyproject.toml', 'setup.py', 'setup.cfg', 'composer.json', 'Gemfile', 'pubspec.yaml', 'Package.swift'])
+
+// 一次文件变化值不值得看：代码文件或清单，不在依赖和构建目录里
+export function watchedChange(file: string | null): boolean {
+  if (file === null) return true
+  const parts = file.split(/[\\/]/)
+  if (parts.some((part) => IGNORED_SEGMENTS.has(part))) return false
+  const name = parts[parts.length - 1]!
+  return MANIFESTS.has(name) || /^tsconfig\..*json$/.test(name) || codeLanguage(name) !== null
+}
+
+interface Watching {
+  watcher: FSWatcher
+  auto: boolean
+  settle: NodeJS.Timeout | null
+  refresh: NodeJS.Timeout | null
+}
+
 // 卡片页要的东西单独存一份小文件，列项目时不用读几十 MB 的分析结果
 interface ProjectSummaryFile {
   digest: AnalysisDigest | null
@@ -48,6 +72,7 @@ export function projectIdOf(path: string): string {
 // 一个项目同一时间只跑一次分析；分析和模型解读的进度通过 onEvent 推给客户端
 export class ArchitectureService {
   private readonly runs = new Map<string, { controller: AbortController; progress: AnalysisProgress }>()
+  private readonly watching = new Map<string, Watching>()
   private projectsCache: ArchitectureProject[] | null = null
   private tail: Promise<unknown> = Promise.resolve()
 
@@ -221,6 +246,82 @@ export class ArchitectureService {
     if (!target?.enforceInTasks) return null
     const analysis = await this.analysis(id)
     return analysis ? { analysis, target } : null
+  }
+
+  // 打开着一个项目时盯着它的文件（v2 · M9）：代码改了就告诉界面过期，开了自动更新就在改动停下后重新分析（增量，只解析改过的文件）。
+  // 界面离开项目时关掉；同时最多盯几个，多了关最早的。auto 记在项目列表里，下次打开照旧
+  async watch(id: string, enabled: boolean, auto: boolean): Promise<void> {
+    this.unwatch(id)
+    if (!enabled) return
+    const project = await this.project(id)
+    if (!!project.autoRefresh !== auto) await this.setAutoRefresh(id, auto)
+    if (!existsSync(project.path)) return
+    while (this.watching.size >= MAX_WATCHED) this.unwatch(this.watching.keys().next().value!)
+    let watcher: FSWatcher
+    try {
+      watcher = watch(project.path, { recursive: true, persistent: false })
+    } catch (error) {
+      this.onEvent({ projectId: id, progress: this.runs.get(id)?.progress ?? null, watchError: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const entry: Watching = { watcher, auto, settle: null, refresh: null }
+    this.watching.set(id, entry)
+    watcher.on('change', (_type, file) => {
+      if (!watchedChange(typeof file === 'string' ? file : null)) return
+      if (entry.settle) clearTimeout(entry.settle)
+      entry.settle = setTimeout(() => void this.settled(id, entry), SETTLE_MS)
+    })
+    watcher.on('error', (error) => {
+      console.error(`[architecture] 监听 ${project.path} 出错，停止监听`, error)
+      this.unwatch(id)
+      this.onEvent({ projectId: id, progress: this.runs.get(id)?.progress ?? null, watchError: error.message })
+    })
+  }
+
+  unwatch(id: string): void {
+    const entry = this.watching.get(id)
+    if (!entry) return
+    this.watching.delete(id)
+    if (entry.settle) clearTimeout(entry.settle)
+    if (entry.refresh) clearTimeout(entry.refresh)
+    entry.watcher.close()
+  }
+
+  dispose(): void {
+    for (const id of [...this.watching.keys()]) this.unwatch(id)
+  }
+
+  // 改动停下了：按指纹核对一次（.gitignore 里的、只改了时间的不算），真变了才说过期
+  private async settled(id: string, entry: Watching): Promise<void> {
+    entry.settle = null
+    if (this.watching.get(id) !== entry) return
+    const stale = await this.stale(id).catch((error: unknown) => {
+      console.error('[architecture] 判断是否过期失败', error)
+      return null
+    })
+    if (stale === null || this.watching.get(id) !== entry) return
+    this.onEvent({ projectId: id, progress: this.runs.get(id)?.progress ?? null, stale })
+    if (!stale || !entry.auto) return
+    if (entry.refresh) clearTimeout(entry.refresh)
+    entry.refresh = setTimeout(() => {
+      entry.refresh = null
+      if (this.watching.get(id) !== entry) return
+      // 正在分析（或解读）：等它完了再看一次
+      if (this.runs.has(id)) {
+        entry.settle = setTimeout(() => void this.settled(id, entry), AUTO_DELAY_MS)
+        return
+      }
+      this.analyze(id).catch((error: unknown) => console.error('[architecture] 自动重新分析失败', error))
+    }, AUTO_DELAY_MS)
+  }
+
+  private async setAutoRefresh(id: string, auto: boolean): Promise<void> {
+    await this.enqueue(async () => {
+      const projects = await this.loadProjects()
+      const next = projects.map((project) => (project.id === id ? { ...project, autoRefresh: auto } : project))
+      await this.writeJson(join(this.dir, PROJECTS_FILE), { version: ARCHITECTURE_VERSION, projects: next })
+      this.projectsCache = next
+    })
   }
 
   // 任务里的智能体查架构（v2 · M9）：这个目录分析过没有。列工具时同步调，只看文件在不在

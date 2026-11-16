@@ -461,6 +461,8 @@ export interface ArchitectureProject {
   path: string
   name: string
   addedAt: string
+  // v2 · M9：打开着这个项目时，代码一改就自动重新分析（默认关，只提示过期）
+  autoRefresh?: boolean
 }
 
 // 卡片上的缩略图：应用架构图每层的方块名
@@ -505,6 +507,9 @@ export interface ArchitectureEvent {
   progress: AnalysisProgress | null
   outcome?: 'done' | 'cancelled' | 'failed'
   error?: string
+  // v2 · M9 监听文件变化：代码在分析之后改了（stale），或者监听不了（watchError）。带这两个字段的不是分析进度
+  stale?: boolean
+  watchError?: string
 }
 
 // 打开一个项目时一次取回的全部数据

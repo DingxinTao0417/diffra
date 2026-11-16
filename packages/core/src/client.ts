@@ -534,6 +534,11 @@ export function architectureStale(connection: acp.ClientConnection, projectId: s
   return requestOf(connection)<{ stale: boolean | null }, { projectId: string }>(SESSION_EXT_METHODS.architectureStale, { projectId }, extRequestOptions())
 }
 
+// 打开着项目时监听文件变化（v2 · M9）；离开项目时 watch 传 false
+export async function architectureWatch(connection: acp.ClientConnection, projectId: string, watch: boolean, auto: boolean): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; watch: boolean; auto: boolean }>(SESSION_EXT_METHODS.architectureWatch, { projectId, watch, auto }, extRequestOptions())
+}
+
 export async function architectureInterpret(connection: acp.ClientConnection, projectId: string, model: SessionModel, parts: InterpretPart[]): Promise<void> {
   await requestOf(connection)<object, { projectId: string; model: SessionModel; parts: InterpretPart[] }>(SESSION_EXT_METHODS.architectureInterpret, { projectId, model, parts }, extRequestOptions())
 }

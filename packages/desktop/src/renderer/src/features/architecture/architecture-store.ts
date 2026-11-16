@@ -14,11 +14,13 @@ interface ArchitectureState {
   bundleErrors: Record<string, string>
   // 最近一次分析或解读失败的原因，下次开始时清掉
   failures: Record<string, string>
+  // 监听文件变化出错的原因（v2）：这时只在打开项目时判断一次是否过期
+  watchErrors: Record<string, string>
 }
 
 const MAX_BUNDLES = 3
 
-let state: ArchitectureState = { projects: null, listError: null, running: {}, stale: {}, bundles: {}, bundleErrors: {}, failures: {} }
+let state: ArchitectureState = { projects: null, listError: null, running: {}, stale: {}, bundles: {}, bundleErrors: {}, failures: {}, watchErrors: {} }
 const listeners = new Set<() => void>()
 
 function set(change: (current: ArchitectureState) => ArchitectureState): void {
@@ -54,6 +56,16 @@ export function wireArchitecture(): void {
 }
 
 function onEvent(event: ArchitectureEvent): void {
+  // 监听文件变化（v2）：不是分析进度
+  if (event.stale !== undefined || event.watchError !== undefined) {
+    const { stale, watchError } = event
+    set((current) => ({
+      ...current,
+      ...(stale !== undefined ? { stale: { ...current.stale, [event.projectId]: stale } } : {}),
+      ...(watchError !== undefined ? { watchErrors: { ...current.watchErrors, [event.projectId]: watchError } } : {}),
+    }))
+    return
+  }
   if (event.progress) {
     const progress = event.progress
     set((current) => ({ ...current, running: { ...current.running, [event.projectId]: progress } }))
@@ -97,6 +109,26 @@ export async function checkStale(projectId: string): Promise<void> {
   } catch (error) {
     console.error('[architecture] 判断是否过期失败', error)
   }
+}
+
+// 打开项目时开始监听，离开时停；auto 是「代码改了自动重新分析」（core 记在项目列表里）
+export async function watchProject(projectId: string, watch: boolean, auto: boolean): Promise<void> {
+  if (watch) {
+    set((current) => {
+      const { [projectId]: _error, ...watchErrors } = current.watchErrors
+      return { ...current, watchErrors }
+    })
+  }
+  try {
+    await window.diffra.watchArchitecture(projectId, watch, auto)
+  } catch (error) {
+    if (watch) set((current) => ({ ...current, watchErrors: { ...current.watchErrors, [projectId]: errorMessage(error) } }))
+  }
+}
+
+// 界面上切「自动更新」：先改手里的，打开着的项目页据此重新开始监听
+export function setAutoRefresh(projectId: string, auto: boolean): void {
+  updateBundle(projectId, (bundle) => ({ ...bundle, project: { ...bundle.project, autoRefresh: auto } }))
 }
 
 export async function loadBundle(projectId: string): Promise<void> {

@@ -16,6 +16,7 @@ import {
   architectureSaveTarget,
   architectureSource,
   architectureStale,
+  architectureWatch,
   type SessionModel,
 } from '@diffra/core'
 import { INTERPRET_PARTS } from '@diffra/core/architecture'
@@ -45,6 +46,9 @@ export function registerArchitectureIpc(architectureModel: () => Promise<Session
   ipcMain.handle(IPC_CHANNELS.architectureRunning, async () => architectureRunning(await coreConnection()))
   ipcMain.handle(IPC_CHANNELS.architectureBundle, async (_event, raw: unknown) => architectureBundle(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureStale, async (_event, raw: unknown) => (await architectureStale(await coreConnection(), parse(projectId, raw))).stale)
+  ipcMain.handle(IPC_CHANNELS.architectureWatch, async (_event, rawId: unknown, rawWatch: unknown, rawAuto: unknown) =>
+    architectureWatch(await coreConnection(), parse(projectId, rawId), parse(z.boolean(), rawWatch), parse(z.boolean(), rawAuto)),
+  )
   ipcMain.handle(IPC_CHANNELS.architectureInterpret, async (_event, rawId: unknown, rawParts: unknown) =>
     architectureInterpret(await coreConnection(), parse(projectId, rawId), await architectureModel(), parse(z.array(z.enum(INTERPRET_PARTS)).min(1), rawParts)),
   )

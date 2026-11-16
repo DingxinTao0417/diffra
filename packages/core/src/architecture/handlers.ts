@@ -102,6 +102,11 @@ export function registerArchitecture(app: acp.AgentApp, service: ArchitectureSer
     })
     .onRequest(SESSION_EXT_METHODS.architectureBundle, projectParams, ({ params }) => service.bundle(params.projectId))
     .onRequest(SESSION_EXT_METHODS.architectureStale, projectParams, async ({ params }) => ({ stale: await service.stale(params.projectId) }))
+    .onRequest(SESSION_EXT_METHODS.architectureWatch, projectParams.extend({ watch: z.boolean(), auto: z.boolean() }), async ({ params, client }) => {
+      remember(client)
+      await service.watch(params.projectId, params.watch, params.auto)
+      return {}
+    })
     // 全局解读在后台跑：一次模型调用要一两分钟，进度显示在项目上
     // 全局解读和三张架构图各一次模型调用，并行跑；每样做完就存，一样失败不影响别的
     .onRequest(SESSION_EXT_METHODS.architectureInterpret, projectParams.extend({ model: modelConfigSchema, parts: z.array(z.enum(INTERPRET_PARTS)).min(1).max(INTERPRET_PARTS.length) }), async ({ params, client }) => {

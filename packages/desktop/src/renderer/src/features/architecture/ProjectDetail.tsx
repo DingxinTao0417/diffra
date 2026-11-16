@@ -10,7 +10,8 @@ import { errorMessage } from '@/lib/errors'
 import { formatDuration, formatTime } from '@/lib/format'
 import { navigate, openArchitecture, openHome, replaceRoute } from '@/state/actions'
 import { type ArchitectureTab, showToast } from '@/state/store'
-import { analyze, checkStale, interpret, loadBundle, useArchitecture } from './architecture-store'
+import { Switch } from '@/components/ui/switch'
+import { analyze, checkStale, interpret, loadBundle, setAutoRefresh, useArchitecture, watchProject } from './architecture-store'
 import { ArchitectureContext, type ArchitectureContextValue, type ArchitectureRoute, type DiagramDraft, useArch } from './context'
 import { ArchIndex, findBlock, parseScope, type Scope } from './graph'
 import { ModuleTree } from './ModuleTree'
@@ -44,6 +45,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
   const progress = useArchitecture((state) => state.running[projectId])
   const stale = useArchitecture((state) => state.stale[projectId])
   const failure = useArchitecture((state) => state.failures[projectId])
+  const watchError = useArchitecture((state) => state.watchErrors[projectId])
   const [peeking, setPeeking] = useState<{ path: string; line: number | null } | null>(null)
   const [draft, setDraft] = useState<DiagramDraft | null>(null)
 
@@ -51,6 +53,15 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
     void loadBundle(projectId)
     void checkStale(projectId)
   }, [projectId])
+
+  // 打开着项目时监听文件变化（v2）：代码改了标过期，开了自动更新就在改动停下后重新分析
+  const loaded = bundle !== undefined
+  const autoRefresh = bundle?.project.autoRefresh === true
+  useEffect(() => {
+    if (!loaded) return
+    void watchProject(projectId, true, autoRefresh)
+    return () => void watchProject(projectId, false, false)
+  }, [projectId, loaded, autoRefresh])
 
   const analysis = bundle?.analysis ?? null
   const index = useMemo(() => (analysis ? new ArchIndex(analysis) : null), [analysis])
@@ -96,7 +107,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
             <h1 className="truncate font-bold" data-testid="architecture-title">
               {project?.name ?? '项目'}
             </h1>
-            {stale && <Badge variant="warning">代码已变，建议重新分析</Badge>}
+            {stale && !progress && <Badge variant="warning" data-testid="architecture-stale">{autoRefresh ? '代码已变，马上重新分析' : '代码已变，建议重新分析'}</Badge>}
           </div>
           <div className="truncate text-xs text-muted-foreground" title={project?.path}>
             {project?.path}
@@ -115,6 +126,12 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
                   <CircleAlert className="size-3.5 shrink-0" />
                   {failure}
                 </span>
+              )}
+              {analysis && (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={watchError ? `没法监听文件变化（${watchError}），打开项目时判断一次是否过期` : '打开着这个项目时，代码改了就自动重新分析（只解析改过的文件）'}>
+                  <Switch label="代码改了自动重新分析" checked={autoRefresh} disabled={Boolean(watchError)} onChange={(value) => setAutoRefresh(projectId, value)} />
+                  {watchError ? '没法自动更新' : '自动更新'}
+                </label>
               )}
               <Button variant="outline" size="sm" onClick={() => void analyze(projectId)} data-testid="architecture-analyze">
                 <RefreshCw className="size-3.5" />

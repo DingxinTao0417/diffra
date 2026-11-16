@@ -161,6 +161,7 @@ export const IPC_CHANNELS = {
   architectureRunning: 'architecture:running',
   architectureBundle: 'architecture:bundle',
   architectureStale: 'architecture:stale',
+  architectureWatch: 'architecture:watch',
   architectureInterpret: 'architecture:interpret',
   architectureInterpretModule: 'architecture:interpret-module',
   architectureFlowChart: 'architecture:flow-chart',
@@ -651,6 +652,8 @@ export interface DiffraApi {
   runningArchitecture(): Promise<AnalysisProgress[]>
   getArchitecture(projectId: string): Promise<ArchitectureBundle>
   isArchitectureStale(projectId: string): Promise<boolean | null>
+  // 打开着项目时监听文件变化（v2）：代码改了推 ArchitectureEvent.stale；auto 时改动停下后自动重新分析
+  watchArchitecture(projectId: string, watch: boolean, auto: boolean): Promise<void>
   // parts：要模型做哪几样（系统简介和流程、三张架构图），并行跑
   interpretArchitecture(projectId: string, parts: InterpretPart[]): Promise<void>
   saveArchitectureDiagram(projectId: string, diagram: BlockDiagram): Promise<void>

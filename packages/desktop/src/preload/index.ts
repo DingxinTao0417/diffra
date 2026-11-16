@@ -110,6 +110,7 @@ const api: DiffraApi = {
   runningArchitecture: () => ipcRenderer.invoke(IPC_CHANNELS.architectureRunning),
   getArchitecture: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureBundle, projectId),
   isArchitectureStale: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.architectureStale, projectId),
+  watchArchitecture: (projectId, watch, auto) => ipcRenderer.invoke(IPC_CHANNELS.architectureWatch, projectId, watch, auto),
   interpretArchitecture: (projectId, parts) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpret, projectId, parts),
   saveArchitectureDiagram: (projectId, diagram) => ipcRenderer.invoke(IPC_CHANNELS.architectureSaveDiagram, projectId, diagram),
   interpretArchitectureModule: (projectId, path) => ipcRenderer.invoke(IPC_CHANNELS.architectureInterpretModule, projectId, path),

@@ -640,6 +640,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       void connection.closed.then(() => {
         for (const session of externals.values()) void session.dispose()
         void lspPool.dispose().catch((error: unknown) => console.error('[lsp] 停掉语言服务器失败', error))
+        architecture?.dispose()
       })
     })
     .onRequest(acp.methods.agent.initialize, () => ({

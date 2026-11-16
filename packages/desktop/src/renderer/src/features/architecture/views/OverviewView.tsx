@@ -222,7 +222,7 @@ function AnalysisDetails() {
     <section className="space-y-2 text-xs text-muted-foreground">
       <h2 className="text-sm font-bold text-foreground">分析说明</h2>
       <p>
-        深度解析了 {analysis.stats.parsedFiles} 个文件（TS/JS/Vue/Python/Go/Rust/Java），其余语言只统计文件和行数。这次重新解析了 {analysis.stats.reparsed} 个文件，其余用上次的结果。
+        深度解析了 {analysis.stats.parsedFiles} 个文件，解析不了的语言只统计文件和行数。这次重新解析了 {analysis.stats.reparsed} 个文件，其余用上次的结果。
         {analysis.commits.length > 0 ? ` 改动频率按最近 ${analysis.churnDays} 天的 ${analysis.commits.length} 次提交算。` : ' 不是 git 仓库，没有改动频率。'}
       </p>
       {(skipped.tooLarge > 0 || skipped.generated > 0 || skipped.overLimit > 0 || skipped.failed > 0) && (
