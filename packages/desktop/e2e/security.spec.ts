@@ -58,11 +58,11 @@ test('安全设置；静态检查和轻量扫描先后打回，改好后完成�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
-    // 安全设置：四项默认都开，各自写着什么时候查；关掉再打开会存下来
+    // 安全设置：各项默认都开（v2 多了污点分析、依赖许可证、Semgrep），各自写着什么时候查；关掉再打开会存下来
     await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '安全' }).click()
     const levels = window.getByTestId('security-levels')
-    for (const name of ['静态检查', '轻量扫描', '深度扫描', '规范审查']) await expect(levels.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'true')
+    for (const name of ['静态检查', '污点分析', '依赖许可证', 'Semgrep', '轻量扫描', '深度扫描', '规范审查']) await expect(levels.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'true')
     await expect(levels).toContainText('完成前自动')
     await expect(levels).toContainText('提交前询问')
     await levels.getByRole('switch', { name: '深度扫描' }).click()
@@ -177,7 +177,7 @@ test('设置里关掉的检查，已经打开的任务立即不再查；智能�
       await levels.getByRole('switch', { name }).click()
       await expect(levels.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'false')
     }
-    await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).security).toEqual({ staticCheck: false, lightScan: false, deepScan: true, review: false })
+    await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).security).toEqual({ staticCheck: false, lightScan: false, deepScan: true, review: false, taint: true, licenses: true, semgrep: true })
     await window.getByRole('button', { name: '返回' }).click()
 
     await taskInput(window).fill('再加一个计算函数')

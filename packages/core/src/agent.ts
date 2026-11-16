@@ -82,6 +82,8 @@ import { buildSystemPrompt } from './session/prompt.js'
 import { registerArchitecture } from './architecture/handlers.js'
 import type { ArchitectureEvent } from './architecture/model.js'
 import { ArchitectureService } from './architecture/service.js'
+import { DYNAMIC_MAX_ROUTES } from './security/dynamic.js'
+import { runSecurityTool, SECURITY_TOOLS, securityToolsInfo } from './security/tools.js'
 import { detectChecks, hasFrontend } from './project/detect.js'
 import { runShell } from './tools/command.js'
 import { restoredTaskState, Session } from './session/session.js'
@@ -244,6 +246,8 @@ async function selectedSkills(session: SessionType, names: string[]): Promise<Sk
 
 export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const sessions = new Map<string, Session>()
+  // 更多安全检查（v2）正在跑的：runId → 取消用的控制器
+  const securityRuns = new Map<string, AbortController>()
   const infos = new Map<string, SessionInfo>()
   // 外接智能体的任务（v2）：和 Diffra 自己的会话分开放，只支持提问、停止、撤销改动、看改动、改名归档
   const externals = new Map<string, ExternalSession>()
@@ -947,8 +951,39 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     })
     // 已经打开的会话都换成新开关；正在跑的一轮从下一次检查起按新值。之后新建、载入的会话由客户端按设置传
     .onRequest(SESSION_EXT_METHODS.securityConfigure, checkSwitchesSchema, ({ params }) => {
-      const { review, ...security } = params
-      for (const session of sessions.values()) session.config = { ...session.config, security, rules: { ...session.config.rules, review } }
+      const { projects, ...global } = params
+      // 按项目单独设的开关（v2）：会话所在目录在列表里就用它覆盖的那几项
+      const key = (path: string) => (process.platform === 'win32' ? path.replace(/[\\/]+$/, '').toLowerCase() : path.replace(/\/+$/, ''))
+      const overrides = new Map(Object.entries(projects ?? {}).map(([path, value]) => [key(path), value]))
+      for (const session of sessions.values()) {
+        const { review, ...security } = { ...global, ...overrides.get(key(session.cwd)) }
+        session.config = { ...session.config, security, rules: { ...session.config.rules, review } }
+      }
+      return {}
+    })
+    .onRequest(SESSION_EXT_METHODS.securityTools, z.object({ cwd: z.string().min(1).max(4096) }), async ({ params }) => securityToolsInfo(params.cwd, await findRipgrep()))
+    .onRequest(
+      SESSION_EXT_METHODS.securityRun,
+      z.object({
+        cwd: z.string().min(1).max(4096),
+        runId: z.string().min(1).max(100),
+        tool: z.enum(SECURITY_TOOLS),
+        baseUrl: z.string().max(2000).optional(),
+        routes: z.array(z.string().max(500)).max(DYNAMIC_MAX_ROUTES).optional(),
+        codeqlLicensed: z.boolean().optional(),
+      }),
+      async ({ params }) => {
+        const controller = new AbortController()
+        securityRuns.set(params.runId, controller)
+        try {
+          return await runSecurityTool({ ...params, rgPath: await findRipgrep() }, controller.signal)
+        } finally {
+          securityRuns.delete(params.runId)
+        }
+      },
+    )
+    .onRequest(SESSION_EXT_METHODS.securityCancel, z.object({ runId: z.string().min(1).max(100) }), ({ params }) => {
+      securityRuns.get(params.runId)?.abort()
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.sessionConfigure, sessionConfigureParams, ({ params }) => {

@@ -74,6 +74,8 @@ export const projectSettingsSchema = z.object({
   allowedCommands: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
   // 第 447 步加的：项目钩子，在固定时机替用户跑的命令；旧设置没有
   hooks: z.object({ afterEdit: hookCommandSchema, beforeCommand: hookCommandSchema, turnEnd: hookCommandSchema }).default({ afterEdit: null, beforeCommand: null, turnEnd: null }),
+  // v2 · M10：按项目单独设的安全开关；旧设置没有
+  security: z.lazy(() => projectSecuritySchema).optional(),
   // 以前按项目存的规范设置（rules）不再使用，读的时候丢掉，下次保存就没了
 })
 
@@ -112,7 +114,19 @@ export const browserSettingsSchema = z.object({
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
 // review 是第 426 步加的，旧设置文件里没有
-export const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean(), review: z.boolean().default(true) })
+export const securitySchema = z.object({
+  staticCheck: z.boolean(),
+  lightScan: z.boolean(),
+  deepScan: z.boolean(),
+  review: z.boolean().default(true),
+  // v2 · M10 加的，旧设置没有
+  taint: z.boolean().optional(),
+  licenses: z.boolean().optional(),
+  semgrep: z.boolean().optional(),
+})
+
+// 按项目单独设的安全开关（v2 · M10）：每项都可以不写
+export const projectSecuritySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean(), review: z.boolean(), taint: z.boolean(), licenses: z.boolean(), semgrep: z.boolean() }).partial()
 
 // goalMaxRounds 是第 17 步加的，旧设置文件里没有
 export const executionSchema = z.object({

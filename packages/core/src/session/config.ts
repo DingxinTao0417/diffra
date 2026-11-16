@@ -45,9 +45,19 @@ const rulePackSchema = z.object({
 
 const providerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) }).nullable()
 
-const securitySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean().optional() })
+const securitySchema = z.object({
+  staticCheck: z.boolean(),
+  lightScan: z.boolean(),
+  deepScan: z.boolean().optional(),
+  taint: z.boolean().optional(),
+  licenses: z.boolean().optional(),
+  semgrep: z.boolean().optional(),
+})
 
-export const checkSwitchesSchema = securitySchema.extend({ review: z.boolean() })
+export const checkSwitchesSchema = securitySchema.extend({
+  review: z.boolean(),
+  projects: z.record(z.string().max(4096), securitySchema.extend({ review: z.boolean() }).partial()).optional(),
+})
 
 export const modelConfigSchema = z.object({
   reasoningEffort: z.enum(REASONING_EFFORTS).optional(),

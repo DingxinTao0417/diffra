@@ -3,6 +3,7 @@ import * as acp from '@agentclientprotocol/sdk'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from './architecture/model.js'
 import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
+import type { SecurityTool, SecurityToolReport, SecurityToolsInfo } from './security/tools.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
 import {
   ACP_MAX_MESSAGE_BYTES,
@@ -398,6 +399,20 @@ export async function configureSecurity(connection: acp.ClientConnection, switch
   await requestOf(connection)(SESSION_EXT_METHODS.securityConfigure, switches, extRequestOptions())
 }
 
+// 更多安全检查（v2 · M10）
+export function securityTools(connection: acp.ClientConnection, cwd: string): Promise<SecurityToolsInfo> {
+  return requestOf(connection)<SecurityToolsInfo, { cwd: string }>(SESSION_EXT_METHODS.securityTools, { cwd }, extRequestOptions())
+}
+
+// CodeQL 最长半小时；core 那边每样有自己的超时，这里多留一点余量
+export function securityRun(connection: acp.ClientConnection, params: { cwd: string; runId: string; tool: SecurityTool; baseUrl?: string; routes?: string[]; codeqlLicensed?: boolean }): Promise<SecurityToolReport> {
+  return requestOf(connection)<SecurityToolReport, typeof params>(SESSION_EXT_METHODS.securityRun, params, { cancellationSignal: AbortSignal.timeout(35 * 60_000), stopWaitingOnCancel: true })
+}
+
+export async function securityCancel(connection: acp.ClientConnection, runId: string): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.securityCancel, { runId }, extRequestOptions())
+}
+
 // 多候选方案：生成和一轮任务一样可能跑很久，不设超时；用 cancelSession 停止
 export function generateCandidates(
   connection: acp.ClientConnection,
@@ -691,3 +706,7 @@ function withCoreMessage(error: unknown): unknown {
 function extRequestOptions(): acp.SendRequestOptions {
   return { cancellationSignal: AbortSignal.timeout(EXT_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true }
 }
+
+export type { ToolFinding } from './security/external.js'
+export type { DependencyLicense, LicenseKind, LicenseReport } from './security/licenses.js'
+export { SECURITY_TOOLS, type SecurityTool, type SecurityToolReport, type SecurityToolsInfo } from './security/tools.js'

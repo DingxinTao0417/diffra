@@ -4,6 +4,7 @@ import { Lang, parse, type SgRoot } from '@ast-grep/napi'
 import { type Language, languageOf, vueScripts } from '../syntax.js'
 import { JAVA_RULES, JS_RULES, JSX_RULES, PYTHON_RULES, type StaticRule } from './rules.js'
 import { scanSecrets } from './secrets.js'
+import { taintScan } from './taint.js'
 import type { AddedLines, SecurityFinding } from './types.js'
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -45,8 +46,10 @@ function runRules(root: SgRoot, rules: StaticRule[], path: string, added: Map<nu
 // 本轮新增的代码按规则匹配常见高危写法，再查硬写的密钥。只在本机运行，不调用模型。
 // sources 是检查命令开跑之前读到的文件内容：检查命令可能改了文件（eslint --fix、prettier --write），
 // 用那时的内容才能和 diff 的行号对上；不传时自己读
-export async function staticScan(cwd: string, added: AddedLines, sources?: Map<string, string>): Promise<{ findings: SecurityFinding[]; notes: StaticScanNotes }> {
+// taint：同时做污点分析（v2，默认开；只看 TS/JS/Vue 和 Python）
+export async function staticScan(cwd: string, added: AddedLines, sources?: Map<string, string>, options: { taint?: boolean } = {}): Promise<{ findings: SecurityFinding[]; notes: StaticScanNotes }> {
   const findings: SecurityFinding[] = []
+  const tainted: SecurityFinding[] = []
   const notes: StaticScanNotes = { skipped: [], dropped: 0 }
   const files = new Map<string, string[]>()
   for (const [path, lines] of added) {
@@ -68,17 +71,29 @@ export async function staticScan(cwd: string, added: AddedLines, sources?: Map<s
     }
     files.set(path, source.split(/\r?\n/))
     if (language === 'vue') {
-      for (const block of vueScripts(source)) findings.push(...runRules(parse(block.lang, block.code), rulesFor(block.lang), path, lines, block.lineOffset))
+      for (const block of vueScripts(source)) {
+        const root = parse(block.lang, block.code)
+        findings.push(...runRules(root, rulesFor(block.lang), path, lines, block.lineOffset))
+        if (options.taint) tainted.push(...taintScan(root.root(), 'script', path, lines, block.lineOffset, source))
+      }
       for (const [line, text] of lines) {
         if (/\sv-html=/.test(text)) {
           findings.push({ ruleId: 'SEC-OUT-1', severity: 'medium', path, line, message: '用了 v-html，确认内容已经过滤', suppressed: null })
         }
       }
     } else {
-      findings.push(...runRules(parse(language, source), rulesFor(language), path, lines, 0))
+      const root = parse(language, source)
+      findings.push(...runRules(root, rulesFor(language), path, lines, 0))
+      if (options.taint && language !== 'java') tainted.push(...taintScan(root.root(), language === 'python' ? 'python' : 'script', path, lines, 0, source))
     }
   }
   findings.push(...scanSecrets(added))
+  // 同一处已经被按写法匹配的规则报了，污点分析就不再报一遍；规则只是提醒、污点分析确认数据来自请求时换成污点分析的（高危）
+  for (const item of tainted) {
+    const at = findings.findIndex((other) => other.ruleId === item.ruleId && other.path === item.path && other.line === item.line)
+    if (at < 0) findings.push(item)
+    else if (findings[at]!.severity !== 'high') findings[at] = item
+  }
 
   const seen = new Set<string>()
   const unique = findings.filter((item) => {

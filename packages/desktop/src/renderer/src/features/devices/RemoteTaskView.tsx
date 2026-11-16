@@ -173,7 +173,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
     [task, key, project?.name, title, details, changeVersion],
   )
   const projectState = useMemo<ProjectState | null>(
-    () => (details?.project ? { path: project?.name ?? '', checks: details.project.checks as unknown as SessionChecks, readOnlyPaths: details.project.readOnlyPaths, allowedCommands: [], hooks: NO_HOOKS } : null),
+    () => (details?.project ? { path: project?.name ?? '', checks: details.project.checks as unknown as SessionChecks, readOnlyPaths: details.project.readOnlyPaths, allowedCommands: [], hooks: NO_HOOKS, security: {} } : null),
     [details, project?.name],
   )
 

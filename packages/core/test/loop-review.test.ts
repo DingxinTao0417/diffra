@@ -289,7 +289,8 @@ describe('结束前的轻量安全扫描', () => {
       { text: '文件名限制在上传目录内' },
     ])
     const reviewer = scriptedModel([{ text: 'high | SEC-INJ-4 | files.ts:1 | 文件名来自请求参数，可以用 ../ 读到上传目录外的文件' }, { text: 'NO_FINDINGS' }])
-    const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: true, lightScan: true })
+    // 请求参数直接进 readFileSync 会被 v2 的污点分析在静态检查里拦下；这里只看轻量扫描，关掉污点分析
+    const session = await makeSession(model, undefined, [], { packs: [], model: reviewer }, { staticCheck: true, lightScan: true, taint: false })
     const io = recordingIO()
     await expect(runTurn(session, { id: 't1', text: '加一个读文件接口' }, io)).resolves.toBe('end_turn')
 

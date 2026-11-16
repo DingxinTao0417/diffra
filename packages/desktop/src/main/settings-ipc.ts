@@ -5,6 +5,7 @@ import { configureSecurity, type ModelEndpoint, type ModelError, requestListMode
 import { REASONING_EFFORTS } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
+import { securitySwitches } from './security-switches'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, reasoningChoiceKey, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
@@ -183,8 +184,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     }
     // 检查开关对已经打开的任务立即生效；推送失败时设置照样存下，之后新建、载入的任务按设置
     if (change.security) {
-      const switches = change.security
-      await configureSecurity(await coreConnection(), switches).catch((error: unknown) => console.error('[settings] 同步检查开关到 core 失败', error))
+      await configureSecurity(await coreConnection(), securitySwitches(settings.get())).catch((error: unknown) => console.error('[settings] 同步检查开关到 core 失败', error))
     }
     return view()
   })

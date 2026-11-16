@@ -2,14 +2,16 @@ import { type FormEvent, useRef, useState } from 'react'
 import type { CheckDetection, CheckRunResult, DetectedCheck } from '@diffra/core/types'
 import { Check, LoaderCircle, Play, ScanSearch, ShieldAlert, X } from 'lucide-react'
 import type { ProjectState } from '../../../../shared/ipc'
-import type { ProjectHooks } from '../../../../shared/settings'
+import { DEFAULT_SECURITY, effectiveSecurity, type ProjectHooks, type ProjectSecurity, type SecuritySettings } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Segmented } from '@/components/ui/segmented'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorMessage } from '@/lib/errors'
+import { useAppState } from '@/state/store'
 
 interface ProjectSettingsDialogProps {
   project: ProjectState | null
@@ -61,6 +63,17 @@ function suggestionOf(result: CheckDetection): Suggestion | null {
   return { command, checks: command.split(' && ').flatMap((part) => result.checks.filter((check) => check.command === part)) }
 }
 
+// 按项目单独设的安全开关（v2）
+const PROJECT_SECURITY_KEYS: Array<{ key: keyof SecuritySettings; label: string }> = [
+  { key: 'staticCheck', label: '静态检查' },
+  { key: 'taint', label: '污点分析' },
+  { key: 'licenses', label: '依赖许可证' },
+  { key: 'semgrep', label: 'Semgrep' },
+  { key: 'lightScan', label: '轻量扫描' },
+  { key: 'deepScan', label: '深度扫描' },
+  { key: 'review', label: '规范审查' },
+]
+
 function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettingsDialogProps, 'open' | 'project'> & { project: ProjectState }) {
   // 第 431 步以前存的快速检查只在没填完成检查时当完成检查用，这里按实际会跑的那条显示，保存时只存完成检查
   const savedFinish = project.checks.beforeFinish ?? project.checks.afterEdit ?? ''
@@ -68,6 +81,8 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
   const [readOnly, setReadOnly] = useState(project.readOnlyPaths.join(', '))
   const [allowed, setAllowed] = useState(project.allowedCommands.join(', '))
   const [hooks, setHooks] = useState<ProjectHooks>(project.hooks)
+  const [security, setSecurity] = useState<ProjectSecurity>(project.security)
+  const globalSecurity = useAppState((state) => state.settings?.security ?? DEFAULT_SECURITY)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [detection, setDetection] = useState<Detection | null>(null)
@@ -97,6 +112,7 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
         // 命令键里有空格（pnpm test），只按逗号和换行分
         allowedCommands: allowed.split(/[,，\n]+/).map((item) => item.replace(/\s+/g, ' ').trim()).filter(Boolean),
         hooks: { afterEdit: hooks.afterEdit?.trim() || null, beforeCommand: hooks.beforeCommand?.trim() || null, turnEnd: hooks.turnEnd?.trim() || null },
+        security,
       })
       onSaved(updated)
       onClose()
@@ -207,6 +223,39 @@ function ProjectSettingsForm({ project, onClose, onSaved }: Omit<ProjectSettings
               </p>
             </div>
           ))}
+        </section>
+        <section className="space-y-3 border-t pt-5" data-testid="project-security">
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold">安全检查</h3>
+            <p className="text-xs text-muted-foreground">这个项目单独开或关哪几样；「跟设置」就用「设置 → 安全」里的。改了对这个项目已经打开的任务立即生效。</p>
+          </div>
+          {PROJECT_SECURITY_KEYS.map(({ key, label }) => {
+            const value = security[key]
+            return (
+              <div key={key} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm">
+                  {label}
+                  <span className="ml-1.5 text-xs text-muted-foreground">设置里{effectiveSecurity(globalSecurity, undefined)[key] ? '开着' : '关着'}</span>
+                </span>
+                <Segmented<'inherit' | 'on' | 'off'>
+                  label={`${label}（这个项目）`}
+                  size="sm"
+                  value={value === undefined ? 'inherit' : value ? 'on' : 'off'}
+                  options={[
+                    { value: 'inherit', label: '跟设置' },
+                    { value: 'on', label: '开' },
+                    { value: 'off', label: '关' },
+                  ]}
+                  onChange={(next) =>
+                    setSecurity((current) => {
+                      const { [key]: _old, ...rest } = current
+                      return next === 'inherit' ? rest : { ...rest, [key]: next === 'on' }
+                    })
+                  }
+                />
+              </div>
+            )
+          })}
         </section>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </DialogBody>

@@ -21,6 +21,7 @@ import {
   lspStatus,
   processOutput,
   configureSession,
+  configureSecurity,
   compactSession,
   type CoreClientHandlers,
   createExternalSession,
@@ -41,6 +42,10 @@ import {
   rewindSession,
   runProjectCheck,
   searchSessions,
+  SECURITY_TOOLS,
+  securityCancel,
+  securityRun,
+  securityTools,
   type SessionChecks,
   type SessionConfig,
   type SessionModel,
@@ -64,7 +69,7 @@ import {
   type SessionHandle,
   type TaskFolderState,
 } from '../shared/ipc'
-import { modelDisplayName, type ModelRef, NO_HOOKS } from '../shared/settings'
+import { effectiveSecurity, modelDisplayName, type ModelRef, NO_HOOKS } from '../shared/settings'
 import { reasoningEffortsFor, withRememberedEffort } from '../shared/reasoning'
 import { coreConnection } from './core-process'
 import { currentBranch, listBranches, switchBranch } from './project-branch'
@@ -82,9 +87,11 @@ import { providerEndpoint, workspaceRoot } from './settings-ipc'
 import {
   modelRefSchema,
   permissionModeSchema,
+  projectSecuritySchema,
   projectSettingsSchema,
   type SettingsStore,
 } from './settings-store'
+import { securitySwitches } from './security-switches'
 
 const sessionOptionsSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
@@ -232,12 +239,13 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       readOnlyPaths: project?.readOnlyPaths ?? [],
       allowedCommands: project?.allowedCommands ?? [],
       hooks: project?.hooks ?? NO_HOOKS,
+      security: project?.security ?? {},
     }
   }
 
   const saveProjectState = async (path: string, change: (current: ProjectState) => ProjectState) => {
-    const { checks, readOnlyPaths, allowedCommands, hooks } = change(projectState(path))
-    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths, allowedCommands, hooks } } }))
+    const { checks, readOnlyPaths, allowedCommands, hooks, security } = change(projectState(path))
+    await settings.update((current) => ({ ...current, projects: { ...current.projects, [path]: { checks, readOnlyPaths, allowedCommands, hooks, ...(Object.keys(security).length > 0 ? { security } : {}) } } }))
     return projectState(path)
   }
 
@@ -319,9 +327,35 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.projectSave, async (_event, rawPath: unknown, rawSettings: unknown) => {
     const path = parse(z.string().min(1), rawPath)
     // 始终允许的命令不传就保持原样（旧界面、脚本只传检查和禁写目录）
-    const input = parse(projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }).extend({ allowedCommands: projectSettingsSchema.shape.allowedCommands.optional(), hooks: projectSettingsSchema.shape.hooks.optional() }), rawSettings)
-    return saveProjectState(path, (current) => ({ ...current, ...input }))
+    const input = parse(
+      projectSettingsSchema.pick({ checks: true, readOnlyPaths: true }).extend({ allowedCommands: projectSettingsSchema.shape.allowedCommands.optional(), hooks: projectSettingsSchema.shape.hooks.optional(), security: projectSecuritySchema.optional() }),
+      rawSettings,
+    )
+    const saved = await saveProjectState(path, (current) => ({ ...current, ...input }))
+    // 按项目的安全开关改了：已经打开的任务立即按新值
+    if (input.security) await configureSecurity(await coreConnection(), securitySwitches(settings.get())).catch((error: unknown) => console.error('[project] 同步检查开关到 core 失败', error))
+    return saved
   })
+
+  // 更多安全检查（v2 · M10）：请求原样转给 core；动态测试只许本机地址，core 那边也会再查
+  ipcMain.handle(IPC_CHANNELS.securityTools, async (_event, raw: unknown) => securityTools(await coreConnection(), parse(z.string().min(1).max(4096), raw)))
+  ipcMain.handle(IPC_CHANNELS.securityRun, async (_event, raw: unknown) =>
+    securityRun(
+      await coreConnection(),
+      parse(
+        z.object({
+          cwd: z.string().min(1).max(4096),
+          runId: z.string().min(1).max(100),
+          tool: z.enum(SECURITY_TOOLS),
+          baseUrl: z.string().max(2000).optional(),
+          routes: z.array(z.string().max(500)).max(60).optional(),
+          codeqlLicensed: z.boolean().optional(),
+        }),
+        raw,
+      ),
+    ),
+  )
+  ipcMain.handle(IPC_CHANNELS.securityCancel, async (_event, raw: unknown) => securityCancel(await coreConnection(), parse(z.string().min(1).max(100), raw)))
 
   // 新建和加载都按当前设置组装会话配置：模型、检查、规范改过的话，打开旧任务也用新的。
   // 输入框里选的模型和权限模式优先，没选就用「编码」角色和默认权限模式
@@ -333,6 +367,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const coder = options.model ? await resolveModel(options.model, '所选模型') : remembered ? await resolveModel(remembered, '「编码」角色的模型') : null
     if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
+    // 安全检查和规范审查按设置开关，项目单独设过的以项目的为准（v2）
+    const security = effectiveSecurity(settings.get().security, project.security)
     // 规范审查按设置开关；没分配评审角色时 core 用编码模型审查
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
@@ -347,9 +383,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         readOnlyPaths: project.readOnlyPaths,
         allowedCommands: project.allowedCommands,
         hooks: project.hooks,
-        rules: { ...SESSION_RULES, review: settings.get().security.review },
+        rules: { ...SESSION_RULES, review: security.review },
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
-        security: { staticCheck: settings.get().security.staticCheck, lightScan: settings.get().security.lightScan, deepScan: settings.get().security.deepScan },
+        security: { staticCheck: security.staticCheck, lightScan: security.lightScan, deepScan: security.deepScan, taint: security.taint, licenses: security.licenses, semgrep: security.semgrep },
         limits: {
           compactAtPercent: settings.get().execution.compactAtPercent,
           maxSteps: settings.get().execution.maxSteps,

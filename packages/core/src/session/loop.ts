@@ -83,6 +83,7 @@ import { runShell } from '../tools/command.js'
 import { fromMsysPath, realpathOfExisting, resolveToolPath } from '../tools/workspace.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
 import { staticScan } from '../security/static.js'
+import { gateLicenses, gateSemgrep } from '../security/gate.js'
 import { type ArchitectureFinding, checkArchitecture } from '../architecture/check.js'
 import type { ArchitectureAnalysis, TargetArchitecture } from '../architecture/model.js'
 import { auditDependencies, dependenciesChanged } from '../security/deps.js'
@@ -1746,9 +1747,18 @@ async function runStaticCheck(session: Session, added: AddedLines, signal: Abort
   const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
     io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
   try {
-    const { findings, notes } = await staticScan(session.cwd, added, sources)
+    const security = session.config.security
+    // v2：污点分析跟着静态检查；新依赖的许可证、装了 Semgrep 时它的结果只提醒（没写开关的旧配置当开）
+    const [scan, licenses, semgrep] = await Promise.all([
+      staticScan(session.cwd, added, sources, { taint: security.taint !== false }),
+      security.licenses !== false ? gateLicenses(session.cwd, added).catch((error: unknown) => ({ findings: [], notes: [`许可证没查成：${error instanceof Error ? error.message : String(error)}`] })) : null,
+      security.semgrep !== false ? gateSemgrep(session.cwd, added, signal) : null,
+    ])
+    const findings = [...scan.findings, ...(licenses?.findings ?? []), ...(semgrep?.findings ?? [])]
+    const notes = scan.notes
     if (signal.aborted) return []
-    const skipped = notes.skipped.length > 0 ? `\n有 ${notes.skipped.length} 个文件太大没有查：${notes.skipped.slice(0, 5).join('、')}` : ''
+    const extraNotes = [...(licenses?.notes ?? []), ...(semgrep?.notes ?? [])].map((note) => `\n${note}`).join('')
+    const skipped = `${notes.skipped.length > 0 ? `\n有 ${notes.skipped.length} 个文件太大没有查：${notes.skipped.slice(0, 5).join('、')}` : ''}${extraNotes}`
     const dropped = notes.dropped > 0 ? `\n问题太多，还有 ${notes.dropped} 处没有列出` : ''
     const result: CheckResult = blocking(findings).length > 0 ? 'failed' : notes.skipped.length > 0 ? 'partial' : findings.length > 0 || notes.dropped > 0 ? 'warned' : 'passed'
     await finishCard(result === 'failed' ? 'failed' : 'completed', result, findings.length > 0 ? `${formatFindings(findings)}${skipped}${dropped}` : `没有发现常见的高危写法${skipped}`)

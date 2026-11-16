@@ -1,7 +1,7 @@
 import { type ReactNode, type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
 import type { ProjectState } from '../../../../shared/ipc'
-import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LayoutDashboard, LoaderCircle, PanelRight, PenTool, ScanSearch, SquareTerminal } from 'lucide-react'
+import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LayoutDashboard, LoaderCircle, PanelRight, PenTool, ScanSearch, ShieldCheck, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -31,6 +31,7 @@ import { BranchMenu } from './BranchMenu'
 import { FilePanel } from './FilePanel'
 import { VisualsPanel } from './VisualsPanel'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
+import { type SecurityDialogKind, SecurityToolsDialog } from './SecurityToolsDialog'
 import { StepsBar } from './StepsBar'
 import { ReadOnlyContext } from './read-only'
 import { RemoteTaskContext, type RemoteTaskSource } from './remote-task'
@@ -77,6 +78,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
   const branch = remote ? remote.branch : local.branch
   const [confirm, setConfirm] = useState<{ mode: 'restore' | 'regenerate'; turnId: string; changes: CheckpointChange[] | null } | null>(null)
   const [scanScope, setScanScope] = useState<'task' | 'project' | null>(null)
+  const [securityKind, setSecurityKind] = useState<SecurityDialogKind | null>(null)
   const [editingProject, setEditingProject] = useState(false)
   const [locate, setLocate] = useState<{ id: string; at: number } | null>(null)
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
@@ -91,6 +93,12 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
     ...(deepScanEnabled && !task.running ? [
       ...(task.turns.length > 0 ? [{ id: 'deep-scan-task', label: '深度扫描 · 本任务改动', description: '只读地跨文件追踪这个任务改过的代码，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('task') }] : []),
       { id: 'deep-scan-project', label: '深度扫描 · 整个项目', description: '只读地扫描整个项目，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('project') },
+    ] : []),
+    // 更多安全检查（v2）：手动发起，跑完勾选问题填进输入框
+    ...(!remote ? [
+      { id: 'security-licenses', label: '安全 · 依赖许可证', description: '列出依赖的许可证，标出 GPL、AGPL 这类强传染的', keywords: ['license', 'security', '许可证'], icon: ShieldCheck, run: () => setSecurityKind('licenses') },
+      { id: 'security-scanners', label: '安全 · 外部扫描器', description: '用本机装的 Semgrep 或 CodeQL 扫整个项目', keywords: ['semgrep', 'codeql', 'security', 'scan'], icon: ShieldCheck, run: () => setSecurityKind('scanners') },
+      { id: 'security-dynamic', label: '安全 · 动态测试', description: '对本机跑着的服务发探测请求，看有没有 XSS、开放跳转、路径穿越', keywords: ['dast', 'security', '动态'], icon: ShieldCheck, run: () => setSecurityKind('dynamic') },
     ] : []),
   ]
   const pinnedCount = useAppState((state) => state.pinned.filter((item) => item.sessionId === task.sessionId).length)
@@ -305,6 +313,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
       </div>
 
       <DeepScanDialog sessionId={task.sessionId} scope={scanScope} onClose={() => setScanScope(null)} />
+      {!remote && <SecurityToolsDialog sessionId={task.sessionId} cwd={task.project} kind={securityKind} onClose={() => setSecurityKind(null)} />}
       {!remote && <ProjectSettingsDialog project={project} open={editingProject} onClose={() => setEditingProject(false)} onSaved={local.setProject} />}
       <RestoreDialog open={confirm !== null} changes={confirm?.changes ?? null} mode={confirm?.mode} turnNumber={confirmIndex >= 0 ? confirmIndex + 1 : null} lastTurn={confirmIndex >= 0 && confirmIndex === task.turns.length - 1} onCancel={() => setConfirm(null)} onConfirm={confirmRestore} />
     </div>

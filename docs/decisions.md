@@ -25,6 +25,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
 - 设备连接只在局域网里直连。已做，见「局域网设备连接（v2 · M6）」。托盘和开机自启已做，见「托盘和开机自启（v2 · M7）」。
 - 待办：重复、嵌套标签、日历拖动、局域网同步。已做，见「重复、嵌套标签、日历拖动、局域网同步（v2 · M8）」。
 - 架构：函数调用图、运行时追踪、更多语言、监听文件变化、导出到仓库、任务里的智能体查架构。已做，见「架构的 v2 部分（v2 · M9）」。
+- 安全：污点分析、Semgrep 和 CodeQL（装了、有许可才用）、动态测试、依赖许可证、按项目单独设开关。已做，见「安全的 v2 部分（v2 · M10）」。
 
 ## 技术栈
 
@@ -1797,7 +1798,19 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 报告里每个问题带数据流链路和修复建议；规则号不存在、文件不在项目里的当作臆测丢掉。
   - 用户勾选后作为新的一轮发给编码模型修，默认勾上高危的。这一轮没有「重新生成」。
 - 用量：轻量扫描和深度扫描的模型调用都记在用量统计里，角色是 reviewer。
-- 不做（v2 再说）：CodeQL、Semgrep Pro 级别的污点分析（许可证或付费问题）、动态测试、许可证合规扫描、按项目单独设置安全开关。
+- 不做（v2 再说）：CodeQL、Semgrep Pro 级别的污点分析（许可证或付费问题）、动态测试、许可证合规扫描、按项目单独设置安全开关。v2 都做了，见下一节。
+
+### 安全的 v2 部分（v2 · M10）
+
+- 新开关（`SecuritySettings` 加了选填的 `taint`、`licenses`、`semgrep`，旧设置没有就当开；旧版读到会丢掉这三项）：设置 → 安全多三行，都跟着静态检查在完成前跑。
+- 污点分析（`security/taint.ts`）：在一个函数里按语句顺序跟踪来自请求的数据（Express/Koa 的 `req.query/body/params/headers/cookies`、`ctx.query`、Lambda 的 `event.*`、浏览器的 `location.*`；Flask/Django/FastAPI 的 `request.args/form/json/GET/POST`……），赋给了哪些变量（含解构），重新赋值成别的就不算；经过 `path.basename`、`encodeURIComponent`、`parseInt`、`int()`、`secure_filename`、`shlex.quote` 这类函数的不算。流进 SQL 查询、`child_process.exec`、`eval`、文件读写和 `res.sendFile`、`res.redirect`、`fetch/axios/requests.get`（SSRF）、`res.send` 拼的 HTML、`render_template_string`、`Markup` 时报高危，打回；放行注释和静态检查一样。只看函数内部（不跨函数、不跨文件），只看 TS/JS/Vue 和 Python。同一处按写法匹配的规则已经报了高危就不重复报，规则只是提醒的换成污点分析的高危。旧的漏洞样例里「路径穿越、SSRF、开放跳转」这几类以前要靠模型扫描，现在本机就能拦下请求参数直接用的写法。
+- 依赖许可证（`security/licenses.ts`）：只读本机装好的依赖，不联网：`package.json`（根目录和 packages/*、apps/* 下的子包）声明的直接依赖读 `node_modules` 里的 `license` 字段或 LICENSE 文件；项目虚拟环境里 `*.dist-info/METADATA` 的 License 或分类；`go.mod` 的 require 到模块缓存里读 LICENSE 文件。分宽松、弱传染（LGPL、MPL、EPL）、强传染（GPL、AGPL、SSPL）和认不出的；SPDX 的 OR 取最宽松的。完成前只看这一轮新加的依赖：强传染的提醒（项目自己也是这类许可证时不提醒），不打回——用不用是业务决定，不是安全漏洞。没装好的依赖查不了，卡片上说明。
+- Semgrep、CodeQL（`security/external.ts`）：Diffra 不自带也不帮着装，本机装了才用（`--version` 探一次，留 10 分钟）。Semgrep 完成前扫这一轮改过的代码文件（90 秒上限），只留新增行上的、只提醒；规则用项目里的 `.semgrep.yml`，没有就用官方 `p/default`（要联网），`--metrics=off`。CodeQL 的命令行只许用在开源代码或有 GitHub Advanced Security 授权的代码上，所以只在任务页手动跑，每次勾选确认有许可；按项目里的语言建不用编译的数据库（JS/TS、Python、Java/Kotlin、C#、Ruby，`--build-mode=none`），跑官方 security-extended 查询集（第一次 `--download` 联网取查询包），读 SARIF；最长半小时，临时目录跑完就删。找不到可执行文件时可以用 `DIFFRA_SEMGREP_PATH`、`DIFFRA_CODEQL_PATH` 指定（测试也用它放假的扫描器）。
+- 动态测试（`security/dynamic.ts`）：只对本机服务（localhost、127.0.0.1、::1，core 和主进程都查），从代码里认 GET 接口（Express/Koa/Fastify、Flask/FastAPI、Spring、Django 的路由写法，路径参数换成 1），也可以自己填。每个接口发几种只读的 GET 探测：常见参数名里塞一个标签看是否原样回显在 HTML 里（反射型 XSS）、跳转参数塞外部地址看 Location（开放跳转）、文件参数塞 `../` 看有没有读到 hosts 或 win.ini（路径穿越）、id 参数带引号看有没有数据库报错（SQL 注入）或 500 时返回堆栈（错误泄露），再看页面有没有 `X-Content-Type-Options: nosniff`。每个请求 5 秒超时、最多 60 个接口、可以取消；连不上就说先把服务跑起来。会真的打到服务上，有副作用的 GET 接口也会被调到，开始前写清楚。
+- 任务页「更多安全检查」：输入框斜杠菜单里「安全 · 依赖许可证」「安全 · 外部扫描器」「安全 · 动态测试」，弹窗里跑（core 的 `_diffra/security/run`，每样有自己的超时，可以取消），列出问题，默认勾上中高危的，「填进输入框」把勾选的写成一段话交给智能体，不直接发。许可证还能展开看全部依赖。
+- 按项目单独设开关：项目设置里多了「安全检查」一节，七项各自「跟设置 / 开 / 关」，只存和全局不一样的几项（`ProjectSettings.security`，旧版读到会丢掉）。建会话时按「全局 + 项目」组装；全局或项目的开关改了，主进程把全局的和每个设过的项目一起推给 core（`CheckSwitches.projects`），core 按会话所在目录套上，已经打开的任务立即按新值。
+- 验证：core 的 `security-v2.test.ts`（JS 的六种污点流向和校验、重新赋值、关掉不查；Python 的 SQL、shell=True、文件、跳转、SSRF，列表参数的 subprocess 不算，只看新增行，和规则重复时取更严重的；许可证分类、node_modules 和 LICENSE 文件、没装的说明、完成前只提醒新加的；Python 虚拟环境；假的 Semgrep：没装、装了、完成前只留新增行；假的 CodeQL：要确认许可、建库分析读 SARIF；本机 HTTP 服务上的反射 XSS、开放跳转、路径穿越、SQL 报错，正常接口不报，连不上时说明；只许本机地址、从代码里认路由），`loop-review.test.ts` 里专测轻量扫描的用例关掉了污点分析（它的读文件写法现在在静态检查就被拦下）。e2e `security-v2.spec.ts`：项目设置里关掉轻量扫描和规范审查后同一个任务接着做，静态检查里污点分析打回、许可证提醒、评审模型一次没调；斜杠菜单的三样（许可证填进输入框、本机服务的反射 XSS、假的 Semgrep 出结果、没装 CodeQL 时不能跑）。`security.spec.ts` 的设置断言加上了三个新开关。真的 Semgrep、CodeQL 没在本机装过试，要手动确认。
+
 
 ## 用量统计
 

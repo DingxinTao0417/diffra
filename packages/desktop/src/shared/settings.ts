@@ -62,6 +62,9 @@ export interface ProjectHooks {
 
 export const NO_HOOKS: ProjectHooks = { afterEdit: null, beforeCommand: null, turnEnd: null }
 
+// 按项目单独设的安全开关（v2 · M10）：只存和全局不一样的几项，没写的跟着「设置 → 安全」
+export type ProjectSecurity = Partial<SecuritySettings>
+
 export interface ProjectSettings {
   checks: SessionChecks
   // 禁写目录，相对项目根目录、/ 分隔
@@ -70,6 +73,8 @@ export interface ProjectSettings {
   allowedCommands?: string[]
   // 项目钩子；旧设置没有
   hooks?: ProjectHooks
+  // v2：按项目单独设的安全开关；旧设置没有
+  security?: ProjectSecurity
 }
 
 export const THEME_MODES = ['light', 'dark', 'system'] as const
@@ -152,9 +157,19 @@ export interface SecuritySettings {
   lightScan: boolean
   deepScan: boolean
   review: boolean
+  // v2 · M10，旧设置没有（当开）：污点分析、新依赖的许可证、装了 Semgrep 时用它扫，都跟着静态检查在完成前跑
+  taint?: boolean
+  licenses?: boolean
+  semgrep?: boolean
 }
 
-export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true, review: true }
+export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true, review: true, taint: true, licenses: true, semgrep: true }
+
+// 一个项目实际用的开关：全局的，加上这个项目单独设的
+export function effectiveSecurity(global: SecuritySettings, project: ProjectSecurity | undefined): Required<SecuritySettings> {
+  const merged = { ...DEFAULT_SECURITY, ...global, ...project }
+  return { staticCheck: merged.staticCheck, lightScan: merged.lightScan, deepScan: merged.deepScan, review: merged.review, taint: merged.taint !== false, licenses: merged.licenses !== false, semgrep: merged.semgrep !== false }
+}
 
 export const COMPACT_AT_PERCENTS = [50, 60, 70, 80, 90] as const
 export const MAX_STEP_OPTIONS = [30, 50, 80, 100] as const

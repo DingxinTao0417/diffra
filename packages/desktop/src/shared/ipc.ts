@@ -50,6 +50,7 @@ import type {
   ModelRef,
   PluginView,
   ProjectHooks,
+  ProjectSecurity,
   ProviderInput,
   Role,
   SecuritySettings,
@@ -62,6 +63,7 @@ import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntr
 import type { ChangelogRelease } from './changelog'
 import type { CatalogView, PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
+import type { SecurityTool, SecurityToolReport, SecurityToolsInfo } from '@diffra/core/types'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from '@diffra/core/architecture'
 
 export const IPC_CHANNELS = {
@@ -88,6 +90,9 @@ export const IPC_CHANNELS = {
   projectDetectChecks: 'project:detect-checks',
   projectRunCheck: 'project:run-check',
   projectSave: 'project:save',
+  securityTools: 'security:tools',
+  securityRun: 'security:run',
+  securityCancel: 'security:cancel',
   sessionsList: 'sessions:list',
   sessionsSearch: 'sessions:search',
   sessionLoad: 'session:load',
@@ -381,6 +386,8 @@ export interface ProjectState {
   // 在这个项目里选过「始终允许同类命令」的命令键
   allowedCommands: string[]
   hooks: ProjectHooks
+  // v2：按项目单独设的安全开关（只有设过的几项）
+  security: ProjectSecurity
 }
 
 export interface SessionHandle {
@@ -543,7 +550,11 @@ export interface DiffraApi {
   detectChecks(path: string): Promise<CheckDetection>
   // 在项目目录试跑一条检查命令
   runCheck(path: string, command: string): Promise<CheckRunResult>
-  saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[]; allowedCommands?: string[]; hooks?: ProjectHooks }): Promise<ProjectState>
+  saveProject(path: string, settings: { checks: SessionChecks; readOnlyPaths: string[]; allowedCommands?: string[]; hooks?: ProjectHooks; security?: ProjectSecurity }): Promise<ProjectState>
+  // 更多安全检查（v2 · M10）：Semgrep、CodeQL 装了没有和认出的接口；跑一样；取消
+  securityTools(cwd: string): Promise<SecurityToolsInfo>
+  runSecurityTool(params: { cwd: string; runId: string; tool: SecurityTool; baseUrl?: string; routes?: string[]; codeqlLicensed?: boolean }): Promise<SecurityToolReport>
+  cancelSecurityTool(runId: string): Promise<void>
   // projectPath 为 null 时建无项目任务
   createSession(projectPath: string | null, options?: SessionOptions): Promise<SessionHandle>
   // 返回新的模型名（换了模型时）

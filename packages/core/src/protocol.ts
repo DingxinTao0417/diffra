@@ -75,12 +75,18 @@ export interface SessionSecurity {
   staticCheck: boolean
   lightScan: boolean
   deepScan?: boolean
+  // v2 · M10，旧客户端不传：污点分析、新依赖的许可证、装了 Semgrep 时用它扫（都跟着静态检查在完成前跑，没写当开）
+  taint?: boolean
+  licenses?: boolean
+  semgrep?: boolean
 }
 
 // 设置里改了检查开关，所有已经打开的会话下一次检查就按新值（SESSION_EXT_METHODS.securityConfigure）
 export interface CheckSwitches extends SessionSecurity {
   // 完成前的规范审查，对应 SessionRules.review
   review: boolean
+  // 按项目单独设的开关（v2 · M10）：项目目录 → 覆盖哪几项；没列的项目用上面的
+  projects?: Record<string, Partial<SessionSecurity & { review: boolean }>>
 }
 
 // 单次任务的上限：上下文用到窗口的百分之多少时压缩；最多跑多少步，null 不限（靠卡死检测兜底）
@@ -997,6 +1003,10 @@ export const SESSION_EXT_METHODS = {
   sessionConfigure: '_diffra/session/configure',
   // 设置里的检查开关（三层安全检查、规范审查）：所有已经打开的会话立即按新值
   securityConfigure: '_diffra/security/configure',
+  // 更多安全检查（v2 · M10）：Semgrep、CodeQL 装了没有和动态测试能认出的接口；跑一样（依赖许可证、外部扫描器、动态测试）；取消
+  securityTools: '_diffra/security/tools',
+  securityRun: '_diffra/security/run',
+  securityCancel: '_diffra/security/cancel',
   // 重新生成：撤掉某一轮及之后的文件改动和对话
   sessionRewind: '_diffra/session/rewind',
   checkpointDiff: '_diffra/checkpoint/diff',
@@ -1125,4 +1135,56 @@ export const PROJECT_COMMANDS_META_KEY = 'projectCommands'
 export interface ProjectCommandsMeta {
   cwd: string
   keys: string[]
+}
+
+// ---------- 更多安全检查（v2 · M10，见 security/tools.ts） ----------
+
+export const SECURITY_TOOLS = ['licenses', 'semgrep', 'codeql', 'dynamic'] as const
+export type SecurityTool = (typeof SECURITY_TOOLS)[number]
+
+export interface ToolFinding {
+  tool: SecurityTool
+  ruleId: string
+  severity: 'high' | 'medium' | 'low'
+  // 相对项目根的文件路径；动态测试是接口路径；许可证是声明它的清单
+  path: string
+  line: number | null
+  message: string
+}
+
+export type LicenseKind = 'permissive' | 'weak-copyleft' | 'strong-copyleft' | 'unknown'
+
+export interface DependencyLicense {
+  name: string
+  version: string | null
+  ecosystem: 'npm' | 'python' | 'go'
+  license: string | null
+  kind: LicenseKind
+  // 项目里哪个清单声明的
+  declaredIn: string
+}
+
+export interface LicenseReport {
+  // 项目自己的许可证（package.json 的 license、LICENSE 文件）；没写是 null
+  project: string | null
+  dependencies: DependencyLicense[]
+  // 没装好、读不到的说明
+  notes: string[]
+}
+
+export interface SecurityToolReport {
+  tool: SecurityTool
+  startedAt: string
+  durationMs: number
+  findings: ToolFinding[]
+  notes: string[]
+  // 许可证扫描的完整清单
+  licenses?: LicenseReport
+}
+
+export interface SecurityToolsInfo {
+  semgrep: string | null
+  codeql: string | null
+  // 动态测试从代码里认出的接口路径
+  routes: string[]
 }

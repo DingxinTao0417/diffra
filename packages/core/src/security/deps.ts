@@ -199,6 +199,11 @@ function npmVulnerabilities(report: unknown): Vulnerability[] {
   })
 }
 
+// 本轮新加的依赖：npm 的名字、Python 规范化后的名字 → 清单和行号（许可证检查用，v2）
+export async function addedDependencies(cwd: string, added: AddedLines): Promise<Map<string, { path: string; line: number }>> {
+  return new Map([...(await addedNodeDependencies(cwd, added)), ...addedPythonDependencies(added)])
+}
+
 // requirements*.txt / pyproject.toml 里本轮新增的依赖：规范化后的名字 → 行号
 function addedPythonDependencies(added: AddedLines): Map<string, { path: string; line: number }> {
   const found = new Map<string, { path: string; line: number }>()

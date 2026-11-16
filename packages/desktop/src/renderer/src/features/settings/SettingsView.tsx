@@ -439,6 +439,30 @@ const SECURITY_LEVELS: Array<{ key: keyof SecuritySettings; label: string; trigg
     detail: '只读地跨文件追踪数据流，从外部输入一路查到危险调用，出一份报告，勾选后交给智能体修复。扫过之后代码没再变，再提交就不问。',
   },
   {
+    key: 'taint',
+    label: '污点分析',
+    trigger: '完成前自动',
+    cost: '本机，不调用模型',
+    description: '跟着静态检查：在一个函数里跟踪来自请求的数据，没校验就进了 SQL、命令、文件路径、跳转、服务端请求、HTML 时打回。',
+    detail: '认 Express、Koa、Flask、Django 这些常见框架的请求参数写法；只看函数内部，不跨函数和文件，漏掉的交给轻量扫描和深度扫描。',
+  },
+  {
+    key: 'licenses',
+    label: '依赖许可证',
+    trigger: '完成前自动',
+    cost: '本机，不联网',
+    description: '这一轮新加的依赖是 GPL、AGPL 这类强传染许可证时提醒你（项目自己也是这类许可证时不提醒）。',
+    detail: '读本机装好的依赖（node_modules、项目的虚拟环境、Go 模块缓存）；还没装的查不了。任务页「更多安全检查」能看全部依赖的许可证。',
+  },
+  {
+    key: 'semgrep',
+    label: 'Semgrep',
+    trigger: '完成前自动，装了才跑',
+    cost: '本机；用官方规则库时要联网',
+    description: '本机装了 Semgrep 时，扫这一轮改过的文件，新增行上的问题提醒你。',
+    detail: '规则用项目里的 .semgrep.yml，没有就用官方的 p/default。Diffra 不自带 Semgrep，没装就跳过。CodeQL 只在任务页手动跑（要确认有使用许可）。',
+  },
+  {
     key: 'review',
     label: '规范审查',
     trigger: '完成前自动',
@@ -493,7 +517,7 @@ function SecuritySection() {
               </>
             }
           >
-            <Switch label={level.label} checked={security[level.key]} onChange={(value) => void change(level.key, value)} />
+            <Switch label={level.label} checked={security[level.key] !== false} onChange={(value) => void change(level.key, value)} />
           </SettingsRow>
         ))}
       </SettingsGroup>
