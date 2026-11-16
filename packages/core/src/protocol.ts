@@ -167,10 +167,12 @@ export interface EditDiffMeta {
   // apply_patch 删掉了这个文件
   deleted?: boolean
 }
-// 任务之间互通（task_send、task_create）：消息是哪个任务发来的
+// 任务之间互通（task_send、task_create、task_reply）：消息是哪个任务发来的
 export interface TaskSource {
   sessionId: string
   title: string
+  // v2：这是对方用 task_reply 发回来的回复（回复叫起来的一轮不能再回复，免得来回触发）；旧记录没有
+  reply?: true
 }
 // 设备连接：这一轮是哪台远程设备发来的（docs/decisions.md「设备连接」）。name 是本机给它记的名称
 export interface RemoteSource {
@@ -757,7 +759,7 @@ export interface StoredTurn {
   images: PromptImage[]
   // 撤销到这一轮或更早的轮次之前时写入，多次撤销记最后一次。只说明之后撤销过，不代表这一轮的改动现在不在
   restoredAt?: string
-  // 这一轮的提问是另一个任务（智能体用 task_send、task_create）发来的；用户自己发的没有
+  // 这一轮的提问是另一个任务（智能体用 task_send、task_create、task_reply）发来的；用户自己发的没有
   from?: TaskSource
   // 这一轮的提问是配对的远程设备发来的；第 360 步加的，旧记录没有
   remote?: RemoteSource

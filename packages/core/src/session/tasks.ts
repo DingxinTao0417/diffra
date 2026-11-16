@@ -6,7 +6,7 @@ import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.
 import type { Session } from './session.js'
 import { toolDefinitionChars } from './tools.js'
 
-// 任务之间互通：主智能体能列出、读别的任务，给它发消息、新建任务、等它这一轮做完。
+// 任务之间互通：主智能体能列出、读别的任务，给它发消息、新建任务、等它这一轮做完；被别的任务叫起来时能回复它一次（v2）。
 // 读由 core 直接读会话记录；发消息和新建要客户端载入任务、起一轮（TaskBridge.act）
 export interface TaskBridge {
   list(): Promise<SessionIndexEntry[]>
@@ -35,6 +35,7 @@ const createInput = z.object({
   design: z.boolean().optional().describe('Create a design task (canvas) instead of a coding task'),
 })
 const waitInput = z.object({ task_id: z.string().min(1), max_minutes: z.number().int().min(1).max(MAX_WAIT_MINUTES).optional() })
+const replyInput = z.object({ message: z.string().min(1).max(MAX_MESSAGE_CHARS) })
 
 export const TASK_TOOLS = {
   tasks_list: tool({
@@ -47,7 +48,7 @@ export const TASK_TOOLS = {
   }),
   task_send: tool({
     description:
-      'Send a message to another existing task, as if the user typed it there; it starts a turn in that task (queued if it is running). Use it to hand off work that belongs to that task. The other task does not reply to you: use task_wait or task_read for its result.',
+      'Send a message to another existing task, as if the user typed it there; it starts a turn in that task (queued if it is running). Use it to hand off work that belongs to that task. Use task_wait or task_read for its result; if you end your turn without waiting, it can answer once with task_reply, which starts a new turn here.',
     inputSchema: sendInput,
   }),
   task_create: tool({
@@ -58,6 +59,11 @@ export const TASK_TOOLS = {
   task_wait: tool({
     description: 'Wait until another task finishes its current turn (no model calls while waiting), then return its latest turn like task_read.',
     inputSchema: waitInput,
+  }),
+  task_reply: tool({
+    description:
+      'Only in a turn started by a message from another task: send one reply back to that task when it asked for an answer. The reply starts a turn there. Skip it when the sender is waiting with task_wait (it reads your final message anyway); you cannot reply to a reply.',
+    inputSchema: replyInput,
   }),
 } satisfies ToolSet
 
@@ -91,7 +97,7 @@ function describeTurn(turn: StoredTurn): string {
   const outcome = outcomeOf(turn)
   const ended = !turn.endedAt ? 'still running' : outcome?.stop ? `stopped (${outcome.stop})` : outcome?.finish ? `finished (${outcome.finish})` : `ended (${turn.stopReason ?? 'unknown'})`
   return [
-    `- Asked (${turn.startedAt}${turn.from ? `, sent by task ${turn.from.sessionId}` : ''}): ${clip(turn.prompt.trim(), 1_000)}`,
+    `- Asked (${turn.startedAt}${turn.from ? `, ${turn.from.reply ? 'reply from' : 'sent by'} task ${turn.from.sessionId}` : ''}): ${clip(turn.prompt.trim(), 1_000)}`,
     `  Ended: ${ended}`,
     reply.trim() ? `  Reply: ${clip(reply.trim(), MAX_REPLY_CHARS)}` : '',
     !reply.trim() && finish.length > 0 ? `  Last result: ${clip(finish.at(-1)!.trim(), MAX_REPLY_CHARS)}` : '',
@@ -126,10 +132,13 @@ const TITLES: Record<keyof typeof TASK_TOOLS, string> = {
   task_send: '发给任务',
   task_create: '新建任务',
   task_wait: '等任务做完',
+  task_reply: '回复任务',
 }
 
 // 每轮用了几次发送、新建：按轮次 id 记，只留最近一轮
 const actionCounts = new WeakMap<Session, { turnId: string; count: number }>()
+// 回复过的轮次 id：一条消息只回复一次
+const repliedTurns = new WeakMap<Session, string>()
 
 export async function runTaskTool(
   session: Session,
@@ -142,7 +151,7 @@ export async function runTaskTool(
     await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status: 'failed', content: [{ type: 'content', content: { type: 'text', text: message } }] })
     return { result: errorResult(call, message), edited: false }
   }
-  await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: TITLES[name], kind: name === 'task_send' || name === 'task_create' ? 'other' : 'read', status: 'in_progress', rawInput: call.input })
+  await io.update({ sessionUpdate: 'tool_call', toolCallId: call.toolCallId, title: TITLES[name], kind: name === 'task_send' || name === 'task_create' || name === 'task_reply' ? 'other' : 'read', status: 'in_progress', rawInput: call.input })
   const bridge = io.tasks
   if (!bridge) return fail('Talking to other tasks is not available here.')
   const done = async (text: string, title: string, meta?: Record<string, unknown>) => {
@@ -191,9 +200,47 @@ export async function runTaskTool(
         await sleep(WAIT_POLL_MS, signal)
       }
     }
-    // 发消息、新建任务：被别的任务叫起来的这一轮不能再往外发，免得互相触发；每轮有次数上限；按权限模式确认
+    // 往别的任务发东西前按权限模式确认；返回拒绝的原因，放行时是 null
+    const confirmSend = async (question: string): Promise<string | null> => {
+      if (session.permissionMode === 'full') return null
+      const choice = await io.requestPermission(
+        { toolCallId: call.toolCallId, title: question, kind: 'other', status: 'pending', rawInput: call.input, _meta: LOCAL_ONLY_META },
+        [
+          { optionId: PERMISSION_OPTIONS.allowOnce, name: '发送', kind: 'allow_once' },
+          { optionId: PERMISSION_OPTIONS.reject, name: '不发', kind: 'reject_once' },
+        ],
+      )
+      if (signal.aborted) return 'Cancelled by the user.'
+      return choice === PERMISSION_OPTIONS.allowOnce ? null : 'The user declined. Do not send it again unless they ask.'
+    }
     const current = session.turns.at(-1)
-    if (current?.from) return fail('This turn was started by a message from another task, so it cannot send to or create tasks. Finish the work here; the sender reads your result.')
+    // 回复（v2）：只在别的任务发消息叫起来的这一轮、只回一次、只回给发消息的任务。回复叫起来的那一轮不能再回复，
+    // 也不能往外发、新建（见下面），来回最多一趟。对方正在跑多半是在 task_wait 等这一轮，它会读到这一轮的结果，不重复发
+    if (name === 'task_reply') {
+      const { message } = replyInput.parse(call.input)
+      const sender = current?.from
+      if (!current || !sender) return fail('task_reply only works in a turn started by a message from another task. Use task_send to message a task.')
+      if (sender.reply) return fail('This turn was started by a reply from another task; do not reply to a reply. Finish the work here.')
+      if (repliedTurns.get(session) === current.id) return fail('You already replied in this turn.')
+      const record = await bridge.record(sender.sessionId)
+      if (!record) return fail(`The task that sent the message (${sender.sessionId}) no longer exists.`)
+      if (record.running) return fail(`Task "${record.title}" is running now, most likely waiting for this turn with task_wait; it reads your final message, so no reply is needed.`)
+      const refused = await confirmSend(`回复任务「${record.title}」`)
+      if (refused) return fail(refused)
+      repliedTurns.set(session, current.id)
+      const result = await bridge.act({ sessionId: session.id, action: 'send', target: sender.sessionId, message, from: { sessionId: session.id, title: session.title, reply: true } })
+      if (!result.ok) {
+        repliedTurns.delete(session)
+        return fail(result.error)
+      }
+      return done(
+        `Replied to task ${result.sessionId} ("${result.title}")${result.queued ? '; it is queued after that task’s current turn' : ''}.`,
+        `回复任务 ${result.title}${result.queued ? '（排队中）' : ''}`,
+        { taskLink: { sessionId: result.sessionId, title: result.title } },
+      )
+    }
+    // 发消息、新建任务：被别的任务叫起来的这一轮不能再往外发，免得互相触发；每轮有次数上限；按权限模式确认
+    if (current?.from) return fail(`This turn was started by a message from another task, so it cannot send to or create tasks. Finish the work here; the sender reads your result${current.from.reply ? '' : ', or answer it once with task_reply'}.`)
     const counted = actionCounts.get(session)
     const count = counted && counted.turnId === current?.id ? counted.count : 0
     if (count >= MAX_TASK_ACTIONS_PER_TURN) return fail(`At most ${MAX_TASK_ACTIONS_PER_TURN} task messages per turn.`)
@@ -213,17 +260,8 @@ export async function runTaskTool(
       params = { sessionId: session.id, action: 'create', project, title: input.title ?? null, design: input.design ?? false, message: input.message, from }
       question = `新建${input.design ? '设计' : ''}任务${input.title ? `「${input.title}」` : ''}`
     }
-    if (session.permissionMode !== 'full') {
-      const choice = await io.requestPermission(
-        { toolCallId: call.toolCallId, title: question, kind: 'other', status: 'pending', rawInput: call.input, _meta: LOCAL_ONLY_META },
-        [
-          { optionId: PERMISSION_OPTIONS.allowOnce, name: '发送', kind: 'allow_once' },
-          { optionId: PERMISSION_OPTIONS.reject, name: '不发', kind: 'reject_once' },
-        ],
-      )
-      if (signal.aborted) return fail('Cancelled by the user.')
-      if (choice !== PERMISSION_OPTIONS.allowOnce) return fail('The user declined. Do not send it again unless they ask.')
-    }
+    const refused = await confirmSend(question)
+    if (refused) return fail(refused)
     actionCounts.set(session, { turnId: current?.id ?? '', count: count + 1 })
     const result = await bridge.act(params)
     if (!result.ok) return fail(result.error)

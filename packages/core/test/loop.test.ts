@@ -428,4 +428,53 @@ describe('任务之间互通', () => {
     expect(acted).toHaveLength(1)
     expect(io.permissionRequests).toBe(1)
   }, 20_000)
+
+  test('回复（v2）：只在别的任务叫起来的一轮、只回一次，回给发消息的任务并标成回复；回复叫起来的一轮不能再回；对方正在跑时不发', async () => {
+    const model = scriptedModel([
+      { toolCalls: [{ name: 'task_reply', input: { message: '没人叫我' } }] },
+      { text: '不能回' },
+      { toolCalls: [{ name: 'task_reply', input: { message: 'README 写好了' } }] },
+      { toolCalls: [{ name: 'task_reply', input: { message: '再回一次' } }] },
+      { text: '回过了' },
+      { toolCalls: [{ name: 'task_reply', input: { message: '回复的回复' } }] },
+      { text: '不回' },
+      { toolCalls: [{ name: 'task_reply', input: { message: '它在等我' } }] },
+      { text: '它会读到' },
+    ])
+    const session = await makeSession(model)
+    const acted: unknown[] = []
+    let running = false
+    const tasks = {
+      list: async () => [],
+      record: async (id: string) => (id === 'other' ? { title: '别的任务', cwd: project, running, turns: [] } : null),
+      act: async (params: unknown) => {
+        acted.push(params)
+        return { ok: true as const, sessionId: 'other', title: '别的任务', queued: false }
+      },
+    }
+    const io = Object.assign(recordingIO(), { tasks })
+    const prompt = (index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt)
+    const sender = { sessionId: 'other', title: '别的任务' }
+
+    session.startTurn('t1', '用户自己发的')
+    await runTurn(session, { id: 't1', text: '用户自己发的' }, io)
+    expect(prompt(1)).toContain('only works in a turn started by a message from another task')
+
+    session.startTurn('t2', '来自任务的消息', 'prompt', [], [], sender)
+    await runTurn(session, { id: 't2', text: '来自任务的消息' }, io)
+    expect(acted).toEqual([{ sessionId: session.id, action: 'send', target: 'other', message: 'README 写好了', from: { sessionId: session.id, title: session.title, reply: true } }])
+    expect(io.permissionRequests).toBe(1)
+    expect(prompt(4)).toContain('already replied in this turn')
+
+    session.startTurn('t3', '来自任务的回复', 'prompt', [], [], { ...sender, reply: true })
+    await runTurn(session, { id: 't3', text: '来自任务的回复' }, io)
+    expect(prompt(6)).toContain('do not reply to a reply')
+
+    running = true
+    session.startTurn('t4', '来自任务的消息', 'prompt', [], [], sender)
+    await runTurn(session, { id: 't4', text: '来自任务的消息' }, io)
+    expect(prompt(8)).toContain('is running now')
+    expect(acted).toHaveLength(1)
+    expect(io.permissionRequests).toBe(1)
+  }, 20_000)
 })

@@ -160,7 +160,7 @@ const recordSchema = z.object({
   images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
       // 第 72 步加的，旧记录没有
       restoredAt: z.string().optional(),
-      from: z.object({ sessionId: z.string(), title: z.string() }).optional(),
+      from: z.object({ sessionId: z.string(), title: z.string(), reply: z.literal(true).optional() }).optional(),
       // 第 360 步加的，旧记录没有
       remote: z.object({ deviceId: z.string(), name: z.string() }).optional(),
       // v2 按计划执行加的，旧记录没有

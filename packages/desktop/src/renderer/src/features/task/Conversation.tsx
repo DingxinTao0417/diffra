@@ -652,7 +652,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   return (
     // 按需渲染用 content-visibility：内容还在 DOM 里，页面内搜索、定位、复制照常；auto 记住画过一次的高度，滚动条不来回跳
     <section ref={sectionRef} data-testid="turn" data-turn-id={turn.id} className={cn('group/turn flex flex-col gap-3.5', deferred && '[contain-intrinsic-size:auto_480px] [content-visibility:auto]')}>
-      {turn.from && <TaskLink source={turn.from} label="来自任务" className="self-end" />}
+      {turn.from && <TaskLink source={turn.from} label={turn.from.reply ? '回复来自任务' : '来自任务'} className="self-end" />}
       {turn.remote && <RemoteSourceTag source={turn.remote} />}
       {blocks.map((block, index) => {
         // 并排对比时只留提问，回答换成对比

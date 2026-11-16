@@ -407,7 +407,7 @@ async function loadLive(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): 
 
 // 任务互通：另一个任务的智能体要给某个任务发消息，或新建任务。在后台载入、起一轮，不把用户从正在看的任务切走
 async function handleTaskAction(params: TaskActionParams): Promise<TaskActionResult> {
-  const text = `来自任务「${params.from.title}」的消息：\n\n${params.message}`
+  const text = `来自任务「${params.from.title}」的${params.from.reply ? '回复' : '消息'}：\n\n${params.message}`
   if (params.action === 'send') {
     const sent = await sendInBackground(params.target, text, { from: params.from })
     if (!sent) return { ok: false, error: `没有找到任务 ${params.target}` }

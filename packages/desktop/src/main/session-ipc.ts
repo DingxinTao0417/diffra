@@ -125,7 +125,7 @@ const promptOptionsSchema = z.object({
   skills: skillNamesSchema,
   goal: z.boolean(),
   images: promptImagesSchema,
-  from: z.object({ sessionId: z.string().min(1), title: z.string() }).optional(),
+  from: z.object({ sessionId: z.string().min(1), title: z.string(), reply: z.literal(true).optional() }).optional(),
   remote: z.object({ deviceId: z.string().regex(/^[0-9a-f]{32}$/), name: z.string().min(1).max(60) }).optional(),
   fromPlan: z.object({ turnId: z.string().min(1), steps: z.array(z.string().trim().min(1).max(300)).min(1).max(20) }).optional(),
 })
