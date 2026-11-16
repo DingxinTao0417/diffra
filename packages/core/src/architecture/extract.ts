@@ -1,6 +1,7 @@
 import { extname } from 'node:path'
 import { Lang, type NapiConfig, parse, type SgNode } from '@ast-grep/napi'
 import { dynamicLanguageAvailable, vueScripts } from '../syntax.js'
+import { type LineLanguage, lineFacts } from './extract-lines.js'
 import type { CallFact, FileFacts, ImportFact, SourceLanguage, SymbolFact, SymbolKind } from './model.js'
 
 export function sourceLanguageOf(path: string): SourceLanguage | null {
@@ -17,6 +18,8 @@ export function sourceLanguageOf(path: string): SourceLanguage | null {
       return 'javascript'
     case '.vue':
       return 'vue'
+    case '.svelte':
+      return 'svelte'
     case '.py':
       return dynamicLanguageAvailable('python') ? 'python' : null
     case '.go':
@@ -26,8 +29,28 @@ export function sourceLanguageOf(path: string): SourceLanguage | null {
     case '.java':
       return dynamicLanguageAvailable('java') ? 'java' : null
     default:
-      return null
+      return LINE_LANGUAGES[extname(path).toLowerCase()] ?? null
   }
+}
+
+// 按行提取的语言（v2 · M9，见 extract-lines.ts）
+const LINE_LANGUAGES: Record<string, LineLanguage> = {
+  '.c': 'c',
+  '.h': 'c',
+  '.cpp': 'cpp',
+  '.cc': 'cpp',
+  '.cxx': 'cpp',
+  '.hpp': 'cpp',
+  '.hh': 'cpp',
+  '.hxx': 'cpp',
+  '.cs': 'csharp',
+  '.kt': 'kotlin',
+  '.kts': 'kotlin',
+  '.scala': 'scala',
+  '.php': 'php',
+  '.rb': 'ruby',
+  '.swift': 'swift',
+  '.dart': 'dart',
 }
 
 // 一个文件的 import、顶层符号（含类和 impl 的方法）和包名；语言不支持时返回 null。解析器容错，有语法错误也只取认得出的部分
@@ -46,6 +69,7 @@ export function extractFacts(path: string, source: string): FileFacts | null {
       break
     }
     case 'vue':
+    case 'svelte':
       for (const block of vueScripts(source)) {
         const root = parse(block.lang, block.code).root()
         scriptFacts(root, block.lineOffset, facts)
@@ -76,6 +100,8 @@ export function extractFacts(path: string, source: string): FileFacts | null {
       calls.collect(root, 'java', 0)
       break
     }
+    default:
+      lineFacts(language, source, facts)
   }
   facts.imports.sort((a, b) => a.line - b.line)
   facts.calls = calls.list

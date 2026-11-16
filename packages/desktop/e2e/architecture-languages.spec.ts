@@ -24,6 +24,13 @@ const FILES: Record<string, string> = {
   'py/src/pysvc/__init__.py': '',
   'py/src/pysvc/cli.py': 'import os\nfrom .db import connect\n\ndef main():\n    connect()\n',
   'py/src/pysvc/db.py': 'def connect():\n    return None\n',
+  // v2 · M9：按行提取的语言
+  'dotnet/Models/User.cs': 'namespace Shop.Models;\n\npublic class User {}\n',
+  'dotnet/Services/UserService.cs': 'using System;\nusing Shop.Models;\n\nnamespace Shop.Services;\n\npublic class UserService\n{\n    public User Load() { return new User(); }\n}\n',
+  'rb/lib/shop/cart.rb': "require 'json'\nrequire_relative 'item'\n\nclass Cart\nend\n",
+  'rb/lib/shop/item.rb': 'class Item\nend\n',
+  'native/src/main.c': '#include <stdio.h>\n#include "util.h"\n\nint main(void) {\n  return twice(1);\n}\n',
+  'native/src/util.h': 'int twice(int x);\n',
 }
 
 test('架构（Java 适配器）：Spring 风格的 Maven 项目按包名和注解分层；启动类是入口；下层反过来依赖上层的地方列出来、能跳到代码', async () => {
@@ -73,7 +80,7 @@ test('架构（Java 适配器）：Spring 风格的 Maven 项目按包名和注�
   }
 })
 
-test('架构：Python、Go、Rust、Java、TS 都能深度解析，依赖和语言自带的库对得上', async () => {
+test('架构：Python、Go、Rust、Java、TS，还有 v2 的 C#、Ruby、C 都能深度解析，依赖和语言自带的库对得上', async () => {
   test.setTimeout(120_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-arch-lang-'))
@@ -91,19 +98,20 @@ test('架构：Python、Go、Rust、Java、TS 都能深度解析，依赖和语�
     await expect(card.getByText('循环依赖')).toBeVisible({ timeout: 60_000 })
     await card.click()
 
-    // 11 个代码文件全部深度解析；每种语言里的项目内依赖都对上了
+    // 17 个代码文件全部深度解析；每种语言里的项目内依赖都对上了
     await window.getByRole('radio', { name: '概览', exact: true }).click()
-    await expect(window.getByTestId('architecture-overview')).toContainText('深度解析了 11 个文件')
-    await expect(window.getByTestId('architecture-stats')).toContainText('5文件之间的依赖')
+    await expect(window.getByTestId('architecture-overview')).toContainText('深度解析了 17 个文件')
+    await expect(window.getByTestId('architecture-stats')).toContainText('8文件之间的依赖')
     await expect(window.getByTestId('architecture-stats')).toContainText('0没对上的导入')
 
-    // 技术架构图的最底层：五种语言和它们自带的库
+    // 技术架构图的最底层：行数最多的 6 种语言（TS、Rust 行数最少，不列），各种语言自带的库都列
     await window.getByRole('radio', { name: '架构图', exact: true }).click()
     await window.getByRole('radio', { name: '技术架构', exact: true }).click()
     const diagram = window.getByTestId('block-diagram')
-    for (const name of ['Go', 'Rust', 'Java', 'Python', 'TypeScript', 'Go 标准库', 'Rust 标准库', 'Java 标准库', 'Python 标准库']) {
+    for (const name of ['Go', 'C#', 'Java', 'Python', 'Ruby', 'C', 'Go 标准库', 'Rust 标准库', 'Java 标准库', 'Python 标准库', '.NET 基础类库', 'Ruby 标准库', 'C/C++ 标准库和系统头文件']) {
       await expect(diagram.getByTestId('diagram-block').filter({ has: window.getByText(name, { exact: true }) })).toHaveCount(1)
     }
+    await expect(diagram.getByTestId('diagram-block').filter({ has: window.getByText('Rust', { exact: true }) })).toHaveCount(0)
   } finally {
     await app.close()
     rmSync(project, { recursive: true, force: true })

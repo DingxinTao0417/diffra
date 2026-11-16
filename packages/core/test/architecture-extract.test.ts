@@ -20,12 +20,16 @@ function facts(path: string, lines: string[]): FileFacts {
 }
 
 describe('架构分析：按扩展名认语言', () => {
-  test('七种语言按扩展名识别，其他返回 null', () => {
+  test('按扩展名识别语言（v2 起多了按行提取的几种和 Svelte），其他返回 null', () => {
     expect(['a.ts', 'a.tsx', 'a.mts', 'a.cts', 'A.TS'].map(sourceLanguageOf)).toEqual(Array(5).fill('typescript'))
     expect(['a.js', 'a.jsx', 'a.mjs', 'a.cjs'].map(sourceLanguageOf)).toEqual(Array(4).fill('javascript'))
     expect(['a.vue', 'a.py', 'a.go', 'a.rs', 'A.java'].map(sourceLanguageOf)).toEqual(['vue', 'python', 'go', 'rust', 'java'])
+    expect(['a.c', 'a.h', 'a.cpp', 'a.hpp', 'a.cs', 'a.kt', 'a.scala', 'a.php', 'a.rb', 'a.swift', 'a.dart', 'a.svelte'].map(sourceLanguageOf)).toEqual([
+      'c', 'c', 'cpp', 'cpp', 'csharp', 'kotlin', 'scala', 'php', 'ruby', 'swift', 'dart', 'svelte',
+    ])
     expect(sourceLanguageOf('README.md')).toBeNull()
-    expect(extractFacts('a.kt', 'fun main() {}')).toBeNull()
+    expect(sourceLanguageOf('a.sql')).toBeNull()
+    expect(extractFacts('a.kt', 'fun main() {}')?.symbols).toEqual([{ name: 'main', kind: 'function', line: 1, endLine: 1, exported: true, parent: null }])
   })
 
   test('语法错误的文件不抛错，取出认得出的部分', () => {

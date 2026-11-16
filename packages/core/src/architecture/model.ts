@@ -3,7 +3,8 @@
 export const ARCHITECTURE_VERSION = 1
 
 // 深度解析（import、导出、符号）的语言；其他语言只统计文件和行数
-export type SourceLanguage = 'typescript' | 'javascript' | 'vue' | 'python' | 'go' | 'rust' | 'java'
+// v2 起多了按行提取的几种（见 extract-lines.ts）和 Svelte
+export type SourceLanguage = 'typescript' | 'javascript' | 'vue' | 'svelte' | 'python' | 'go' | 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 'scala' | 'php' | 'ruby' | 'swift' | 'dart'
 
 // import：普通导入；type：只导入类型；dynamic：import()；require：CommonJS；reexport：export … from；
 // mod：Rust 的 mod foo;；use：Rust 的 use；static：Java 的 import static
@@ -130,9 +131,12 @@ export interface ExternalUse {
   specifier: string
 }
 
+// 外部包的来源；v2 起多了 C/C++（native）、C#（nuget）、PHP（composer）、Ruby（gem）、Swift、Dart（pub）
+export type ExternalEcosystem = 'npm' | 'python' | 'go' | 'cargo' | 'java' | 'native' | 'nuget' | 'composer' | 'gem' | 'swift' | 'pub'
+
 export interface ExternalInfo {
   name: string
-  ecosystem: 'npm' | 'python' | 'go' | 'cargo' | 'java'
+  ecosystem: ExternalEcosystem
   // 语言自带的库：node:fs、Python 标准库、Go 标准库、Rust std、java.*
   builtin: boolean
   // 清单里声明过

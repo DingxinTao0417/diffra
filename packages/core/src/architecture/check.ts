@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AddedLines } from '../security/types.js'
+import { TYPED_LANGUAGES, topLevelNames } from './engine.js'
 import { extractFacts, sourceLanguageOf } from './extract.js'
 import { type ArchitectureAnalysis, componentOfPath, evaluateTarget, linkViolation, type SourceLanguage, type TargetArchitecture, targetParts } from './model.js'
 import { Resolver } from './resolve.js'
@@ -29,11 +30,13 @@ export async function checkArchitecture(root: string, analysis: ArchitectureAnal
 
   const sourceFiles = new Map<string, SourceLanguage>()
   const namespaces = new Map<string, string | null>()
+  const types = new Map<string, string[]>()
   for (const file of analysis.files) {
     const language = file.parsed ? sourceLanguageOf(file.path) : null
     if (language) {
       sourceFiles.set(file.path, language)
       namespaces.set(file.path, file.namespace)
+      if (TYPED_LANGUAGES.has(language)) types.set(file.path, topLevelNames(file.symbols))
     }
   }
   const facts = new Map<string, ReturnType<typeof extractFacts>>()
@@ -42,6 +45,7 @@ export async function checkArchitecture(root: string, analysis: ArchitectureAnal
     facts.set(path, fileFacts)
     sourceFiles.set(path, language)
     namespaces.set(path, fileFacts?.namespace ?? null)
+    if (fileFacts && TYPED_LANGUAGES.has(language)) types.set(path, topLevelNames(fileFacts.symbols))
   }
   const resolver = new Resolver({
     config: analysis.resolver,
@@ -49,6 +53,7 @@ export async function checkArchitecture(root: string, analysis: ArchitectureAnal
     sourceFiles,
     namespaces,
     declaredGo: analysis.packages.filter((item) => item.ecosystem === 'go').flatMap((item) => item.dependencies),
+    types,
   })
 
   const { components } = targetParts(target)
@@ -70,7 +75,7 @@ export async function checkArchitecture(root: string, analysis: ArchitectureAnal
     for (const fact of fileFacts.imports) {
       if (!newLines.has(fact.line)) continue
       if (ALLOW_COMMENT.test(lines[fact.line - 1] ?? '') || ALLOW_COMMENT.test(lines[fact.line - 2] ?? '')) continue
-      const result = resolver.resolve(path, language, fact)
+      const result = resolver.resolve(path, language, fact, fileFacts.typeRefs)
       if (result.kind === 'internal') {
         for (const file of result.files) {
           const to = componentOfPath(components, file)

@@ -232,8 +232,38 @@ const BUILD_MATCH = ['vite', '@vitejs/', 'vitest', 'jest', '@playwright/', 'play
 
 const matches = (patterns: readonly string[], name: string) => patterns.some((pattern) => (pattern.endsWith('/') ? name.startsWith(pattern) : name === pattern || name.startsWith(`${pattern}.`) || name.startsWith(`${pattern}/`)))
 
-const LANGUAGE_RUNTIMES: Record<string, string> = { npm: 'Node.js 内置模块', python: 'Python 标准库', go: 'Go 标准库', cargo: 'Rust 标准库', java: 'Java 标准库' }
-const LANGUAGE_NAMES: Record<string, string> = { typescript: 'TypeScript', javascript: 'JavaScript', python: 'Python', go: 'Go', rust: 'Rust', java: 'Java', vue: 'Vue 单文件组件', kotlin: 'Kotlin', csharp: 'C#', cpp: 'C++', c: 'C' }
+const LANGUAGE_RUNTIMES: Record<string, string> = {
+  npm: 'Node.js 内置模块',
+  python: 'Python 标准库',
+  go: 'Go 标准库',
+  cargo: 'Rust 标准库',
+  java: 'Java 标准库',
+  native: 'C/C++ 标准库和系统头文件',
+  nuget: '.NET 基础类库',
+  composer: 'PHP 内置类',
+  gem: 'Ruby 标准库',
+  swift: 'Apple 系统框架',
+  pub: 'Dart SDK',
+}
+const LANGUAGE_NAMES: Record<string, string> = {
+  typescript: 'TypeScript',
+  javascript: 'JavaScript',
+  python: 'Python',
+  go: 'Go',
+  rust: 'Rust',
+  java: 'Java',
+  vue: 'Vue 单文件组件',
+  svelte: 'Svelte 组件',
+  kotlin: 'Kotlin',
+  scala: 'Scala',
+  csharp: 'C#',
+  cpp: 'C++',
+  c: 'C',
+  php: 'PHP',
+  ruby: 'Ruby',
+  swift: 'Swift',
+  dart: 'Dart',
+}
 
 function staticTechnology(analysis: ArchitectureAnalysis): BlockDiagram {
   const diagram = emptyDiagram('technology', analysis)

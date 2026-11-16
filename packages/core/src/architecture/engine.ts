@@ -23,12 +23,17 @@ import {
   type PackageInfo,
   type SourceLanguage,
   stronglyConnected,
+  type SymbolFact,
   type UnresolvedImport,
 } from './model.js'
 import { Resolver } from './resolve.js'
 
 // 规模上限：超过的代码文件不进图（记在 skipped.overLimit），太大的单个文件多半是生成的
 export const MAX_CODE_FILES = 20_000
+
+// 按「包.名字」对 import 的语言（v2 · M9）：解析器要知道每个文件顶层定义了哪些名字
+export const TYPED_LANGUAGES = new Set<SourceLanguage>(['kotlin', 'scala', 'csharp', 'php', 'swift'])
+export const topLevelNames = (symbols: readonly SymbolFact[]) => [...new Set(symbols.filter((symbol) => symbol.parent === null && symbol.kind !== 'module').map((symbol) => symbol.name))]
 const MAX_LISTED_FILES = 300_000
 const MAX_FILE_BYTES = 512 * 1024
 const MAX_UNRESOLVED = 500
@@ -181,8 +186,15 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     const stale = batch.filter((file) => {
       const cached = previous[file.path]
       // 以前的结果里 Java 文件没有注解（v2 的 Java 适配器才加）：重新解析一次
-      // 以前的结果没有函数调用（v2 的调用图才加）：也重新解析一次
-      return !cached || cached.mtimeMs !== file.mtimeMs || cached.size !== file.size || (cached.facts?.language === 'java' && cached.facts.annotations === undefined) || (cached.facts !== null && cached.facts.calls === undefined)
+      // 以前的结果没有函数调用（v2 的调用图才加）：也重新解析一次；v2 新支持的语言以前只统计了行数，也要解析
+      return (
+        !cached ||
+        cached.mtimeMs !== file.mtimeMs ||
+        cached.size !== file.size ||
+        (cached.facts?.language === 'java' && cached.facts.annotations === undefined) ||
+        (cached.facts !== null && cached.facts.calls === undefined) ||
+        (cached.facts === null && cached.skipped === undefined && file.source !== null)
+      )
     })
     const texts = new Map(await Promise.all(stale.map(async (file) => [file.path, await readFile(join(root, file.path), 'utf8').catch(() => null)] as const)))
     for (const file of batch) {
@@ -261,11 +273,13 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
   // 依赖解析
   const sourceFiles = new Map<string, SourceLanguage>()
   const namespaces = new Map<string, string | null>()
+  const types = new Map<string, string[]>()
   for (const file of included) {
     const facts = cache.files[file.path]!.facts
     if (facts) {
       sourceFiles.set(file.path, facts.language)
       namespaces.set(file.path, facts.namespace)
+      if (TYPED_LANGUAGES.has(facts.language)) types.set(file.path, topLevelNames(facts.symbols))
     }
   }
   const resolver = new Resolver({
@@ -274,6 +288,7 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     sourceFiles,
     namespaces,
     declaredGo: manifests.filter((item) => item.ecosystem === 'go').flatMap((item) => item.dependencies),
+    types,
   })
   const declared = new Set(manifests.flatMap((manifest) => manifest.dependencies.map((name) => name.toLowerCase())))
   const edgeMap = new Map<number, Map<number, EdgeImport[]>>()
@@ -293,7 +308,7 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
     if (!facts) continue
     const from = index.get(file.path)!
     for (const fact of facts.imports) {
-      const result = resolver.resolve(file.path, facts.language, fact)
+      const result = resolver.resolve(file.path, facts.language, fact, facts.typeRefs)
       const item: EdgeImport = { line: fact.line, specifier: fact.specifier, names: fact.names, kind: fact.kind, ...(fact.local ? { local: fact.local } : {}) }
       if (result.kind === 'internal') {
         for (const target of result.files) {
@@ -310,11 +325,9 @@ export async function analyzeProject(options: AnalyzeOptions): Promise<{ analysi
         unresolved.push({ file: from, line: fact.line, specifier: fact.specifier })
       }
     }
-    if (facts.language === 'java') {
-      for (const target of resolver.samePackageJava(file.path, facts.typeRefs)) {
-        const to = index.get(target)
-        if (to !== undefined) addEdge(from, to, { line: 1, specifier: posix.basename(target, '.java'), names: [], kind: 'import' })
-      }
+    for (const target of resolver.implicitTargets(file.path, facts.language, facts.typeRefs)) {
+      const to = index.get(target)
+      if (to !== undefined) addEdge(from, to, { line: 1, specifier: posix.basename(target).replace(/\.[^.]+$/, ''), names: [], kind: 'import' })
     }
     resolved++
     progress('resolving', resolved, sourceFiles.size)

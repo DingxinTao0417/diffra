@@ -1,15 +1,15 @@
 import { builtinModules } from 'node:module'
 import { posix } from 'node:path'
-import type { ImportFact, ResolverConfig, SourceLanguage } from './model.js'
+import type { ExternalEcosystem, ImportFact, ResolverConfig, SourceLanguage } from './model.js'
 
 export type Resolution =
   | { kind: 'internal'; files: string[] }
-  | { kind: 'external'; name: string; ecosystem: 'npm' | 'python' | 'go' | 'cargo' | 'java'; builtin: boolean }
+  | { kind: 'external'; name: string; ecosystem: ExternalEcosystem; builtin: boolean }
   // 项目里的非代码文件（样式、图片、JSON），不进依赖图
   | { kind: 'asset' }
   | { kind: 'unresolved' }
 
-const SCRIPT_EXTENSIONS = ['.ts', '.tsx', '.d.ts', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.vue']
+const SCRIPT_EXTENSIONS = ['.ts', '.tsx', '.d.ts', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.svelte']
 const JS_TO_TS: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.jsx': ['.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'] }
 const NODE_BUILTINS = new Set(builtinModules)
 const RUST_BUILTIN_CRATES = new Set(['std', 'core', 'alloc', 'proc_macro', 'test'])
@@ -49,6 +49,42 @@ export interface ResolverInput {
   namespaces: ReadonlyMap<string, string | null>
   // Go、Cargo、Maven、Python 清单里声明的依赖，用来把外部导入归到声明的名字上
   declaredGo: readonly string[]
+  // v2 · M9：Kotlin、Scala、C#、PHP、Swift 文件里顶层定义的名字（类型、函数），按「包.名字」对上 import
+  types?: ReadonlyMap<string, readonly string[]>
+}
+
+const JVM_LANGUAGES = new Set<SourceLanguage>(['java', 'kotlin', 'scala'])
+const RUBY_STDLIB = new Set(
+  'json set date time fileutils pathname open3 optparse yaml psych net uri securerandom digest logger erb csv tempfile tmpdir socket benchmark English forwardable singleton observer ostruct stringio timeout zlib openssl base64 bigdecimal etc io pp prettyprint rbconfig ripper monitor shellwords strscan find getoptlong open-uri pstore resolv weakref coverage objspace pty readline fiddle'.split(' '),
+)
+const SWIFT_SYSTEM = new Set(
+  'Swift Foundation UIKit SwiftUI AppKit Combine CoreData CoreGraphics CoreFoundation CoreLocation CoreImage CoreML CoreText Darwin Dispatch os OSLog XCTest Testing Observation AVFoundation MapKit WebKit StoreKit UserNotifications Security Network Photos PhotosUI CloudKit GameKit SpriteKit SceneKit Metal MetalKit QuartzCore Accelerate Charts WidgetKit AuthenticationServices LocalAuthentication Glibc'.split(' '),
+)
+const C_SYSTEM_DIRS = new Set(['sys', 'bits', 'linux', 'arpa', 'netinet', 'asm', 'machine', 'mach', 'net'])
+
+// 一个路径所有的后缀：a/b/c.h → a/b/c.h、b/c.h、c.h
+function* suffixes(path: string): Generator<string> {
+  const parts = path.split('/')
+  for (let index = 0; index < parts.length; index++) yield parts.slice(index).join('/')
+}
+
+const pushTo = <K, V>(map: Map<K, V[]>, key: K, value: V) => {
+  const list = map.get(key)
+  if (list) {
+    if (!list.includes(value)) list.push(value)
+  } else map.set(key, [value])
+}
+
+// 和 from 共同上级目录最深的排前面：同名头文件、同名 Ruby 文件有好几个时取最近的
+function closest(from: string, files: readonly string[]): string {
+  const depth = (file: string) => {
+    const a = from.split('/')
+    const b = file.split('/')
+    let shared = 0
+    while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared++
+    return shared
+  }
+  return [...files].sort((x, y) => depth(y) - depth(x) || x.length - y.length)[0]!
 }
 
 // 把导入路径对上项目里的文件，或者归到外部包
@@ -64,6 +100,15 @@ export class Resolver {
   private readonly aliasCache = new Map<string, AliasRule[][]>()
   private readonly goModules: Array<[string, string]>
   private readonly declaredGo: string[]
+  // v2 · M9：更多语言
+  private readonly csTypes = new Map<string, string[]>()
+  private readonly csNamespaces = new Set<string>()
+  private readonly phpTypes = new Map<string, string>()
+  private readonly swiftModules = new Map<string, string[]>()
+  private readonly swiftTypes = new Map<string, string[]>()
+  private readonly cSuffixes = new Map<string, string[]>()
+  private readonly rubySuffixes = new Map<string, string[]>()
+  private readonly dartLibs = new Map<string, string[]>()
 
   constructor(private readonly input: ResolverInput) {
     for (const [file, language] of input.sourceFiles) {
@@ -71,13 +116,39 @@ export class Resolver {
       const inDir = this.dirFiles.get(dir)
       if (inDir) inDir.push(file)
       else this.dirFiles.set(dir, [file])
-      if (language === 'java') {
+      if (JVM_LANGUAGES.has(language)) {
         const namespace = input.namespaces.get(file) ?? ''
-        const name = posix.basename(file, '.java')
-        this.javaClasses.set(namespace ? `${namespace}.${name}` : name, file)
+        // Kotlin、Scala 一个文件可以定义好几个类和顶层函数，都记上；Java 按文件名
+        const names = language === 'java' ? [posix.basename(file, '.java')] : [posix.basename(file).replace(/\.[^.]+$/, ''), ...(input.types?.get(file) ?? [])]
+        for (const name of names) {
+          const key = namespace ? `${namespace}.${name}` : name
+          if (!this.javaClasses.has(key)) this.javaClasses.set(key, file)
+        }
         const inPackage = this.javaPackages.get(namespace)
         if (inPackage) inPackage.push(file)
         else this.javaPackages.set(namespace, [file])
+      } else if (language === 'csharp') {
+        const namespace = input.namespaces.get(file) ?? ''
+        this.csNamespaces.add(namespace)
+        for (const name of input.types?.get(file) ?? []) pushTo(this.csTypes, namespace ? `${namespace}.${name}` : name, file)
+      } else if (language === 'php') {
+        const namespace = input.namespaces.get(file) ?? ''
+        for (const name of input.types?.get(file) ?? []) {
+          const key = namespace ? `${namespace}\\${name}` : name
+          if (!this.phpTypes.has(key)) this.phpTypes.set(key, file)
+        }
+      } else if (language === 'swift') {
+        const module = swiftModuleOf(file)
+        pushTo(this.swiftModules, module, file)
+        for (const name of input.types?.get(file) ?? []) pushTo(this.swiftTypes, `${module}.${name}`, file)
+      } else if (language === 'c' || language === 'cpp') {
+        for (const suffix of suffixes(file)) pushTo(this.cSuffixes, suffix, file)
+      } else if (language === 'ruby') {
+        for (const suffix of suffixes(file.replace(/\.rb$/, ''))) pushTo(this.rubySuffixes, suffix, file)
+      } else if (language === 'dart') {
+        // 包的 lib/ 下面的文件，package:名字/路径 按「lib/ 之后的路径」找
+        const lib = file.lastIndexOf('lib/')
+        if (lib >= 0 && (lib === 0 || file[lib - 1] === '/') && input.allFiles.has(`${file.slice(0, lib)}pubspec.yaml`)) pushTo(this.dartLibs, file.slice(lib + 4), file)
       }
     }
     const byScope = new Map<string, AliasRule[]>()
@@ -106,11 +177,13 @@ export class Resolver {
     }
   }
 
-  resolve(from: string, language: SourceLanguage, fact: ImportFact): Resolution {
+  // typeRefs：文件里出现的类型名（C#、Swift 的整个命名空间、模块导入按它挑出真正用到的文件）
+  resolve(from: string, language: SourceLanguage, fact: ImportFact, typeRefs: readonly string[] = []): Resolution {
     switch (language) {
       case 'typescript':
       case 'javascript':
       case 'vue':
+      case 'svelte':
         return this.resolveScript(from, fact.specifier)
       case 'python':
         return this.resolvePython(from, fact)
@@ -119,8 +192,123 @@ export class Resolver {
       case 'rust':
         return this.resolveRust(from, fact)
       case 'java':
+      case 'kotlin':
+      case 'scala':
         return this.resolveJava(fact.specifier)
+      case 'csharp':
+        return this.resolveCsharp(fact.specifier, typeRefs)
+      case 'php':
+        return this.resolvePhp(from, fact)
+      case 'ruby':
+        return this.resolveRuby(from, fact.specifier)
+      case 'c':
+      case 'cpp':
+        return this.resolveC(from, fact.specifier)
+      case 'swift':
+        return this.resolveSwift(fact.specifier, typeRefs)
+      case 'dart':
+        return this.resolveDart(from, fact.specifier)
     }
+  }
+
+  // 不用 import 就能用的：Java、Kotlin、Scala 同一个包，C# 同一个和上级命名空间，PHP 同一个命名空间，Swift 同一个模块
+  implicitTargets(from: string, language: SourceLanguage, typeRefs: readonly string[]): string[] {
+    if (JVM_LANGUAGES.has(language)) return this.samePackageJava(from, typeRefs)
+    const namespace = this.input.namespaces.get(from) ?? ''
+    const targets = new Set<string>()
+    if (language === 'csharp') {
+      const scopes = namespace.split('.').map((_, index, parts) => parts.slice(0, parts.length - index).join('.'))
+      for (const ref of typeRefs) for (const scope of [...scopes, '']) for (const file of this.csTypes.get(scope ? `${scope}.${ref}` : ref) ?? []) targets.add(file)
+    } else if (language === 'php') {
+      for (const ref of typeRefs) {
+        const file = this.phpTypes.get(namespace ? `${namespace}\\${ref}` : ref)
+        if (file) targets.add(file)
+      }
+    } else if (language === 'swift') {
+      const module = swiftModuleOf(from)
+      for (const ref of typeRefs) for (const file of this.swiftTypes.get(`${module}.${ref}`) ?? []) targets.add(file)
+    }
+    targets.delete(from)
+    return [...targets]
+  }
+
+  // ---------- v2 · M9：C#、PHP、Ruby、C/C++、Swift、Dart ----------
+
+  private resolveCsharp(specifier: string, typeRefs: readonly string[]): Resolution {
+    // using A.B; 引入整个命名空间：只连这个文件真用到的类型所在的文件
+    if (this.csNamespaces.has(specifier)) return { kind: 'internal', files: [...new Set(typeRefs.flatMap((ref) => this.csTypes.get(`${specifier}.${ref}`) ?? []))] }
+    // using static A.B.C; / using X = A.B.C;
+    const type = this.csTypes.get(specifier)
+    if (type) return { kind: 'internal', files: type }
+    if ([...this.csNamespaces].some((namespace) => namespace.startsWith(`${specifier}.`))) return { kind: 'internal', files: [] }
+    const segments = specifier.split('.')
+    return { kind: 'external', name: segments.slice(0, 2).join('.'), ecosystem: 'nuget', builtin: segments[0] === 'System' }
+  }
+
+  private resolvePhp(from: string, fact: ImportFact): Resolution {
+    const specifier = fact.specifier
+    if (fact.kind === 'require') {
+      for (const candidate of [joinPath(dirOf(from), specifier), joinPath(specifier)]) if (insideRoot(candidate) && this.input.allFiles.has(candidate)) return { kind: 'internal', files: [candidate] }
+      return { kind: 'unresolved' }
+    }
+    const file = this.phpTypes.get(specifier)
+    if (file) return { kind: 'internal', files: [file] }
+    const segments = specifier.split('\\')
+    if (segments.length === 1) return { kind: 'external', name: specifier, ecosystem: 'composer', builtin: true }
+    if ([...this.phpTypes.keys()].some((key) => key.startsWith(`${segments[0]}\\`))) return { kind: 'unresolved' }
+    return { kind: 'external', name: segments.slice(0, 2).join('\\'), ecosystem: 'composer', builtin: false }
+  }
+
+  private resolveRuby(from: string, specifier: string): Resolution {
+    if (specifier.startsWith('./') || specifier.startsWith('../')) {
+      const base = joinPath(dirOf(from), specifier)
+      for (const candidate of [base, `${base}.rb`]) if (this.input.allFiles.has(candidate)) return { kind: 'internal', files: [candidate] }
+      return { kind: 'unresolved' }
+    }
+    const matches = this.rubySuffixes.get(specifier.replace(/\.rb$/, ''))
+    if (matches) {
+      const preferred = matches.filter((file) => file.startsWith('lib/') || file.includes('/lib/'))
+      return { kind: 'internal', files: [closest(from, preferred.length > 0 ? preferred : matches)] }
+    }
+    const name = specifier.split('/')[0]!
+    return { kind: 'external', name, ecosystem: 'gem', builtin: RUBY_STDLIB.has(name) }
+  }
+
+  private resolveC(from: string, specifier: string): Resolution {
+    const system = specifier.startsWith('<')
+    const name = system ? specifier.slice(1, -1) : specifier
+    if (!system) {
+      const local = joinPath(dirOf(from), name)
+      if (insideRoot(local) && this.input.allFiles.has(local)) return { kind: 'internal', files: [local] }
+    }
+    // 项目里的 include 目录（include/、src/……）：按路径后缀找，同名的取最近的
+    const matches = this.cSuffixes.get(name.replace(/^(\.\/)+/, ''))
+    if (matches) return { kind: 'internal', files: [closest(from, matches)] }
+    if (!system) return { kind: 'unresolved' }
+    const first = name.split('/')[0]!
+    const builtin = !name.includes('/') || C_SYSTEM_DIRS.has(first)
+    return { kind: 'external', name: builtin ? name : first, ecosystem: 'native', builtin }
+  }
+
+  private resolveSwift(module: string, typeRefs: readonly string[]): Resolution {
+    if (this.swiftModules.has(module)) return { kind: 'internal', files: [...new Set(typeRefs.flatMap((ref) => this.swiftTypes.get(`${module}.${ref}`) ?? []))] }
+    return { kind: 'external', name: module, ecosystem: 'swift', builtin: SWIFT_SYSTEM.has(module) }
+  }
+
+  private resolveDart(from: string, specifier: string): Resolution {
+    if (specifier.startsWith('dart:')) return { kind: 'external', name: specifier, ecosystem: 'pub', builtin: true }
+    if (specifier.startsWith('package:')) {
+      const [name, ...rest] = specifier.slice(8).split('/')
+      const files = this.dartLibs.get(rest.join('/'))
+      if (files) {
+        const named = files.filter((file) => posix.basename(file.slice(0, file.lastIndexOf('lib/')).replace(/\/$/, '')) === name)
+        return { kind: 'internal', files: [closest(from, named.length > 0 ? named : files)] }
+      }
+      return { kind: 'external', name: name!, ecosystem: 'pub', builtin: false }
+    }
+    const local = joinPath(dirOf(from), specifier)
+    if (insideRoot(local) && this.input.allFiles.has(local)) return { kind: 'internal', files: [local] }
+    return { kind: 'unresolved' }
   }
 
   // Java 同一个包里的类不用 import：文件里出现的类型名对上同包的类
@@ -330,7 +518,7 @@ export class Resolver {
       }
     }
     const segments = specifier.replace(/\.\*$/, '').split('.')
-    const builtin = ['java', 'javax', 'jdk', 'sun'].includes(segments[0]!)
+    const builtin = ['java', 'javax', 'jdk', 'sun', 'kotlin', 'scala'].includes(segments[0]!)
     const third = segments[2]
     const name = third && /^[a-z]/.test(third) && segments.length > 3 ? segments.slice(0, 3).join('.') : segments.slice(0, 2).join('.')
     return { kind: 'external', name, ecosystem: 'java', builtin }
@@ -353,4 +541,10 @@ export function rustModulePath(crateDir: string, file: string): string | null {
   const segments = relative.split('/')
   if (segments[segments.length - 1] === 'mod') segments.pop()
   return segments.join('::')
+}
+
+// Swift Package 的模块是 Sources/<模块名>/ 下的文件；不是 Package 结构的（Xcode 工程）整个项目算一个模块
+export function swiftModuleOf(file: string): string {
+  const match = /(?:^|\/)Sources\/([^/]+)\//.exec(file)
+  return match ? match[1]! : ''
 }
