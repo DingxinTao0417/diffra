@@ -225,6 +225,7 @@ export async function runTurn(
   options: TurnOptions = {},
 ): Promise<StopReason> {
   if (session.running) throw new Error('上一个任务还没结束')
+  await session.refreshPrompt().catch((error: unknown) => console.error('[session] 重建系统提示词失败，沿用原来的', error))
   const controller = session.activateTurn()
   const { signal } = controller
   // 重新生成沿用同一个轮次 id，上一次的清单不能拿来收尾

@@ -248,12 +248,14 @@ export class SessionStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
-  async update(id: string, change: { title?: string; archived?: boolean }): Promise<SessionIndexEntry> {
+  // noProject 只能改成 false：无项目任务转成正式项目（v2），文件夹不动
+  async update(id: string, change: { title?: string; archived?: boolean; noProject?: false }): Promise<SessionIndexEntry> {
     const record = await this.load(id)
     const next: SessionRecord = {
       ...record,
       title: change.title ?? record.title,
       archived: change.archived ?? record.archived,
+      ...(change.noProject === false ? { noProject: false } : {}),
     }
     await this.save(next)
     return toEntry(next)

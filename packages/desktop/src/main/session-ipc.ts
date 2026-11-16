@@ -696,10 +696,16 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       z.object({
         title: z.string().trim().min(1, '任务名称不能为空').max(100, '任务名称太长').optional(),
         archived: z.boolean().optional(),
+        promote: z.literal(true).optional(),
       }),
       rawChange,
     )
     await updateSession(await coreConnection(), sessionId, change)
+    // 转成正式项目：文件夹成了用户的项目，记成上次用的项目（首页下拉、侧栏分组按它）
+    if (change.promote) {
+      const entry = (await listSessions(await coreConnection())).find((item) => item.sessionId === sessionId)
+      if (entry) await rememberProject(entry.cwd)
+    }
     emitSessionEvent({ type: 'changed', sessionId })
   })
 

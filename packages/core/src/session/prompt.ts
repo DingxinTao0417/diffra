@@ -30,7 +30,7 @@ export interface PromptContext {
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
 export async function buildSystemPrompt(
   bashPath: string | null,
-  { checks, readOnlyPaths, rules }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules'>,
+  { checks, readOnlyPaths, rules, noProject }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules' | 'noProject'>,
   rulePacks: RulePack[],
   context: PromptContext = { skills: [], frontend: null },
 ): Promise<string> {
@@ -48,6 +48,14 @@ export async function buildSystemPrompt(
     '- A file applies to the whole directory tree that contains it. For every file you change, follow every AGENTS.md whose tree includes it. Deeper files win when they conflict; direct instructions from the user win over AGENTS.md.',
     '- The files from the project root down to the working directory are already in your context; do not read them again. When you work in a subdirectory or outside the working directory, look for AGENTS.md files that apply there.',
     '',
+    // 无项目任务（v2）：文件夹是 Diffra 替这个任务新建的，不是用户的项目
+    ...(noProject
+      ? [
+          '## Working folder',
+          "- The working directory is a new empty folder that Diffra created for this task; it is not one of the user's projects. Put the files you create here, and say in your final message where they are.",
+          '',
+        ]
+      : []),
     '## Context from Diffra',
     '- Messages that start with "[Diffra]" or that hold <environment_context>, AGENTS.md instructions or <turn_aborted> come from Diffra, not from the user: the environment, instruction files, check results and reminders. A later update replaces the matching part of an earlier one.',
     '',

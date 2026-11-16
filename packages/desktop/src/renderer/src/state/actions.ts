@@ -943,6 +943,18 @@ export async function renameTask(sessionId: string, title: string): Promise<void
   }
 }
 
+// 无项目任务转成正式项目（v2）：文件夹不动，只是以后按项目对待（项目列表、项目设置、侧栏分组、用量按项目）
+export async function promoteTask(sessionId: string): Promise<void> {
+  try {
+    await window.diffra.updateSession(sessionId, { promote: true })
+    updateLive(sessionId, (task) => ({ ...task, noProject: false }))
+    await refreshTasks()
+    showToast('已转成正式项目，文件夹位置没变')
+  } catch (error) {
+    showToast(errorMessage(error))
+  }
+}
+
 export async function setArchived(sessionId: string, archived: boolean): Promise<void> {
   try {
     await window.diffra.updateSession(sessionId, { archived })

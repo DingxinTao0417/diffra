@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { Archive, FolderCog, FolderOpen, Pencil, Trash2 } from 'lucide-react'
+import { Archive, FolderCog, FolderInput, FolderOpen, Pencil, Trash2 } from 'lucide-react'
 import type { TaskFolderState } from '../../../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,7 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { errorMessage } from '@/lib/errors'
-import { deleteTask, renameTask, setArchived } from '@/state/actions'
+import { deleteTask, promoteTask, renameTask, setArchived } from '@/state/actions'
 import { type ExportFormat, ExportSubmenu } from '@/features/task/export'
 import { showToast, useAppState } from '@/state/store'
 
@@ -40,6 +40,7 @@ export function TaskMenu({ sessionId, title, project, noProject, archived, open,
   const running = useAppState((state) => state.live[sessionId]?.running ?? false)
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [promoting, setPromoting] = useState(false)
 
   return (
     <>
@@ -63,6 +64,12 @@ export function TaskMenu({ sessionId, title, project, noProject, archived, open,
               项目设置
             </DropdownMenuItem>
           )}
+          {noProject && (
+            <DropdownMenuItem disabled={running} onSelect={() => setPromoting(true)}>
+              <FolderInput />
+              转成正式项目…
+            </DropdownMenuItem>
+          )}
           {onExport && <ExportSubmenu label="导出整个任务" onExport={onExport} />}
           <DropdownMenuItem disabled={running} onSelect={() => void setArchived(sessionId, !archived)}>
             <Archive />
@@ -76,6 +83,29 @@ export function TaskMenu({ sessionId, title, project, noProject, archived, open,
         </DropdownMenuContent>
       </DropdownMenu>
       <RenameDialog open={renaming} title={title} onClose={() => setRenaming(false)} onSave={(next) => renameTask(sessionId, next)} />
+      <Dialog open={promoting} onOpenChange={setPromoting}>
+        <DialogContent data-testid="promote-task">
+          <DialogHeader>
+            <DialogTitle>把这个任务的文件夹转成正式项目？</DialogTitle>
+            <DialogDescription>
+              文件夹还在原来的位置（{project}），以后按项目对待：出现在项目列表和侧栏的项目分组里，可以设检查命令、禁写目录这些项目设置，用量按项目单独统计。转了不能转回无项目。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPromoting(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                setPromoting(false)
+                void promoteTask(sessionId)
+              }}
+            >
+              转成正式项目
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={deleting} onOpenChange={setDeleting}>
         <DialogContent showCloseButton={false}>
           {deleting && (

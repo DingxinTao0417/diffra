@@ -386,7 +386,8 @@ export async function deleteSession(connection: acp.ClientConnection, sessionId:
 export function updateSession(
   connection: acp.ClientConnection,
   sessionId: string,
-  change: { title?: string; archived?: boolean },
+  // promote：无项目任务转成正式项目（v2）
+  change: { title?: string; archived?: boolean; promote?: true },
 ): Promise<unknown> {
   return requestOf(connection)(SESSION_EXT_METHODS.sessionUpdate, { sessionId, ...change }, extRequestOptions())
 }

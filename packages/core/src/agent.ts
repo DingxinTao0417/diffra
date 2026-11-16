@@ -128,6 +128,8 @@ const sessionUpdateParams = z.object({
   sessionId: z.string().min(1),
   title: z.string().trim().min(1).max(100).optional(),
   archived: z.boolean().optional(),
+  // v2：无项目任务转成正式项目（原地转换：清掉标记，文件夹不动）
+  promote: z.literal(true).optional(),
 })
 
 // 设备连接读一页轮次：before 是这一页取到第几轮之前（不含），不给是取到最后；超过 maxChars 就少取几轮，但至少一轮
@@ -448,6 +450,19 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     const id = record?.id ?? randomUUID()
     const startContext = await sessionStartContext(hooks, { cwd, bashPath: environment.bashPath, sessionId: id })
     const systemPrompt = await buildSystemPrompt(environment.bashPath, config, rulePacks, promptContext)
+    // 无项目任务从空文件夹开始，建会话时只有不分语言的规则包、没有前端做法（v2）：
+    // 智能体在里面写了文件以后，下一轮开始时按新文件重新选一次（系统提示词只变这一次，提示词缓存只失效一次）
+    const rebuildPrompt =
+      config.noProject && files.length === 0
+        ? async () => {
+            const now = await listProjectFiles(cwd, environment.rgPath)
+            if (now.length === 0) return null
+            const packs = config.rules.packs.length > 0 ? selectRulePacks(config.rules.packs, countLanguages(now)) : []
+            const context = { ...promptContext, frontend: hasFrontend(now) ? { browser: config.browser, screenshots: config.browser && config.model.supportsImages } : null }
+            const main = await buildSystemPrompt(environment.bashPath, config, packs, context)
+            return { rulePacks: packs, systemPrompt: startContext ? `${main}\n\n# Context from plugins\n\n${startContext}` : main, workerPrompt: await buildSystemPrompt(environment.bashPath, config, packs, { ...context, worker: true }) }
+          }
+        : undefined
     const session = new Session({
       id,
       cwd,
@@ -467,6 +482,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       lsp: { pool: lspPool, servers: await pluginLspServers(config.plugins) },
       record,
       architecture,
+      rebuildPrompt,
     })
     const info: SessionInfo = {
       bashPath: environment.bashPath,
@@ -921,12 +937,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (live && live.turns.length === 0) {
         live.title = params.title ?? live.title
         live.archived = params.archived ?? live.archived
+        if (params.promote) live.noProject = false
         return toEntry(live.toRecord())
       }
-      const entry = await requireStore().update(params.sessionId, { title: params.title, archived: params.archived })
+      const entry = await requireStore().update(params.sessionId, { title: params.title, archived: params.archived, ...(params.promote ? { noProject: false as const } : {}) })
       if (live) {
         live.title = entry.title
         live.archived = entry.archived
+        live.noProject = entry.noProject
       }
       return entry
     })

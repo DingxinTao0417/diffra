@@ -78,6 +78,8 @@ export interface SessionOptions {
   fallbackModel?: LanguageModel
   // 从存储恢复时传入
   record?: SessionRecord
+  // 无项目任务建会话时文件夹是空的：等有了文件时重建系统提示词（v2，见 refreshPrompt）
+  rebuildPrompt?: () => Promise<{ rulePacks: RulePack[]; systemPrompt: string; workerPrompt: string } | null>
   // 会话存储的目录：命令输出太长时，完整输出存在它下面的 <会话 id>/outputs 里。没有存储时不存
   outputRoot?: string | null
   // 架构功能的数据：项目有目标架构时，完成前检查这一轮新增的依赖
@@ -106,8 +108,8 @@ export class Session {
   readonly designTask: boolean
   // 设计任务的风格预设 id，没用预设时为 null
   readonly designStyle: string | null
-  // 无项目任务：建会话时定下，存进记录
-  readonly noProject: boolean
+  // 无项目任务：建会话时定下，存进记录；v2 起可以转成正式项目（改成 false）
+  noProject: boolean
   readonly turns: StoredTurn[] = []
   // 模型和权限模式可以在会话中途切换，其余设置建会话时定下
   config: SessionConfig
@@ -116,7 +118,8 @@ export class Session {
   userLanguage: string | null = null
   readonly environment: SessionEnvironment
   readonly checkpoints: Checkpoints | null
-  readonly rulePacks: RulePack[]
+  // 无项目任务写了文件以后会重新选一次（见 refreshPrompt），所以不是 readonly
+  rulePacks: RulePack[]
   readonly readRoots: string[]
   // 被截短的命令输出的完整版存在这里（见 tools/command.ts），也在 readRoots 里
   readonly outputDir: string | null
@@ -133,8 +136,10 @@ export class Session {
   mcpTools: McpTurnTools | null = null
   // 客户端配置的设计面板工具：设计任务每轮开始前由客户端配置，普通任务是 null
   design: SessionDesign | null = null
-  readonly systemPrompt: string
-  readonly workerPrompt: string
+  systemPrompt: string
+  workerPrompt: string
+  // 无项目任务建会话时文件夹是空的：等有了文件，重新选规则包、前端做法，重建一次系统提示词（v2）
+  private rebuildPrompt: (() => Promise<{ rulePacks: RulePack[]; systemPrompt: string; workerPrompt: string } | null>) | undefined
   model: LanguageModel
   // 没有单独配置评审模型时用编码模型
   reviewModel: LanguageModel
@@ -222,6 +227,7 @@ export class Session {
     this.lsp = options.lsp && options.lsp.servers.length > 0 ? options.lsp : null
     this.systemPrompt = options.systemPrompt
     this.workerPrompt = options.workerPrompt ?? options.systemPrompt
+    this.rebuildPrompt = options.rebuildPrompt
     const coder = options.config.model
     this.model = options.model ?? createLanguageModel(coder.endpoint, coder.modelId, coder.reasoningEffort, coder.maxOutputTokens)
     const review = options.config.reviewModel
@@ -360,6 +366,17 @@ export class Session {
     if (!turn) return false
     turn.updates.push(update)
     return true
+  }
+
+  // 每轮开始前调：无项目任务的文件夹从空变成有文件时，按新文件重新选规则包和前端做法、重建系统提示词，只做一次
+  async refreshPrompt(): Promise<void> {
+    if (!this.rebuildPrompt) return
+    const next = await this.rebuildPrompt()
+    if (!next) return
+    this.rebuildPrompt = undefined
+    this.rulePacks = next.rulePacks
+    this.systemPrompt = next.systemPrompt
+    this.workerPrompt = next.workerPrompt
   }
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上

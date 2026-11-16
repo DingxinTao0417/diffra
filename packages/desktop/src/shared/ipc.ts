@@ -629,7 +629,8 @@ export interface DiffraApi {
   listSessions(projectPath: string | null): Promise<StoredSessionSummary[]>
   searchSessions(query: string): Promise<SessionSearchResult[]>
   loadSession(sessionId: string, projectPath: string): Promise<LoadedSessionHandle>
-  updateSession(sessionId: string, change: { title?: string; archived?: boolean }): Promise<void>
+  // promote：无项目任务转成正式项目（v2，原地转换：清掉标记，文件夹不动）
+  updateSession(sessionId: string, change: { title?: string; archived?: boolean; promote?: true }): Promise<void>
   // trashFolder：无项目任务连文件夹一起移到回收站；项目任务忽略
   deleteSession(sessionId: string, options?: { trashFolder: boolean }): Promise<SessionDeleteResult>
   sendPrompt(sessionId: string, turnId: string, text: string, options: PromptOptions): Promise<StopReason>

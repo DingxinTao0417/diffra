@@ -74,7 +74,8 @@ export class ExternalSession {
   private updatedAt: string
   title: string
   archived: boolean
-  readonly noProject: boolean
+  // 无项目任务；v2 起可以转成正式项目（改成 false）
+  noProject: boolean
   readonly agent: SessionAgentRef
   spec: ExternalAgentSpec | null
   externalSessionId: string | null
