@@ -43,6 +43,9 @@ import {
   runProjectCheck,
   searchSessions,
   SECURITY_TOOLS,
+  usageCleanup,
+  usageExport,
+  usageFiles,
   securityCancel,
   securityRun,
   securityTools,
@@ -614,10 +617,23 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return { bytes: await sizeOf(dir), dir }
   })
 
-  // 时间范围和时区由界面给，core 校验
-  ipcMain.handle(IPC_CHANNELS.usageSummary, async (_event, rawQuery: unknown) =>
-    usageSummary(await coreConnection(), parse(z.object({ from: z.string(), to: z.string(), timeZone: z.string() }), rawQuery)),
-  )
+  // 时间范围和时区由界面给，core 校验；单价和无项目任务的根目录由主进程按设置补上（v2）
+  const usageQuery = (raw: unknown) => {
+    const query = parse(z.object({ from: z.string(), to: z.string(), timeZone: z.string() }), raw)
+    return { ...query, prices: settings.get().usage?.prices ?? [], workspaceRoot: workspaceRoot(settings).path }
+  }
+  ipcMain.handle(IPC_CHANNELS.usageSummary, async (_event, rawQuery: unknown) => usageSummary(await coreConnection(), usageQuery(rawQuery)))
+  // 导出 CSV：用户在保存对话框里选位置；取消返回 null
+  ipcMain.handle(IPC_CHANNELS.usageExport, async (event, rawQuery: unknown) => {
+    const query = usageQuery(rawQuery)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = { title: '导出用量', defaultPath: `diffra-usage-${query.from.slice(0, 10)}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] }
+    const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    return { ...(await usageExport(await coreConnection(), { ...query, path: result.filePath })), path: result.filePath }
+  })
+  ipcMain.handle(IPC_CHANNELS.usageFiles, async () => usageFiles(await coreConnection()))
+  ipcMain.handle(IPC_CHANNELS.usageCleanup, async (_event, raw: unknown) => usageCleanup(await coreConnection(), parse(z.string().regex(/^\d{4}-\d{2}$/), raw)))
 
   ipcMain.handle(IPC_CHANNELS.sessionLoad, async (_event, rawSessionId: unknown, rawPath: unknown): Promise<LoadedSessionHandle> => {
     const sessionId = parse(z.string().min(1), rawSessionId)

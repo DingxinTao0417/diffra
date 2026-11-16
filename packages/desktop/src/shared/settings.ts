@@ -1,3 +1,4 @@
+import type { UsagePrice } from '@diffra/core/types'
 import { BROWSER_BACKENDS, type BrowserBackend, type PermissionMode, type PluginInfo, type Protocol, type ReasoningEffort, type SessionChecks } from '@diffra/core/types'
 import type { McpOAuthState } from './mcp-oauth'
 import type { ExternalAgentConfig } from './external-agents'
@@ -265,6 +266,8 @@ export interface Settings {
   computerUse?: ComputerUseSettings
   // v2：托盘和开机自启；旧设置没有这一项（都关着）
   system?: SystemSettings
+  // v2：用量的单价、币种和每月预算；旧设置没有这一项（不算费用）
+  usage?: UsageSettings
   // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
   defaultWorkspace: string | null
   // 上次启动的版本；升级后第一次启动据此提示改了什么，界面不显示
@@ -279,6 +282,18 @@ export interface Settings {
 export interface ProviderView extends ProviderConfig {
   keyHint: string | null
 }
+
+// 用量的费用和预算（v2 · M11）：单价按模型填（每百万 token 多少钱），金额都是小数字符串，按整数算
+export interface UsageSettings {
+  currency: 'CNY' | 'USD'
+  prices: UsagePrice[]
+  // 每月预算；null 是不设
+  monthlyBudget: string | null
+  // 这个月已经提醒到哪一档（80% 或 100%），每档每月只提醒一次
+  budgetNotice: { month: string; level: 80 | 100 } | null
+}
+
+export const DEFAULT_USAGE: UsageSettings = { currency: 'CNY', prices: [], monthlyBudget: null, budgetNotice: null }
 
 export interface SettingsView {
   providers: ProviderView[]
@@ -301,6 +316,7 @@ export interface SettingsView {
   // 电脑操控（v2）：没设过就是关着
   computerUse: ComputerUseSettings
   system: SystemSettings
+  usage: UsageSettings
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

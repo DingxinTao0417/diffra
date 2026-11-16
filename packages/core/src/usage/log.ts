@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir, open, readdir } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { LanguageModelUsage } from 'ai'
@@ -92,8 +92,37 @@ export class UsageLog {
     }
   }
 
+  // 各月的记录文件和大小（清理前给用户看），按月份排
+  async files(): Promise<Array<{ month: string; bytes: number }>> {
+    const names = await readdir(this.dir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [] as string[]
+      throw error
+    })
+    const files = await Promise.all(names.filter((name) => MONTH_FILE.test(name)).map(async (name) => ({ month: name.slice(0, 7), bytes: (await stat(join(this.dir, name))).size })))
+    return files.sort((a, b) => (a.month < b.month ? -1 : 1))
+  }
+
+  // 删掉 before（YYYY-MM，UTC 月份）之前各月的记录文件；用户在用量页确认后才调（v2 · M11）。排在追加写后面，不和写入抢文件
+  removeBefore(before: string): Promise<string[]> {
+    const work = this.queue.then(async () => {
+      const removed: string[] = []
+      for (const file of await this.files()) {
+        if (file.month >= before) continue
+        await rm(join(this.dir, `${file.month}.jsonl`), { force: true })
+        removed.push(file.month)
+      }
+      return removed
+    })
+    this.queue = work.then(
+      () => {},
+      () => {},
+    )
+    return work
+  }
+
   // 逐行读 [from, to) 之间的记录，不把整个文件读进内存；格式不对的行跳过并计数
-  async scan(from: Date, to: Date, visit: (record: UsageRecord) => void): Promise<{ skippedLines: number }> {
+  // visit 返回 Promise 时等它（导出时边读边写，不把记录攒在内存里）
+  async scan(from: Date, to: Date, visit: (record: UsageRecord) => unknown): Promise<{ skippedLines: number }> {
     const names = await readdir(this.dir).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return [] as string[]
       throw error
@@ -111,7 +140,10 @@ export class UsageLog {
           continue
         }
         const at = Date.parse(record.at)
-        if (at >= from.getTime() && at < to.getTime()) visit(record)
+        if (at >= from.getTime() && at < to.getTime()) {
+          const result = visit(record)
+          if (result instanceof Promise) await result
+        }
       }
     }
     return { skippedLines }

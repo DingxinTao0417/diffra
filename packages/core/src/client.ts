@@ -494,6 +494,19 @@ export function searchSessions(connection: acp.ClientConnection, query: string):
   return requestOf(connection)<SessionSearchResult[], { query: string }>(SESSION_EXT_METHODS.sessionSearch, { query }, extRequestOptions())
 }
 
+// v2 · M11：导出 CSV 可能要读很多记录，给 5 分钟
+export function usageExport(connection: acp.ClientConnection, query: UsageQuery & { path: string }): Promise<{ rows: number; skippedLines: number }> {
+  return requestOf(connection)<{ rows: number; skippedLines: number }, UsageQuery & { path: string }>(SESSION_EXT_METHODS.usageExport, query, { cancellationSignal: AbortSignal.timeout(5 * 60_000), stopWaitingOnCancel: true })
+}
+
+export function usageFiles(connection: acp.ClientConnection): Promise<Array<{ month: string; bytes: number }>> {
+  return requestOf(connection)<Array<{ month: string; bytes: number }>, object>(SESSION_EXT_METHODS.usageFiles, {}, extRequestOptions())
+}
+
+export function usageCleanup(connection: acp.ClientConnection, before: string): Promise<{ removed: string[] }> {
+  return requestOf(connection)<{ removed: string[] }, { before: string }>(SESSION_EXT_METHODS.usageCleanup, { before }, extRequestOptions())
+}
+
 export function usageSummary(connection: acp.ClientConnection, query: UsageQuery): Promise<UsageSummary> {
   return requestOf(connection)<UsageSummary, UsageQuery>(SESSION_EXT_METHODS.usageSummary, query, extRequestOptions())
 }

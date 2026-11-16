@@ -125,6 +125,22 @@ export const securitySchema = z.object({
   semgrep: z.boolean().optional(),
 })
 
+// 用量的单价和预算（v2 · M11）：金额是小数字符串（最多 6 位小数），按整数算
+const priceString = z.string().trim().regex(/^\d{1,7}(\.\d{1,6})?$/, '单价要填数字，最多 6 位小数')
+export const usageSettingsSchema = z.object({
+  currency: z.enum(['CNY', 'USD']),
+  prices: z.array(z.object({
+  providerId: z.string().max(200).nullable(),
+  modelId: z.string().min(1).max(300),
+  input: priceString,
+  cachedInput: priceString.nullable().optional(),
+  cacheWrite: priceString.nullable().optional(),
+  output: priceString,
+})).max(500),
+  monthlyBudget: priceString.nullable(),
+  budgetNotice: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/), level: z.union([z.literal(80), z.literal(100)]) }).nullable(),
+})
+
 // 按项目单独设的安全开关（v2 · M10）：每项都可以不写
 export const projectSecuritySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean(), review: z.boolean(), taint: z.boolean(), licenses: z.boolean(), semgrep: z.boolean() }).partial()
 
@@ -188,6 +204,8 @@ const settingsSchema = z.object({
   computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
   // v2 加的：托盘和开机自启，默认都关
   system: z.object({ tray: z.boolean(), launchAtLogin: z.boolean() }).optional(),
+  // v2 · M11：用量的单价和预算；旧设置没有
+  usage: z.lazy(() => usageSettingsSchema).optional(),
   defaultPermissionMode: permissionModeSchema.default('ask'),
   // 第 14 步加的
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),

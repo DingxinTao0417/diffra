@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ARCHITECTURE_USAGE_ID, PROMPT_ENHANCE_USAGE_ID, type UsageSummary, type UsageTotals } from '@diffra/core/types'
-import { Activity, BarChart3, Clock3, Plus, Zap } from 'lucide-react'
+import { Activity, BarChart3, Clock3, Coins, Download, Plus, Trash2, Zap } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -8,7 +8,10 @@ import { Segmented } from '@/components/ui/segmented'
 import { errorMessage } from '@/lib/errors'
 import { folderName, formatTokens } from '@/lib/format'
 import { openHome, openTask } from '@/state/actions'
-import { useAppState } from '@/state/store'
+import { showToast, useAppState } from '@/state/store'
+import { budgetRatio, formatMoney, monthRange } from '@/state/usage-budget'
+import { DEFAULT_USAGE, type UsageSettings } from '../../../../shared/settings'
+import { UsageCleanupDialog, UsagePricesDialog } from './UsageCostDialogs'
 import { SettingsGroup, SettingsHeader } from './SettingsLayout'
 
 export type Range = 'today' | 'week' | 'month30' | 'thisMonth'
@@ -65,10 +68,15 @@ function heatmapRange(now: Date): { from: Date; to: Date } {
 
 export function UsageSection() {
   const tasks = useAppState((state) => state.tasks)
+  const usage = useAppState((state) => state.settings?.usage ?? DEFAULT_USAGE)
   const [range, setRange] = useState<Range>('week')
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [heatmap, setHeatmap] = useState<UsageSummary['days'] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // v2：单价和预算、清理旧记录的对话框；改了单价、清理之后重新统计
+  const [dialog, setDialog] = useState<'prices' | 'cleanup' | null>(null)
+  const [version, setVersion] = useState(0)
+  const [monthCost, setMonthCost] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     let stale = false
@@ -83,7 +91,36 @@ export function UsageSection() {
     return () => {
       stale = true
     }
-  }, [range])
+  }, [range, version])
+
+  // 设了预算时看本月花了多少（不管上面选的统计范围）
+  useEffect(() => {
+    if (!usage.monthlyBudget || usage.prices.length === 0) {
+      setMonthCost(undefined)
+      return
+    }
+    let stale = false
+    const { from, to } = monthRange(new Date())
+    window.diffra
+      .usageSummary({ from: from.toISOString(), to: to.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+      .then(
+        (result) => !stale && setMonthCost(result.totals.cost),
+        (caught: unknown) => console.error('读取本月用量失败', caught),
+      )
+    return () => {
+      stale = true
+    }
+  }, [usage.monthlyBudget, usage.prices, version])
+
+  const exportCsv = async () => {
+    const { from, to } = rangeOf(range, new Date())
+    try {
+      const result = await window.diffra.exportUsage({ from: from.toISOString(), to: to.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+      if (result) showToast(`导出了 ${result.rows} 条记录到 ${result.path}`)
+    } catch (caught) {
+      showToast(`导出失败：${errorMessage(caught)}`)
+    }
+  }
 
   // 活动热力图固定看最近 8 周，不随上面的统计范围变
   useEffect(() => {
@@ -112,6 +149,23 @@ export function UsageSection() {
         description="按模型供应商返回的数据统计 token 用量，含缓存、推理和每天的活动。"
         actions={<Segmented label="统计范围" value={range} options={RANGES} onChange={(value) => setRange(value)} />}
       />
+      <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="usage-toolbar">
+        <Button variant="outline" size="sm" onClick={() => setDialog('prices')}>
+          <Coins className="size-3.5" />
+          单价和预算
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => void exportCsv()}>
+          <Download className="size-3.5" />
+          导出 CSV
+        </Button>
+        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setDialog('cleanup')}>
+          <Trash2 className="size-3.5" />
+          清理旧记录
+        </Button>
+        {usage.monthlyBudget && monthCost !== undefined && <BudgetBar usage={usage} cost={monthCost} />}
+      </div>
+      <UsagePricesDialog open={dialog === 'prices'} models={summary?.models ?? []} onClose={() => setDialog(null)} onSaved={() => setVersion((value) => value + 1)} />
+      <UsageCleanupDialog open={dialog === 'cleanup'} onClose={() => setDialog(null)} onDone={() => setVersion((value) => value + 1)} />
 
       {error && (
         <p className="mb-4 text-sm text-destructive" role="alert">
@@ -129,7 +183,7 @@ export function UsageSection() {
       )}
       {summary && summary.totals.calls > 0 && (
         <div data-testid="usage-summary" className="space-y-3">
-          <Tiles totals={summary.totals} days={summary.days} />
+          <Tiles totals={summary.totals} days={summary.days} usage={usage} />
           {range !== 'today' && <DailyChart days={summary.days} />}
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_17rem]">
             <Composition totals={summary.totals} />
@@ -140,6 +194,7 @@ export function UsageSection() {
           <div className="space-y-8 pt-1">
             <UsageTable
               title="按模型"
+              usage={usage}
               rows={summary.models.map((model) => ({
                 key: `${model.providerId ?? ''}/${model.modelId}`,
                 name: model.providerName ? `${model.providerName} / ${model.modelId}` : model.modelId,
@@ -148,10 +203,12 @@ export function UsageSection() {
             />
             <UsageTable
               title="按项目"
-              rows={summary.projects.map((project) => ({ key: project.cwd, name: folderName(project.cwd), hint: project.cwd, totals: project }))}
+              usage={usage}
+              rows={summary.projects.map((project) => ({ key: project.cwd, name: project.noProject ? `无项目（${project.tasks ?? 0} 个任务）` : folderName(project.cwd), hint: project.cwd, totals: project }))}
             />
             <UsageTable
               title="用量最多的任务"
+              usage={usage}
               rows={summary.tasks.map((task) => {
                 const stored = titles.get(task.sessionId)
                 return {
@@ -200,7 +257,22 @@ function UsageSkeleton() {
   )
 }
 
-function Tiles({ totals, days }: { totals: UsageTotals; days: UsageSummary['days'] }) {
+// 每月预算用了多少（v2）：到 80% 变成提醒色，超过 100% 用警告色
+function BudgetBar({ usage, cost }: { usage: UsageSettings; cost: string }) {
+  const ratio = budgetRatio(usage, cost) ?? 0
+  return (
+    <div className="ml-auto flex min-w-48 items-center gap-2 text-xs" data-testid="usage-budget" title="本月按你填的单价估算的费用">
+      <span className={cn('tabular-nums', ratio >= 0.8 ? 'text-warning' : 'text-muted-foreground')}>
+        本月 {formatMoney(usage, cost)} / {formatMoney(usage, usage.monthlyBudget ?? '0')}
+      </span>
+      <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted" aria-hidden>
+        <span className={cn('block h-full rounded-full', ratio >= 0.8 ? 'bg-warning' : 'bg-chart-1')} style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+      </span>
+    </div>
+  )
+}
+
+function Tiles({ totals, days, usage }: { totals: UsageTotals; days: UsageSummary['days']; usage: UsageSettings }) {
   const known = totals.calls - totals.unknownCalls
   const activeDays = days.filter((day) => day.calls > 0).length
   const tiles = [
@@ -222,6 +294,10 @@ function Tiles({ totals, days }: { totals: UsageTotals; days: UsageSummary['days
       note: `平均每次 ${known > 0 ? compact(Math.round(total(totals) / known)) : '—'}`,
     },
     { label: '活跃天数', value: exact(activeDays), unit: '天', title: `${activeDays} 天有用量`, note: `平均每天 ${activeDays > 0 ? compact(Math.round(total(totals) / activeDays)) : '—'}` },
+    // v2：填了单价才有费用
+    ...(totals.cost !== undefined
+      ? [{ label: '估算费用', value: formatMoney(usage, totals.cost), unit: '', title: '按你填的单价算，以供应商账单为准', note: totals.unpricedCalls ? `${totals.unpricedCalls} 次调用没有单价，没算` : '按你填的单价算' }]
+      : []),
   ]
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -543,8 +619,9 @@ interface UsageRow {
 const NUMBER_CELL = 'px-3 py-2 text-right tabular-nums'
 
 // 三张表共用同一组列宽，数字列上下对齐
-function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
+function UsageTable({ title, rows, usage }: { title: string; rows: UsageRow[]; usage: UsageSettings }) {
   const maxTotal = Math.max(...rows.map((row) => total(row.totals)), 1)
+  const priced = rows.some((row) => row.totals.cost !== undefined)
   return (
     <SettingsGroup title={title} className="overflow-x-auto">
       <table className="w-full min-w-2xl table-fixed text-sm">
@@ -555,6 +632,7 @@ function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
           <col className="w-20" />
           <col className="w-28" />
           <col className="w-28" />
+          {priced && <col className="w-24" />}
         </colgroup>
         <thead className="text-xs text-muted-foreground">
           <tr className="border-b">
@@ -564,6 +642,7 @@ function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
             <th className="px-3 py-2 text-right font-normal">缓存命中</th>
             <th className="px-3 py-2 text-right font-normal">输出</th>
             <th className="px-3 py-2 text-right font-normal">合计</th>
+            {priced && <th className="px-3 py-2 text-right font-normal">费用</th>}
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -587,6 +666,7 @@ function UsageTable({ title, rows }: { title: string; rows: UsageRow[] }) {
               <td className={cn(NUMBER_CELL, 'text-muted-foreground')}>{percent(row.totals.cacheRead, row.totals.input)}</td>
               <td className={NUMBER_CELL}>{exact(row.totals.output)}</td>
               <td className={cn(NUMBER_CELL, 'font-semibold')}>{exact(total(row.totals))}</td>
+              {priced && <td className={NUMBER_CELL}>{row.totals.cost !== undefined && !(row.totals.cost === '0.000000' && row.totals.unpricedCalls) ? formatMoney(usage, row.totals.cost) : '—'}</td>}
             </tr>
           ))}
         </tbody>

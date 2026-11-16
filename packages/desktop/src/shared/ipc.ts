@@ -51,6 +51,7 @@ import type {
   PluginView,
   ProjectHooks,
   ProjectSecurity,
+  UsageSettings,
   ProviderInput,
   Role,
   SecuritySettings,
@@ -110,6 +111,9 @@ export const IPC_CHANNELS = {
   attachmentDescribe: 'attachment:describe',
   sessionsStorage: 'sessions:storage',
   usageSummary: 'usage:summary',
+  usageExport: 'usage:export',
+  usageFiles: 'usage:files',
+  usageCleanup: 'usage:cleanup',
   terminalCreate: 'terminal:create',
   terminalWrite: 'terminal:write',
   terminalResize: 'terminal:resize',
@@ -573,6 +577,10 @@ export interface DiffraApi {
   getPathForFile(file: File): string
   sessionsStorage(): Promise<{ bytes: number; dir: string }>
   usageSummary(query: UsageQuery): Promise<UsageSummary>
+  // v2：导出范围内的用量记录（弹保存对话框，取消返回 null）；各月的记录文件；删掉某个月（YYYY-MM）之前的
+  exportUsage(query: UsageQuery): Promise<{ rows: number; skippedLines: number; path: string } | null>
+  usageFiles(): Promise<Array<{ month: string; bytes: number }>>
+  cleanupUsage(before: string): Promise<{ removed: string[] }>
   // 在项目目录开一个终端；返回终端 id 和 shell 名
   createTerminal(cwd: string, size: TerminalSize): Promise<{ id: string; shell: string }>
   writeTerminal(id: string, data: string): void
@@ -606,6 +614,8 @@ export interface DiffraApi {
     computerUse?: ComputerUseSettings
     // 托盘和开机自启（v2），马上生效
     system?: SystemSettings
+    // 用量的单价、币种和预算（v2）
+    usage?: UsageSettings
     // 输入框里给这个模型选了思考程度，记下来
     reasoningChoice?: { providerId: string; modelId: string; effort: ReasoningEffort }
   }): Promise<SettingsView>

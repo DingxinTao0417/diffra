@@ -12,6 +12,7 @@ import { errorMessage } from '../lib/errors'
 import { folderName } from '../lib/format'
 import { sameProjectPath } from '../lib/projects'
 import { hasWidePanel, isSidebarShown, type ExtensionsTab, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { checkUsageBudget } from './usage-budget'
 
 const TITLE_CHARS = 40
 
@@ -186,6 +187,7 @@ export async function refreshSettings(): Promise<void> {
 
 export async function initialize(): Promise<void> {
   await refreshSettings().catch((error: unknown) => showToast(`读取设置失败：${errorMessage(error)}`))
+  void checkUsageBudget(true)
   const last = await window.diffra.getLastProject().catch(() => null)
   const archived = store.get().settings?.archivedProjects ?? []
   if (last && !archived.some((path) => sameProjectPath(path, last.path))) {
@@ -772,6 +774,7 @@ async function runTurnOnCore(
       return { ...current, running: false, permission: null, queue: scanFirst ? current.queue : current.queue.slice(1), changeVersion: current.changeVersion + 1, unread: current.unread || !viewing }
     })
     await refreshTasks()
+    void checkUsageBudget()
     if (scanFirst) void runDeepScan(sessionId, 'task')
     else if (next) void sendMessage(sessionId, next.text, next.options)
   }

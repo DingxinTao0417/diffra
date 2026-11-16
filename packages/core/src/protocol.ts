@@ -967,6 +967,20 @@ export interface UsageTotals {
   cacheWrite: number
   output: number
   reasoning: number
+  // v2 · M11：按用户填的单价算的费用（6 位小数的字符串，币种由界面定）；没填单价时没有这两项
+  cost?: string
+  // 没有单价的调用次数
+  unpricedCalls?: number
+}
+
+// 一个模型的单价：每百万 token 多少钱（小数字符串）；缓存读、写缓存没填时按输入价（v2 · M11）
+export interface UsagePrice {
+  providerId: string | null
+  modelId: string
+  input: string
+  cachedInput?: string | null
+  cacheWrite?: string | null
+  output: string
 }
 
 // 统计范围 [from, to)，按 timeZone 的日界分天
@@ -974,6 +988,9 @@ export interface UsageQuery {
   from: string
   to: string
   timeZone: string
+  // v2 · M11：给了单价就算费用；给了无项目任务的根目录，按项目统计时下面的任务合成一行
+  prices?: UsagePrice[]
+  workspaceRoot?: string | null
 }
 
 export interface UsageSummary {
@@ -981,7 +998,8 @@ export interface UsageSummary {
   // 范围内的每一天（没有调用的天也在，数都是 0），日期是 timeZone 下的 YYYY-MM-DD
   days: Array<UsageTotals & { date: string }>
   models: Array<UsageTotals & { providerId: string | null; providerName: string | null; modelId: string }>
-  projects: Array<UsageTotals & { cwd: string }>
+  // noProject：无项目任务合成的一行（cwd 是它们的根目录，tasks 是任务数）
+  projects: Array<UsageTotals & { cwd: string; noProject?: boolean; tasks?: number }>
   // 用量最多的几个任务
   tasks: Array<UsageTotals & { sessionId: string; cwd: string }>
   // 读到的格式不对的行（比如进程崩溃留下的半行）
@@ -1011,6 +1029,10 @@ export const SESSION_EXT_METHODS = {
   sessionRewind: '_diffra/session/rewind',
   checkpointDiff: '_diffra/checkpoint/diff',
   usageSummary: '_diffra/usage/summary',
+  // v2 · M11：把范围内的记录导出成 CSV；列出各月的记录文件；删掉某个月之前的记录
+  usageExport: '_diffra/usage/export',
+  usageFiles: '_diffra/usage/files',
+  usageCleanup: '_diffra/usage/cleanup',
   projectDetectChecks: '_diffra/project/detect-checks',
   projectRunCheck: '_diffra/project/run-check',
   deepScan: '_diffra/security/deep-scan',

@@ -90,6 +90,8 @@ import { restoredTaskState, Session } from './session/session.js'
 import { type SessionRecord, SessionStore, toEntry } from './session/store.js'
 import { toUsageRecord, UsageLog } from './usage/log.js'
 import { isTimeZone, UsageAggregator } from './usage/summary.js'
+import { exportUsageCsv } from './usage/export.js'
+import { PRICE_PATTERN } from './usage/pricing.js'
 import { CORE_VERSION } from './version.js'
 import { ExternalAgentError, ExternalAgentProcess } from './external/connection.js'
 import { ExternalSession } from './external/session.js'
@@ -182,8 +184,23 @@ const listTargetParams = z.union([
 
 // 一次最多汇总 400 天，避免一个请求扫完所有历史
 const MAX_USAGE_RANGE_MS = 400 * 86_400_000
+const usagePriceSchema = z.object({
+  providerId: z.string().max(200).nullable(),
+  modelId: z.string().min(1).max(300),
+  input: z.string().regex(PRICE_PATTERN),
+  cachedInput: z.string().regex(PRICE_PATTERN).nullable().optional(),
+  cacheWrite: z.string().regex(PRICE_PATTERN).nullable().optional(),
+  output: z.string().regex(PRICE_PATTERN),
+})
+
 const usageQueryParams = z
-  .object({ from: z.iso.datetime(), to: z.iso.datetime(), timeZone: z.string().refine(isTimeZone, '无效的时区') })
+  .object({
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    timeZone: z.string().refine(isTimeZone, '无效的时区'),
+    prices: z.array(usagePriceSchema).max(500).optional(),
+    workspaceRoot: z.string().max(4096).nullable().optional(),
+  })
   .refine((query) => Date.parse(query.from) < Date.parse(query.to), '开始时间要早于结束时间')
   .refine((query) => Date.parse(query.to) - Date.parse(query.from) <= MAX_USAGE_RANGE_MS, '一次最多统计 400 天')
 
@@ -1031,9 +1048,22 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
       const from = new Date(params.from)
       const to = new Date(params.to)
-      const aggregator = new UsageAggregator(from, to, params.timeZone)
+      const aggregator = new UsageAggregator(from, to, params.timeZone, { prices: params.prices, workspaceRoot: params.workspaceRoot })
       const { skippedLines } = await usageLog.scan(from, to, (record) => aggregator.add(record))
       return aggregator.result(skippedLines)
+    })
+    // v2 · M11：导出 CSV（路径是用户在保存对话框里选的）、列出各月的记录文件、删掉某个月之前的
+    .onRequest(SESSION_EXT_METHODS.usageExport, usageQueryParams.and(z.object({ path: z.string().min(1).max(4096) })), async ({ params }) => {
+      if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
+      return exportUsageCsv(usageLog, { from: new Date(params.from), to: new Date(params.to), timeZone: params.timeZone, prices: params.prices ?? [] }, params.path)
+    })
+    .onRequest(SESSION_EXT_METHODS.usageFiles, z.object({}), async () => {
+      if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
+      return usageLog.files()
+    })
+    .onRequest(SESSION_EXT_METHODS.usageCleanup, z.object({ before: z.string().regex(/^\d{4}-\d{2}$/) }), async ({ params }) => {
+      if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
+      return { removed: await usageLog.removeBefore(params.before) }
     })
     .onRequest(SESSION_EXT_METHODS.projectDetectChecks, z.object({ cwd: z.string().min(1) }), async ({ params }) => {
       if (!(await stat(params.cwd).catch(() => null))?.isDirectory()) throw new Error(`项目目录不存在：${params.cwd}`)
