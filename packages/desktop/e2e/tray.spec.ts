@@ -18,7 +18,7 @@ const tray = {
 const windowVisible = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible() ?? false)
 const closeWindow = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close())
 
-test('托盘和开机自启：默认都关；开了托盘后关窗口留在托盘里、任务接着跑，托盘菜单显示几个任务在跑、能打开、新建任务、退出；开机自启登记带 --hidden，自启时藏在托盘里、换深浅色也不跳出来；关了托盘关窗口就退出', async () => {
+test('托盘和开机自启：默认关窗口留在托盘里、开机自启关；关窗口留在托盘里、任务接着跑，托盘菜单显示几个任务在跑、能打开、新建任务、退出；开机自启登记带 --hidden，自启时藏在托盘里、换深浅色也不跳出来；关了托盘关窗口就退出', async () => {
   test.setTimeout(180_000)
   const userDataDir = makeUserDataDir()
   const workspace = mkdtempSync(join(tmpdir(), 'diffra-e2e-tray-'))
@@ -33,15 +33,14 @@ test('托盘和开机自启：默认都关；开了托盘后关窗口留在托�
     let window = await app.firstWindow()
     await expect(window.getByText('要做什么？')).toBeVisible()
     expect(JSON.parse(readFileSync(loginFile, 'utf8'))).toEqual({ openAtLogin: false, args: [] })
-    expect(await tray.labels(app)).toEqual([])
+    // 默认开着托盘：菜单有打开、新任务、几个任务在跑、退出
+    await expect.poll(() => tray.labels(app)).toEqual(['打开 Diffra', '新任务', '没有任务在跑', '退出 Diffra'])
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
-
-    // 打开托盘：菜单有打开、新任务、几个任务在跑、退出
     await window.keyboard.press('ControlOrMeta+,')
     await settingsNav(window).getByRole('button', { name: '常规' }).click()
-    await window.getByRole('switch', { name: '关掉窗口时留在托盘里' }).click()
-    await expect.poll(() => tray.labels(app)).toEqual(['打开 Diffra', '新任务', '没有任务在跑', '退出 Diffra'])
-    expect((JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')) as { system?: unknown }).system).toEqual({ tray: true, launchAtLogin: false })
+    await expect(window.getByRole('switch', { name: '关掉窗口时留在托盘里' })).toBeChecked()
+    // 默认值不往设置文件里写
+    expect((JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')) as { system?: unknown }).system).toBeUndefined()
     await window.screenshot({ path: 'test-results/tray-settings.png' })
     await window.getByRole('button', { name: '返回' }).click()
 

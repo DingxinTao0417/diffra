@@ -6,12 +6,12 @@ import type { SystemSettings } from '../shared/settings'
 import type { SettingsStore } from './settings-store'
 import { testOverridesAllowed } from './test-overrides'
 
-// 托盘和开机自启（v2 · M7），设置「常规」里开，都默认关：
+// 托盘和开机自启（v2 · M7），设置「常规」里改。关窗口留在托盘里默认开（旧设置没有这一项也按开），开机自启默认关：
 // - 开着托盘时关窗口只是藏起来（任务、终端照常跑），托盘图标能打开窗口、新建任务、看几个任务在跑、退出；Mac 上关窗本来就是藏起来，托盘是菜单栏图标。
 // - 开机自启：登记到系统的登录项（Windows 带 --hidden 参数）；开着托盘时启动后直接藏在托盘里，没开托盘就照常显示窗口。
 //   开发版不往系统里登记（登记的会是 electron.exe），e2e 用 DIFFRA_LOGIN_ITEM_FILE 写进文件
 
-export const DEFAULT_SYSTEM: SystemSettings = { tray: false, launchAtLogin: false }
+export const DEFAULT_SYSTEM: SystemSettings = { tray: true, launchAtLogin: false }
 
 export interface TrayTestHandle {
   labels(): string[]

@@ -5,7 +5,7 @@ import { IS_MAC } from '@/lib/platform'
 import { showToast, store, useAppState } from '@/state/store'
 import { SettingsGroup, SettingsRow } from './SettingsLayout'
 
-// 托盘和开机自启（v2 · M7），都默认关，改了马上生效
+// 托盘和开机自启（v2 · M7）：关窗口留在托盘里默认开、开机自启默认关，改了马上生效
 export function StartupGroup() {
   const system = useAppState((state) => state.settings?.system ?? null)
   if (!system) return null
