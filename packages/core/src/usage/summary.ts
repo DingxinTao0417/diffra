@@ -47,14 +47,17 @@ export class UsageAggregator {
   // 显示用的无项目根目录（原样大小写）
   private readonly workspaceRoot: string | null
   private readonly noProjectTasks = new Set<string>()
+  // 还在的任务是不是无项目任务（会话索引里的标记）：转成正式项目的不再合进「无项目」
+  private readonly taskNoProject: ReadonlyMap<string, boolean>
   private readonly days = new Map<string, UsageTotals & { date: string }>()
   private readonly models = new Map<string, UsageSummary['models'][number]>()
   private readonly projects = new Map<string, UsageSummary['projects'][number]>()
   private readonly tasks = new Map<string, UsageSummary['tasks'][number]>()
   private readonly dayOf: (date: Date) => string
 
-  constructor(from: Date, to: Date, timeZone: string, options: { prices?: readonly UsagePrice[]; workspaceRoot?: string | null } = {}) {
+  constructor(from: Date, to: Date, timeZone: string, options: { prices?: readonly UsagePrice[]; workspaceRoot?: string | null; taskNoProject?: ReadonlyMap<string, boolean> } = {}) {
     this.prices = new PriceBook(options.prices ?? [])
+    this.taskNoProject = options.taskNoProject ?? new Map()
     this.workspaceRoot = options.workspaceRoot ? options.workspaceRoot.replace(/[\\/]+$/, '') : null
     this.workspace = this.workspaceRoot ? pathKey(this.workspaceRoot) : null
     this.dayOf = dayFormatter(timeZone)
@@ -83,9 +86,10 @@ export class UsageAggregator {
     model.providerName = record.providerName ?? model.providerName
     count(model)
 
-    // 无项目任务每个一个文件夹，都在同一个根目录下：合成一行（v2）
+    // 无项目任务每个一个文件夹，合成一行（v2）。任务还在时按它的标记，删掉了的按文件夹在不在无项目根目录下
     const key = pathKey(record.cwd)
-    const noProject = this.workspace !== null && (key === this.workspace || key.startsWith(`${this.workspace}/`) || key.startsWith(`${this.workspace}\\`))
+    const underWorkspace = this.workspace !== null && (key === this.workspace || key.startsWith(`${this.workspace}/`) || key.startsWith(`${this.workspace}\\`))
+    const noProject = this.workspace !== null && (this.taskNoProject.get(record.sessionId) ?? underWorkspace)
     const projectKey = noProject ? '\u0000no-project' : key
     let project = this.projects.get(projectKey)
     if (!project) {

@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { startTask, waitTaskDone } from './flows'
+import { settingsNav, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { addFile, startScriptedModel } from './scripted-model'
@@ -49,6 +49,13 @@ test('无项目任务转成正式项目：确认后侧栏归到它自己的项�
     window = await app.firstWindow()
     await expect(window.getByTestId('sidebar-project').filter({ hasText: folder! })).toHaveCount(1, { timeout: 15_000 })
     await expect(window.getByTestId('sidebar-project').filter({ hasText: '无项目' })).toHaveCount(0)
+
+    // 用量按项目：转过的任务单独一行（文件夹还在无项目的根目录下），不再算进「无项目」
+    await window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
+    await settingsNav(window).getByRole('button', { name: '用量' }).click()
+    await expect(window.getByTestId('usage-summary')).toBeVisible()
+    await expect(window.getByTestId('usage-row').filter({ hasText: folder! })).toHaveCount(1)
+    await expect(window.getByTestId('usage-row').filter({ hasText: '无项目' })).toHaveCount(0)
   } finally {
     await app.close()
     await model.close()

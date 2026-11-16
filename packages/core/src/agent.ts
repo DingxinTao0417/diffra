@@ -1074,7 +1074,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
       const from = new Date(params.from)
       const to = new Date(params.to)
-      const aggregator = new UsageAggregator(from, to, params.timeZone, { prices: params.prices, workspaceRoot: params.workspaceRoot })
+      const taskNoProject = params.workspaceRoot && store ? new Map((await store.list()).map((entry) => [entry.id, entry.noProject] as const)) : undefined
+      const aggregator = new UsageAggregator(from, to, params.timeZone, { prices: params.prices, workspaceRoot: params.workspaceRoot, taskNoProject })
       const { skippedLines } = await usageLog.scan(from, to, (record) => aggregator.add(record))
       return aggregator.result(skippedLines)
     })

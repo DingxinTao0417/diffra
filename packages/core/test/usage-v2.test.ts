@@ -79,6 +79,18 @@ describe('无项目任务合成一行', () => {
     expect(projects.find((item) => item.noProject)).toMatchObject({ cwd: 'C:\\Users\\me\\Documents\\Diffra', tasks: 2, calls: 3 })
     expect(projects.find((item) => !item.noProject)).toMatchObject({ cwd: 'D:\\work\\app', calls: 1 })
   })
+
+  test('转成正式项目的任务按会话索引的标记单独一行；索引里没有（删掉了）的仍按文件夹位置合并', () => {
+    const root = 'C:\\Users\\me\\Documents\\Diffra'
+    const aggregator = new UsageAggregator(new Date('2026-11-01T00:00:00.000Z'), new Date('2026-11-02T00:00:00.000Z'), 'UTC', { workspaceRoot: root, taskNoProject: new Map([['a', false], ['b', true]]) })
+    aggregator.add(record({ at: '2026-11-01T01:00:00.000Z', sessionId: 'a', cwd: `${root}\\写周报` }))
+    aggregator.add(record({ at: '2026-11-01T02:00:00.000Z', sessionId: 'b', cwd: `${root}\\查资料` }))
+    aggregator.add(record({ at: '2026-11-01T03:00:00.000Z', sessionId: 'gone', cwd: `${root}\\删掉的` }))
+    const projects = aggregator.result(0).projects
+    expect(projects).toHaveLength(2)
+    expect(projects.find((item) => item.noProject)).toMatchObject({ cwd: root, tasks: 2, calls: 2 })
+    expect(projects.find((item) => !item.noProject)).toMatchObject({ cwd: `${root}\\写周报`, calls: 1 })
+  })
 })
 
 describe('导出和清理', () => {
