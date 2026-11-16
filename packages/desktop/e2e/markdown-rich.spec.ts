@@ -144,6 +144,13 @@ test('回答里的富文档：代码高亮和行号、diff、callout、表格、
     await expect(long.locator('.code-line')).toHaveCount(16)
     await long.getByTestId('code-expand').click()
     await expect(long.locator('.code-line')).toHaveCount(40)
+    // 长代码在块内纵向滚动，横向滚动条固定在可视区底部，不用先滚到整段末尾
+    const longBody = long.locator('.code-body')
+    await expect.poll(async () => longBody.evaluate((element) => {
+      const view = element.ownerDocument.defaultView
+      return { maxHeight: view?.getComputedStyle(element).maxHeight, overflowY: view?.getComputedStyle(element).overflowY }
+    })).toMatchObject({ overflowY: 'auto' })
+    await expect.poll(async () => longBody.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
 
     // diff：两个文件，各自的增删数；文件能收起
     const diff = answer.getByTestId('diff-block')

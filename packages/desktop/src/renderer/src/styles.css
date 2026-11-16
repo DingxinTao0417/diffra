@@ -469,8 +469,12 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
 /* 回答里代码块的代码区（rich/CodeBlock.tsx 的 CodeLines）：字号比正文小一档，行号不跟着选中和复制；放大的弹窗不在 .markdown 里，所以不依赖它 */
 .code-body {
   margin: 0;
-  overflow-x: auto;
-  padding: 0.5rem 0;
+  /* 长代码在块内纵向滚动：横向滚动条固定在可视区底部，不用先滚到整段末尾才看得到 */
+  max-height: 70vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0.5rem 0 0.75rem;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.6;

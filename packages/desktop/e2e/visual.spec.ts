@@ -66,6 +66,8 @@ test('对话里的可视化：脚本能跑、能从网上加载脚本和图片�
     await expect.poll(() => frame.locator('#themed').evaluate((element) => (globalThis as unknown as PageStyle).getComputedStyle(element).color)).toBe(appColor)
     // 高度跟着内容，不是默认的 120
     await expect.poll(async () => (await card.locator('iframe').boundingBox())?.height ?? 0).toBeGreaterThan(150)
+    // 聊天里的内联可视化默认限宽居中，宽窗口下不会被拉满
+    await expect.poll(() => frame.locator('body').evaluate((element) => element.ownerDocument.defaultView?.getComputedStyle(element).maxWidth)).toBe('720px')
 
     // 按钮把文字填进输入框，不发送
     await frame.locator('#pick').click()
@@ -144,6 +146,7 @@ test('可视化的预设和工具箱：对比和流程图按模板画，图表�
     const compare = visuals.nth(0).locator('iframe').contentFrame()
     await expect(compare.locator('.dk-option')).toHaveCount(2)
     await expect(compare.locator('.dk-option').nth(1)).toContainText('推荐')
+    await expect.poll(() => compare.locator('body').evaluate(() => typeof (window as unknown as { diffra?: { ask?: unknown } }).diffra?.ask)).toBe('function')
     await compare.locator('.dk-option').nth(1).getByRole('button', { name: '选这个' }).click()
     await expect(taskInput(window)).toHaveValue('选「方案 B」')
     await taskInput(window).fill('')

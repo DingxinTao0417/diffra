@@ -603,6 +603,12 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   const sectionRef = useRef<HTMLElement>(null)
   const shownItems = viewed?.items ?? turn.items
   const items = useMemo(() => (replay === null ? shownItems : shownItems.slice(0, replay)), [shownItems, replay])
+  // 同一个目标任务在一轮里可能先后出现发消息、等它做完几张卡：跳转只挂在最后一张上，其余卡只留标题
+  const taskLinkOwner = useMemo(() => {
+    const owners = new Map<string, string>()
+    for (const item of items) if (item.kind === 'tool' && item.taskLink) owners.set(item.taskLink.sessionId, item.id)
+    return owners
+  }, [items])
   // 等待确认的那一步由输入框上方的确认卡片代表，这里不再画一条转圈的待执行行
   const pendingToolId = active && task.permission ? task.permission.toolCall.toolCallId : null
   const blocks = useMemo(() => toBlocks(pendingToolId ? items.filter((item) => item.id !== pendingToolId) : items), [items, pendingToolId])
@@ -749,7 +755,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           case 'wait':
             return <ToolStep key={block.item.id} item={block.item} defaultOpen />
           case 'task':
-            return <ToolStep key={block.item.id} item={block.item} />
+            return <ToolStep key={block.item.id} item={block.item} showTaskLink={block.item.taskLink ? taskLinkOwner.get(block.item.taskLink.sessionId) === block.item.id : true} />
           case 'mcp-ui':
             return <McpAppCard key={block.item.id} ui={block.item.mcpUi!} sessionId={task.sessionId} />
           case 'visual':
@@ -1066,7 +1072,7 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
   )
 }
 
-function ToolStep({ item, unverified = false, defaultOpen = false }: { item: ToolItem; unverified?: boolean; defaultOpen?: boolean }) {
+function ToolStep({ item, unverified = false, defaultOpen = false, showTaskLink = true }: { item: ToolItem; unverified?: boolean; defaultOpen?: boolean; showTaskLink?: boolean }) {
   // 命令失败的结果是跑完之后才到的，所以默认展开要跟着 item 算，不能只在挂载时定
   const [open, setOpen] = useState<boolean | null>(null)
   const commandFailed = item.succeeded === false
@@ -1083,7 +1089,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false }: { item: Too
         {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
       </DisclosureRow>
-      {item.taskLink && (
+      {item.taskLink && showTaskLink && (
         <div className="mt-1 ml-5">
           <TaskLink source={item.taskLink} label="打开任务" />
         </div>
@@ -1130,7 +1136,7 @@ function TaskLink({ source, label, className }: { source: { sessionId: string; t
   return (
     <button
       type="button"
-      className={cn('flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground', className)}
+      className={cn('flex shrink-0 items-center gap-1.5 rounded-md border border-foreground/20 bg-accent px-2.5 py-1 text-xs font-medium text-foreground hover:bg-accent/80', className)}
       data-testid="task-link"
       title={source.title}
       onClick={(event) => {
@@ -1140,7 +1146,7 @@ function TaskLink({ source, label, className }: { source: { sessionId: string; t
         else showToast('这个任务已经不在了')
       }}
     >
-      <ArrowUpRight className="size-3" />
+      <ArrowUpRight className="size-3.5" />
       {text}
     </button>
   )

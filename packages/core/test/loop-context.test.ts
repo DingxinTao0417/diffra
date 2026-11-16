@@ -120,7 +120,8 @@ describe('系统提示词', () => {
 
   test('配了检查命令时说明结束这一轮时 Diffra 自动跑（beforeFinish 优先）、没过就接着修，改的过程中不要自己跑', async () => {
     const prompt = await buildSystemPrompt(null, { ...options, checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' } }, [])
-    expect(prompt).toContain('When you end your turn after changing files, Diffra runs `pnpm test` automatically.')
+    expect(prompt).toContain('When you end your turn after changing source, types, dependencies, build scripts or tests, Diffra runs `pnpm test` automatically.')
+    expect(prompt).toContain('Turns that only answer, read, or change documentation do not run it.')
     expect(prompt).toContain('If it fails, you get the errors and continue: fix them and end your turn again.')
     expect(prompt).toContain('Do not run that command yourself while you are still changing code')
     expect(prompt).not.toContain('pnpm typecheck')

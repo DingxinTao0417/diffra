@@ -38,10 +38,12 @@ import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { pickAttachments } from './Composer'
 import { SidePanel } from './SidePanel'
 import type { TaskDiff } from './useTaskDiff'
+import type { ProjectGitStateView } from './useProjectGitState'
 
 const COLLAPSED_LIMIT = 10
 const OUTPUT_LINES = 300
 const COMMIT_PROMPT = '把这些改动提交并推送'
+const PUSH_PROMPT = '把当前分支推送到远程'
 const NO_PROCESSES: BackgroundProcess[] = []
 
 interface MonitorPanelProps {
@@ -50,12 +52,30 @@ interface MonitorPanelProps {
   // 远程任务：对方设备的名字；本机任务是 null
   device: string | null
   diff: TaskDiff | null
+  gitState: ProjectGitStateView
   onLocate(itemId: string): void
+}
+
+interface CommitAction {
+  label: string
+  hint: string | null
+  prompt: string | null
+}
+
+function commitAction(branch: string | null, remote: boolean, git: ProjectGitStateView['state'], uncommitted: number): CommitAction | null {
+  if (!branch || remote) return null
+  if (!git) return { label: '提交或推送', hint: null, prompt: COMMIT_PROMPT }
+  if (!git.repo) return null
+  if (uncommitted > 0) return { label: '提交或推送', hint: `${uncommitted} 个文件未提交`, prompt: COMMIT_PROMPT }
+  if (!git.head) return { label: '还没有提交', hint: null, prompt: null }
+  if (git.ahead > 0) return { label: '推送', hint: `${git.ahead} 个提交未推送`, prompt: PUSH_PROMPT }
+  if (git.upstream) return { label: '已推送', hint: '工作区干净', prompt: null }
+  return { label: '已提交', hint: '没有远程分支', prompt: null }
 }
 
 // 右侧栏只放这个任务的状态和产出，参照 Qoder（第 529 步）：运行中、环境、子智能体、产出、看过的网页、用户给的资料（摘要卡第 543 步去掉）。
 // 检查、安全、规范、模型、MCP 这些配置在设置页和项目设置里改
-export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPanelProps) {
+export function MonitorPanel({ task, branch, device, diff, gitState, onLocate }: MonitorPanelProps) {
   const [expanded, setExpanded] = useState<{ sessionId: string; files: boolean; agents: boolean } | null>(null)
   const show = expanded?.sessionId === task.sessionId ? expanded : { sessionId: task.sessionId, files: false, agents: false }
   const [output, setOutput] = useState<BackgroundProcess | null>(null)
@@ -75,6 +95,14 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
   const files = diff?.state === 'ready' ? diff.files : []
   const added = files.reduce((sum, file) => sum + file.added, 0)
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
+  const git = gitState.state
+  const uncommitted = git?.files ?? []
+  const uncommittedAdded = uncommitted.reduce((sum, file) => sum + file.added, 0)
+  const uncommittedRemoved = uncommitted.reduce((sum, file) => sum + file.removed, 0)
+  const uncommittedPaths = new Set(uncommitted.map((file) => file.path))
+  const commit = commitAction(branch, remote, git, uncommitted.length)
+  const commitPrompt = commit?.prompt ?? null
+  const fillCommit = commitPrompt ? () => store.set((state) => ({ ...state, composerInsert: { target: task.sessionId, text: commitPrompt, mode: 'fill' } })) : undefined
   const mcpFailed = mcp.statuses?.some((server) => server.state === 'failed') ?? false
   const openReview = (path?: string) => store.set((state) => ({ ...state, panel: 'review', reviewFile: path ?? null }))
   const openPage = (url: string) => {
@@ -143,8 +171,35 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
         <Section title="环境信息">
           <Row
             leading={<IconBox icon={GitCompareArrows} />}
+            testId="monitor-uncommitted"
+          >
+            {remote ? (
+              <span className="truncate text-muted-foreground">远程任务不显示提交状态</span>
+            ) : !task.project ? (
+              <span className="truncate text-muted-foreground">无项目任务没有 Git 状态</span>
+            ) : gitState.error ? (
+              <span className="truncate text-destructive" title={gitState.error}>
+                {gitState.error}
+              </span>
+            ) : gitState.loading && !git ? (
+              <span className="text-muted-foreground">正在读取改动…</span>
+            ) : !git ? (
+              <span className="text-muted-foreground">正在读取改动…</span>
+            ) : !git.repo ? (
+              <span className="truncate text-muted-foreground">不是 Git 仓库</span>
+            ) : uncommitted.length === 0 ? (
+              <span className="text-muted-foreground">工作区干净</span>
+            ) : (
+              <>
+                <DiffCounts added={uncommittedAdded} removed={uncommittedRemoved} />
+                <span className="text-xs text-muted-foreground">{uncommitted.length} 个文件未提交</span>
+              </>
+            )}
+          </Row>
+          <Row
+            leading={<IconBox icon={GitCommitHorizontal} />}
             testId="monitor-changes"
-            onClick={task.info.checkpoints && diff?.state === 'ready' ? () => openReview() : undefined}
+            onClick={task.info.checkpoints && diff?.state === 'ready' && files.length > 0 ? () => openReview() : undefined}
             label={files.length > 0 ? `审阅 ${files.length} 个文件的改动` : undefined}
           >
             {!task.info.checkpoints ? (
@@ -156,11 +211,14 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
             ) : diff?.state !== 'ready' ? (
               <span className="text-muted-foreground">正在读取改动…</span>
             ) : files.length === 0 ? (
-              <span className="text-muted-foreground">还没有改动文件</span>
+              <span className="text-muted-foreground">本任务还没有改动</span>
             ) : (
               <>
                 <DiffCounts added={added} removed={removed} />
                 <span className="text-xs text-muted-foreground">{files.length} 个文件</span>
+                <span className="shrink-0 text-xs text-muted-foreground" title="含这个任务里已经提交的改动">
+                  含已提交
+                </span>
               </>
             )}
           </Row>
@@ -170,13 +228,14 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
           <Row leading={<IconBox icon={GitBranch} />}>
             <span className="truncate text-foreground">{branch ?? '不是 Git 仓库'}</span>
           </Row>
-          {branch && !remote && (
+          {commit && (
             <Row
               leading={<IconBox icon={GitCommitHorizontal} />}
               testId="monitor-commit"
-              onClick={() => store.set((state) => ({ ...state, composerInsert: { target: task.sessionId, text: COMMIT_PROMPT, mode: 'fill' } }))}
+              onClick={fillCommit}
             >
-              <span className="text-foreground">提交或推送</span>
+              <span className="text-foreground">{commit.label}</span>
+              {commit.hint && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{commit.hint}</span>}
             </Row>
           )}
           {/* 外接智能体用它自己的方式跑命令，不靠 Diffra 找的 Git Bash */}
@@ -251,6 +310,11 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
                       {owner.name}
                     </span>
                   ))}
+                  {!remote && git?.repo && (
+                    <span className={cn('shrink-0 text-xs', uncommittedPaths.has(file.path) ? 'text-warning' : 'text-muted-foreground')} data-testid="monitor-file-status">
+                      {uncommittedPaths.has(file.path) ? '未提交' : '已提交'}
+                    </span>
+                  )}
                   {file.binary ? <span className="shrink-0 text-xs text-muted-foreground">二进制</span> : <DiffCounts added={file.added} removed={file.removed} />}
                 </Row>
               )

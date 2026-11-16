@@ -109,7 +109,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await waitTaskStatus(window, 'unfinished')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello world\n')
     expect(existsSync(join(project, 'greet.js'))).toBe(false)
-    await expect(window.getByTestId('monitor-panel')).toContainText('还没有改动文件')
+    await expect(window.getByTestId('monitor-panel')).toContainText('本任务还没有改动')
 
     // 任务里换权限模式，同时记成新任务的默认值
     await window.getByTestId('permission-mode').click()

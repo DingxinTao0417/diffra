@@ -13,6 +13,7 @@ import { type CommandPolicy, commandKeys, commandRisk, classifyCommand, gitSubco
 import { truncateForModel } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
+import { shouldRunFinishCheck } from './check-scope.js'
 import {
   type BrowserAction,
   type BrowserActionResult,
@@ -42,6 +43,8 @@ import {
   type PromptImage,
   type SessionModel,
   type TaskProgressView,
+  type TodoRequest,
+  type TodoActionResult,
   TURN_OUTCOME_META_KEY,
   type TurnOutcome,
   type TurnStop,
@@ -74,6 +77,7 @@ import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, 
 import { historySecretValues, projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
 import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
+import { isTodoTool, runTodoToolCall } from './todos.js'
 import {
   annotateDiff,
   buildReviewRequest,
@@ -169,6 +173,12 @@ export interface TurnIO {
   stockPhotos?(params: Omit<StockPhotoParams, 'sessionId'>, signal: AbortSignal): Promise<StockPhotoResult>
   // 任务之间互通：列出、读别的任务，替它发消息、新建任务；没有会话列表时不提供
   tasks?: TaskBridge
+  // 用户待办：读写界面里的同一份待办；没有待办功能时不提供
+  todos?: TodoBridge
+}
+
+export interface TodoBridge {
+  act(params: TodoRequest): Promise<TodoActionResult>
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -339,8 +349,8 @@ export async function runTurn(
     }
     let round = 1
 
-    // 待验证从之前的轮次带过来时，这一轮停下前同样要过结束门禁
-    let editedThisTurn = session.taskState.needsVerification
+    // 这一轮有没有改文件只看本轮：之前留下的待验证不在纯回答/只读的轮次里重复过门禁
+    let editedThisTurn = false
     let commandedThisTurn = false
     const compaction: CompactionState = { cooldownUntil: 0 }
     // 调用签名 → 自上次成功编辑以来出现的次数
@@ -436,7 +446,8 @@ export async function runTurn(
           continue
         }
         if (gate.verification) turnFinish = mergeFinish(turnFinish, gate.verification)
-        session.taskState.needsVerification = false
+        // 这一轮没改文件（只是回答/只读）时不跑门禁，也不把之前留下的待验证清掉
+        if (changes !== 'none') session.taskState.needsVerification = false
         if (goal === null || goal === 'complete') {
           // 插件的 Stop 钩子拦下：把理由交回去接着做，结束门禁下次停下时再过
           const held = session.pluginHooks.length > 0 && stopContinues < MAX_STOP_HOOK_CONTINUES ? await stopHooks(session.pluginHooks, stopContinues > 0, hookContext(session, signal)) : null
@@ -1086,6 +1097,7 @@ export async function runToolCall(
   if (name === TODO_TOOL && !scope) return runTodoWrite(session, call, io)
   if (name === ASK_USER_TOOL && !scope) return runAskUser(session, call, signal, io)
   if (isTaskTool(name) && !scope && !call.invalid) return runTaskTool(session, { ...call, toolName: name }, signal, io)
+  if (isTodoTool(name) && !scope && !call.invalid) return runTodoToolCall(session, { ...call, toolName: name }, signal, io)
   if (isDesignTool(session, name) && !call.invalid) return runDesignToolCall(session, call, signal, io)
   const kind = isToolName(name) ? TOOL_KINDS[name] : 'other'
   await io.update({
@@ -1477,7 +1489,10 @@ async function runEndGate(
 ): Promise<{ passed: true; verification: FinishVerification | null } | { passed: false; feedback: string; failedCheck?: string }> {
   if (changes === 'none') return { passed: true, verification: null }
   const cardId = `finish-${randomUUID()}`
-  const command = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
+  const configured = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
+  const changedPaths = changes === 'edited' ? await turnChangedPaths(session, turnId) : null
+  const docsOnly = changes === 'edited' && !shouldRunFinishCheck(changes, changedPaths)
+  const command = docsOnly ? null : configured
   // 没有检查点、判断不了改没改文件：没配检查就直接完成；配了就照常跑（第 526 步：配了检查就是要多一轮检查，判断不了不是跳过的理由）
   if (changes === 'unknown' && !command) {
     await showFinishCard(io, cardId, 'unverified', '')
@@ -1485,11 +1500,11 @@ async function runEndGate(
   }
   // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回。
   // 代价是检查命令不过时审查照样调模型，可能对还要改的代码提意见。本轮改动在检查命令开跑前取，审查看不到检查命令自己生成的文件
-  const architecture = await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
+  const architecture = docsOnly ? null : await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
     console.error('[session] 读取目标架构失败，这一轮不做架构检查', error)
     return null
   })
-  const diff = await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
+  const diff = docsOnly ? null : await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
   // 检查命令可能改写文件（eslint --fix、prettier --write、jest -u）。静态扫描和轻量扫描要按 diff 的行号
   // 看文件内容，必须在命令开跑之前把内容读下来，否则行号对不上、漏报或报错行
   const sources = diff === null ? new Map<string, string>() : await snapshotSources(session.cwd, addedLinesOf(diff))
@@ -1577,6 +1592,11 @@ async function runEndGate(
       ...(failedCheck ? { failedCheck } : {}),
     }
   }
+  if (docsOnly) {
+    await notice(io, 'info', '这一轮只改了文档，跳过完成检查')
+    await showFinishCard(io, cardId, 'unverified', '只改了文档，跳过完成检查')
+    return { passed: true, verification: 'unverified' }
+  }
   if (!command) {
     await showFinishCard(io, cardId, 'unverified', '')
     return { passed: true, verification: 'unverified' }
@@ -1613,6 +1633,18 @@ async function snapshotSources(cwd: string, added: AddedLines): Promise<Map<stri
 }
 
 // 本轮智能体对文件的改动（Git 带进来的不算，见 Session.changeBase），安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
+async function turnChangedPaths(session: Session, turnId: string): Promise<string[] | null> {
+  if (!session.checkpoints || !session.turnCheckpoints.has(turnId)) return null
+  try {
+    const base = await session.changeBase(turnId)
+    if (!base) return null
+    return (await session.checkpoints.changesSince(base)).map((change) => change.path)
+  } catch (error) {
+    console.error('[session] 读取本轮改动文件失败', error)
+    return null
+  }
+}
+
 async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: string[] = []): Promise<string | null> {
   const wanted = [
     session.config.security.staticCheck || session.config.security.lightScan ? '安全检查' : null,

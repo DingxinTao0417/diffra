@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from './architecture/model.js'
-import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, stockPhotoParamsSchema, taskActionParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, stockPhotoParamsSchema, taskActionParamsSchema, todoActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import type { SecurityTool, SecurityToolReport, SecurityToolsInfo } from './security/tools.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
@@ -30,6 +30,8 @@ import {
   type SessionAgentRef,
   type TaskActionParams,
   type TaskActionResult,
+  type TodoActionParams,
+  type TodoActionResult,
   type RemoteSource,
   type TaskSource,
   type DevServerParams,
@@ -83,6 +85,8 @@ export interface CoreClientHandlers {
   onStockPhotos?(params: StockPhotoParams): Promise<StockPhotoResult>
   // 智能体给别的任务发消息、新建任务；不提供时任务互通的发送和新建会报错
   onTaskAction?(params: TaskActionParams): Promise<TaskActionResult>
+  // 智能体读写用户待办；不提供时待办工具会报错
+  onTodoAction?(params: TodoActionParams): Promise<TodoActionResult>
   // 架构分析、解读的进度和结束
   onArchitectureEvent?(event: ArchitectureEvent): void
   // 会话的后台命令列表变了
@@ -117,6 +121,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onStockPhotos) app.onRequest(CLIENT_EXT_METHODS.stockPhotos, stockPhotoParamsSchema, ({ params }) => onStockPhotos(params))
     const onTaskAction = handlers.onTaskAction
     if (onTaskAction) app.onRequest(CLIENT_EXT_METHODS.taskAction, taskActionParamsSchema, ({ params }) => onTaskAction(params))
+    const onTodoAction = handlers.onTodoAction
+    if (onTodoAction) app.onRequest(CLIENT_EXT_METHODS.todoAction, todoActionParamsSchema, ({ params }) => onTodoAction(params))
     const onArchitectureEvent = handlers.onArchitectureEvent
     // core 自己发的通知，结构由 core 保证
     if (onArchitectureEvent) app.onNotification(CLIENT_EXT_NOTIFICATIONS.architectureEvent, (raw: unknown) => raw as ArchitectureEvent, ({ params }) => onArchitectureEvent(params))

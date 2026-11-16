@@ -105,6 +105,7 @@ export const IPC_CHANNELS = {
   checkpointDiff: 'session:checkpoint-diff',
   projectBranch: 'project:branch',
   projectBranches: 'project:branches',
+  projectGitState: 'project:git-state',
   projectSwitchBranch: 'project:switch-branch',
   projectOpenFolder: 'project:open-folder',
   sessionFolderState: 'session:folder-state',
@@ -402,6 +403,24 @@ export interface ProjectState {
   security: ProjectSecurity
 }
 
+export interface GitFileState {
+  path: string
+  added: number
+  removed: number
+  binary: boolean
+}
+
+// 工作区相对 HEAD 的未提交改动，以及分支和上游状态（任务监控「环境信息」用）
+export interface ProjectGitState {
+  repo: boolean
+  branch: string | null
+  head: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  files: GitFileState[]
+}
+
 export interface SessionHandle {
   modelRef?: ModelRef
   sessionId: string
@@ -575,6 +594,7 @@ export interface DiffraApi {
   rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean; edited: boolean }>
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
+  projectGitState(projectPath: string): Promise<ProjectGitState>
   // 本地分支和当前分支；切换前检查有没有任务在跑、工作区有没有未提交的改动
   projectBranches(projectPath: string): Promise<{ current: string | null; branches: string[] }>
   switchProjectBranch(projectPath: string, branch: string): Promise<void>

@@ -19,6 +19,7 @@ import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
 import { INTERACT_TOOL_CHARS, INTERACT_TOOLS } from './interact.js'
 import { TASK_TOOL_CHARS, TASK_TOOLS } from './tasks.js'
+import { TODO_TOOL_CHARS, TODO_TOOLS } from './todos.js'
 import { browserTools } from './browser.js'
 import { computerTools } from './computer.js'
 import { ARCHITECTURE_TOOL_CHARS, architectureTools } from './architecture-tool.js'
@@ -381,11 +382,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, ...(this.config.model.supportsImages ? VIEW_IMAGE_TOOL : {}), [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...browserTools(this), ...computerTools(this), ...architectureTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, ...(this.config.model.supportsImages ? VIEW_IMAGE_TOOL : {}), [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...TODO_TOOLS, ...browserTools(this), ...computerTools(this), ...architectureTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + (this.config.model.supportsImages ? toolDefinitionChars(VIEW_IMAGE_TOOL) : 0) + VISUAL_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + toolDefinitionChars(computerTools(this)) + (Object.keys(architectureTools(this)).length ? ARCHITECTURE_TOOL_CHARS : 0) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + (this.config.model.supportsImages ? toolDefinitionChars(VIEW_IMAGE_TOOL) : 0) + VISUAL_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + TODO_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + toolDefinitionChars(computerTools(this)) + (Object.keys(architectureTools(this)).length ? ARCHITECTURE_TOOL_CHARS : 0) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数

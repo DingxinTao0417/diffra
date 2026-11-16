@@ -4,11 +4,13 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { z } from 'zod'
+import type { TodoActionParams, TodoActionResult, TodoQuery, TodoView } from '@diffra/core/types'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { MAX_ATTACHMENT_PATH_LENGTH, MAX_PROMPT_FILE_REFERENCES } from '../shared/attachments'
-import { mergeTodoLists, mergeTombstones, syncableTodo, type Todo, TODO_MAX_IMAGES, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT, TODO_REPEAT_KINDS, type TodoTombstone } from '../shared/todos'
+import { mergeTodoLists, mergeTombstones, normalizeTodoTags, syncableTodo, tagMatches, type Todo, type TodoRepeatKind, TODO_MAX_IMAGES, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT, TODO_REPEAT_KINDS, type TodoTombstone } from '../shared/todos'
 import { parse } from './ipc-input'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
+import { logEvent } from './app-log'
 
 const IMAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // 和输入框里的图片（lib/images.ts）同一个上限
@@ -57,6 +59,7 @@ const todoSchema = z.object({
     .optional(),
   // v2：最近一次改动的时间（局域网同步按它决定谁新），选填
   updatedAt: z.iso.datetime().optional(),
+  archivedAt: z.iso.datetime().nullable().optional(),
   images: z.array(z.string().regex(IMAGE_ID)).max(TODO_MAX_IMAGES).optional(),
   files: z
     .array(z.object({ path: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH).refine(isAbsolute, '必须是本地绝对路径'), name: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH), kind: z.enum(['file', 'directory']) }))
@@ -79,6 +82,13 @@ export const todoSync: {
   snapshot: () => Promise.reject(new Error('待办还没准备好')),
   merge: () => Promise.reject(new Error('待办还没准备好')),
   onChange: () => {},
+}
+
+// 智能体读写待办（v2 工具层）：和界面用同一个 cache / write，不直接改 todos.json。注册 IPC 时填上
+export const todoHost: {
+  act(params: TodoActionParams): Promise<TodoActionResult>
+} = {
+  act: () => Promise.reject(new Error('待办还没准备好')),
 }
 
 // 对方发来的待办：一条条校验，不对的丢掉；本机没有的图片去掉（图片只在记下它的那台电脑上）
@@ -177,6 +187,152 @@ export function registerTodosIpc(userDataDir: string): void {
     tombstones = deleted
     if (shown === null || JSON.stringify(shown) !== JSON.stringify(todos)) for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC_CHANNELS.todosChanged, todos)
     await removeOrphanImages(todos).catch((error: unknown) => console.error('[todos] 清理没用的附件图片失败', error))
+  }
+
+  const samePath = (a: string | null, b: string | null) => (process.platform === 'win32' ? (a ?? '').toLowerCase() === (b ?? '').toLowerCase() : a === b)
+  const toView = (todo: Todo): TodoView => ({
+    id: todo.id,
+    text: todo.text,
+    ...(todo.body !== undefined ? { body: todo.body } : {}),
+    ...(todo.priority !== undefined ? { priority: todo.priority } : {}),
+    project: todo.project,
+    tags: todo.tags,
+    createdAt: todo.createdAt,
+    ...(todo.updatedAt !== undefined ? { updatedAt: todo.updatedAt } : {}),
+    done: todo.done,
+    ...(todo.archivedAt !== undefined ? { archivedAt: todo.archivedAt } : {}),
+    ...(todo.schedule
+      ? {
+          schedule: {
+            at: todo.schedule.at,
+            repeat: todo.schedule.repeat ? { every: todo.schedule.repeat.every, interval: todo.schedule.repeat.interval, start: todo.schedule.repeat.start } : null,
+          },
+        }
+      : {}),
+  })
+  const matches = (todo: Todo, query: TodoQuery): boolean => {
+    if (query.archived === true ? !todo.archivedAt : Boolean(todo.archivedAt)) return false
+    if (query.project !== undefined && !samePath(todo.project, query.project)) return false
+    if (query.done !== undefined && todo.done !== query.done) return false
+    if (query.priority !== undefined && todo.priority !== query.priority) return false
+    if (query.tags && query.tags.length > 0 && !query.tags.every((tag) => todo.tags.some((item) => tagMatches(item, tag)))) return false
+    if (query.query) {
+      const words = query.query.toLowerCase()
+      if (!`${todo.text}\n${todo.body ?? ''}`.toLowerCase().includes(words)) return false
+    }
+    if (query.dueFrom && (!todo.schedule || todo.schedule.at < query.dueFrom)) return false
+    if (query.dueTo && (!todo.schedule || todo.schedule.at > query.dueTo)) return false
+    return true
+  }
+  const scheduleOf = (at: string, repeat: { every: TodoRepeatKind; interval?: number } | undefined) => ({
+    at,
+    action: { kind: 'remind' as const },
+    result: null,
+    ...(repeat ? { repeat: { every: repeat.every, interval: repeat.interval ?? 1, start: at } } : {}),
+  })
+  const fail = (error: string): TodoActionResult => ({ ok: false, error })
+
+  // 智能体工具：读、增、改、归档/删除、完成。读不加锁；写和界面保存排同一个队列，避免互相覆盖
+  todoHost.act = async (params) => {
+    pending++
+    try {
+      return await queue.run(async () => {
+        const current = await load()
+        if (params.action === 'read') {
+          const list = current.filter((todo) => matches(todo, params.query)).slice(0, params.query.limit ?? 50)
+          logEvent(`[todo] read session=${params.sessionId} count=${list.length}`)
+          return { ok: true, todos: list.map(toView), summary: `找到 ${list.length} 条待办` }
+        }
+        const change = params.write
+        const now = new Date().toISOString()
+        const deleted = await loadTombstones()
+        if (change.action === 'add') {
+          const added: Todo[] = change.items.map((item) => ({
+            id: randomUUID(),
+            text: item.text.trim(),
+            ...(item.body !== undefined ? { body: item.body.trim() } : {}),
+            ...(item.priority !== undefined && item.priority !== null ? { priority: item.priority } : {}),
+            project: item.project === undefined ? null : item.project,
+            tags: normalizeTodoTags(item.tags ?? []),
+            createdAt: now,
+            done: false,
+            sentTo: null,
+            updatedAt: now,
+            ...(item.remindAt ? { schedule: scheduleOf(item.remindAt, item.repeat) } : {}),
+          }))
+          await write([...added, ...current], deleted, null)
+          for (const listener of listeners) listener()
+          logEvent(`[todo] add session=${params.sessionId} count=${added.length}`)
+          return { ok: true, todos: added.map(toView), summary: `已新建 ${added.length} 条待办` }
+        }
+        const ids = new Set(change.ids)
+        const missing = change.ids.filter((id) => !current.some((todo) => todo.id === id))
+        if (missing.length > 0) return fail(`找不到这些待办：${missing.join('、')}`)
+        if (change.action === 'delete') {
+          const removed = current.filter((todo) => ids.has(todo.id))
+          if (change.mode === 'delete') {
+            const next = current.filter((todo) => !ids.has(todo.id))
+            const allDeleted = mergeTombstones(deleted, removed.map((todo) => ({ id: todo.id, at: now })), Date.now())
+            await write(next, allDeleted, null)
+            for (const listener of listeners) listener()
+            logEvent(`[todo] permanent-delete session=${params.sessionId} count=${removed.length}`)
+            return { ok: true, todos: removed.map(toView), summary: `已永久删除 ${removed.length} 条待办` }
+          }
+          const next = current.map((todo) => (ids.has(todo.id) ? { ...todo, archivedAt: now, updatedAt: now } : todo))
+          await write(next, deleted, null)
+          for (const listener of listeners) listener()
+          logEvent(`[todo] archive session=${params.sessionId} count=${removed.length}`)
+          return { ok: true, todos: next.filter((todo) => ids.has(todo.id)).map(toView), summary: `已归档 ${removed.length} 条待办` }
+        }
+        if (change.action === 'complete') {
+          const next = current.map((todo) => (ids.has(todo.id) ? { ...todo, done: change.done, updatedAt: now } : todo))
+          await write(next, deleted, null)
+          for (const listener of listeners) listener()
+          logEvent(`[todo] complete session=${params.sessionId} done=${change.done} count=${ids.size}`)
+          return { ok: true, todos: next.filter((todo) => ids.has(todo.id)).map(toView), summary: `${change.done ? '已完成' : '已取消完成'} ${ids.size} 条待办` }
+        }
+        const fields = change.fields
+        if (fields.repeat !== undefined && fields.remindAt === undefined) {
+          const noSchedule = current.filter((todo) => ids.has(todo.id) && !todo.schedule)
+          if (noSchedule.length > 0) return fail('这几条待办还没有提醒时间，不能单独设置重复')
+        }
+        let next = current.map((todo) => {
+          if (!ids.has(todo.id)) return todo
+          const updated: Todo = {
+            ...todo,
+            ...(fields.text !== undefined ? { text: fields.text.trim() } : {}),
+            ...(fields.body !== undefined ? { body: fields.body.trim() } : {}),
+            ...(fields.priority !== undefined ? { priority: fields.priority } : {}),
+            ...(fields.project !== undefined ? { project: fields.project } : {}),
+            ...(fields.tags !== undefined ? { tags: normalizeTodoTags(fields.tags) } : {}),
+            ...(fields.done !== undefined ? { done: fields.done } : {}),
+            ...(fields.archived !== undefined ? { archivedAt: fields.archived ? now : null } : {}),
+            updatedAt: now,
+          }
+          if (fields.remindAt !== undefined) {
+            if (fields.remindAt === null) delete updated.schedule
+            else updated.schedule = scheduleOf(fields.remindAt, fields.repeat ?? undefined)
+          } else if (fields.repeat !== undefined && updated.schedule) {
+            updated.schedule = {
+              ...updated.schedule,
+              repeat: fields.repeat ? { every: fields.repeat.every, interval: fields.repeat.interval ?? 1, start: updated.schedule.at } : null,
+            }
+          }
+          return updated
+        })
+        if (fields.position) {
+          const selected = next.filter((todo) => ids.has(todo.id))
+          const rest = next.filter((todo) => !ids.has(todo.id))
+          next = fields.position === 'top' ? [...selected, ...rest] : [...rest, ...selected]
+        }
+        await write(next, deleted, null)
+        for (const listener of listeners) listener()
+        logEvent(`[todo] update session=${params.sessionId} count=${ids.size}`)
+        return { ok: true, todos: next.filter((todo) => ids.has(todo.id)).map(toView), summary: `已修改 ${ids.size} 条待办` }
+      })
+    } finally {
+      pending--
+    }
   }
 
   ipcMain.handle(IPC_CHANNELS.todosList, () => load())

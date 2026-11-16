@@ -38,6 +38,8 @@ import {
   type StoredTurn,
   type TaskActionParams,
   type TaskActionResult,
+  type TodoActionParams,
+  type TodoActionResult,
   type RemoteSource,
   type TaskSource,
   type TurnKind,
@@ -586,6 +588,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             client
               .request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, params, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
               .catch((error: unknown): TaskActionResult => ({ ok: false, error: clientErrorMessage(error) })),
+        },
+        todos: {
+          act: (params) =>
+            client
+              .request<TodoActionResult, TodoActionParams>(CLIENT_EXT_METHODS.todoAction, { sessionId: session.id, ...params }, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+              .catch((error: unknown): TodoActionResult => ({ ok: false, error: clientErrorMessage(error) })),
         },
         devServer: (params, signal) =>
           client

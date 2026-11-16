@@ -48,12 +48,12 @@ const MAX_FILL = 4000
 // 高度这么久没再变算画好了，可以截快照
 const SETTLE_MS = 1000
 
-function themeCss(): string {
+function themeCss(wide = false): string {
   const style = getComputedStyle(document.documentElement)
   const vars = TOKENS.map(([name, source]) => `${name}:${style.getPropertyValue(source).trim()};`).join('')
   const dark = document.documentElement.classList.contains('dark')
   // 滚动条槽位一直留着：不然出不出滚动条会让内容宽度来回变，按宽度缩放的图（SVG）高度跟着变，高度报告和滚动条互相触发
-  return `:root{${vars}color-scheme:${dark ? 'dark' : 'light'}}html{scrollbar-gutter:stable}html,body{margin:0;background:transparent}body{padding:4px 2px;color:var(--fg);font:14px/1.6 var(--font-sans)}*{box-sizing:border-box}`
+  return `:root{${vars}color-scheme:${dark ? 'dark' : 'light'}}html{scrollbar-gutter:stable}html,body{margin:0;background:transparent}body{max-width:${wide ? 'none' : '720px'};margin:0 auto;padding:4px 12px;color:var(--fg);font:14px/1.6 var(--font-sans)}*{box-sizing:border-box}`
 }
 
 // 在容器页里跑的那段：报内容高度、diffra.fill 把文字交给输入框、点链接先交给主界面确认。放在最前面，用户代码一开始就能用。
@@ -129,7 +129,7 @@ export function VisualFrame({ title, code, sessionId, fill = false, step = null,
       const target = frame.current?.contentWindow
       if (!target || event.source !== target) return
       const data = event.data as { type?: unknown; height?: unknown; text?: unknown; href?: unknown; path?: unknown; line?: unknown; count?: unknown } | null
-      if (data?.type === 'diffra-visual-ready') target.postMessage({ type: 'diffra-visual', html: visualDocument(title, code) }, '*')
+      if (data?.type === 'diffra-visual-ready') target.postMessage({ type: 'diffra-visual', html: visualDocument(title, code, themeCss(fill)) }, '*')
       else if (data?.type === 'diffra-visual-height' && typeof data.height === 'number') {
         setHeight(Math.min(Math.max(Math.ceil(data.height), 40), MAX_HEIGHT))
         if (settleTimer.current !== null) window.clearTimeout(settleTimer.current)
@@ -152,7 +152,7 @@ export function VisualFrame({ title, code, sessionId, fill = false, step = null,
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [title, code, sessionId, readOnly, answer, onLink])
+  }, [title, code, sessionId, readOnly, answer, onLink, fill])
   // 只在卸载时清：上面的监听在流式输出时跟着 answer 一直重建，在那里清的话，内容不再变高就再也等不到「画好了」，不截快照
   useEffect(
     () => () => {

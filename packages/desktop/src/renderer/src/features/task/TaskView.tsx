@@ -31,6 +31,7 @@ import { BranchMenu } from './BranchMenu'
 import { FilePanel } from './FilePanel'
 import { VisualsPanel } from './VisualsPanel'
 import { DeepScanDialog, MonitorPanel } from './MonitorPanel'
+import { useProjectGitState } from './useProjectGitState'
 import { type SecurityDialogKind, SecurityToolsDialog } from './SecurityToolsDialog'
 import { StepsBar } from './StepsBar'
 import { ReadOnlyContext } from './read-only'
@@ -84,6 +85,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
   const deepScanEnabled = useAppState((state) => state.settings?.security.deepScan ?? false)
   const firstTurn = task.turns[0]?.id ?? null
   const monitorDiff = useTaskDiff(task.sessionId, firstTurn, task.info.checkpoints && panel === 'monitor', task.changeVersion, remote?.source)
+  const monitorGit = useProjectGitState(remote ? null : task.project, panel === 'monitor' && !remote, task.changeVersion)
 
   const status = turnVerdict(task)
   // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
@@ -303,7 +305,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
             </div>
           </div>
         </section>
-        {panel === 'monitor' && <MonitorPanel task={task} branch={branch} device={remote ? remote.device : null} diff={monitorDiff} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
+        {panel === 'monitor' && <MonitorPanel task={task} branch={branch} device={remote ? remote.device : null} diff={monitorDiff} gitState={monitorGit} onLocate={(id) => setLocate({ id, at: Date.now() })} />}
         {panel === 'review' && <ReviewPanel task={task} onRestore={remote && !source?.restore ? undefined : (turnId) => void askRestore('restore', turnId)} />}
         {panel === 'browser' && !remote && <BrowserPanel sessionId={task.sessionId} />}
         {panel === 'design' && !remote && <DesignPanel sessionId={task.sessionId} project={task.project} noProject={task.noProject} />}

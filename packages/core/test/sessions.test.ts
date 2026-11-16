@@ -746,7 +746,7 @@ describe('重新生成、切换模型、整段 diff', () => {
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hi\n')
   })
 
-  test('重新生成的这一轮开始时就有没验证的改动：重新生成后仍要验证，只回文字也会在停下时跑门禁', async () => {
+  test('重新生成的这一轮开始时就有没验证的改动：只回文字不跑门禁，待验证保留；下一次改代码才跑', async () => {
     server = await startScriptedServer([
       { toolCalls: [addFile('a.txt', 'a')] },
       { text: '写好了' },
@@ -754,7 +754,7 @@ describe('重新生成、切换模型、整段 diff', () => {
       { text: '写好了' },
       { toolCalls: [addFile('b.txt', 'b')] },
       { text: '写好了 a.txt 和 b.txt' },
-      // 重新生成的这一轮：先只回文字，检查不过被打回，补上 b.txt 再停下
+      // 重新生成的这一轮：只回文字不跑门禁；下一次改代码时门禁才跑
       { text: '重新生成的回答' },
       { toolCalls: [addFile('b.txt', 'b')] },
       { text: '补上了 b.txt' },
@@ -774,11 +774,14 @@ describe('重新生成、切换模型、整段 diff', () => {
     notifications = []
     const requests = server.bodies.length
     await sendPrompt(core, sessionId, 'turn-2b', '再写 b.txt')
+    expect(server.bodies.length - requests).toBe(1)
+    expect(finishVerifications(sessionId)).toEqual([])
+    expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: true })
+
+    // 下一次改代码：门禁照常跑，补上 b.txt 后通过
+    await sendPrompt(core, sessionId, 'turn-2c', '继续')
     expect(server.bodies.length - requests).toBe(3)
-    // 问题作为一条用户消息交回去，模型接着改
-    expect(server.bodies[requests + 1]).toContain('[Diffra] Before ending the turn Diffra ran the project checks on your changes, and the task is not finished yet.')
-    expect(server.bodies[requests + 1]).toContain('The check `test -f b.txt` failed.')
-    expect(finishVerifications(sessionId)).toEqual(['failed', 'verified'])
+    expect(finishVerifications(sessionId)).toEqual(['verified'])
     expect(lastTaskState(sessionId)).toMatchObject({ status: 'completed', needsVerification: false })
   }, 20_000)
 })

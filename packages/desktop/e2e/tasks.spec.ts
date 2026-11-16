@@ -33,6 +33,8 @@ test('任务互通：一个任务新建另一个任务、等它做完拿回结�
     await waitTaskDone(window, 40_000)
     await expect(window.getByText('另一个任务说 README 写好了')).toBeVisible()
     expect(model.requests()).toBe(4)
+    // 发消息和等它做完两张卡指向同一个任务：只保留一个跳转入口
+    await expect(window.getByTestId('task-link').filter({ hasText: '写 README' })).toHaveCount(1)
 
     // 工具卡片指向新任务，点过去能看到它是哪个任务发来的、它的回复
     const links = window.getByTestId('task-link')

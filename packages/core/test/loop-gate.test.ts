@@ -134,7 +134,8 @@ describe('主循环', () => {
     expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: false })
     // 系统提示词里写明了检查在停下时自动跑、改的过程中不要自己跑
     const system = model.doStreamCalls[0]?.prompt.find((message) => message.role === 'system')?.content
-    expect(system).toContain(`When you end your turn after changing files, Diffra runs \`${check}\` automatically.`)
+    expect(system).toContain(`When you end your turn after changing source, types, dependencies, build scripts or tests, Diffra runs \`${check}\` automatically.`)
+    expect(system).toContain('Turns that only answer, read, or change documentation do not run it.')
     expect(system).toContain('Do not run that command yourself while you are still changing code')
 
     // 撤销这一轮：文件回到开始前，原来的结论不再算数
@@ -354,28 +355,46 @@ describe('主循环', () => {
     expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: false })
   })
 
-  test('待验证从之前轮次带过来时，本轮没改文件停下也要过门禁；只跑了不改文件的命令也一样', async () => {
+  test('待验证从之前轮次带过来时，本轮只回答/只读不跑门禁；待验证保留给下一次改代码', async () => {
     const model = scriptedModel([{ text: '这个函数负责解析配置' }])
     const session = await makeSession(model, { afterEdit: null, beforeFinish: 'true' })
     session.taskState.needsVerification = true
     const io = recordingIO()
     await expect(runTurn(session, { id: 't', text: '这个函数是做什么的' }, io)).resolves.toBe('end_turn')
     expect(model.doStreamCalls).toHaveLength(1)
-    expect(checkResults(io, '完成检查')).toEqual(['passed'])
-    expect(verifications(io)).toEqual(['verified'])
-    expect(turnOutcomes(io)).toEqual([{ finish: 'verified', stop: null }])
-    expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: false })
+    expect(checkResults(io, '完成检查')).toEqual([])
+    expect(verifications(io)).toEqual([])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(io)).toMatchObject({ status: 'completed', needsVerification: true })
 
-    // 没配检查命令：照样出完成卡，标未验证
+    // 只跑不改文件的命令也一样：不算这一轮的改动，不跑门禁
     const listed = scriptedModel([{ toolCalls: [exec('ls')] }, { text: '看过了' }])
     const listedSession = await makeSession(listed)
     listedSession.taskState.needsVerification = true
     const listedIO = recordingIO()
     await runTurn(listedSession, { id: 't', text: '看看目录' }, listedIO)
     expect(listed.doStreamCalls).toHaveLength(2)
-    expect(finishCards(listedIO).map((card) => card._meta)).toEqual([{ diffra: { unverified: true, verification: 'unverified' } }])
-    expect(turnOutcomes(listedIO)).toEqual([{ finish: 'unverified', stop: null }])
-    expect(lastTaskState(listedIO)).toMatchObject({ status: 'completed', needsVerification: false })
+    expect(finishCards(listedIO)).toEqual([])
+    expect(turnOutcomes(listedIO)).toEqual([{ finish: null, stop: null }])
+    expect(lastTaskState(listedIO)).toMatchObject({ status: 'completed', needsVerification: true })
+  }, 30_000)
+
+  test('只改文档不跑完成检查，出一张说明卡；改源码照常跑', async () => {
+    const docsModel = scriptedModel([{ toolCalls: [addFile('README.md', '# 文档\n')] }, { text: '文档改好了' }])
+    const docsSession = await makeSession(docsModel, { afterEdit: null, beforeFinish: 'false' })
+    const docsIO = recordingIO()
+    await runTurn(docsSession, { id: 'd', text: '改一下文档' }, docsIO)
+    expect(checkResults(docsIO, '完成检查')).toEqual([])
+    expect(verifications(docsIO)).toEqual(['unverified'])
+    const docsCard = finishCards(docsIO)[0]
+    if (docsCard?.sessionUpdate !== 'tool_call') throw new Error('expected finish card')
+    expect(docsCard.content).toEqual([{ type: 'content', content: { type: 'text', text: '只改了文档，跳过完成检查' } }])
+
+    const codeModel = scriptedModel([{ toolCalls: [addFile('src/a.ts', 'export const a = 1\n')] }, { text: '代码改好了' }])
+    const codeSession = await makeSession(codeModel, { afterEdit: null, beforeFinish: 'true' })
+    const codeIO = recordingIO()
+    await runTurn(codeSession, { id: 'c', text: '改一下代码' }, codeIO)
+    expect(checkResults(codeIO, '完成检查')).toEqual(['passed'])
   }, 30_000)
 
   test('只跑了不改文件的命令就停下：工作区指纹没变，算没改动，不跑检查、不出完成卡', async () => {

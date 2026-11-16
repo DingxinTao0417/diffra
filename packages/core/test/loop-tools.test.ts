@@ -117,7 +117,8 @@ describe('步骤清单和中途提问', () => {
     await runTurn(session, { id: 'turn-1', text: '分两步做' }, io)
 
     expect(toolNames(model)).toContain('update_plan')
-    expect(toolNames(model)).not.toContain('todo_write')
+    // todo_write 现在是独立的待办工具，不再是步骤清单的旧名字
+    expect(toolNames(model)).toContain('todo_write')
     const cards = stepCards(io)
     expect(cards.map((card) => card.toolCallId)).toEqual(['steps-turn-1', 'steps-turn-1', 'steps-turn-1'])
     expect(cards.map((card) => card.sessionUpdate)).toEqual(['tool_call', 'tool_call_update', 'tool_call_update'])

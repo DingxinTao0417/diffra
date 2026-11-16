@@ -57,6 +57,8 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
+import { projectGitState } from './git-state'
+import { todoHost } from './todos-ipc'
 import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, MAX_CANDIDATES, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES, ASK_ANSWERS_META_KEY } from '@diffra/core/types'
 import { askAnswersSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
@@ -227,6 +229,7 @@ export const coreClientHandlers: CoreClientHandlers = {
         resolve({ ok: false, error: '应用窗口没有打开，发不了' })
       }
     }),
+  onTodoAction: (params) => todoHost.act(params),
 }
 
 // 本机界面、远程设备谁先答算谁的；已经答过的返回 false。答完告诉界面收起确认卡片（可能是远程答的）
@@ -589,6 +592,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   )
 
   ipcMain.handle(IPC_CHANNELS.projectBranch, async (_event, rawPath: unknown) => currentBranch(parse(z.string().min(1), rawPath)))
+  ipcMain.handle(IPC_CHANNELS.projectGitState, async (_event, rawPath: unknown) => projectGitState(parse(z.string().min(1), rawPath)))
   ipcMain.handle(IPC_CHANNELS.projectBranches, async (_event, rawPath: unknown) => listBranches(parse(z.string().min(1), rawPath)))
   ipcMain.handle(IPC_CHANNELS.projectSwitchBranch, async (_event, rawPath: unknown, rawBranch: unknown) => switchBranch(parse(z.string().min(1), rawPath), parse(z.string().min(1).max(200), rawBranch)))
 

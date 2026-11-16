@@ -185,6 +185,63 @@ export type TaskActionParams =
 // queued：对方正在跑，消息排在它这一轮后面
 export type TaskActionResult = { ok: true; sessionId: string; title: string; queued: boolean } | { ok: false; error: string }
 
+// 待办 CRUD（v2 工具层）：core 通过客户端读写用户待办，和界面里的待办是同一份数据
+export type TodoPriorityView = 0 | 1 | 2 | 3
+export type TodoRepeatView = { every: 'day' | 'weekday' | 'week' | 'month'; interval: number; start: string }
+export interface TodoView {
+  id: string
+  text: string
+  body?: string
+  priority?: TodoPriorityView | null
+  project: string | null
+  tags: string[]
+  createdAt: string
+  updatedAt?: string
+  done: boolean
+  archivedAt?: string | null
+  schedule?: { at: string; repeat: TodoRepeatView | null } | null
+}
+export interface TodoQuery {
+  query?: string
+  project?: string | null
+  tags?: string[]
+  priority?: TodoPriorityView
+  done?: boolean
+  archived?: boolean
+  dueFrom?: string
+  dueTo?: string
+  limit?: number
+}
+export interface TodoAddInput {
+  text: string
+  body?: string
+  priority?: TodoPriorityView | null
+  project?: string | null
+  tags?: string[]
+  remindAt?: string
+  repeat?: { every: TodoRepeatView['every']; interval?: number }
+}
+export interface TodoPatch {
+  text?: string
+  body?: string
+  priority?: TodoPriorityView | null
+  project?: string | null
+  tags?: string[]
+  remindAt?: string | null
+  repeat?: { every: TodoRepeatView['every']; interval?: number } | null
+  done?: boolean
+  archived?: boolean
+  position?: 'top' | 'bottom'
+}
+export type TodoWrite =
+  | { action: 'add'; items: TodoAddInput[] }
+  | { action: 'update'; ids: string[]; fields: TodoPatch }
+  | { action: 'delete'; ids: string[]; mode?: 'archive' | 'delete' }
+  | { action: 'complete'; ids: string[]; done: boolean }
+export type TodoRequest = { action: 'read'; query: TodoQuery } | { action: 'write'; write: TodoWrite }
+export type TodoActionParams = { sessionId: string } & TodoRequest
+export type TodoActionResult = { ok: true; todos: TodoView[]; summary: string } | { ok: false; error: string }
+
 export const DIAGNOSIS_META_KEY = 'diagnosis'
 
 // 优化提示词交回的结果
@@ -684,6 +741,8 @@ export const CLIENT_EXT_METHODS = {
   stockPhotos: '_diffra/design/stock-photos',
   // 任务之间互通：智能体给别的任务发消息、新建任务，由客户端载入任务、起一轮
   taskAction: '_diffra/task/action',
+  // 待办 CRUD（v2）：读写用户在界面里的待办
+  todoAction: '_diffra/todo/action',
 } as const
 
 export interface McpPromptInfo {

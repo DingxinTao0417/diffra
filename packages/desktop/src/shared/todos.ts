@@ -22,6 +22,8 @@ export interface Todo {
   schedule?: TodoSchedule | null
   // 最近一次改动的时间（v2，局域网同步按它决定谁新）；旧数据没有，按 createdAt 算
   updatedAt?: string
+  // 软归档（v2 工具层）：归档后不在列表里显示，智能体可以恢复；旧数据没有这个字段
+  archivedAt?: string | null
   // 附件（第 638 步），派给任务时一起发；旧数据没有这两个字段。图片存在数据目录的 todo-attachments 里，这里只记 id；
   // 文件和输入框里加的一样只记路径，不复制内容
   images?: string[]

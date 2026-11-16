@@ -1159,7 +1159,7 @@ test('设备连接：可操作的远程任务页用本机的输入框——切�
     // 任务监控跟着刷新：改回去之后没有改动了
     const monitor = remoteTask.getByTestId('monitor-panel')
     if (!(await monitor.isVisible())) await remoteTask.getByRole('button', { name: '任务监控' }).click()
-    await expect(monitor.getByTestId('monitor-changes')).toContainText('还没有改动文件', { timeout: 10_000 })
+    await expect(monitor.getByTestId('monitor-changes')).toContainText('本任务还没有改动', { timeout: 10_000 })
     await guest.window.screenshot({ path: 'test-results/devices-remote-ops.png' })
   } finally {
     await close([host, guest])

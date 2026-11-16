@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlarmClock, ChevronDown, ChevronRight, ListTodo, Send } from 'lucide-react'
+import { AlarmClock, ArchiveRestore, ChevronDown, ChevronRight, ListTodo, Send } from 'lucide-react'
 import { parseTodoPriority, tagMatches, tagTree, type Todo, type TodoPriority, TODO_PRIORITIES } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { Segmented } from '@/components/ui/segmented'
 import { folderName } from '@/lib/format'
 import { dayKey, formatDue, GROUP_LABELS, groupOf, type TodoGroup } from '@/lib/todo-time'
 import { useNow } from '@/lib/use-now'
-import { addTodo } from '@/state/actions'
+import { addTodo, saveTodos } from '@/state/actions'
 import { store, useAppState } from '@/state/store'
 import { SchedulePicker } from './SchedulePicker'
 import { SendTodosDialog } from './SendTodosDialog'
@@ -43,12 +43,15 @@ export function TodosView() {
   const [selected, setSelected] = useState<string[]>([])
   const [sending, setSending] = useState<Sending | null>(null)
   const [showDone, setShowDone] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   // 从右边迷你月历点进日历视图时停在那天
   const [calendarDay, setCalendarDay] = useState<Date | null>(null)
 
-  const projects = useMemo(() => [...new Set((todos ?? []).map((todo) => todo.project ?? NO_PROJECT))], [todos])
+  const activeTodos = useMemo(() => (todos ?? []).filter((todo) => !todo.archivedAt), [todos])
+  const archivedTodos = useMemo(() => (todos ?? []).filter((todo) => todo.archivedAt), [todos])
+  const projects = useMemo(() => [...new Set(activeTodos.map((todo) => todo.project ?? NO_PROJECT))], [activeTodos])
   // 嵌套标签（v2）：「工作/项目A」也列出上一层「工作」；第一层一直显示，下一层在选中它的上一层（或它下面的）时展开
-  const tagEntries = useMemo(() => tagTree((todos ?? []).flatMap((todo) => todo.tags)), [todos])
+  const tagEntries = useMemo(() => tagTree(activeTodos.flatMap((todo) => todo.tags)), [activeTodos])
   const shownTags = tagEntries.filter((entry) => {
     if (entry.depth === 0) return true
     const parent = entry.tag.slice(0, entry.tag.lastIndexOf('/'))
@@ -56,18 +59,18 @@ export function TodosView() {
   })
   // 有待办设了优先级才出这一组筛选；只列出用到的几档
   const priorities = useMemo(() => {
-    const used = new Set((todos ?? []).map((todo) => todo.priority ?? 'none'))
+    const used = new Set(activeTodos.map((todo) => todo.priority ?? 'none'))
     return used.size === 1 && used.has('none') ? [] : [...TODO_PRIORITIES.filter((value) => used.has(value)), ...(used.has('none') ? ['none' as const] : [])]
-  }, [todos])
+  }, [activeTodos])
   const visible = useMemo(
     () =>
-      (todos ?? []).filter(
+      activeTodos.filter(
         (todo) =>
           (filter === ALL || (todo.project ?? NO_PROJECT) === filter) &&
           (tagFilter === null || todo.tags.some((tag) => tagMatches(tag, tagFilter))) &&
           (priorityFilter === null || (todo.priority ?? 'none') === priorityFilter),
       ),
-    [todos, filter, tagFilter, priorityFilter],
+    [activeTodos, filter, tagFilter, priorityFilter],
   )
   const groups = useMemo(() => groupTodos(visible, now), [visible, now])
   const openCount = visible.filter((todo) => !todo.done).length
@@ -103,7 +106,7 @@ export function TodosView() {
           </span>
         </div>
         <TodoInput autoFocus />
-        {(todos?.length ?? 0) > 0 && (
+        {activeTodos.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {[ALL, ...projects].map((value) => (
               <button
@@ -176,13 +179,13 @@ export function TodosView() {
               ))}
           </div>
         )}
-        {todos !== null && todos.length === 0 && (
+        {todos !== null && activeTodos.length === 0 && archivedTodos.length === 0 && (
           <EmptyState icon={ListTodo} title="突然有点子就记在这里" description="可以定个时间到点提醒，或者到点自动发给某个任务；也可以随时派给新任务或已有的任务。" variant="plain" className="mt-6" />
         )}
-        {view === 'calendar' && todos !== null && todos.length > 0 ? (
+        {view === 'calendar' && todos !== null && activeTodos.length > 0 ? (
           <TodoCalendar key={calendarDay ? dayKey(calendarDay) : 'today'} todos={visible} now={now} rowProps={rowProps} initialDay={calendarDay ?? undefined} />
         ) : (
-          <div className={cn('grid items-start gap-6', todos !== null && todos.length > 0 && 'lg:grid-cols-[minmax(0,1fr)_17rem]')}>
+          <div className={cn('grid items-start gap-6', todos !== null && activeTodos.length > 0 && 'lg:grid-cols-[minmax(0,1fr)_17rem]')}>
           <div className="flex flex-col gap-4" data-testid="todo-list">
             {OPEN_GROUPS.map((group) =>
               groups[group].length === 0 ? null : (
@@ -214,8 +217,30 @@ export function TodosView() {
                 )}
               </section>
             )}
+            {archivedTodos.length > 0 && (
+              <section className="overflow-hidden rounded-xl border bg-card">
+                <button type="button" className="flex w-full items-center gap-1 px-4 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowArchived(!showArchived)}>
+                  {showArchived ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                  已归档 {archivedTodos.length}
+                </button>
+                {showArchived && (
+                  <ul className="flex flex-col divide-y border-t opacity-80">
+                    {archivedTodos.map((todo) => (
+                      <li key={todo.id} className="flex items-center gap-2 px-4 py-2 text-sm" data-testid="todo-archived">
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground line-through">{todo.text}</span>
+                        {todo.project && <span className="shrink-0 text-xs text-muted-foreground">{folderName(todo.project)}</span>}
+                        <Button variant="ghost" size="xs" onClick={() => void saveTodos((list) => list.map((item) => (item.id === todo.id ? { ...item, archivedAt: null } : item)))}>
+                          <ArchiveRestore className="size-3.5" />
+                          恢复
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
           </div>
-          {todos !== null && todos.length > 0 && (
+          {todos !== null && activeTodos.length > 0 && (
             <div className="hidden lg:block">
               <TodoSidePanel
                 todos={visible}

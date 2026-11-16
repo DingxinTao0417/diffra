@@ -17,6 +17,7 @@ import {
   type ExternalAgentSpec,
   type SessionConfig,
   type SessionDesign,
+  type TodoActionParams,
 } from '../protocol.js'
 
 export const endpointSchema = z.object({
@@ -240,3 +241,48 @@ export const taskActionParamsSchema = z.discriminatedUnion('action', [
     from: taskSourceSchema,
   }),
 ])
+
+const todoPrioritySchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)])
+const todoRepeatSchema = z.object({ every: z.enum(['day', 'weekday', 'week', 'month']), interval: z.number().int().min(1).max(365).optional() })
+const todoQuerySchema = z.object({
+  query: z.string().max(500).optional(),
+  project: z.string().max(2000).nullable().optional(),
+  tags: z.array(z.string().min(1).max(30)).max(12).optional(),
+  priority: todoPrioritySchema.optional(),
+  done: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  dueFrom: z.iso.datetime().optional(),
+  dueTo: z.iso.datetime().optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+})
+const todoAddSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  body: z.string().max(4000).optional(),
+  priority: todoPrioritySchema.nullable().optional(),
+  project: z.string().max(2000).nullable().optional(),
+  tags: z.array(z.string().max(30)).max(12).optional(),
+  remindAt: z.iso.datetime().optional(),
+  repeat: todoRepeatSchema.optional(),
+})
+const todoPatchSchema = z.object({
+  text: z.string().trim().min(1).max(4000).optional(),
+  body: z.string().max(4000).optional(),
+  priority: todoPrioritySchema.nullable().optional(),
+  project: z.string().max(2000).nullable().optional(),
+  tags: z.array(z.string().max(30)).max(12).optional(),
+  remindAt: z.iso.datetime().nullable().optional(),
+  repeat: todoRepeatSchema.nullable().optional(),
+  done: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  position: z.enum(['top', 'bottom']).optional(),
+})
+const todoWriteSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('add'), items: z.array(todoAddSchema).min(1).max(50) }),
+  z.object({ action: z.literal('update'), ids: z.array(z.string().min(1).max(64)).min(1).max(200), fields: todoPatchSchema }),
+  z.object({ action: z.literal('delete'), ids: z.array(z.string().min(1).max(64)).min(1).max(200), mode: z.enum(['archive', 'delete']).optional() }),
+  z.object({ action: z.literal('complete'), ids: z.array(z.string().min(1).max(64)).min(1).max(200), done: z.boolean() }),
+])
+export const todoActionParamsSchema = z.discriminatedUnion('action', [
+  z.object({ sessionId: z.string().min(1), action: z.literal('read'), query: todoQuerySchema.default({}) }),
+  z.object({ sessionId: z.string().min(1), action: z.literal('write'), write: todoWriteSchema }),
+]) satisfies z.ZodType<TodoActionParams>

@@ -189,7 +189,7 @@ function checkLines(checks: SessionChecks): string[] {
   const command = checks.beforeFinish ?? checks.afterEdit
   if (command) {
     return [
-      `- When you end your turn after changing files, Diffra runs \`${command}\` automatically. If it fails, you get the errors and continue: fix them and end your turn again. Do not run that command yourself while you are still changing code; finish the whole change first.`,
+      `- When you end your turn after changing source, types, dependencies, build scripts or tests, Diffra runs \`${command}\` automatically. Turns that only answer, read, or change documentation do not run it. If it fails, you get the errors and continue: fix them and end your turn again. Do not run that command yourself while you are still changing code; finish the whole change first.`,
     ]
   }
   return ['- No project checks are configured: after changing code, verify it yourself, for example by running the relevant tests.']
