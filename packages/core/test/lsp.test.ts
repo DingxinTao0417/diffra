@@ -138,6 +138,35 @@ describe('LSP 服务器池', () => {
     expect(new Set(methods.map((entry) => entry.pid)).size).toBe(1)
   }, 30_000)
 
+  test('服务器发回来的地址写法不一样（Windows 上盘符小写、冒号转义、整条路径小写）也对得上这个文件，状态里的路径照原样', async () => {
+    const pool = newPool()
+    const spec = await fakeSpec({ env: { FAKE_LSP_LOG: join(root, 'lsp.log'), FAKE_LSP_URI: 'lower' } })
+    const file = join(project, 'Src', 'A.ts')
+    const result = await pool.check(project, spec, file, 'ERROR here\n')
+    expect(result.note).toBeNull()
+    expect(result.diagnostics).toHaveLength(1)
+    const again = await pool.check(project, spec, file, 'fine\n')
+    expect(again.diagnostics).toEqual([])
+    await pool.check(project, spec, file, 'ERROR again\n')
+    expect(pool.status(project, [spec])[0]!.files.map((item) => item.path)).toEqual(['Src/A.ts'])
+  }, 30_000)
+
+  test('拉取式诊断（像 TypeScript 7 自带的语言服务器）：声明了 diagnosticProvider 就改完直接问，不等推送', async () => {
+    const pool = newPool({ diagnosticsWaitMs: 5000 })
+    const spec = await fakeSpec({ env: { FAKE_LSP_LOG: join(root, 'lsp.log'), FAKE_LSP_PULL: '1' } })
+    const file = join(project, 'src', 'a.ts')
+    const started = Date.now()
+    const first = await pool.check(project, spec, file, 'ERROR here\n  WARN there\n')
+    expect(first.note).toBeNull()
+    expect(first.diagnostics?.map((item) => item.severity)).toEqual([1, 2])
+    const second = await pool.check(project, spec, file, 'clean\n')
+    expect(second.diagnostics).toEqual([])
+    // 直接拉到，不用等推送的时限
+    expect(Date.now() - started).toBeLessThan(4000)
+    expect(logged().filter((entry) => entry.method === 'textDocument/diagnostic')).toHaveLength(2)
+    expect(pool.status(project, [spec])[0]).toMatchObject({ errors: 0, warnings: 0 })
+  }, 30_000)
+
   test('崩了按退避重启，打开过的文件重新交给它；同一项目的任务共用一个进程', async () => {
     const pool = newPool()
     const spec = await fakeSpec()

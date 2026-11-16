@@ -1,7 +1,7 @@
 import { extname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LspDiagnostic, LspFileDiagnostics, LspServerState, LspServerStatus } from '../protocol.js'
-import { fileUri, LspProcess, type PublishedDiagnostics } from './client.js'
+import { fileUri, LspProcess, type PublishedDiagnostics, uriKey } from './client.js'
 import type { LspServerSpec } from './config.js'
 
 // 语言服务器池（v2 · M4）：同一个项目、同样配置的服务器在各个任务间共用一个进程。
@@ -37,7 +37,8 @@ interface Entry {
   restarts: number
   error: string | null
   docs: Map<string, Doc>
-  diagnostics: Map<string, { version: number | null; items: LspDiagnostic[] }>
+  // 键是 uriKey（服务器发回来的地址写法和我们的不一定一样），uri 是原样的地址，显示路径用
+  diagnostics: Map<string, { uri: string; version: number | null; items: LspDiagnostic[] }>
   waiters: Set<Waiter>
   // 停止、重启时加一，作废还在退避等待中的重启
   generation: number
@@ -129,9 +130,12 @@ export class LspPool {
 
   private published(entry: Entry, process: LspProcess, published: PublishedDiagnostics): void {
     if (entry.process !== process) return
-    entry.diagnostics.set(published.uri, { version: published.version, items: published.diagnostics })
+    const key = uriKey(published.uri)
+    // 我们打开过的文件用我们自己的地址（服务器发回来的可能整条变成了小写），显示路径时大小写才对
+    const uri = [...entry.docs.keys()].find((own) => uriKey(own) === key) ?? published.uri
+    entry.diagnostics.set(key, { uri, version: published.version, items: published.diagnostics })
     for (const waiter of entry.waiters) {
-      if (waiter.uri === published.uri && (published.version === null || published.version >= waiter.version)) waiter.resolve('published')
+      if (uriKey(waiter.uri) === key && (published.version === null || published.version >= waiter.version)) waiter.resolve('published')
     }
   }
 
@@ -215,6 +219,24 @@ export class LspPool {
     })
     if (previous) process.notify('textDocument/didChange', { textDocument: { uri, version }, contentChanges: [{ text }] })
     else process.notify('textDocument/didOpen', { textDocument: { uri, languageId, version, text } })
+    // 拉取式诊断：直接问这个文件的诊断，不等推送
+    if (process.pullDiagnostics) {
+      const aborted = new Promise<'aborted'>((resolve) => {
+        if (signal?.aborted) resolve('aborted')
+        signal?.addEventListener('abort', () => resolve('aborted'), { once: true })
+      })
+      try {
+        const pulled = await Promise.race([process.diagnostics(uri, this.diagnosticsWaitMs), aborted])
+        if (pulled === 'aborted') return result(null, '已取消')
+        const key = uriKey(uri)
+        const items = pulled ?? entry.diagnostics.get(key)?.items ?? []
+        entry.diagnostics.set(key, { uri, version, items })
+        return result(items, null)
+      } catch (error) {
+        if (entry.process !== process) return result(null, entry.state === 'restarting' ? '检查这个文件时崩溃了，正在重启' : (entry.error ?? '已停止'))
+        return result(null, error instanceof Error ? error.message : String(error))
+      }
+    }
     let outcome: 'published' | 'gone' | 'timeout' | 'aborted'
     try {
       outcome = await Promise.race([
@@ -231,7 +253,7 @@ export class LspPool {
     if (outcome === 'published') await sleep(SETTLE_MS)
     if (outcome === 'gone') return result(null, entry.state === 'restarting' ? '检查这个文件时崩溃了，正在重启' : (entry.error ?? '已停止'))
     if (outcome === 'aborted') return result(null, '已取消')
-    const current = entry.diagnostics.get(uri)
+    const current = entry.diagnostics.get(uriKey(uri))
     if (!current || (current.version !== null && current.version < version)) return result(null, `${this.diagnosticsWaitMs / 1000} 秒内没给出这个文件的诊断`)
     return result(current.items, null)
   }
@@ -242,7 +264,7 @@ export class LspPool {
       const files: LspFileDiagnostics[] = []
       let errors = 0
       let warnings = 0
-      for (const [uri, published] of entry?.diagnostics ?? []) {
+      for (const { uri, ...published } of entry?.diagnostics.values() ?? []) {
         const items = published.items.filter((item) => item.severity <= 2)
         const fileErrors = items.filter((item) => item.severity === 1).length
         errors += fileErrors

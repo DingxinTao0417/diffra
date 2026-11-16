@@ -45,6 +45,19 @@ export function fileUri(path: string): string {
   return pathToFileURL(path).href
 }
 
+// 比较两个文件地址用的写法：服务器发回来的不一定和我们发的一样。Windows 上 typescript-language-server 发
+// file:///d%3A/Code/a.ts（盘符小写、冒号转义），TypeScript 7 自带的语言服务器连整条路径都转成小写；
+// 所以先解码，Windows 盘符路径整个按小写比（文件系统本来就不分大小写）
+export function uriKey(uri: string): string {
+  let text = uri
+  try {
+    text = decodeURIComponent(uri)
+  } catch {
+    // 转义不完整就按原样比
+  }
+  return /^file:\/\/\/[A-Za-z]:/.test(text) ? text.toLowerCase() : text
+}
+
 export interface LspProcessEvents {
   onDiagnostics(published: PublishedDiagnostics): void
   // 进程退出了（自己退出或崩溃）；intentional 为真是我们让它停的
@@ -58,6 +71,8 @@ export class LspProcess {
   private readonly pending = new Map<number, Pending>()
   private stderrTail = ''
   private stopping = false
+  // 服务器支持拉取式诊断（initialize 时声明了 diagnosticProvider）
+  pullDiagnostics = false
   private exited: Promise<void> = Promise.resolve()
 
   constructor(
@@ -106,7 +121,7 @@ export class LspProcess {
     child.stdin.on('error', () => {})
     const folder = spec.workspaceFolder ? expand(spec.workspaceFolder) : cwd
     try {
-      await this.request(
+      const initialized = await this.request(
         'initialize',
         {
           processId: process.pid,
@@ -119,6 +134,8 @@ export class LspProcess {
             textDocument: {
               synchronization: { didSave: false, dynamicRegistration: false },
               publishDiagnostics: { relatedInformation: false, versionSupport: true },
+              // LSP 3.17 的拉取式诊断：TypeScript 7 自带的语言服务器只这样给（打开的文件不推送）
+              diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
             },
             workspace: { configuration: true, workspaceFolders: true },
             window: { workDoneProgress: false },
@@ -127,6 +144,7 @@ export class LspProcess {
         spec.startupTimeoutMs,
         `${spec.startupTimeoutMs / 1000} 秒内没启动好`,
       )
+      this.pullDiagnostics = Boolean(asRecord(asRecord(initialized).capabilities).diagnosticProvider)
       this.notify('initialized', {})
       if (spec.settings !== null) this.notify('workspace/didChangeConfiguration', { settings: spec.settings })
     } catch (error) {
@@ -137,6 +155,13 @@ export class LspProcess {
 
   notify(method: string, params: unknown): void {
     this.send({ jsonrpc: '2.0', method, params })
+  }
+
+  // 拉一个文件的诊断（服务器声明了 diagnosticProvider 时用）；「没变」返回 null，沿用上次的
+  async diagnostics(uri: string, timeoutMs: number): Promise<LspDiagnostic[] | null> {
+    const report = asRecord(await this.request('textDocument/diagnostic', { textDocument: { uri } }, timeoutMs, `${timeoutMs / 1000} 秒内没给出这个文件的诊断`))
+    if (report.kind === 'unchanged') return null
+    return Array.isArray(report.items) ? report.items.map(diagnosticOf) : []
   }
 
   request(method: string, params: unknown, timeoutMs = this.spec.requestTimeoutMs, timeoutMessage?: string): Promise<unknown> {

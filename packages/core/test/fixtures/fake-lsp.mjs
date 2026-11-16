@@ -1,7 +1,9 @@
 // 假的语言服务器（v2 · M4 的 LSP 测试用，core 单测和桌面端 e2e 共用）：stdio 上的 LSP。
 // 打开或改文件时按行发诊断：含 ERROR 的行是错误，含 WARN 的行是警告。特殊内容：
 // CRASH_ALWAYS 收到就退出（退出码 3）；CRASH_ONCE 第一次收到时退出（退出码 4，记在 FAKE_LSP_MARK 文件里，重启后不再崩）；SILENT 不发诊断。
-// 参数 --fail-start 一启动就退出；环境变量 FAKE_LSP_NO_INIT 不回 initialize；FAKE_LSP_LOG 把收到的方法一行一个 JSON 记下来
+// 参数 --fail-start 一启动就退出；环境变量 FAKE_LSP_NO_INIT 不回 initialize；FAKE_LSP_LOG 把收到的方法一行一个 JSON 记下来；
+// FAKE_LSP_URI=lower 发诊断时把地址改成 Windows 上 TypeScript 语言服务器那样（盘符小写、冒号转义、整条路径小写）；
+// FAKE_LSP_PULL=1 像 TypeScript 7 自带的语言服务器：声明 diagnosticProvider，不推送，等客户端用 textDocument/diagnostic 来拉
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 
 const log = (entry) => {
@@ -18,8 +20,12 @@ const send = (message) => {
   process.stdout.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'ascii'), body]))
 }
 
-const publish = (uri, version, text) => {
-  if (text.includes('SILENT')) return
+// Windows 上语言服务器发回来的地址写法：file:///D:/Work/a.ts → file:///d%3a/work/a.ts
+const rewrite = (uri) => (process.env.FAKE_LSP_URI === 'lower' ? uri.replace(/^file:\/\/\/([A-Za-z]):/, (_, drive) => `file:///${drive}%3A`).toLowerCase() : uri)
+const pull = process.env.FAKE_LSP_PULL === '1'
+const texts = new Map()
+
+const diagnosticsOf = (text) => {
   const diagnostics = []
   text.split(/\r?\n/).forEach((line, index) => {
     const error = line.indexOf('ERROR')
@@ -27,7 +33,13 @@ const publish = (uri, version, text) => {
     if (error >= 0) diagnostics.push({ range: { start: { line: index, character: error }, end: { line: index, character: error + 5 } }, severity: 1, message: `found ERROR on line ${index + 1}`, source: 'fake', code: 'E1' })
     else if (warn >= 0) diagnostics.push({ range: { start: { line: index, character: warn }, end: { line: index, character: warn + 4 } }, severity: 2, message: 'found WARN', source: 'fake' })
   })
-  send({ method: 'textDocument/publishDiagnostics', params: { uri, version, diagnostics } })
+  return diagnostics
+}
+
+const publish = (uri, version, text) => {
+  texts.set(uri, text)
+  if (text.includes('SILENT') || pull) return
+  send({ method: 'textDocument/publishDiagnostics', params: { uri: rewrite(uri), version, diagnostics: diagnosticsOf(text) } })
 }
 
 const crashes = (text) => {
@@ -48,7 +60,10 @@ const handle = (message) => {
   else log({ response: message.id, result: message.result ?? null })
   switch (message.method) {
     case 'initialize':
-      if (!process.env.FAKE_LSP_NO_INIT) send({ id: message.id, result: { capabilities: { textDocumentSync: 1 }, serverInfo: { name: 'fake-lsp' } } })
+      if (!process.env.FAKE_LSP_NO_INIT) send({ id: message.id, result: { capabilities: { textDocumentSync: 1, ...(pull ? { diagnosticProvider: { interFileDependencies: false, workspaceDiagnostics: false } } : {}) }, serverInfo: { name: 'fake-lsp' } } })
+      return
+    case 'textDocument/diagnostic':
+      send({ id: message.id, result: { kind: 'full', items: diagnosticsOf(texts.get(message.params.textDocument.uri) ?? '') } })
       return
     case 'initialized':
       // 反过来问一次配置，看客户端答不答
