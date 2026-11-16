@@ -167,6 +167,7 @@ const api: DiffraApi = {
   browserSetBackend: (sessionId, backend) => ipcRenderer.send(IPC_CHANNELS.browserSetBackend, sessionId, backend),
   browserResume: (sessionId) => ipcRenderer.send(IPC_CHANNELS.browserResume, sessionId),
   browserDevTools: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.browserDevTools, sessionId),
+  pickChromeExecutable: () => ipcRenderer.invoke(IPC_CHANNELS.browserChromePick),
   computerStatus: () => ipcRenderer.invoke(IPC_CHANNELS.computerStatus),
   computerAudit: () => ipcRenderer.invoke(IPC_CHANNELS.computerAudit),
   clearComputerAudit: () => ipcRenderer.invoke(IPC_CHANNELS.computerAuditClear),

@@ -232,6 +232,7 @@ export const IPC_CHANNELS = {
   browserSetBackend: 'browser:set-backend',
   browserResume: 'browser:resume',
   browserDevTools: 'browser:devtools',
+  browserChromePick: 'browser:chrome-pick',
   computerStatus: 'computer:status',
   computerAudit: 'computer:audit',
   computerAuditClear: 'computer:audit-clear',
@@ -315,6 +316,8 @@ export interface BrowserState {
   backend: AgentBrowser
   // direct：Chrome 是直接启动的系统 Chrome（v2，不经扩展），没在跑时智能体一用就自动启动
   external: { connected: boolean; paused: string | null; direct?: boolean } | null
+  // v2：设置的是直接启动的 Chrome，但没找到或没启动起来，这个任务改用内置浏览器；写着原因
+  fallback?: string | null
 }
 
 export type BrowserCommand = 'back' | 'forward' | 'reload' | 'stop' | 'external'
@@ -326,13 +329,14 @@ export interface BridgeStatus {
   direct?: DirectChromeStatus
 }
 
-// 系统 Chrome：找到的程序、在不在跑、上次没启动起来的原因；supported 为假是这个系统（Linux）不支持
+// 系统 Chrome：找到的程序、在不在跑、上次没启动起来的原因；custom 是用户在设置里选的程序（不管在不在）
 export interface DirectChromeStatus {
   supported: boolean
   executable: string | null
   name: string | null
   running: boolean
   error: string | null
+  custom?: string | null
 }
 
 // 中文菜单里交给页面处理的命令
@@ -770,6 +774,8 @@ export interface DiffraApi {
   browserResume(sessionId: string): void
   // 当前标签页的开发者工具（v2）：内置浏览器单独开窗口，直接启动的 Chrome 在那里开检查器
   browserDevTools(sessionId: string): Promise<void>
+  // 选直接启动用的浏览器程序（v2）：返回选到的可执行文件路径，取消是 null；不改设置
+  pickChromeExecutable(): Promise<string | null>
   // 电脑操控（v2）：这台电脑支不支持；最近的操作记录（新的在前）；清空记录
   computerStatus(): Promise<ComputerStatus>
   computerAudit(): Promise<ComputerAuditEntry[]>

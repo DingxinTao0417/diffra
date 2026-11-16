@@ -118,6 +118,10 @@ export interface BrowserSettings {
   blockSites: string[]
   // v2：选了 Chrome 时不经扩展，直接启动系统里装的 Chrome（Diffra 单独的配置）；旧设置没有这一项（就是经扩展）
   chromeDirect?: boolean
+  // v2：直接启动时用的程序，用户自己选的；没有就按 Chrome、Edge、Chromium 的常见位置找
+  chromePath?: string | null
+  // v2：浏览器面板上显示「开发者工具」按钮；旧设置没有就是显示
+  devTools?: boolean
 }
 
 export const DEFAULT_BROWSER: BrowserSettings = { agent: 'builtin', allowSites: [], blockSites: [] }

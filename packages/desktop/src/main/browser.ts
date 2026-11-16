@@ -2,13 +2,13 @@ import { join } from 'node:path'
 import { normalizeUrl } from '@diffra/core'
 import { setBrowserSites } from '@diffra/core'
 import type { BrowserAction, BrowserActionParams, BrowserActionResult } from '@diffra/core/types'
-import { BrowserWindow, session as electronSession, ipcMain, type NativeImage, shell, WebContentsView } from 'electron'
+import { BrowserWindow, dialog, session as electronSession, ipcMain, type NativeImage, shell, WebContentsView } from 'electron'
 import { z } from 'zod'
 import type { BridgeTask } from '../shared/browser-bridge'
 import { type BridgeStatus, type BrowserRect, type BrowserState, IPC_CHANNELS } from '../shared/ipc'
 import type { AgentBrowser } from '../shared/settings'
 import { BridgeServer } from './browser-bridge'
-import { DirectChrome } from './browser-direct'
+import { DirectChrome, resolveChromeExecutable } from './browser-direct'
 import { BROWSER_NAMES, ExternalBrowser, type ExternalKind } from './browser-external'
 import { coreConnection } from './core-process'
 import { registerNativeHost } from './native-host-registry'
@@ -108,6 +108,9 @@ class BuiltinTarget implements PageTarget {
 class BuiltinBrowser {
   private readonly tasks = new Map<string, TaskTabs>()
   private sessionReady = false
+
+  // 这个任务为什么改用了内置浏览器（v2：设置的是直接启动的 Chrome 但没用上），面板上要写出来
+  constructor(private readonly fallbackOf: (sessionId: string) => string | null = () => null) {}
 
   private window(): BrowserWindow | null {
     return BrowserWindow.getAllWindows()[0] ?? null
@@ -222,6 +225,7 @@ class BuiltinBrowser {
       activeTab: task.active,
       backend: 'builtin',
       external: null,
+      fallback: this.fallbackOf(sessionId),
     }
   }
 
@@ -336,7 +340,9 @@ class BuiltinBrowser {
 // 智能体的浏览器：按任务分给内置浏览器，或用户自己的 Chrome、Edge（经 Diffra 浏览器扩展）。
 // 默认用设置里选的，浏览器面板上可以给单个任务换
 export class BrowserHost {
-  private readonly builtin = new BuiltinBrowser()
+  // 设置的是直接启动的 Chrome，但没找到程序或没启动起来：这些任务改用内置浏览器，记着原因（v2）。用户在面板上换浏览器时清掉、下次再试
+  private readonly fallbacks = new Map<string, string>()
+  private readonly builtin = new BuiltinBrowser((sessionId) => this.fallbacks.get(sessionId) ?? null)
   private readonly external: ExternalBrowser
   private readonly bridge: BridgeServer
   // 直接启动的系统 Chrome（v2）；启动时知道数据目录才建
@@ -376,11 +382,15 @@ export class BrowserHost {
   async start(settings: SettingsStore, userDataDir: string): Promise<void> {
     this.settings = settings
     this.pushSites()
-    this.direct = new DirectChrome(join(userDataDir, 'system-chrome'), {
-      message: (connection, message) => void this.external.handle(connection, message).catch((error: unknown) => console.error('[browser] 处理系统 Chrome 的消息失败', error)),
-      closed: (connection) => this.external.closed(connection),
-      changed: () => this.send(IPC_CHANNELS.browserBridgeStatus, this.status()),
-    })
+    this.direct = new DirectChrome(
+      join(userDataDir, 'system-chrome'),
+      {
+        message: (connection, message) => void this.external.handle(connection, message).catch((error: unknown) => console.error('[browser] 处理系统 Chrome 的消息失败', error)),
+        closed: (connection) => this.external.closed(connection),
+        changed: () => this.statusChanged(),
+      },
+      () => settings.get().browser.chromePath ?? null,
+    )
     const endpoint = await registerNativeHost(userDataDir)
     this.bridge.start(endpoint)
   }
@@ -392,6 +402,11 @@ export class BrowserHost {
 
   private chromeDirect(): boolean {
     return this.settings?.get().browser.chromeDirect === true
+  }
+
+  // 设置改了（比如换了 Chrome 程序）也推一次，设置页上的状态跟着变
+  statusChanged(): void {
+    this.send(IPC_CHANNELS.browserBridgeStatus, this.status())
   }
 
   pushSites(): void {
@@ -423,11 +438,12 @@ export class BrowserHost {
 
   private externalKind(sessionId: string): ExternalKind | null {
     const backend = this.backend(sessionId)
-    return backend === 'builtin' ? null : backend
+    return backend === 'builtin' || this.fallbacks.has(sessionId) ? null : backend
   }
 
   setBackend(sessionId: string, backend: AgentBrowser): void {
-    if (this.backend(sessionId) === backend) return
+    const retry = this.fallbacks.delete(sessionId)
+    if (this.backend(sessionId) === backend && !retry) return
     this.overrides.set(sessionId, backend)
     // 换走的那边：内置浏览器的标签页留着，切回来还在；Chrome、Edge 里的标签页交还给用户
     if (backend === 'builtin') this.external.release(sessionId)
@@ -501,6 +517,23 @@ export class BrowserHost {
     this.external.release(sessionId)
     this.overrides.delete(sessionId)
     this.titles.delete(sessionId)
+    this.fallbacks.delete(sessionId)
+  }
+
+  // 直接启动的 Chrome 用不上时改用内置浏览器（v2）：返回这次才改过去时要告诉模型的话，没改是 null
+  private async fallBack(sessionId: string): Promise<string | null> {
+    if (this.backend(sessionId) !== 'chrome' || !this.chromeDirect() || this.fallbacks.has(sessionId) || !this.direct) return null
+    try {
+      await this.direct.start()
+      return null
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      this.fallbacks.set(sessionId, reason)
+      this.external.release(sessionId)
+      const state = this.builtin.getState(sessionId) ?? { sessionId, url: '', title: '', loading: false, canGoBack: false, canGoForward: false, tabs: [], activeTab: 0, backend: 'builtin' as const, external: null, fallback: reason }
+      this.send(IPC_CHANNELS.browserState, state)
+      return `System Chrome is not available (${reason}), so this task uses Diffra's built-in browser instead; its logins are separate. Mention it to the user if it matters.`
+    }
   }
 
   // 智能体的操作。界面上把这个任务的浏览器面板打开，用户能看到在做什么
@@ -508,8 +541,10 @@ export class BrowserHost {
     const { sessionId, ...action } = params
     this.send(IPC_CHANNELS.browserActivity, { sessionId })
     if (action.action === 'switch') return { text: this.switchTo(sessionId, action.browser), image: null }
+    const notice = await this.fallBack(sessionId)
     const kind = this.externalKind(sessionId)
-    return kind ? this.external.act(sessionId, kind, action) : this.builtin.act(sessionId, action)
+    const result = kind ? await this.external.act(sessionId, kind, action) : await this.builtin.act(sessionId, action)
+    return notice ? { ...result, text: `${notice}\n\n${result.text}` } : result
   }
 }
 
@@ -541,6 +576,14 @@ export function registerBrowserIpc(): void {
   })
   ipcMain.on(IPC_CHANNELS.browserResume, (_event, rawSessionId: unknown) => browserHost.resume(parse(sessionIdSchema, rawSessionId)))
   ipcMain.handle(IPC_CHANNELS.browserDevTools, (_event, rawSessionId: unknown) => browserHost.openDevTools(parse(sessionIdSchema, rawSessionId)))
+  ipcMain.handle(IPC_CHANNELS.browserChromePick, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const filters = process.platform === 'win32' ? [{ name: '程序', extensions: ['exe'] }] : []
+    const options = { title: '选择 Chrome、Edge 或 Chromium', filters, properties: ['openFile' as const] }
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
+    const picked = result.canceled ? undefined : result.filePaths[0]
+    return picked ? resolveChromeExecutable(picked) : null
+  })
   ipcMain.handle(IPC_CHANNELS.browserBridgeGetStatus, () => browserHost.status())
   ipcMain.on(IPC_CHANNELS.browserBridgeTasks, (_event, rawTasks: unknown) => {
     const tasks = parse(z.array(z.object({ sessionId: z.string().min(1), title: z.string().max(200), running: z.boolean() })).max(50), rawTasks)

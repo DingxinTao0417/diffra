@@ -20,6 +20,7 @@ const BROWSER_LABELS: Record<AgentBrowser, string> = { builtin: '内置浏览器
 export function BrowserPanel({ sessionId }: { sessionId: string }) {
   const state = useAppState((app) => app.browsers[sessionId] ?? null)
   const defaultBrowser = useAppState((app) => app.settings?.browser.agent ?? 'builtin')
+  const devToolsEnabled = useAppState((app) => app.settings?.browser.devTools !== false)
   const body = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const [address, setAddress] = useState('')
@@ -97,7 +98,7 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
   const direct = state?.external?.direct === true
   const name = direct ? '系统 Chrome' : BROWSER_LABELS[backend]
   // 开发者工具：内置浏览器和直接启动的 Chrome 能从这里开；经扩展的请用户在浏览器里按 F12
-  const devTools = hasPage && (!external || direct)
+  const devTools = devToolsEnabled && hasPage && (!external || direct)
 
   return (
     <SidePanel
@@ -190,6 +191,14 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
               </button>
             </div>
           ))}
+        </div>
+      )}
+      {state?.fallback && (
+        <div role="status" className="flex shrink-0 items-start gap-2 border-b bg-warning-soft px-4 py-2.5 text-sm" data-testid="browser-fallback">
+          <Info className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">
+            没用上系统 Chrome：{state.fallback}。这个任务先用内置浏览器（登录状态是分开的）；装好或在设置里选好程序后，在右上角换回 Chrome 再试。
+          </span>
         </div>
       )}
       {external && state?.external?.paused && (

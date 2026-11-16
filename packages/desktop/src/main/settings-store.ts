@@ -109,6 +109,8 @@ export const browserSettingsSchema = z.object({
   allowSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
   blockSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
   chromeDirect: z.boolean().optional(),
+  chromePath: z.string().min(1).max(4096).nullable().optional(),
+  devTools: z.boolean().optional(),
 })
 
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])

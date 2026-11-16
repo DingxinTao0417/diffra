@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Segmented } from '@/components/ui/segmented'
+import { Switch } from '@/components/ui/switch'
 import { errorMessage } from '@/lib/errors'
 import { showToast, store, useAppState } from '@/state/store'
 import { ComputerUseGroup } from './ComputerUseGroup'
@@ -68,7 +69,10 @@ export function BrowserSection() {
         >
           <Segmented label="Chrome 怎么连" value={browser.chromeDirect ? 'direct' : 'extension'} options={CHROME_MODES} onChange={(mode) => void save({ ...browser, chromeDirect: mode === 'direct' })} />
         </SettingsRow>
-        {browser.chromeDirect && <DirectChromeRow status={bridge.direct ?? null} />}
+        {browser.chromeDirect && <DirectChromeRow status={bridge.direct ?? null} browser={browser} onSave={(next) => void save(next)} />}
+        <SettingsRow label="开发者工具" hint="浏览器面板顶栏显示「开发者工具」按钮：内置浏览器单独开一个窗口，直接启动的 Chrome 在那个 Chrome 里打开检查器（控制台、网络、元素）；经扩展时请在浏览器里按 F12。">
+          <Switch label="浏览器面板上的开发者工具" checked={browser.devTools !== false} onChange={(devTools) => void save({ ...browser, devTools })} />
+        </SettingsRow>
         {(['chrome', 'edge'] as const).map((kind) => {
           const name = kind === 'chrome' ? 'Chrome' : 'Edge'
           // 测试用的 Chromium 也算 Chrome
@@ -124,12 +128,20 @@ export function BrowserSection() {
   )
 }
 
-// 直接启动的系统 Chrome：找到了哪个程序、在不在跑、上次为什么没启动起来；Linux 不支持
-function DirectChromeRow({ status }: { status: DirectChromeStatus | null }) {
-  const badge = !status ? null : !status.supported ? (
-    <Badge variant="warning">这个系统不支持</Badge>
-  ) : !status.executable ? (
-    <Badge variant="warning">没找到 Chrome</Badge>
+// 直接启动的系统 Chrome：用哪个程序（自动找到的或用户选的）、在不在跑、上次为什么没启动起来。
+// 用不上时任务改用内置浏览器，面板上写原因（v2）。Linux 按常见位置找，没在 Linux 上实测过
+function DirectChromeRow({ status, browser, onSave }: { status: DirectChromeStatus | null; browser: BrowserSettings; onSave(next: BrowserSettings): void }) {
+  const custom = browser.chromePath ?? null
+  const pick = async () => {
+    try {
+      const path = await window.diffra.pickChromeExecutable()
+      if (path) onSave({ ...browser, chromePath: path })
+    } catch (error) {
+      showToast(errorMessage(error))
+    }
+  }
+  const badge = !status ? null : !status.executable ? (
+    <Badge variant="warning">{custom ? '选的程序不在了' : '没找到 Chrome'}</Badge>
   ) : status.running ? (
     <Badge variant="secondary">运行中</Badge>
   ) : (
@@ -137,11 +149,13 @@ function DirectChromeRow({ status }: { status: DirectChromeStatus | null }) {
   )
   const hint = !status
     ? '正在检测…'
-    : !status.supported
-      ? 'Linux 上暂不支持直接启动，请用内置浏览器或 Diffra 浏览器扩展。'
-      : !status.executable
-        ? '没找到 Chrome、Edge 或 Chromium，先装一个，或者改回「经扩展」。'
-        : `${status.name ?? 'Chrome'}：${status.executable}`
+    : custom
+      ? status.executable
+        ? `用你选的程序（${status.name ?? 'Chrome'}）：${custom}`
+        : `你选的程序不在了：${custom}。重新选一个，或者改回自动找。`
+      : status.executable
+        ? `自动找到的 ${status.name ?? 'Chrome'}：${status.executable}`
+        : '没找到 Chrome、Edge 或 Chromium。可以自己选一个程序，或者改回「经扩展」。用不上时任务会先用内置浏览器，面板上会写原因。'
   return (
     <SettingsRow
       label={
@@ -151,12 +165,23 @@ function DirectChromeRow({ status }: { status: DirectChromeStatus | null }) {
         </span>
       }
       hint={
-        <span className="break-all">
+        <span className="break-all" data-testid="direct-chrome-hint">
           {hint}
           {status?.error && <span className="block text-destructive">上次没启动起来：{status.error}</span>}
         </span>
       }
-    />
+    >
+      <div className="flex shrink-0 flex-wrap justify-end gap-2">
+        {custom && (
+          <Button variant="ghost" size="sm" onClick={() => onSave({ ...browser, chromePath: null })}>
+            改回自动找
+          </Button>
+        )}
+        <Button variant="outline" size="sm" onClick={() => void pick()}>
+          选择程序…
+        </Button>
+      </div>
+    </SettingsRow>
   )
 }
 

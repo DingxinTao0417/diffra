@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { BridgeCall, DiffraMessage, ExtensionMessage } from '../shared/browser-bridge'
 import type { DirectChromeStatus } from '../shared/ipc'
 import { BridgeConnection } from './browser-bridge'
@@ -19,10 +19,17 @@ export interface SystemChrome {
   name: string
 }
 
-// 按 Chrome、Edge、Chromium 的顺序找；Linux 暂不支持
-export function findSystemChrome(): SystemChrome | null {
+// 用户选的程序叫什么：按文件名认 Edge、Chromium，其余都叫 Chrome
+function nameOf(path: string): string {
+  const file = basename(path).toLowerCase()
+  return file.includes('edge') ? 'Edge' : file.includes('chromium') ? 'Chromium' : 'Chrome'
+}
+
+// 用户在设置里选了程序就只用它（不在了返回 null，不偷偷换成别的）；没选就按 Chrome、Edge、Chromium 的顺序找常见位置
+export function findSystemChrome(custom: string | null = null): SystemChrome | null {
   const override = testOverridesAllowed() ? process.env.DIFFRA_SYSTEM_CHROME : undefined
-  if (override) return existsSync(override) ? { path: override, name: 'Chromium' } : null
+  if (override && !custom) return existsSync(override) ? { path: override, name: 'Chromium' } : null
+  if (custom) return existsSync(custom) ? { path: custom, name: nameOf(custom) } : null
   const candidates: SystemChrome[] = []
   if (process.platform === 'win32') {
     const roots = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter((root): root is string => Boolean(root))
@@ -35,8 +42,20 @@ export function findSystemChrome(): SystemChrome | null {
       candidates.push({ path: join(base, 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge'), name: 'Edge' })
       candidates.push({ path: join(base, 'Chromium.app', 'Contents', 'MacOS', 'Chromium'), name: 'Chromium' })
     }
+  } else if (process.platform === 'linux') {
+    for (const file of ['google-chrome', 'google-chrome-stable']) candidates.push({ path: join('/usr/bin', file), name: 'Chrome' })
+    candidates.push({ path: '/opt/google/chrome/chrome', name: 'Chrome' })
+    for (const file of ['microsoft-edge', 'microsoft-edge-stable']) candidates.push({ path: join('/usr/bin', file), name: 'Edge' })
+    for (const path of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium']) candidates.push({ path, name: 'Chromium' })
   }
   return candidates.find((candidate) => existsSync(candidate.path)) ?? null
+}
+
+// 设置里选程序时选到的是 macOS 的 .app：换成包里真正的可执行文件
+export function resolveChromeExecutable(picked: string): string {
+  if (process.platform !== 'darwin' || !picked.endsWith('.app')) return picked
+  const app = basename(picked, '.app')
+  return join(picked, 'Contents', 'MacOS', app)
 }
 
 interface Tab {
@@ -76,6 +95,8 @@ export class DirectChrome {
   constructor(
     private readonly profileDir: string,
     private readonly listener: DirectChromeListener,
+    // 设置里选的程序（v2）；没选是 null
+    private readonly customPath: () => string | null = () => null,
   ) {}
 
   connections(): BridgeConnection[] {
@@ -83,13 +104,15 @@ export class DirectChrome {
   }
 
   status(): DirectChromeStatus {
-    const found = findSystemChrome()
+    const custom = this.customPath()
+    const found = findSystemChrome(custom)
     return {
-      supported: process.platform === 'win32' || process.platform === 'darwin' || Boolean(testOverridesAllowed() && process.env.DIFFRA_SYSTEM_CHROME),
+      supported: true,
       executable: found?.path ?? null,
       name: this.browserName ?? found?.name ?? null,
       running: this.connections().length > 0,
       error: this.lastError,
+      custom,
     }
   }
 
@@ -123,8 +146,9 @@ export class DirectChrome {
   }
 
   private async launch(): Promise<void> {
-    const chrome = findSystemChrome()
-    if (!chrome) throw new Error(process.platform === 'linux' ? 'Linux 上暂不支持直接启动系统 Chrome，请用内置浏览器或 Diffra 浏览器扩展' : '没找到 Chrome、Edge 或 Chromium，先装一个，或者改用 Diffra 浏览器扩展')
+    const custom = this.customPath()
+    const chrome = findSystemChrome(custom)
+    if (!chrome) throw new Error(custom ? `设置里选的浏览器程序不在了：${custom}` : '没找到 Chrome、Edge 或 Chromium')
     await mkdir(this.profileDir, { recursive: true })
     // 上次 Diffra 启动的那个 Chrome 还开着（同一个配置目录只能开一个）：直接连上去
     const existing = await this.readActivePort()

@@ -189,7 +189,10 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     )
     const { reasoningChoice, ...preferences } = change
     await settings.update((current) => ({ ...current, ...preferences, ...(reasoningChoice ? { reasoningChoices: rememberReasoning(current, reasoningChoice) } : {}) }))
-    if (change.browser) browserHost.pushSites()
+    if (change.browser) {
+      browserHost.pushSites()
+      browserHost.statusChanged()
+    }
     if (change.system) {
       applyTray(settings)
       applyLoginItem(settings)
