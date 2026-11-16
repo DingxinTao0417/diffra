@@ -82,7 +82,7 @@ describe('架构分析：TS / JS / Vue', () => {
       imp(9, './some', ['e', 'f'], 'reexport'),
       imp(10, './def', ['default'], 'reexport'),
       imp(11, './lazy', [], 'dynamic'),
-      imp(12, 'node:fs', [], 'require'),
+      imp(12, 'node:fs', [], 'require', 'fs'),
       imp(16, './both', ['default'], 'import', 'ns'),
       imp(17, './space', [], 'reexport'),
       imp(18, './legacy', [], 'require'),
@@ -153,7 +153,7 @@ describe('架构分析：TS / JS / Vue', () => {
     expect(tsx.imports).toEqual([imp(1, './Button', ['Button'], 'import')])
     expect(tsx.symbols).toEqual([sym('App', 'function', 2, 4, true)])
     const jsx = facts('src/App.jsx', ["const React = require('react')", 'export const App = () => <div />'])
-    expect(jsx.imports).toEqual([imp(1, 'react', [], 'require')])
+    expect(jsx.imports).toEqual([imp(1, 'react', [], 'require', 'React')])
     expect(jsx.symbols).toEqual([sym('React', 'variable', 1, 1, false), sym('App', 'function', 2, 2, true)])
   })
 

@@ -1,8 +1,8 @@
 import { isAbsolute, posix, relative } from 'node:path'
-import { type ArchitectureAnalysis, evaluateTarget, type FileInfo, stronglyConnected, type TargetArchitecture } from './model.js'
+import { type ArchitectureAnalysis, evaluateTarget, type FileInfo, type RuntimeTrace, stronglyConnected, type TargetArchitecture } from './model.js'
 
 // 任务里的智能体查架构图（v2 · M9）：读已有的分析结果回答，不重新分析。结果是给模型看的纯文本，有长度上限
-export const QUERY_ACTIONS = ['overview', 'dependencies', 'dependents', 'symbols', 'find', 'path', 'violations', 'calls', 'callers'] as const
+export const QUERY_ACTIONS = ['overview', 'dependencies', 'dependents', 'symbols', 'find', 'path', 'violations', 'calls', 'callers', 'runtime'] as const
 export type QueryAction = (typeof QUERY_ACTIONS)[number]
 
 export interface QueryInput {
@@ -66,7 +66,7 @@ function notFound(analysis: ArchitectureAnalysis, path: string): string {
   return `No analyzed code file or directory matches "${path}".${similar.length ? ` Similar: ${similar.map((file) => file.path).join(', ')}` : ''} Paths are relative to the project root.`
 }
 
-export function runArchitectureQuery(analysis: ArchitectureAnalysis, target: TargetArchitecture | null, input: QueryInput): string {
+export function runArchitectureQuery(analysis: ArchitectureAnalysis, target: TargetArchitecture | null, input: QueryInput, runtime: RuntimeTrace | null = null): string {
   const out = new Output()
   const path = normalizeQueryPath(analysis.root, input.path ?? '')
   switch (input.action) {
@@ -106,8 +106,30 @@ export function runArchitectureQuery(analysis: ArchitectureAnalysis, target: Tar
     case 'calls':
     case 'callers':
       return calls(analysis, path, input.symbol?.trim() ?? '', input.action === 'calls')
+    case 'runtime':
+      if (!runtime) return 'No runtime trace yet (the user can run one on the Architecture page: it runs a command such as the tests and records which functions actually ran).'
+      runtimeSummary(analysis, runtime, path, out)
+      break
   }
   return out.text()
+}
+
+// 运行时追踪：最花时间的函数、静态分析没看到的调用（动态分派、回调）；给了路径就只看这个文件或目录
+function runtimeSummary(analysis: ArchitectureAnalysis, runtime: RuntimeTrace, path: string, out: Output): void {
+  const inside = new Set(filesUnder(analysis, path))
+  const name = (file: number) => analysis.files[file]?.path ?? `#${file}`
+  out.add(`Runtime trace of \`${runtime.command}\` at ${runtime.startedAt}: exit code ${runtime.exitCode ?? 'none'}${runtime.timedOut ? ' (timed out)' : ''}, ${runtime.durationMs} ms, ${runtime.files} project files ran (${runtime.languages.join(', ') || 'no Node.js/Python profile'}). Times are ${runtime.languages.includes('node') ? 'sampled for Node.js' : 'measured'}; only what this command exercised.`)
+  for (const note of runtime.notes) out.add(`Note: ${note}`)
+  const functions = runtime.functions.filter((item) => inside.has(item.file))
+  out.add('Hottest functions (total ms incl. callees / self ms / calls):')
+  for (const item of functions.slice(0, 25)) out.add(`- ${name(item.file)} ${item.symbol}: ${item.totalMs} / ${item.selfMs}${item.calls !== null ? ` / ${item.calls}` : ''}`)
+  const staticLinks = new Set((analysis.calls ?? []).map((call) => `${call.from}\u0000${call.fromSymbol}\u0000${call.to}\u0000${call.toSymbol}`))
+  const dynamic = runtime.links.filter((link) => (inside.has(link.from) || inside.has(link.to)) && !staticLinks.has(`${link.from}\u0000${link.fromSymbol}\u0000${link.to}\u0000${link.toSymbol}`))
+  out.add(`Calls seen at runtime but not in the static call graph (callbacks, dynamic dispatch, calls through libraries): ${dynamic.length}`)
+  for (const link of dynamic.slice(0, 25)) out.add(`- ${name(link.from)} ${link.fromSymbol} → ${name(link.to)} ${link.toSymbol} (${link.ms} ms${link.calls !== null ? `, ${link.calls} calls` : ''})`)
+  const ran = new Set(runtime.functions.map((item) => item.file))
+  const idle = [...inside].filter((file) => analysis.files[file]!.parsed && !ran.has(file))
+  if (idle.length) out.add(`${idle.length} analyzed files did not run, e.g. ${idle.slice(0, 8).map(name).join(', ')}`)
 }
 
 function overview(analysis: ArchitectureAnalysis, target: TargetArchitecture | null, out: Output): void {

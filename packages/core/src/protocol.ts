@@ -1055,6 +1055,9 @@ export const SESSION_EXT_METHODS = {
   architectureExport: '_diffra/architecture/export',
   architectureShared: '_diffra/architecture/shared',
   architectureImport: '_diffra/architecture/import',
+  // 运行时追踪（v2 · M9）：跑一条命令记下执行到的函数（后台，进度走 architectureEvent）；默认命令
+  architectureTrace: '_diffra/architecture/trace',
+  architectureTraceCommand: '_diffra/architecture/trace-command',
   architectureInterpret: '_diffra/architecture/interpret',
   architectureInterpretModule: '_diffra/architecture/interpret-module',
   // 让模型读一条流程经过的代码，画它的流程图

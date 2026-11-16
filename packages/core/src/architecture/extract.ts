@@ -265,8 +265,26 @@ function scriptFacts(root: SgNode, offset: number, facts: FileFacts): void {
       .find((child) => child.kind() !== 'comment')
     if (argument?.kind() !== 'string') continue
     const kind = call.field('function')?.kind() === 'import' ? 'dynamic' : 'require'
-    facts.imports.push({ specifier: unquote(argument), line: lineOf(call) + offset, names: [], kind })
+    facts.imports.push({ specifier: unquote(argument), line: lineOf(call) + offset, ...requireBinding(call), kind })
   }
+}
+
+// const { a, b: c } = require('./x') 记下 a、b；const x = require('./x') 记下本地名 x（调用图用，v2 · M9）
+function requireBinding(call: SgNode): { names: string[]; local?: string } {
+  const declarator = call.parent()
+  if (declarator?.kind() !== 'variable_declarator') return { names: [] }
+  const name = declarator.field('name')
+  if (name?.kind() === 'identifier') return { names: [], local: name.text() }
+  if (name?.kind() !== 'object_pattern') return { names: [] }
+  const names = name.children().flatMap((part) => {
+    if (part.kind() === 'shorthand_property_identifier_pattern') return [part.text()]
+    if (part.kind() === 'pair_pattern') {
+      const key = part.field('key')
+      return key ? [nameText(key)] : []
+    }
+    return []
+  })
+  return { names }
 }
 
 const nameText = (node: SgNode) => (node.kind() === 'string' ? unquote(node) : node.text())

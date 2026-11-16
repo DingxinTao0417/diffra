@@ -19,6 +19,8 @@ import {
   architectureShared,
   architectureSource,
   architectureStale,
+  architectureTrace,
+  architectureTraceCommand,
   architectureWatch,
   type SessionModel,
 } from '@diffra/core'
@@ -49,6 +51,10 @@ export function registerArchitectureIpc(architectureModel: () => Promise<Session
   ipcMain.handle(IPC_CHANNELS.architectureRunning, async () => architectureRunning(await coreConnection()))
   ipcMain.handle(IPC_CHANNELS.architectureBundle, async (_event, raw: unknown) => architectureBundle(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureStale, async (_event, raw: unknown) => (await architectureStale(await coreConnection(), parse(projectId, raw))).stale)
+  ipcMain.handle(IPC_CHANNELS.architectureTrace, async (_event, rawId: unknown, rawCommand: unknown, rawTimeout: unknown) =>
+    architectureTrace(await coreConnection(), parse(projectId, rawId), parse(z.string().trim().min(1).max(2000), rawCommand), parse(z.number().int().min(5).max(600), rawTimeout)),
+  )
+  ipcMain.handle(IPC_CHANNELS.architectureTraceCommand, async (_event, raw: unknown) => architectureTraceCommand(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureExport, async (_event, raw: unknown) => architectureExport(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureShared, async (_event, raw: unknown) => architectureShared(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureImport, async (_event, raw: unknown) => architectureImport(await coreConnection(), parse(projectId, raw)))

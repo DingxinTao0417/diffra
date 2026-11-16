@@ -23,7 +23,8 @@ const ARCHITECTURE_TOOLS = {
       'dependencies / dependents (project files or directories a path imports / that import it, with lines); ' +
       'symbols (functions, classes, methods of a file or the exported ones of a directory); find (where a symbol is defined); ' +
       'path (shortest import chain from path to to); violations (target architecture rules broken, with file:line); ' +
-      'calls / callers (static function call graph for path + symbol; dynamic dispatch and callbacks are not tracked). ' +
+      'calls / callers (static function call graph for path + symbol; dynamic dispatch and callbacks are not tracked); ' +
+      'runtime (the last runtime trace, if the user ran one: hottest functions, calls only seen at runtime, files that did not run). ' +
       'Use it to understand structure and the impact of a change before reading many files; verify details in the code.',
     inputSchema: architectureInput,
   }),
@@ -45,6 +46,7 @@ const ACTION_TITLES: Record<QueryAction, string> = {
   violations: '目标架构违规',
   calls: '调用了谁',
   callers: '被谁调用',
+  runtime: '运行时',
 }
 
 export async function runArchitectureTool(session: Session, call: StepToolCall, io: TurnIO): Promise<{ result: ToolResultPart; edited: boolean }> {
@@ -63,7 +65,7 @@ export async function runArchitectureTool(session: Session, call: StepToolCall, 
     return null
   })
   if (!data) return fail(title, 'This project has not been analyzed on the Architecture page (or the result could not be read). Explore the code with the file tools instead.')
-  const text = runArchitectureQuery(data.analysis, data.target, input)
+  const text = runArchitectureQuery(data.analysis, data.target, input, data.runtime)
   await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text } }] })
   return { result: textResult(call, text), edited: false }
 }

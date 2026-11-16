@@ -27,7 +27,7 @@ export type Route =
   | { name: 'architecture'; projectId: string | null; tab: ArchitectureTab; diagram: DiagramKind; section: DependencySection; scope: string; focus: string | null }
   | { name: 'settings'; section: SettingsSection }
 
-export type ArchitectureTab = 'overview' | 'diagram' | 'dependencies' | 'flows' | 'hotspots' | 'target'
+export type ArchitectureTab = 'overview' | 'diagram' | 'dependencies' | 'flows' | 'hotspots' | 'target' | 'runtime'
 export type DependencySection = 'graph' | 'matrix' | 'cycles' | 'externals'
 
 export type SidePanel = 'monitor' | 'review' | 'browser' | 'design' | 'terminal' | 'file' | 'visuals' | null

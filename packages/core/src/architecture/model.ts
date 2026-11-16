@@ -491,7 +491,7 @@ export interface ArchitectureProjectSummary extends ArchitectureProject {
   exists: boolean
 }
 
-export type AnalysisPhase = 'listing' | 'manifests' | 'parsing' | 'resolving' | 'history' | 'saving' | 'interpreting'
+export type AnalysisPhase = 'listing' | 'manifests' | 'parsing' | 'resolving' | 'history' | 'saving' | 'interpreting' | 'tracing'
 
 export interface AnalysisProgress {
   projectId: string
@@ -512,6 +512,43 @@ export interface ArchitectureEvent {
   watchError?: string
 }
 
+// ---------- 运行时追踪（v2 · M9，见 trace.ts） ----------
+
+// 运行时执行到的项目里的函数：file 是 analysis.files 的下标；calls 只有 Python 有（Node.js 是采样，没有次数）
+export interface RuntimeFunction {
+  file: number
+  symbol: string
+  selfMs: number
+  totalMs: number
+  calls: number | null
+}
+
+// 运行时的一条调用：from 调了 to（中间隔着依赖的库也算）；ms 是 to 在这条路径上花的时间
+export interface RuntimeLink {
+  from: number
+  fromSymbol: string
+  to: number
+  toSymbol: string
+  ms: number
+  calls: number | null
+}
+
+export interface RuntimeTrace {
+  command: string
+  startedAt: string
+  durationMs: number
+  exitCode: number | null
+  timedOut: boolean
+  // 命令输出的最后一段
+  output: string
+  languages: Array<'node' | 'python'>
+  functions: RuntimeFunction[]
+  links: RuntimeLink[]
+  // 执行到的项目文件数
+  files: number
+  notes: string[]
+}
+
 // 仓库里共享的架构定义的状态（v2 · M9，见 share.ts）
 export type { SharedStatus } from './share.js'
 
@@ -523,6 +560,8 @@ export interface ArchitectureBundle {
   diagrams: ArchitectureDiagrams
   target: TargetArchitecture | null
   layout: ArchitectureLayout
+  // v2 · M9：最近一次运行时追踪，没跑过是 null（旧版 core 没有这个字段）
+  runtime?: RuntimeTrace | null
 }
 
 // 手动拖过的节点位置：键是视图（画布所在的范围），值是节点 id → 坐标

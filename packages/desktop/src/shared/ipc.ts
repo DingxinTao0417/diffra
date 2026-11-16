@@ -163,6 +163,8 @@ export const IPC_CHANNELS = {
   architectureStale: 'architecture:stale',
   architectureWatch: 'architecture:watch',
   architectureExport: 'architecture:export',
+  architectureTrace: 'architecture:trace',
+  architectureTraceCommand: 'architecture:trace-command',
   architectureShared: 'architecture:shared',
   architectureImport: 'architecture:import',
   architectureInterpret: 'architecture:interpret',
@@ -659,6 +661,9 @@ export interface DiffraApi {
   watchArchitecture(projectId: string, watch: boolean, auto: boolean): Promise<void>
   // 架构定义放进仓库（v2）：导出到项目的 .diffra/，看仓库里那份的状态，用仓库里的换掉本机的
   exportArchitecture(projectId: string): Promise<{ files: string[] }>
+  // 运行时追踪（v2）：在后台跑一条命令，进度和结束走 onArchitectureEvent；默认命令（有 test 脚本就跑测试）
+  traceArchitecture(projectId: string, command: string, timeoutSeconds: number): Promise<void>
+  architectureTraceCommand(projectId: string): Promise<string>
   sharedArchitecture(projectId: string): Promise<SharedStatus>
   importArchitecture(projectId: string): Promise<void>
   // parts：要模型做哪几样（系统简介和流程、三张架构图），并行跑

@@ -110,6 +110,17 @@ describe('调用处提取', () => {
   })
 })
 
+describe('require 的名字', () => {
+  test('解构的 require 记下导出名，整个赋给变量的记下本地名', () => {
+    const facts = extractFacts('a.js', "const { work, run: go } = require('./lib')\nconst util = require('./util')\nrequire('./side')")!
+    expect(facts.imports).toEqual([
+      { specifier: './lib', line: 1, names: ['work', 'run'], kind: 'require' },
+      { specifier: './util', line: 2, names: [], kind: 'require', local: 'util' },
+      { specifier: './side', line: 3, names: [], kind: 'require' },
+    ])
+  })
+})
+
 describe('调用图', () => {
   test('TS：import 的函数、命名空间前缀、导入类的静态方法、this 调本类方法、模块顶层的调用', () => {
     const all = links()

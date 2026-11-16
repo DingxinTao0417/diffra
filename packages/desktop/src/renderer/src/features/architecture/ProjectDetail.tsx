@@ -24,6 +24,7 @@ import { DiagramView } from './views/DiagramView'
 import { FlowsView } from './views/FlowsView'
 import { HotspotsView } from './views/HotspotsView'
 import { OverviewView } from './views/OverviewView'
+import { RuntimeView } from './views/RuntimeView'
 import { TargetView } from './views/TargetView'
 
 const TABS: Array<{ value: ArchitectureTab; label: string }> = [
@@ -33,6 +34,7 @@ const TABS: Array<{ value: ArchitectureTab; label: string }> = [
   { value: 'flows', label: '流程' },
   { value: 'hotspots', label: '热点' },
   { value: 'target', label: '目标架构' },
+  { value: 'runtime', label: '运行时' },
 ]
 
 // 左边的目录树只在按目录看的视图里出现；右边一栏一直在（选中东西时是详情，没选中时是概况）
@@ -111,6 +113,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
       target: bundle.target,
       evaluation,
       layout: bundle.layout,
+      runtime: bundle.runtime ?? null,
       route,
       draft,
       setDraft,
@@ -262,6 +265,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
               {route.tab === 'flows' && <FlowsView />}
               {route.tab === 'hotspots' && <HotspotsView />}
               {route.tab === 'target' && <TargetView />}
+              {route.tab === 'runtime' && <RuntimeView />}
             </div>
             {WITH_SIDE_PANEL.has(route.tab) && <SidePanel />}
           </div>

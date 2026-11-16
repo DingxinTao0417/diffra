@@ -80,15 +80,15 @@ function onEvent(event: ArchitectureEvent): void {
     return { ...current, running, failures }
   })
   const name = state.projects?.find((item) => item.id === event.projectId)?.name ?? '项目'
-  const what = phase === 'interpreting' ? '模型解读' : '架构分析'
+  const what = phase === 'interpreting' ? '模型解读' : phase === 'tracing' ? '运行时追踪' : '架构分析'
   if (event.outcome === 'failed') showToast(`「${name}」${what}失败：${event.error ?? ''}`)
   // 模型几样一起做时可能只失败一部分，做完的已经存了，也要重新读
   if (event.outcome === 'done' || (event.outcome === 'failed' && phase === 'interpreting')) {
     void loadProjects()
     if (state.bundles[event.projectId]) void loadBundle(event.projectId)
   }
-  // 刚分析完的代码不会过期；模型解读不改分析结果
-  if (event.outcome === 'done' && phase !== 'interpreting') {
+  // 刚分析完的代码不会过期；模型解读、运行时追踪不改分析结果
+  if (event.outcome === 'done' && phase !== 'interpreting' && phase !== 'tracing') {
     set((current) => ({ ...current, stale: { ...current.stale, [event.projectId]: false } }))
   }
 }
@@ -109,6 +109,11 @@ export async function checkStale(projectId: string): Promise<void> {
   } catch (error) {
     console.error('[architecture] 判断是否过期失败', error)
   }
+}
+
+// 运行时追踪（v2）：在后台跑，进度显示在项目上，跑完重新读一遍项目
+export function trace(projectId: string, command: string, timeoutSeconds: number): Promise<void> {
+  return run(projectId, () => window.diffra.traceArchitecture(projectId, command, timeoutSeconds))
 }
 
 // 打开项目时开始监听，离开时停；auto 是「代码改了自动重新分析」（core 记在项目列表里）

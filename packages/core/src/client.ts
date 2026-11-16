@@ -534,6 +534,15 @@ export function architectureStale(connection: acp.ClientConnection, projectId: s
   return requestOf(connection)<{ stale: boolean | null }, { projectId: string }>(SESSION_EXT_METHODS.architectureStale, { projectId }, extRequestOptions())
 }
 
+// 运行时追踪（v2 · M9）
+export async function architectureTrace(connection: acp.ClientConnection, projectId: string, command: string, timeoutSeconds: number): Promise<void> {
+  await requestOf(connection)<object, { projectId: string; command: string; timeoutSeconds: number }>(SESSION_EXT_METHODS.architectureTrace, { projectId, command, timeoutSeconds }, extRequestOptions())
+}
+
+export async function architectureTraceCommand(connection: acp.ClientConnection, projectId: string): Promise<string> {
+  return (await requestOf(connection)<{ command: string }, { projectId: string }>(SESSION_EXT_METHODS.architectureTraceCommand, { projectId }, extRequestOptions())).command
+}
+
 export function architectureExport(connection: acp.ClientConnection, projectId: string): Promise<{ files: string[] }> {
   return requestOf(connection)<{ files: string[] }, { projectId: string }>(SESSION_EXT_METHODS.architectureExport, { projectId }, extRequestOptions())
 }

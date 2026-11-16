@@ -7,6 +7,7 @@ import type {
   ArchitectureProject,
   BlockDiagram,
   DiagramKind,
+  RuntimeTrace,
   TargetArchitecture,
   TargetEvaluation,
 } from '@diffra/core/architecture'
@@ -32,6 +33,8 @@ export interface ArchitectureContextValue {
   // 现状对比目标架构；没有目标架构为 null
   evaluation: TargetEvaluation | null
   layout: ArchitectureLayout
+  // 最近一次运行时追踪（v2），没跑过是 null
+  runtime: RuntimeTrace | null
   route: ArchitectureRoute
   draft: DiagramDraft | null
   setDraft(draft: DiagramDraft | null): void

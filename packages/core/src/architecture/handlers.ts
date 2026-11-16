@@ -7,6 +7,7 @@ import { toUsageRecord, type UsageLog } from '../usage/log.js'
 import { generateDiagram, generateFlowChart, interpretArchitecture, interpretModule, proposeTarget } from './interpret.js'
 import { ARCHITECTURE_VERSION, type ArchitectureEvent, type ArchitectureLayout, DIAGRAM_KINDS, INTERPRET_PARTS, type InterpretPart } from './model.js'
 import { diagramSchema, targetSchema } from './schemas.js'
+import { TRACE_TIMEOUT_MAX_SECONDS } from './trace.js'
 
 const PART_NAMES: Record<InterpretPart, string> = { overview: '系统简介和流程', application: '应用架构图', technology: '技术架构图', system: '系统架构图' }
 import type { ArchitectureService } from './service.js'
@@ -58,6 +59,12 @@ export function registerArchitecture(app: acp.AgentApp, service: ArchitectureSer
     })
     .onRequest(SESSION_EXT_METHODS.architectureBundle, projectParams, ({ params }) => service.bundle(params.projectId))
     .onRequest(SESSION_EXT_METHODS.architectureStale, projectParams, async ({ params }) => ({ stale: await service.stale(params.projectId) }))
+    .onRequest(SESSION_EXT_METHODS.architectureTrace, projectParams.extend({ command: z.string().trim().min(1).max(2000), timeoutSeconds: z.number().int().min(5).max(TRACE_TIMEOUT_MAX_SECONDS) }), async ({ params, client }) => {
+      remember(client)
+      await service.trace(params.projectId, params.command, params.timeoutSeconds)
+      return {}
+    })
+    .onRequest(SESSION_EXT_METHODS.architectureTraceCommand, projectParams, async ({ params }) => ({ command: await service.traceCommand(params.projectId) }))
     .onRequest(SESSION_EXT_METHODS.architectureExport, projectParams, ({ params }) => service.exportShared(params.projectId))
     .onRequest(SESSION_EXT_METHODS.architectureShared, projectParams, ({ params }) => service.sharedStatus(params.projectId))
     .onRequest(SESSION_EXT_METHODS.architectureImport, projectParams, async ({ params }) => {

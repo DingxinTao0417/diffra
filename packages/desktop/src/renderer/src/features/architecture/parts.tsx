@@ -73,6 +73,7 @@ export const PHASE_LABELS: Record<AnalysisPhase, string> = {
   history: '读取提交历史',
   saving: '保存结果',
   interpreting: '模型解读中',
+  tracing: '运行时追踪中',
 }
 
 export function RunProgress({ progress, compact = false }: { progress: AnalysisProgress; compact?: boolean }) {

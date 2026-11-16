@@ -3,6 +3,7 @@ import { existsSync, type FSWatcher, watch } from 'node:fs'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { keepPinned, staticDiagram, thumbnailOf, verifyDiagram } from './diagrams.js'
+import { guessTraceCommand, runTrace, TRACE_TIMEOUT_DEFAULT_SECONDS } from './trace.js'
 import { sameDefinition, SHARED_DIR, SHARED_FORMAT, SHARED_JSON, SHARED_MARKDOWN, type SharedArchitecture, sharedMarkdown, sharedSchema, type SharedStatus } from './share.js'
 import { AnalysisCancelled, analyzeProject, codeLanguage, currentFingerprint, digestOf, type ParseCache } from './engine.js'
 import {
@@ -19,6 +20,7 @@ import {
   type ArchitectureProject,
   type ArchitectureProjectSummary,
   type ArchitectureThumbnail,
+  type RuntimeTrace,
   type BlockDiagram,
   DIAGRAM_KINDS,
   evaluateTarget,
@@ -325,6 +327,29 @@ export class ArchitectureService {
     })
   }
 
+  // ---------- 运行时追踪（v2 · M9，见 trace.ts） ----------
+
+  async runtime(id: string): Promise<RuntimeTrace | null> {
+    return this.readJson<RuntimeTrace>(join(this.projectDir(id), 'runtime.json'))
+  }
+
+  async traceCommand(id: string): Promise<string> {
+    return guessTraceCommand((await this.project(id)).path)
+  }
+
+  // 在后台跑：和分析共用「一个项目同时只做一件事」，进度和结束走同一个事件，可以取消（连同子进程一起结束）
+  async trace(id: string, command: string, timeoutSeconds = TRACE_TIMEOUT_DEFAULT_SECONDS): Promise<void> {
+    const project = await this.project(id)
+    if (!existsSync(project.path)) throw new Error(`找不到文件夹：${project.path}`)
+    const analysis = await this.analysis(id)
+    if (!analysis) throw new Error('先分析这个项目，运行时追踪要对到分析出来的函数')
+    this.start(id, 'tracing', async (signal, report) => {
+      report('tracing', 0, 0)
+      const runtime = await runTrace({ root: project.path, command, timeoutSeconds, analysis, signal })
+      await this.writeJson(join(this.projectDir(id), 'runtime.json'), runtime)
+    })
+  }
+
   // ---------- 导出到仓库、从仓库导入（v2 · M9，见 share.ts） ----------
 
   // 用户点了「导出到仓库」才写：项目根的 .diffra/architecture.json 和 .md，已有的覆盖
@@ -394,23 +419,24 @@ export class ArchitectureService {
     return existsSync(join(this.projectDir(projectIdOf(root)), 'analysis.json'))
   }
 
-  async queryData(root: string): Promise<{ analysis: ArchitectureAnalysis; target: TargetArchitecture | null } | null> {
+  async queryData(root: string): Promise<{ analysis: ArchitectureAnalysis; target: TargetArchitecture | null; runtime: RuntimeTrace | null } | null> {
     const id = projectIdOf(root)
-    const [analysis, target] = await Promise.all([this.analysis(id), this.target(id)])
-    return analysis ? { analysis, target } : null
+    const [analysis, target, runtime] = await Promise.all([this.analysis(id), this.target(id), this.runtime(id)])
+    return analysis ? { analysis, target, runtime } : null
   }
 
   async bundle(id: string): Promise<ArchitectureBundle> {
     const project = await this.project(id)
     const dir = this.projectDir(id)
-    const [analysis, interpretation, diagrams, target, layout] = await Promise.all([
+    const [analysis, interpretation, diagrams, target, layout, runtime] = await Promise.all([
       this.analysis(id),
       this.interpretation(id),
       this.diagrams(id),
       this.target(id),
       this.readJson<ArchitectureLayout>(join(dir, 'layout.json')),
+      this.runtime(id),
     ])
-    return { project, analysis, interpretation, diagrams, target, layout: layout ?? {} }
+    return { project, analysis, interpretation, diagrams, target, layout: layout ?? {}, runtime }
   }
 
   // 代码在分析之后变过没有；从没分析过、文件夹不在了为 null
