@@ -82,6 +82,9 @@ export function workspaceRoot(settings: SettingsStore): { path: string; isDefaul
     warnedWorkspace = chosen
     console.warn(`[settings] 默认保存位置不是绝对路径，改用默认值：${chosen}`)
   }
+  // DIFFRA_DEFAULT_WORKSPACE 只给打包版 e2e 用：打包版默认放真实的「文档」，测试改放这次的临时目录
+  const override = process.env.DIFFRA_DEFAULT_WORKSPACE
+  if (override && isAbsolute(override)) return { path: override, isDefault: true }
   return { path: app.isPackaged ? join(app.getPath('documents'), 'Diffra') : join(app.getPath('userData'), 'workspace'), isDefault: true }
 }
 

@@ -25,7 +25,7 @@ export function isPackagedRun(): boolean {
 
 // extraEnv：只给这一次启动加的环境变量，比如缩短 core 的提示时限
 export function launchApp(userDataDir: string, extraEnv: Record<string, string> = {}): Promise<ElectronApplication> {
-  const env = {
+  const env: Record<string, string> = {
     ...Object.fromEntries(
       // Electron 宿主启动测试时可能继承该变量；被测应用必须以桌面模式启动。
       Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'),
@@ -44,6 +44,8 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
     ...extraEnv,
   }
   const executable = packagedExecutable()
+  // 打包版的无项目任务默认放「文档/Diffra」：测试不往真实的「文档」里写，和开发版一样放这次数据目录下的 workspace
+  if (executable && !extraEnv.DIFFRA_DEFAULT_WORKSPACE) env.DIFFRA_DEFAULT_WORKSPACE = join(userDataDir, 'workspace')
   // CI 的 Windows 机器屏幕只有 1024×768，1200 宽的窗口被压到屏幕宽，开着任务监控时对话列不够宽，侧栏会自动收起，
   // 用例按侧栏一直在写的；缩到 0.8 倍后 1200×820 的窗口占 960×656 像素，布局和本机一致
   const extraArgs = DEVICE_SCALE === 1 ? [] : [`--force-device-scale-factor=${DEVICE_SCALE}`]

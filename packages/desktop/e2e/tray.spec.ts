@@ -19,6 +19,8 @@ const windowVisible = (app: ElectronApplication) => app.evaluate(({ BrowserWindo
 const closeWindow = (app: ElectronApplication) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close())
 
 test('托盘和开机自启：默认关窗口留在托盘里、开机自启关；关窗口留在托盘里、任务接着跑，托盘菜单显示几个任务在跑、能打开、新建任务、退出；开机自启登记带 --hidden，自启时藏在托盘里、换深浅色也不跳出来；关了托盘关窗口就退出', async () => {
+  // 按 Windows 的托盘写的：Mac 上关窗口本来就只是藏起来，开关是「在菜单栏显示图标」，开机自启也不带 --hidden，要另写一份
+  test.skip(process.platform === 'darwin', 'Mac 的菜单栏图标另写用例')
   test.setTimeout(180_000)
   const userDataDir = makeUserDataDir()
   const workspace = mkdtempSync(join(tmpdir(), 'diffra-e2e-tray-'))
