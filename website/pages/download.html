@@ -25,7 +25,7 @@
 
   <div class="download-card download-card-next" id="mac">
     <div>
-      <h2>Diffra for Mac <span class="badge">预览版</span></h2>
+      <h2>Diffra for Mac</h2>
       <p data-release-mac="summary">macOS 12 及以上 · Apple 芯片（M 系列）</p>
     </div>
     <a class="button large" href="https://update.diffra.dev/mac/Diffra-latest-arm64.dmg" data-download-mac>
@@ -54,7 +54,7 @@
     <h2 id="install-mac">在 Mac 上安装</h2>
     <ol>
       <li>打开下载好的 <code>Diffra-版本号-arm64.dmg</code>，把 Diffra 拖进「应用程序」文件夹。</li>
-      <li>预览版还没有经过 Apple 公证，第一次打开时 macOS 会提示无法验证、不让打开：点「完成」关掉提示，打开「系统设置 → 隐私与安全性」，在下面找到 Diffra 那一行，点「仍要打开」，输入开机密码确认。之后再打开就不会再问。</li>
+      <li>第一次打开时 macOS 会问「Diffra 是从互联网下载的 App，确定要打开吗？」，点「打开」。Mac 版经过 Apple 公证，不会被拦。</li>
       <li>打开 Diffra，按<a href="/docs.html">快速开始</a>接入模型，就能开始第一个任务。快捷键里的 <code>Ctrl</code> 在 Mac 上换成 <code>⌘</code>。</li>
     </ol>
 
@@ -66,8 +66,8 @@
 
     <h2 id="update">更新和卸载</h2>
     <ul>
-      <li>Windows：有新版本时 Diffra 会在后台下载，「设置 → 更新与关于」里点「重启并更新」，或者下次退出时自动装好。每个版本改了什么见<a href="/changelog.html">更新日志</a>。</li>
-      <li>Mac 预览版暂时不会自动更新，有新版本时到这里重新下载 dmg，把新的 Diffra 拖进「应用程序」替换旧的就行，任务记录和设置都还在。</li>
+      <li>有新版本时 Diffra 会在后台下载，「设置 → 更新与关于」里点「重启并更新」，或者下次退出时自动装好。每个版本改了什么见<a href="/changelog.html">更新日志</a>。</li>
+      <li>装过 Mac 预览版（0.5.2）的：预览版不会自动更新，到这里重新下载一次 dmg，把新的 Diffra 拖进「应用程序」替换旧的，任务记录和设置都还在。第一次打开新版时 macOS 可能问 Diffra 能不能使用钥匙串里的「Diffra Safe Storage」（存着加密 API Key 的密钥），输入开机密码后点「始终允许」。之后的版本就会自动更新了。</li>
       <li>卸载：Windows「设置 → 应用」里找到 Diffra 卸载；Mac 把「应用程序」里的 Diffra 移到废纸篓。你的任务记录和设置留在 Windows 的 <code>%APPDATA%\Diffra</code>、Mac 的 <code>~/Library/Application Support/Diffra</code>，重装后还在；不需要的话可以手动删掉这个文件夹。</li>
     </ul>
   </div>
