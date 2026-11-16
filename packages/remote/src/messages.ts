@@ -133,7 +133,19 @@ export const sessionListSchema = z.object({
   // 被连接端的设备连接接口版本（shared/remote.ts 的 REMOTE_API），0.3.x 没有
   api: z.number().int().positive().optional(),
   // 「完全控制」的项目 level 也写 control，另带 full：0.3.x 的连接端只认 view、control，多一个值整张列表都会被它丢掉
-  projects: z.array(z.object({ id: projectId, name: z.string().max(200), level: z.enum(['view', 'control']), full: z.boolean().optional() })).max(200),
+  projects: z
+    .array(
+      z.object({
+        id: projectId,
+        name: z.string().max(200),
+        level: z.enum(['view', 'control']),
+        full: z.boolean().optional(),
+        // 新版起带上仓库身份：连接端把同一个仓库在本机的检出和对方的项目并成一组；旧连接端忽略这两项
+        origin: z.string().max(500).optional(),
+        subpath: z.string().max(500).optional(),
+      }),
+    )
+    .max(200),
   sessions: z
     .array(z.object({ sessionId, projectId, title: z.string().max(200), updatedAt: z.string(), running: z.boolean(), turnCount: z.number().int().nonnegative() }))
     .max(2000),

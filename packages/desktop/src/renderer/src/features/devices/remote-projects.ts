@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import type { SessionList } from '@diffra/remote/messages'
+import type { RepoIdentity } from '../../../../shared/repo-identity'
 import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { useAppState } from '@/state/store'
 import { loadRemoteList } from './remote-tasks'
@@ -15,6 +16,9 @@ export interface RemoteProjectGroup {
   level: SessionList['projects'][number]['level']
   // 开放了「完全控制」（level 仍是 control）
   full: boolean
+  // 对方项目的仓库身份；对本机同一个仓库的检出时并成一组，旧连接端没有这两项
+  origin: RepoIdentity['origin'] | null
+  subpath: RepoIdentity['subpath'] | null
   sessions: SessionList['sessions']
 }
 
@@ -51,6 +55,8 @@ export function useRemoteProjects(): RemoteProjectGroup[] {
             name: project.name,
             level: project.level,
             full: project.full === true,
+            origin: project.origin ?? null,
+            subpath: project.subpath ?? null,
             sessions: list.sessions.filter((session) => session.projectId === project.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
           }))
         })

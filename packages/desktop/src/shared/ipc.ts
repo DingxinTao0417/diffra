@@ -58,6 +58,7 @@ import type {
   SecuritySettings,
   SettingsView,
 } from './settings'
+import type { RepoIdentity } from './repo-identity'
 import type { FileReference } from './attachments'
 import type { ExternalAgentDiscovery, ExternalAgentInput } from './external-agents'
 import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
@@ -108,6 +109,8 @@ export const IPC_CHANNELS = {
   projectBranch: 'project:branch',
   projectBranches: 'project:branches',
   projectGitState: 'project:git-state',
+  // 本机项目的仓库身份（origin + 相对路径），侧栏据此把同一个仓库在别的设备上的项目并成一组
+  projectRepoIdentities: 'project:repo-identities',
   projectSwitchBranch: 'project:switch-branch',
   projectOpenFolder: 'project:open-folder',
   sessionFolderState: 'session:folder-state',
@@ -599,6 +602,8 @@ export interface DiffraApi {
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
   projectGitState(projectPath: string): Promise<ProjectGitState>
+  // 按项目路径查仓库身份；不是 Git 仓库、没有 origin 的是 null
+  projectRepoIdentities(paths: string[]): Promise<Record<string, RepoIdentity | null>>
   // 本地分支和当前分支；切换前检查有没有任务在跑、工作区有没有未提交的改动
   projectBranches(projectPath: string): Promise<{ current: string | null; branches: string[] }>
   switchProjectBranch(projectPath: string, branch: string): Promise<void>

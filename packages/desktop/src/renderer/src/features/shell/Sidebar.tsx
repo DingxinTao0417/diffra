@@ -1,7 +1,9 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useState } from 'react'
 import type { StoredSessionSummary } from '@diffra/core/types'
-import { Blocks, ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings } from 'lucide-react'
+import type { SessionList } from '@diffra/remote/messages'
+import { Blocks, ChevronRight, CircleAlert, CirclePause, Ellipsis, Folder, FolderDot, FolderOpen, ListTodo, LoaderCircle, MonitorSmartphone, Network, PenTool, Plus, Search, Settings, WifiOff } from 'lucide-react'
 import type { UpdateStatus } from '../../../../shared/ipc'
+import { projectIdentityKey, type RepoIdentity, sameProjectIdentity } from '../../../../shared/repo-identity'
 import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -19,6 +21,7 @@ import { loadTodos, navigate, openArchitecture, openDesign, openExtensions, open
 import { type AppState, showToast, store, useAppState } from '@/state/store'
 import { type RemoteProjectGroup, useRemoteProjects } from '@/features/devices/remote-projects'
 import { RemoteNewTaskDialog } from '@/features/devices/RemoteNewTaskDialog'
+import { useProjectIdentities } from './use-project-identities'
 import { BrandMark } from './BrandMark'
 import { highlightMatch } from './SearchDialog'
 import { SidebarFooter } from './SidebarFooter'
@@ -40,6 +43,7 @@ interface SidebarTask {
 // 无项目任务都归到这一组；真实路径小写后不会是这个值
 const NO_PROJECT_KEY = '<no-project>'
 const NO_ARCHIVED_PROJECTS: readonly string[] = []
+const NO_PROJECT_PATHS: string[] = []
 
 // 侧栏宽度的上下限，右边主区至少留 MAIN_MIN_REM
 const SIDEBAR_MIN_REM = 13
@@ -75,9 +79,37 @@ function groupTasks(projects: string[], tasks: StoredSessionSummary[], live: App
 
 const RECENT_TASK_LIMIT = 5
 
-// 默认只显示最近几条；当前打开的任务再旧也要留着
-function recentTasks(tasks: SidebarTask[], activeSession: string | null) {
-  return tasks.filter((task, index) => index < RECENT_TASK_LIMIT || task.sessionId === activeSession)
+type LocalGroup = ReturnType<typeof groupTasks>[number]
+type RemoteSession = SessionList['sessions'][number]
+// 一组里本机任务和别的设备上的任务排在一起，按更新时间排
+type GroupRow = { at: string; kind: 'local'; task: SidebarTask } | { at: string; kind: 'remote'; group: RemoteProjectGroup; session: RemoteSession }
+
+// 本机项目和别的设备上的项目是同一个仓库（origin 和相对路径都一样）时并成一组；
+// 对不上的远程项目照旧单独列，标题上带设备名
+function mergeRemoteGroups(projects: LocalGroup[], remoteGroups: RemoteProjectGroup[], identities: Record<string, RepoIdentity | null>) {
+  const matched = new Map<string, RemoteProjectGroup[]>()
+  const loose: RemoteProjectGroup[] = []
+  for (const remote of remoteGroups) {
+    const identity = remote.origin !== null && remote.subpath !== null ? { origin: remote.origin, subpath: remote.subpath } : null
+    const owner = identity
+      ? projects.find((project) => project.path !== null && sameProjectIdentity(identities[projectIdentityKey(project.path)], identity))
+      : undefined
+    if (!owner) {
+      loose.push(remote)
+      continue
+    }
+    const list = matched.get(owner.key)
+    if (list) list.push(remote)
+    else matched.set(owner.key, [remote])
+  }
+  return { matched, loose }
+}
+
+// 一组里最新的改动时间，决定项目之间怎么排：别的设备上的任务也算
+function latestOf(tasks: SidebarTask[], remoteGroups: RemoteProjectGroup[]): string {
+  let latest = tasks[0]?.updatedAt ?? ''
+  for (const group of remoteGroups) for (const session of group.sessions) if (session.updatedAt > latest) latest = session.updatedAt
+  return latest
 }
 
 function toggleProject(key: 'collapsedProjects' | 'expandedProjects', path: string) {
@@ -100,7 +132,15 @@ export function Sidebar() {
   const archivedProjects = useAppState((state) => state.settings?.archivedProjects ?? NO_ARCHIVED_PROJECTS)
   const groups = useMemo(() => groupTasks(projects, tasks, live, archivedProjects), [projects, tasks, live, archivedProjects])
   const remoteGroups = useRemoteProjects()
+  const identities = useProjectIdentities(REMOTE_DEVICE_CONNECTION_ENABLED ? projects : NO_PROJECT_PATHS)
+  const merged = useMemo(() => mergeRemoteGroups(groups, remoteGroups, identities), [groups, remoteGroups, identities])
+  // 合并进来的远程任务可能比本机任务新，项目顺序按两边的最近更新重排
+  const orderedGroups = useMemo(
+    () => [...groups].sort((a, b) => latestOf(b.tasks, merged.matched.get(b.key) ?? []).localeCompare(latestOf(a.tasks, merged.matched.get(a.key) ?? []))),
+    [groups, merged],
+  )
   const activeSession = route.name === 'task' ? route.sessionId : null
+  const activeRemote = route.name === 'remote-task' ? { deviceId: route.deviceId, sessionId: route.sessionId } : null
   const todos = useAppState((state) => state.todos)
   const openTodoCount = useMemo(() => todos?.filter((todo) => !todo.done).length ?? 0, [todos])
   // 到了时间还没勾掉的，侧栏上多一个点
@@ -169,82 +209,22 @@ export function Sidebar() {
             打开项目文件夹…
           </Button>
         )}
-        {groups.map((group) => {
-          const isCollapsed = collapsed.has(group.key)
-          const isExpanded = expanded.has(group.key)
-          const hasTasks = group.tasks.length > 0
-          const recent = recentTasks(group.tasks, activeSession)
-          const hiddenCount = group.tasks.length - recent.length
-          const name = group.path === null ? '无项目' : folderName(group.path)
-          const GroupIcon = group.path === null ? FolderDot : Folder
-          const sessionIds = new Set(group.path === null ? [] : tasks.filter((task) => !task.noProject && sameProjectPath(task.cwd, group.path)).map((task) => task.sessionId))
-          if (group.path !== null) {
-            for (const task of Object.values(live)) if (sameProjectPath(task.project, group.path)) sessionIds.add(task.sessionId)
-          }
-          const running =
-            group.path !== null &&
-            (tasks.some((task) => task.running && sameProjectPath(task.cwd, group.path)) || Object.values(live).some((task) => task.running && sameProjectPath(task.project, group.path)))
-          const row = (
-            <div className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent" data-testid="sidebar-project-row">
-              <span className="relative size-4 shrink-0">
-                <GroupIcon
-                  className={cn(
-                    'size-4 transition-opacity',
-                    hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0',
-                  )}
-                />
-                {hasTasks && (
-                  <ChevronRight
-                    className={cn(
-                      'absolute inset-0 size-4 text-muted-foreground opacity-0 transition-[opacity,rotate] group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100',
-                      !isCollapsed && 'rotate-90',
-                    )}
-                  />
-                )}
-              </span>
-              <button
-                type="button"
-                className={rowButtonClass}
-                title={group.path ?? workspacePath}
-                aria-expanded={hasTasks ? !isCollapsed : undefined}
-                onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.key) : openHome(group.path))}
-              >
-                <span className="truncate">{name}</span>
-              </button>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
-                    className={projectActionClass}
-                    data-testid="sidebar-project-action"
-                    onClick={() => openHome(group.path)}
-                  >
-                    <Plus className="size-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>{group.path === null ? '新建无项目任务' : '在这个项目新建任务'}</TooltipContent>
-              </Tooltip>
-            </div>
-          )
-          return (
-            <div key={group.key} className="space-y-px" data-testid="sidebar-project">
-              {group.path === null ? row : <ProjectMenu path={group.path} name={name} sessionCount={sessionIds.size} running={running}>{row}</ProjectMenu>}
-              {!isCollapsed && (isExpanded ? group.tasks : recent).map((task) => <TaskRow key={task.sessionId} task={task} active={task.sessionId === activeSession} />)}
-              {!isCollapsed && hiddenCount > 0 && (
-                <button
-                  type="button"
-                  className="flex h-7 w-full items-center rounded-lg pr-2 pl-8 text-left text-xs text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                  onClick={() => toggleProject('expandedProjects', group.key)}
-                >
-                  {isExpanded ? '收起' : `显示更多（${hiddenCount}）`}
-                </button>
-              )}
-            </div>
-          )
-        })}
+        {orderedGroups.map((group) => (
+          <LocalProject
+            key={group.key}
+            group={group}
+            remotes={merged.matched.get(group.key) ?? []}
+            tasks={tasks}
+            live={live}
+            workspacePath={workspacePath}
+            collapsed={collapsed.has(group.key)}
+            expanded={expanded.has(group.key)}
+            activeSession={activeSession}
+            activeRemote={activeRemote}
+          />
+        ))}
         {REMOTE_DEVICE_CONNECTION_ENABLED &&
-          remoteGroups.map((group) => (
+          merged.loose.map((group) => (
             <RemoteProject key={group.key} group={group} collapsed={collapsed.has(group.key)} expanded={expanded.has(group.key)} activeSession={route.name === 'remote-task' && route.deviceId === group.deviceId ? route.sessionId : null} />
           ))}
       </div>
@@ -472,7 +452,166 @@ function TaskRow({ task, active }: { task: SidebarTask; active: boolean }) {
   )
 }
 
-// 别的设备授权给本机的项目：和本机项目一样排在「项目」下，右边的设备图标标出是远程的；开放了「可查看和操作」的有加号，在对方那边新建任务。
+// 本机的一个项目。同一个仓库在别的设备上的项目并进来，任务排在一起，每行左边的设备图标标出它在对方机器上；
+// 组里还有对方能操作的项目时，标题右边多一个设备按钮，在对方那边新建任务
+function LocalProject({ group, remotes, tasks, live, workspacePath, collapsed, expanded, activeSession, activeRemote }: {
+  group: LocalGroup
+  remotes: RemoteProjectGroup[]
+  tasks: StoredSessionSummary[]
+  live: AppState['live']
+  workspacePath: string | undefined
+  collapsed: boolean
+  expanded: boolean
+  activeSession: string | null
+  activeRemote: { deviceId: string; sessionId: string } | null
+}) {
+  const [creatingRemote, setCreatingRemote] = useState<RemoteProjectGroup | null>(null)
+  const rows: GroupRow[] = [
+    ...group.tasks.map((task) => ({ at: task.updatedAt, kind: 'local' as const, task })),
+    ...remotes.flatMap((remote) => remote.sessions.map((session) => ({ at: session.updatedAt, kind: 'remote' as const, group: remote, session }))),
+  ].sort((a, b) => b.at.localeCompare(a.at))
+  const isActive = (row: GroupRow) =>
+    row.kind === 'local'
+      ? row.task.sessionId === activeSession
+      : activeRemote !== null && activeRemote.deviceId === row.group.deviceId && activeRemote.sessionId === row.session.sessionId
+  // 默认只显示最近几条；当前打开的任务再旧也要留着
+  const recent = rows.filter((row, index) => index < RECENT_TASK_LIMIT || isActive(row))
+  const hiddenCount = rows.length - recent.length
+  const hasTasks = rows.length > 0
+  const name = group.path === null ? '无项目' : folderName(group.path)
+  const GroupIcon = group.path === null ? FolderDot : Folder
+  const sessionIds = new Set(group.path === null ? [] : tasks.filter((task) => !task.noProject && sameProjectPath(task.cwd, group.path)).map((task) => task.sessionId))
+  if (group.path !== null) {
+    for (const task of Object.values(live)) if (sameProjectPath(task.project, group.path)) sessionIds.add(task.sessionId)
+  }
+  const running =
+    group.path !== null &&
+    (tasks.some((task) => task.running && sameProjectPath(task.cwd, group.path)) || Object.values(live).some((task) => task.running && sameProjectPath(task.project, group.path)))
+  const controlRemotes = remotes.filter((remote) => remote.level === 'control')
+  const row = (
+    <div
+      className="group/project relative flex h-7.5 items-center gap-2 rounded-lg pr-7 pl-2 hover:bg-accent"
+      style={controlRemotes.length > 0 ? { paddingRight: 28 + controlRemotes.length * 24 } : undefined}
+      data-testid="sidebar-project-row"
+    >
+      <span className="relative size-4 shrink-0">
+        <GroupIcon
+          className={cn(
+            'size-4 transition-opacity',
+            hasTasks && 'group-hover/project:opacity-0 group-has-[:focus-visible]/project:opacity-0',
+          )}
+        />
+        {hasTasks && (
+          <ChevronRight
+            className={cn(
+              'absolute inset-0 size-4 text-muted-foreground opacity-0 transition-[opacity,rotate] group-hover/project:opacity-100 group-has-[:focus-visible]/project:opacity-100',
+              !collapsed && 'rotate-90',
+            )}
+          />
+        )}
+      </span>
+      <button
+        type="button"
+        className={rowButtonClass}
+        title={group.path ?? workspacePath}
+        aria-expanded={hasTasks ? !collapsed : undefined}
+        onClick={() => (hasTasks ? toggleProject('collapsedProjects', group.key) : openHome(group.path))}
+      >
+        <span className="truncate">{name}</span>
+      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={group.path === null ? '新建无项目任务' : `在 ${name} 新建任务`}
+            className={projectActionClass}
+            data-testid="sidebar-project-action"
+            onClick={() => openHome(group.path)}
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{group.path === null ? '新建无项目任务' : '在这个项目新建任务'}</TooltipContent>
+      </Tooltip>
+      {controlRemotes.map((remote, index) => (
+        <Tooltip key={remote.key}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={`在 ${remote.deviceName} 的这个项目新建任务`}
+              className={projectActionClass}
+              style={{ right: 28 + index * 24 }}
+              data-testid="sidebar-device-project-action"
+              disabled={!remote.online}
+              onClick={() => setCreatingRemote(remote)}
+            >
+              <MonitorSmartphone className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>在「{remote.deviceName}」的这个项目新建任务</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  )
+  return (
+    <div className="space-y-px" data-testid="sidebar-project">
+      {group.path === null ? row : <ProjectMenu path={group.path} name={name} sessionCount={sessionIds.size} running={running}>{row}</ProjectMenu>}
+      {!collapsed &&
+        (expanded ? rows : recent).map((item) =>
+          item.kind === 'remote' ? (
+            <RemoteTaskRow key={`${item.group.deviceId}/${item.session.sessionId}`} group={item.group} session={item.session} active={isActive(item)} />
+          ) : (
+            <TaskRow key={item.task.sessionId} task={item.task} active={item.task.sessionId === activeSession} />
+          ),
+        )}
+      {!collapsed && hiddenCount > 0 && (
+        <button
+          type="button"
+          className="flex h-7 w-full items-center rounded-lg pr-2 pl-8 text-left text-xs text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          onClick={() => toggleProject('expandedProjects', group.key)}
+        >
+          {expanded ? '收起' : `显示更多（${hiddenCount}）`}
+        </button>
+      )}
+      {creatingRemote && (
+        <RemoteNewTaskDialog
+          deviceId={creatingRemote.deviceId}
+          deviceName={creatingRemote.deviceName}
+          projectId={creatingRemote.projectId}
+          projectName={creatingRemote.name}
+          onClose={() => setCreatingRemote(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// 别的设备上的一个任务：标题左边的设备图标标出它在哪台机器上，离线时换成断开的图标
+function RemoteTaskRow({ group, session, active }: { group: RemoteProjectGroup; session: RemoteSession; active: boolean }) {
+  const where = group.online ? `在「${group.deviceName}」上` : `「${group.deviceName}」不在线，显示的是之前的内容`
+  const title = session.title || '（没有标题）'
+  return (
+    <div
+      className={cn('relative flex h-7.5 items-center gap-2 rounded-lg pr-2 pl-8 hover:bg-accent', active && 'bg-soft text-foreground hover:bg-soft')}
+      data-testid="sidebar-remote-task"
+    >
+      <span role="img" aria-label={where} title={where} className={cn('absolute top-1/2 left-3 flex -translate-y-1/2 text-muted-foreground', !group.online && 'opacity-40')}>
+        {group.online ? <MonitorSmartphone className="size-3.5" /> : <WifiOff className="size-3.5" />}
+      </span>
+      <button
+        type="button"
+        className={rowButtonClass}
+        title={`${title}（${where}）`}
+        onClick={() => navigate({ name: 'remote-task', deviceId: group.deviceId, sessionId: session.sessionId })}
+      >
+        <span className="truncate">{title}</span>
+      </button>
+      <span className={trailingClass}>{session.running ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label="运行中" /> : formatTime(session.updatedAt)}</span>
+    </div>
+  )
+}
+
+// 别的设备授权给本机的项目，和对不上本机仓库的那些：标题上带设备名，右边有设备图标；开放了「可查看和操作」的有加号，在对方那边新建任务。
 // 任务点开是远程任务页
 function RemoteProject({ group, collapsed, expanded, activeSession }: { group: RemoteProjectGroup; collapsed: boolean; expanded: boolean; activeSession: string | null }) {
   const [creating, setCreating] = useState(false)
@@ -496,7 +635,10 @@ function RemoteProject({ group, collapsed, expanded, activeSession }: { group: R
           )}
         </span>
         <button type="button" className={rowButtonClass} title={`${group.name}（${where}）`} aria-expanded={hasTasks ? !collapsed : undefined} disabled={!hasTasks} onClick={() => toggleProject('collapsedProjects', group.key)}>
-          <span className="truncate">{group.name}</span>
+          <span className="truncate">
+            {group.name}
+            <span className="text-muted-foreground"> · {group.deviceName}</span>
+          </span>
         </button>
         <span
           role="img"
@@ -521,16 +663,7 @@ function RemoteProject({ group, collapsed, expanded, activeSession }: { group: R
       {creating && <RemoteNewTaskDialog deviceId={group.deviceId} deviceName={group.deviceName} projectId={group.projectId} projectName={group.name} onClose={() => setCreating(false)} />}
       {!collapsed &&
         (expanded ? group.sessions : recent).map((session) => (
-          <div
-            key={session.sessionId}
-            className={cn('relative flex h-7.5 items-center gap-2 rounded-lg pr-2 pl-8 hover:bg-accent', session.sessionId === activeSession && 'bg-soft text-foreground hover:bg-soft')}
-            data-testid="sidebar-remote-task"
-          >
-            <button type="button" className={rowButtonClass} title={session.title} onClick={() => navigate({ name: 'remote-task', deviceId: group.deviceId, sessionId: session.sessionId })}>
-              <span className="truncate">{session.title || '（没有标题）'}</span>
-            </button>
-            <span className={trailingClass}>{session.running ? <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label="运行中" /> : formatTime(session.updatedAt)}</span>
-          </div>
+          <RemoteTaskRow key={session.sessionId} group={group} session={session} active={session.sessionId === activeSession} />
         ))}
       {!collapsed && hiddenCount > 0 && (
         <button

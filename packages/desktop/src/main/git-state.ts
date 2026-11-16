@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+// scripts/ 用 node 直接跑 TS，导入要写 .ts 后缀（见 tsconfig.node.json）
+import { normalizeRepoOrigin, type RepoIdentity } from '../shared/repo-identity.ts'
 
 const execFileAsync = promisify(execFile)
 const READ_TIMEOUT_MS = 5000
@@ -30,6 +32,29 @@ const EMPTY: ProjectGitState = { repo: false, branch: null, head: null, upstream
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd, timeout: READ_TIMEOUT_MS, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
   return stdout
+}
+
+// 认项目身份要读 git，侧栏每次刷新都问一次太贵；同一个路径 30 秒内复用上次的结果
+const IDENTITY_TTL_MS = 30_000
+const identities = new Map<string, { at: number; value: RepoIdentity | null }>()
+
+// 项目所在仓库的远程地址和在仓库里的相对路径；不是 Git 仓库、没有 origin 时认不出来，返回 null
+export async function repoIdentity(cwd: string): Promise<RepoIdentity | null> {
+  const key = cwd.trim().replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+  const cached = identities.get(key)
+  if (cached && Date.now() - cached.at < IDENTITY_TTL_MS) return cached.value
+  let value: RepoIdentity | null = null
+  try {
+    const [prefix, origin] = await Promise.all([git(cwd, ['rev-parse', '--show-prefix']), git(cwd, ['config', '--get', 'remote.origin.url'])])
+    // 远程地址归一化后再记：发给别的设备时不会带上地址里的用户名和令牌，两边的写法不一样也能对上
+    const remote = normalizeRepoOrigin(origin)
+    if (remote) value = { origin: remote, subpath: prefix.trim().replace(/\\/g, '/').replace(/\/+$/, '') }
+  } catch {
+    // 不是 Git 仓库、没有 origin、没装 Git：这台机器上认不出项目身份，按单独的项目显示
+    value = null
+  }
+  identities.set(key, { at: Date.now(), value })
+  return value
 }
 
 function projectPath(repoPath: string, prefix: string): string | null {

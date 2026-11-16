@@ -8,6 +8,7 @@ import { hidePaths, type PathRoots, previewTurn, redactDiff, redactText, redactT
 import { canControl, REMOTE_API, type RemoteAction, type RemoteActionResult, type RemoteProjectGrant, type RemoteTaskCall, type RemoteTaskDetails } from '../../shared/remote'
 import type { SessionEvent } from '../session-events'
 import { logRemote } from '../app-log'
+import { repoIdentity } from '../git-state'
 import { HostTerminals } from './host-terminals'
 import type { StoredGrant } from './state'
 
@@ -564,9 +565,19 @@ export class HostSync {
 
   private async list(grant: StoredGrant): Promise<SessionList> {
     const sessions = await this.deps.listSessions()
+    const identities = await Promise.all(grant.projects.map((project) => repoIdentity(project.path)))
     return {
       api: REMOTE_API,
-      projects: grant.projects.map((project) => ({ id: projectIdOf(project.path), name: folderName(project.path), level: canControl(project.level) ? 'control' : 'view', ...(project.level === 'full' ? { full: true } : {}) })),
+      projects: grant.projects.map((project, index) => {
+        const identity = identities[index] ?? null
+        return {
+          id: projectIdOf(project.path),
+          name: folderName(project.path),
+          level: canControl(project.level) ? 'control' : 'view',
+          ...(project.level === 'full' ? { full: true } : {}),
+          ...(identity ? { origin: identity.origin, subpath: identity.subpath } : {}),
+        }
+      }),
       sessions: sessions.flatMap((session) => {
         const project = visible(grant, session)
         if (!project) return []
