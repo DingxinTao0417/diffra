@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { evaluateTarget } from '@diffra/core/architecture'
-import { ArrowLeft, ChevronRight, CircleAlert, Ellipsis, FolderOpen, MessageSquarePlus, Network, RefreshCw, Sparkles } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { evaluateTarget, type SharedStatus } from '@diffra/core/architecture'
+import { ArrowLeft, ChevronRight, CircleAlert, Download, Ellipsis, FolderOpen, MessageSquarePlus, Network, RefreshCw, Share2, Sparkles } from 'lucide-react'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -62,6 +63,37 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
     void watchProject(projectId, true, autoRefresh)
     return () => void watchProject(projectId, false, false)
   }, [projectId, loaded, autoRefresh])
+
+  // 仓库里共享的架构定义（v2）：和本机的不一样时提示能用仓库里的
+  const [shared, setShared] = useState<SharedStatus | null>(null)
+  const [sharing, setSharing] = useState<'export' | 'import' | null>(null)
+  const [sharedDismissed, setSharedDismissed] = useState(false)
+  const refreshShared = useCallback(() => {
+    window.diffra
+      .sharedArchitecture(projectId)
+      .then(setShared)
+      .catch((error: unknown) => console.error('[architecture] 读仓库里的架构定义失败', error))
+  }, [projectId])
+  useEffect(() => {
+    if (loaded) refreshShared()
+  }, [loaded, refreshShared])
+  const shareAction = async () => {
+    const action = sharing
+    setSharing(null)
+    try {
+      if (action === 'export') {
+        await window.diffra.exportArchitecture(projectId)
+        showToast('已导出到 .diffra/architecture.json 和 architecture.md，提交到版本库后团队成员打开这个项目就能导入')
+      } else if (action === 'import') {
+        await window.diffra.importArchitecture(projectId)
+        await loadBundle(projectId)
+        showToast('已换成仓库里的架构定义，本机原来的留了备份')
+      }
+      refreshShared()
+    } catch (error) {
+      showToast(`${action === 'export' ? '导出' : '导入'}失败：${errorMessage(error)}`)
+    }
+  }
 
   const analysis = bundle?.analysis ?? null
   const index = useMemo(() => (analysis ? new ArchIndex(analysis) : null), [analysis])
@@ -145,9 +177,46 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
               )}
             </>
           )}
-          {project && <ProjectMenu path={project.path} />}
+          {project && <ProjectMenu path={project.path} onExport={analysis ? () => setSharing('export') : null} />}
         </div>
       </div>
+      {shared?.state === 'present' && !shared.matches && !sharedDismissed && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-4 py-2 text-sm" data-testid="architecture-shared">
+          <Share2 className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            仓库里有共享的架构定义（{formatTime(shared.exportedAt)} 导出，{shared.diagrams} 张架构图{shared.hasTarget ? '，含目标架构' : ''}），和本机的不一样。
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setSharing('import')}>
+            <Download className="size-3.5" />
+            用仓库里的
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSharedDismissed(true)}>
+            先不用
+          </Button>
+        </div>
+      )}
+      {shared?.state === 'invalid' && !sharedDismissed && (
+        <div className="flex items-center gap-2 border-b px-4 py-1.5 text-xs text-muted-foreground" data-testid="architecture-shared-invalid">
+          <CircleAlert className="size-3.5 shrink-0" />
+          {shared.error}
+        </div>
+      )}
+      <AlertDialog open={sharing !== null} onOpenChange={(open) => !open && setSharing(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{sharing === 'export' ? '把架构定义导出到仓库？' : '用仓库里的架构定义？'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {sharing === 'export'
+                ? `写到 ${project?.path ?? '项目'} 下的 .diffra/architecture.json（给 Diffra 读）和 .diffra/architecture.md（给人看），已有的会覆盖。三张架构图和目标架构都在里面，提交到版本库后团队成员打开这个项目就能导入。`
+                : '本机的架构图和目标架构会换成仓库里的；本机原来的改名留一份备份，不会删。'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void shareAction()}>{sharing === 'export' ? '导出' : '用仓库里的'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {bundleError && !bundle && (
         <EmptyState icon={CircleAlert} title="读取分析结果失败" description={bundleError}>
@@ -203,7 +272,7 @@ export function ProjectDetail({ route, projectId }: { route: ArchitectureRoute; 
   )
 }
 
-function ProjectMenu({ path }: { path: string }) {
+function ProjectMenu({ path, onExport }: { path: string; onExport: (() => void) | null }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -220,6 +289,12 @@ function ProjectMenu({ path }: { path: string }) {
           <FolderOpen className="size-4" />
           在资源管理器中打开
         </DropdownMenuItem>
+        {onExport && (
+          <DropdownMenuItem onSelect={onExport}>
+            <Share2 className="size-4" />
+            导出到仓库（.diffra/）…
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

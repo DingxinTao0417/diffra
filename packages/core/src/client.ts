@@ -1,6 +1,6 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
-import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from './architecture/model.js'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from './architecture/model.js'
 import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
@@ -532,6 +532,18 @@ export function architectureBundle(connection: acp.ClientConnection, projectId: 
 
 export function architectureStale(connection: acp.ClientConnection, projectId: string): Promise<{ stale: boolean | null }> {
   return requestOf(connection)<{ stale: boolean | null }, { projectId: string }>(SESSION_EXT_METHODS.architectureStale, { projectId }, extRequestOptions())
+}
+
+export function architectureExport(connection: acp.ClientConnection, projectId: string): Promise<{ files: string[] }> {
+  return requestOf(connection)<{ files: string[] }, { projectId: string }>(SESSION_EXT_METHODS.architectureExport, { projectId }, extRequestOptions())
+}
+
+export function architectureShared(connection: acp.ClientConnection, projectId: string): Promise<SharedStatus> {
+  return requestOf(connection)<SharedStatus, { projectId: string }>(SESSION_EXT_METHODS.architectureShared, { projectId }, extRequestOptions())
+}
+
+export async function architectureImport(connection: acp.ClientConnection, projectId: string): Promise<void> {
+  await requestOf(connection)<object, { projectId: string }>(SESSION_EXT_METHODS.architectureImport, { projectId }, extRequestOptions())
 }
 
 // 打开着项目时监听文件变化（v2 · M9）；离开项目时 watch 传 false

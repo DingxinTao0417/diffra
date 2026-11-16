@@ -512,6 +512,9 @@ export interface ArchitectureEvent {
   watchError?: string
 }
 
+// 仓库里共享的架构定义的状态（v2 · M9，见 share.ts）
+export type { SharedStatus } from './share.js'
+
 // 打开一个项目时一次取回的全部数据
 export interface ArchitectureBundle {
   project: ArchitectureProject

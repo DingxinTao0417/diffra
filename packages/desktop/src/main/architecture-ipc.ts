@@ -4,7 +4,9 @@ import {
   architectureAnalyze,
   architectureBundle,
   architectureCancel,
+  architectureExport,
   architectureFlowChart,
+  architectureImport,
   architectureInterpret,
   architectureInterpretModule,
   architectureList,
@@ -14,6 +16,7 @@ import {
   architectureSaveDiagram,
   architectureSaveLayout,
   architectureSaveTarget,
+  architectureShared,
   architectureSource,
   architectureStale,
   architectureWatch,
@@ -46,6 +49,9 @@ export function registerArchitectureIpc(architectureModel: () => Promise<Session
   ipcMain.handle(IPC_CHANNELS.architectureRunning, async () => architectureRunning(await coreConnection()))
   ipcMain.handle(IPC_CHANNELS.architectureBundle, async (_event, raw: unknown) => architectureBundle(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureStale, async (_event, raw: unknown) => (await architectureStale(await coreConnection(), parse(projectId, raw))).stale)
+  ipcMain.handle(IPC_CHANNELS.architectureExport, async (_event, raw: unknown) => architectureExport(await coreConnection(), parse(projectId, raw)))
+  ipcMain.handle(IPC_CHANNELS.architectureShared, async (_event, raw: unknown) => architectureShared(await coreConnection(), parse(projectId, raw)))
+  ipcMain.handle(IPC_CHANNELS.architectureImport, async (_event, raw: unknown) => architectureImport(await coreConnection(), parse(projectId, raw)))
   ipcMain.handle(IPC_CHANNELS.architectureWatch, async (_event, rawId: unknown, rawWatch: unknown, rawAuto: unknown) =>
     architectureWatch(await coreConnection(), parse(projectId, rawId), parse(z.boolean(), rawWatch), parse(z.boolean(), rawAuto)),
   )

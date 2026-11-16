@@ -5,58 +5,14 @@ import { ARCHITECTURE_USAGE_ID, CLIENT_EXT_NOTIFICATIONS, SESSION_EXT_METHODS, t
 import { modelConfigSchema } from '../session/config.js'
 import { toUsageRecord, type UsageLog } from '../usage/log.js'
 import { generateDiagram, generateFlowChart, interpretArchitecture, interpretModule, proposeTarget } from './interpret.js'
-import { ARCHITECTURE_VERSION, type ArchitectureEvent, type ArchitectureLayout, type BlockDiagram, DIAGRAM_KINDS, INTERPRET_PARTS, type InterpretPart, type TargetArchitecture } from './model.js'
+import { ARCHITECTURE_VERSION, type ArchitectureEvent, type ArchitectureLayout, DIAGRAM_KINDS, INTERPRET_PARTS, type InterpretPart } from './model.js'
+import { diagramSchema, targetSchema } from './schemas.js'
 
 const PART_NAMES: Record<InterpretPart, string> = { overview: '系统简介和流程', application: '应用架构图', technology: '技术架构图', system: '系统架构图' }
 import type { ArchitectureService } from './service.js'
 
 const projectParams = z.object({ projectId: z.string().min(1).max(64) })
-const id = z.string().trim().min(1).max(80)
-const text = (max: number) => z.string().max(max)
 
-// 界面保存的架构图和目标架构：在边界上校验一遍，core 之后信任这个结构
-const blockSchema = z.object({
-  id,
-  name: text(80).min(1),
-  description: text(4000),
-  kind: z.enum(['code', 'tech', 'external', 'store']),
-  paths: z.array(text(300).min(1)).max(50),
-  packages: z.array(text(200).min(1)).max(50),
-  pinned: z.boolean(),
-  unverified: z.boolean(),
-})
-
-const diagramSchema = z.object({
-  kind: z.enum(DIAGRAM_KINDS),
-  source: z.enum(['static', 'model']),
-  generatedAt: z.string().max(40),
-  model: z.object({ provider: text(200), modelId: text(200) }).nullable(),
-  fingerprint: text(200),
-  layers: z
-    .array(z.object({ id, name: text(80), description: text(2000), pinned: z.boolean(), groups: z.array(z.object({ id, name: text(80), pinned: z.boolean(), blocks: z.array(blockSchema).max(100) })).max(30) }))
-    .max(20),
-  sides: z.array(z.object({ id, name: text(80), description: text(2000), from: id, to: id, pinned: z.boolean(), blocks: z.array(blockSchema).max(50) })).max(6),
-  connectors: z.array(z.object({ from: id, to: id, label: text(200) })).max(40),
-  dropped: z.number().int().nonnegative(),
-}) satisfies z.ZodType<BlockDiagram>
-
-const targetSchema = z.object({
-  version: z.literal(ARCHITECTURE_VERSION),
-  updatedAt: z.iso.datetime(),
-  diagram: diagramSchema,
-  rules: z
-    .array(
-      z.discriminatedUnion('kind', [
-        z.object({ id, kind: z.literal('layers'), strict: z.boolean() }),
-        z.object({ id, kind: z.literal('forbid'), from: id, to: id, note: text(1000) }),
-        z.object({ id, kind: z.literal('allow'), from: id, to: id, note: text(1000) }),
-        z.object({ id, kind: z.literal('no-cycles') }),
-        z.object({ id, kind: z.literal('external'), package: text(200).min(1), only: z.array(id).max(200), note: text(1000) }),
-      ]),
-    )
-    .max(300),
-  enforceInTasks: z.boolean(),
-}) satisfies z.ZodType<TargetArchitecture>
 
 const point = z.object({ x: z.number().finite(), y: z.number().finite() })
 const layoutSchema = z.record(z.string().max(600), z.record(z.string().max(600), point)) satisfies z.ZodType<ArchitectureLayout>
@@ -102,6 +58,12 @@ export function registerArchitecture(app: acp.AgentApp, service: ArchitectureSer
     })
     .onRequest(SESSION_EXT_METHODS.architectureBundle, projectParams, ({ params }) => service.bundle(params.projectId))
     .onRequest(SESSION_EXT_METHODS.architectureStale, projectParams, async ({ params }) => ({ stale: await service.stale(params.projectId) }))
+    .onRequest(SESSION_EXT_METHODS.architectureExport, projectParams, ({ params }) => service.exportShared(params.projectId))
+    .onRequest(SESSION_EXT_METHODS.architectureShared, projectParams, ({ params }) => service.sharedStatus(params.projectId))
+    .onRequest(SESSION_EXT_METHODS.architectureImport, projectParams, async ({ params }) => {
+      await service.importShared(params.projectId)
+      return {}
+    })
     .onRequest(SESSION_EXT_METHODS.architectureWatch, projectParams.extend({ watch: z.boolean(), auto: z.boolean() }), async ({ params, client }) => {
       remember(client)
       await service.watch(params.projectId, params.watch, params.auto)

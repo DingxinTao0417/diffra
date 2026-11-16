@@ -62,7 +62,7 @@ import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntr
 import type { ChangelogRelease } from './changelog'
 import type { CatalogView, PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
-import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
+import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from '@diffra/core/architecture'
 
 export const IPC_CHANNELS = {
   coreStatus: 'core:status',
@@ -162,6 +162,9 @@ export const IPC_CHANNELS = {
   architectureBundle: 'architecture:bundle',
   architectureStale: 'architecture:stale',
   architectureWatch: 'architecture:watch',
+  architectureExport: 'architecture:export',
+  architectureShared: 'architecture:shared',
+  architectureImport: 'architecture:import',
   architectureInterpret: 'architecture:interpret',
   architectureInterpretModule: 'architecture:interpret-module',
   architectureFlowChart: 'architecture:flow-chart',
@@ -654,6 +657,10 @@ export interface DiffraApi {
   isArchitectureStale(projectId: string): Promise<boolean | null>
   // 打开着项目时监听文件变化（v2）：代码改了推 ArchitectureEvent.stale；auto 时改动停下后自动重新分析
   watchArchitecture(projectId: string, watch: boolean, auto: boolean): Promise<void>
+  // 架构定义放进仓库（v2）：导出到项目的 .diffra/，看仓库里那份的状态，用仓库里的换掉本机的
+  exportArchitecture(projectId: string): Promise<{ files: string[] }>
+  sharedArchitecture(projectId: string): Promise<SharedStatus>
+  importArchitecture(projectId: string): Promise<void>
   // parts：要模型做哪几样（系统简介和流程、三张架构图），并行跑
   interpretArchitecture(projectId: string, parts: InterpretPart[]): Promise<void>
   saveArchitectureDiagram(projectId: string, diagram: BlockDiagram): Promise<void>

@@ -3,6 +3,7 @@ import { existsSync, type FSWatcher, watch } from 'node:fs'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { keepPinned, staticDiagram, thumbnailOf, verifyDiagram } from './diagrams.js'
+import { sameDefinition, SHARED_DIR, SHARED_FORMAT, SHARED_JSON, SHARED_MARKDOWN, type SharedArchitecture, sharedMarkdown, sharedSchema, type SharedStatus } from './share.js'
 import { AnalysisCancelled, analyzeProject, codeLanguage, currentFingerprint, digestOf, type ParseCache } from './engine.js'
 import {
   type AnalysisDigest,
@@ -322,6 +323,70 @@ export class ArchitectureService {
       await this.writeJson(join(this.dir, PROJECTS_FILE), { version: ARCHITECTURE_VERSION, projects: next })
       this.projectsCache = next
     })
+  }
+
+  // ---------- 导出到仓库、从仓库导入（v2 · M9，见 share.ts） ----------
+
+  // 用户点了「导出到仓库」才写：项目根的 .diffra/architecture.json 和 .md，已有的覆盖
+  async exportShared(id: string): Promise<{ files: string[] }> {
+    const project = await this.project(id)
+    if (!existsSync(project.path)) throw new Error(`找不到文件夹：${project.path}`)
+    const [diagrams, target] = await Promise.all([this.diagrams(id), this.target(id)])
+    if (Object.keys(diagrams).length === 0 && !target) throw new Error('还没有架构图和目标架构，先分析')
+    const shared: SharedArchitecture = { format: SHARED_FORMAT, version: 1, exportedAt: new Date().toISOString(), project: project.name, diagrams, target }
+    await mkdir(join(project.path, SHARED_DIR), { recursive: true })
+    const json = join(project.path, SHARED_JSON)
+    const markdown = join(project.path, SHARED_MARKDOWN)
+    await writeFile(json, `${JSON.stringify(shared, null, 2)}\n`)
+    await writeFile(markdown, sharedMarkdown(shared))
+    return { files: [json, markdown] }
+  }
+
+  private async readShared(id: string): Promise<{ shared: SharedArchitecture } | { error: string } | null> {
+    const project = await this.project(id)
+    const text = await readFile(join(project.path, SHARED_JSON), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (text === null) return null
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch {
+      return { error: `${SHARED_JSON} 不是有效的 JSON` }
+    }
+    const parsed = sharedSchema.safeParse(raw)
+    if (!parsed.success) return { error: `${SHARED_JSON} 的格式不对（可能是更新版本的 Diffra 导出的）` }
+    return { shared: parsed.data }
+  }
+
+  // 打开项目时看仓库里有没有共享的定义、和本机的一样不一样
+  async sharedStatus(id: string): Promise<SharedStatus> {
+    const read = await this.readShared(id)
+    if (!read) return { state: 'none' }
+    if ('error' in read) return { state: 'invalid', error: read.error }
+    const { shared } = read
+    const [diagrams, target] = await Promise.all([this.diagrams(id), this.target(id)])
+    return { state: 'present', exportedAt: shared.exportedAt, diagrams: Object.keys(shared.diagrams).length, hasTarget: shared.target !== null, matches: sameDefinition(shared, diagrams, target) }
+  }
+
+  // 用仓库里的换掉本机的架构图和目标架构；本机原来的改名留底（和删目标架构一样，不直接删）
+  async importShared(id: string): Promise<void> {
+    const read = await this.readShared(id)
+    if (!read) throw new Error(`仓库里没有 ${SHARED_JSON}`)
+    if ('error' in read) throw new Error(read.error)
+    const { shared } = read
+    await this.enqueue(async () => {
+      const dir = this.projectDir(id)
+      const stamp = Date.now()
+      for (const name of ['diagrams.json', 'target.json']) {
+        const path = join(dir, name)
+        if (existsSync(path)) await rename(path, `${path}.before-import-${stamp}`)
+      }
+      await this.writeJson(join(dir, 'diagrams.json'), { version: ARCHITECTURE_VERSION, diagrams: shared.diagrams })
+      if (shared.target) await this.writeJson(join(dir, 'target.json'), shared.target)
+    })
+    await this.updateSummary(id)
   }
 
   // 任务里的智能体查架构（v2 · M9）：这个目录分析过没有。列工具时同步调，只看文件在不在

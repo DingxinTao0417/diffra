@@ -1051,6 +1051,10 @@ export const SESSION_EXT_METHODS = {
   architectureStale: '_diffra/architecture/stale',
   // 打开着项目时监听文件变化（v2 · M9）：{ projectId, watch, auto }，过期和出错走 architectureEvent
   architectureWatch: '_diffra/architecture/watch',
+  // 架构定义放进仓库（v2 · M9）：导出到 .diffra/、看仓库里那份的状态、用仓库里的
+  architectureExport: '_diffra/architecture/export',
+  architectureShared: '_diffra/architecture/shared',
+  architectureImport: '_diffra/architecture/import',
   architectureInterpret: '_diffra/architecture/interpret',
   architectureInterpretModule: '_diffra/architecture/interpret-module',
   // 让模型读一条流程经过的代码，画它的流程图
