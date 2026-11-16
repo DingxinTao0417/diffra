@@ -6,11 +6,13 @@ import { z } from 'zod'
 import { commandRoots, loadCommands } from './commands.js'
 import { PLUGIN_HOOK_EVENTS, type PluginBlock, type PluginHookEvent, type PluginHookInfo, type PluginInfo, type PluginRef } from './protocol.js'
 import { RICH_BLOCK_KINDS } from './rich/blocks.js'
+import { type LspServerSpec, pluginLspServers as readPluginLspServers, readLspServers } from './lsp/config.js'
 import { loadSkills } from './skills.js'
 import { loadPluginAgentTypes } from './subagents.js'
 
 // 插件是一个文件夹，兼容 Claude Code 插件的一部分：清单 .diffra-plugin/plugin.json 或 .claude-plugin/plugin.json，
-// commands/ 里的命令、skills/ 里的 Skill、agents/ 里的子智能体、hooks/hooks.json 里的钩子、.mcp.json 里的 MCP 服务器。
+// commands/ 里的命令、skills/ 里的 Skill、agents/ 里的子智能体、hooks/hooks.json 里的钩子、.mcp.json 里的 MCP 服务器、
+// .lsp.json 和清单 lspServers 里的语言服务器（v2，见 lsp/config.ts）。
 // output-styles、monitors 不支持，读到时列出来
 const MANIFESTS = [join('.diffra-plugin', 'plugin.json'), join('.claude-plugin', 'plugin.json')]
 const UNSUPPORTED = ['output-styles', 'monitors']
@@ -35,6 +37,8 @@ const manifestSchema = z.object({
   description: z.string().optional(),
   // 清单里另写的钩子不读，只认 hooks/hooks.json
   hooks: z.unknown().optional(),
+  // 语言服务器：文件路径、内联配置或数组，和 .lsp.json 合在一起读
+  lspServers: z.unknown().optional(),
 })
 
 const nameValues = z.record(z.string(), z.string()).optional()
@@ -174,20 +178,30 @@ export async function inspectPlugin(dir: string): Promise<PluginInfo> {
   const manifest = await readManifest(dir)
   const name = manifest?.name ?? basename(dir)
   const plugin = { name, dir }
-  const [commands, skills, mcpServers, agents, hooks, blocks] = await Promise.all([
+  const [commands, skills, mcpServers, agents, hooks, blocks, lsp] = await Promise.all([
     loadCommands(commandRoots(dir, [plugin]).filter((root) => root.source === 'plugin')),
     loadSkills([{ source: 'plugin', dir: join(dir, 'skills') }]),
     readMcpEntries(dir),
     loadPluginAgentTypes([plugin]),
     readHooks(dir),
     readBlocks(dir, name),
+    readLspServers(plugin, manifest?.lspServers),
   ])
   const unsupported: string[] = []
   for (const item of UNSUPPORTED) if (await exists(join(dir, item))) unsupported.push(item)
   if (manifest?.hooks !== undefined) unsupported.push('plugin.json 里的 hooks')
-  unsupported.push(...hooks.unsupported, ...blocks.unsupported)
-  if (!manifest && commands.length === 0 && skills.length === 0 && mcpServers.length === 0 && agents.length === 0 && hooks.hooks.length === 0 && blocks.blocks.length === 0) {
-    throw new Error('这个文件夹不是插件：没有 .claude-plugin/plugin.json，也没有 commands、skills、agents、hooks、blocks 或 .mcp.json')
+  unsupported.push(...hooks.unsupported, ...blocks.unsupported, ...lsp.problems)
+  if (
+    !manifest &&
+    commands.length === 0 &&
+    skills.length === 0 &&
+    mcpServers.length === 0 &&
+    agents.length === 0 &&
+    hooks.hooks.length === 0 &&
+    blocks.blocks.length === 0 &&
+    lsp.servers.length === 0
+  ) {
+    throw new Error('这个文件夹不是插件：没有 .claude-plugin/plugin.json，也没有 commands、skills、agents、hooks、blocks、.mcp.json 或 .lsp.json')
   }
   return {
     name,
@@ -200,6 +214,7 @@ export async function inspectPlugin(dir: string): Promise<PluginInfo> {
     hooks: hooks.hooks,
     hooksFingerprint: hooksFingerprint(hooks.hooks),
     blocks: blocks.blocks.map((block) => block.kind),
+    lspServers: lsp.servers.map((server) => server.name),
     unsupported,
   }
 }
@@ -266,6 +281,11 @@ export async function pluginHooks(plugins: PluginRef[]): Promise<LoadedPluginHoo
     }
   }
   return loaded
+}
+
+// 开着的插件里的语言服务器；读不了的插件跳过
+export function pluginLspServers(plugins: PluginRef[]): Promise<LspServerSpec[]> {
+  return readPluginLspServers(plugins, async (dir) => (await readManifest(dir).catch(() => null))?.lspServers)
 }
 
 // 插件里的 Skill 目录，排在用户自己的后面、兼容目录的前面

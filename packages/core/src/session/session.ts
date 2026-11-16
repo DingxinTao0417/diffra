@@ -5,6 +5,8 @@ import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
+import type { LspServerSpec } from '../lsp/config.js'
+import type { LspPool } from '../lsp/pool.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
@@ -84,6 +86,8 @@ export interface SessionOptions {
   pluginHooks?: LoadedPluginHook[]
   // 开着的插件注册的富块（第 682 步）
   pluginBlocks?: PluginBlock[]
+  // 开着的插件里的语言服务器（v2），进程放在 pool 里，同一项目的任务共用；改完文件把诊断给模型
+  lsp?: { pool: LspPool; servers: LspServerSpec[] } | null
   // 新会话的 id；不传就新生成。插件的 SessionStart 钩子在建会话之前跑，要先知道 id
   id?: string
 }
@@ -119,6 +123,9 @@ export class Session {
   readonly pluginBlocks: PluginBlock[]
   readonly mcpServers: McpServer[]
   readonly mcpPool: McpPool | null
+  readonly lsp: { pool: LspPool; servers: LspServerSpec[] } | null
+  // 这个任务里已经告诉过用户的语言服务器问题（按服务器名和状态），同样的不再提示
+  readonly lspNoticed = new Set<string>()
   readonly architecture: ArchitectureService | null
   // 最近一轮开始时取到的 MCP 工具
   mcpTools: McpTurnTools | null = null
@@ -210,6 +217,7 @@ export class Session {
     this.readRoots = [...(options.readRoots ?? []), ...(this.outputDir ? [this.outputDir] : [])]
     this.mcpServers = options.mcpServers ?? []
     this.mcpPool = options.mcpPool ?? null
+    this.lsp = options.lsp && options.lsp.servers.length > 0 ? options.lsp : null
     this.systemPrompt = options.systemPrompt
     this.workerPrompt = options.workerPrompt ?? options.systemPrompt
     const coder = options.config.model

@@ -6,6 +6,7 @@ import type {
   CommandInfo,
   ExternalAgentDetection,
   ListModelsResult,
+  LspServerStatus,
   McpServerStatus,
   PromptEnhancement,
   AskAnswer,
@@ -131,6 +132,8 @@ export const IPC_CHANNELS = {
   sessionApplyDiff: 'session:apply-diff',
   sessionProcesses: 'session:processes',
   sessionProcessStop: 'session:process-stop',
+  sessionLspStatus: 'session:lsp-status',
+  sessionLspControl: 'session:lsp-control',
   sessionProcessOutput: 'session:process-output',
   sessionDiagnose: 'session:diagnose',
   promptEnhance: 'prompt:enhance',
@@ -639,6 +642,9 @@ export interface DiffraApi {
   // 智能体转到后台的命令：列表变化、停止、最近的输出（任务监控「运行中」）
   onSessionProcesses(listener: (event: SessionProcesses) => void): () => void
   stopProcess(sessionId: string, id: number): Promise<{ stopped: boolean }>
+  // 插件的语言服务器（v2）：这个任务用到的服务器的状态和诊断；启动、停止、重启
+  lspStatus(sessionId: string): Promise<LspServerStatus[]>
+  controlLsp(sessionId: string, server: string, action: 'start' | 'stop' | 'restart'): Promise<LspServerStatus[]>
   processOutput(sessionId: string, id: number): Promise<{ text: string; running: boolean }>
   compactSession(sessionId: string, turnId: string): Promise<StopReason>
   // 项目、用户目录、插件和兼容的 Claude/Codex 目录里的 Skill，同名的只列优先的那个；任务里按建任务时开着的插件，首页按设置里开着的插件

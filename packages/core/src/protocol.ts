@@ -442,6 +442,8 @@ export interface PluginInfo {
   hooks: PluginHookInfo[]
   // 钩子的指纹，允许钩子时记下；没有钩子时为 null
   hooksFingerprint: string | null
+  // LSP 服务器（v2），名字带插件名（插件名-服务器名）
+  lspServers: string[]
   unsupported: string[]
 }
 
@@ -624,6 +626,42 @@ export interface McpServerStatus {
   error: string | null
   tools: Array<{ name: string; description: string }>
   prompts: McpPromptInfo[]
+}
+
+// 插件的语言服务器（v2 · M4）：idle 没在跑（还没用到或闲置停了），stopped 是用户停的，failed 是起不来或崩溃次数用完了
+export type LspServerState = 'idle' | 'starting' | 'running' | 'restarting' | 'failed' | 'stopped'
+
+export interface LspDiagnostic {
+  // 从 0 开始，和 LSP 一样
+  line: number
+  character: number
+  // 1 错误、2 警告、3 信息、4 提示
+  severity: number
+  message: string
+  source: string | null
+  code: string | null
+}
+
+export interface LspFileDiagnostics {
+  // 相对项目目录，/ 分隔
+  path: string
+  errors: number
+  warnings: number
+  // 最多几条，错误和警告
+  diagnostics: LspDiagnostic[]
+}
+
+export interface LspServerStatus {
+  name: string
+  plugin: string
+  extensions: string[]
+  state: LspServerState
+  error: string | null
+  restarts: number
+  pid: number | null
+  errors: number
+  warnings: number
+  files: LspFileDiagnostics[]
 }
 
 // 查哪些 MCP 服务器：某个任务用的，或者给定项目和配置（首页、设置页还没有任务）
@@ -963,6 +1001,9 @@ export const SESSION_EXT_METHODS = {
   skillsList: '_diffra/skills/list',
   // MCP 服务器状态；retry 为 true 时连不上的马上重连
   mcpStatus: '_diffra/mcp/status',
+  // 插件的语言服务器（v2）：这个任务用到的服务器的状态和诊断；启动、停止、重启
+  lspStatus: '_diffra/lsp/status',
+  lspControl: '_diffra/lsp/control',
   // 把一个 MCP prompt 展开成文字
   mcpPrompt: '_diffra/mcp/prompt',
   // 列出这个任务或项目能用的自定义命令

@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import type { BackgroundProcess } from '@diffra/core/types'
+import type { BackgroundProcess, LspServerState, LspServerStatus } from '@diffra/core/types'
 import {
   BookOpen,
+  Braces,
   CircleCheck,
   CircleDashed,
   CircleX,
@@ -60,6 +61,8 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
   const [output, setOutput] = useState<BackgroundProcess | null>(null)
   const remote = device !== null
   const mcp = useMcpStatus(remote ? null : { sessionId: task.sessionId })
+  // 外接智能体的任务不用 Diffra 的插件
+  const lsp = useLspStatus(remote || task.agent ? null : task.sessionId, task.running)
   const terminals = useAppState((state) => state.terminals)
   const processes = useAppState((state) => state.processes[task.sessionId] ?? NO_PROCESSES)
   const verdict = turnVerdict(task)
@@ -196,6 +199,8 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
             </Row>
           )}
         </Section>
+
+        {lsp.servers.length > 0 && <LanguageServers servers={lsp.servers} onControl={lsp.control} />}
 
         {agents.length > 0 && (
           <Section title={agents.every(({ item }) => item.title.startsWith('候选方案 ')) ? '候选方案' : '子智能体'}>
@@ -391,6 +396,108 @@ function attachedSources(turns: Turn[]): Source[] {
     for (const skill of turn.skills) add(`skill:${skill}`, { kind: 'skill', name: skill })
   }
   return sources
+}
+
+// 插件的语言服务器（v2）：任务开着时每隔几秒查一次，这一轮结束时马上查；没有语言服务器的任务不显示这一块
+const LSP_POLL_MS = 3000
+
+function useLspStatus(sessionId: string | null, running: boolean) {
+  const [servers, setServers] = useState<LspServerStatus[]>([])
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!sessionId) {
+      setServers([])
+      return
+    }
+    let stale = false
+    window.diffra.lspStatus(sessionId).then(
+      (next) => !stale && setServers(next),
+      (error: unknown) => console.error('读取语言服务器状态失败', error),
+    )
+    return () => {
+      stale = true
+    }
+  }, [sessionId, running, tick])
+  const any = servers.length > 0
+  useEffect(() => {
+    if (!sessionId || !any) return
+    const timer = setInterval(() => setTick((value) => value + 1), LSP_POLL_MS)
+    return () => clearInterval(timer)
+  }, [sessionId, any])
+  const control = async (server: string, action: 'start' | 'stop' | 'restart') => {
+    if (!sessionId) return
+    try {
+      setServers(await window.diffra.controlLsp(sessionId, server, action))
+    } catch (error) {
+      showToast(`语言服务器操作失败：${errorMessage(error)}`)
+    }
+  }
+  return { servers, control }
+}
+
+const LSP_STATE_LABELS: Record<LspServerState, string> = {
+  idle: '用到时启动',
+  starting: '启动中',
+  running: '运行中',
+  restarting: '崩溃了，重启中',
+  failed: '没在运行',
+  stopped: '已停止',
+}
+
+function LanguageServers({ servers, onControl }: { servers: LspServerStatus[]; onControl(server: string, action: 'start' | 'stop' | 'restart'): Promise<void> }) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const act = (server: string, action: 'start' | 'stop' | 'restart') => {
+    setBusy(server)
+    void onControl(server, action).finally(() => setBusy(null))
+  }
+  return (
+    <Section title="语言服务器">
+      {servers.map((server) => {
+        const bad = server.state === 'failed' || server.state === 'restarting'
+        const live = server.state === 'running' || server.state === 'starting' || server.state === 'restarting'
+        const counts = [server.errors > 0 && `${server.errors} 个错误`, server.warnings > 0 && `${server.warnings} 个警告`].filter(Boolean).join(' · ')
+        return (
+          <div key={server.name} className="flex flex-col gap-1" data-testid="lsp-server" data-status={server.state}>
+            <Row leading={<IconBox icon={bad ? TriangleAlert : Braces} tone={bad ? 'bad' : undefined} />} title={server.extensions.join(' ')}>
+              <span className="min-w-0 truncate text-foreground">{server.name}</span>
+              <span className={cn('shrink-0 text-xs', bad ? 'text-destructive' : 'text-muted-foreground')} data-testid="lsp-state">
+                {LSP_STATE_LABELS[server.state]}
+                {server.restarts > 0 && server.state === 'running' && `（重启过 ${server.restarts} 次）`}
+              </span>
+              <span className="ml-auto flex shrink-0 items-center">
+                {live ? (
+                  <Button size="xs" variant="ghost" disabled={busy === server.name} aria-label={`停止 ${server.name}`} onClick={() => act(server.name, 'stop')}>
+                    停止
+                  </Button>
+                ) : (
+                  <Button size="xs" variant="ghost" disabled={busy === server.name} aria-label={`启动 ${server.name}`} onClick={() => act(server.name, server.state === 'failed' ? 'restart' : 'start')}>
+                    {server.state === 'failed' ? '重启' : '启动'}
+                  </Button>
+                )}
+              </span>
+            </Row>
+            {server.error && bad && <p className="ml-8 text-xs break-words whitespace-pre-wrap text-destructive" data-testid="lsp-error">{server.error}</p>}
+            {counts && <p className="ml-8 text-xs text-muted-foreground" data-testid="lsp-counts">{counts}</p>}
+            {server.files.map((file) => (
+              <div key={file.path} className="ml-8 flex min-w-0 flex-col text-xs" data-testid="lsp-file">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 truncate font-mono" title={file.path}>
+                    {file.path}
+                  </span>
+                  <span className={cn('ml-auto shrink-0', file.errors > 0 ? 'text-destructive' : 'text-warning')}>{file.errors > 0 ? `${file.errors} 个错误` : `${file.warnings} 个警告`}</span>
+                </span>
+                {file.diagnostics[0] && (
+                  <span className="truncate text-muted-foreground" title={file.diagnostics.map((item) => `${item.line + 1}:${item.character + 1} ${item.message}`).join('\n')}>
+                    {file.diagnostics[0].line + 1} 行：{file.diagnostics[0].message}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      })}
+    </Section>
+  )
 }
 
 function Section({ title, action, children }: { title: string; action?: ReactNode; children?: ReactNode }) {

@@ -41,9 +41,11 @@ test('扩展目录的官方图标能显示，深浅主题尺寸一致', async ()
     await openExtensions(window, 'MCP')
     const view = window.getByTestId('extensions-view')
     const mcpRows = view.getByTestId('catalog-mcp')
-    await expect(mcpRows).toHaveCount(13)
+    // v2 加了 Railway 远程版，和本地版用同一个图标
+    await expect(mcpRows).toHaveCount(14)
     const icons = view.getByTestId('brand-icon')
-    await expect(icons).toHaveCount(13)
+    await expect(icons).toHaveCount(14)
+    await expect(mcpRows.filter({ hasText: 'Railway（远程版）' }).getByTestId('brand-icon')).toHaveCount(1)
     const sizes = await icons.evaluateAll((icons) =>
       icons.map((icon) => {
         const box = icon.getBoundingClientRect()

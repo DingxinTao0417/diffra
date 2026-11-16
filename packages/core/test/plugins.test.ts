@@ -67,6 +67,7 @@ describe('插件', () => {
       hooks: [],
       hooksFingerprint: null,
       blocks: [],
+      lspServers: [],
       unsupported: ['output-styles'],
     })
   })

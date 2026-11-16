@@ -47,7 +47,8 @@ import { commandRoots, loadCommands } from './commands.js'
 import { McpPool } from './mcp.js'
 import { loadAgentTypes } from './subagents.js'
 import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
-import { inspectPlugin, pluginBlocks, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { inspectPlugin, pluginBlocks, pluginHooks, pluginLspServers, pluginMcpServers, pluginSkillRoots } from './plugins.js'
+import { LspPool } from './lsp/pool.js'
 import { commandRisk } from './permissions.js'
 import { sessionStartContext } from './session/plugin-hooks.js'
 import { planStepsInstruction, presetSteps } from './session/interact.js'
@@ -99,6 +100,8 @@ export interface AgentOptions {
   usageDir?: string | null
   // 测试时注入，用完自己关掉；正常运行时 core 退出，stdio 服务器读到输入结束自行退出
   mcpPool?: McpPool
+  // 插件的语言服务器（v2）；测试时注入以缩短等待。客户端断开时全部停掉
+  lspPool?: LspPool
   // 架构分析的数据目录；不给就不提供架构功能
   architectureDir?: string | null
   // 多候选方案的 git worktree 放在这里；不给就用系统临时目录
@@ -244,6 +247,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const store = options.sessionsDir ? new SessionStore(options.sessionsDir) : null
   const usageLog = options.usageDir ? new UsageLog(options.usageDir) : null
   const mcpPool = options.mcpPool ?? new McpPool()
+  const lspPool = options.lspPool ?? new LspPool()
   let notifyArchitecture: (event: ArchitectureEvent) => void = () => {}
   const architecture = options.architectureDir ? new ArchitectureService(options.architectureDir, findRipgrep, (event) => notifyArchitecture(event)) : null
   // 会话更新的序号（见 UPDATE_SEQ_META_KEY）按会话 id 记，重新载入会话（换了 Session 对象）也接着往上数
@@ -256,11 +260,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     return client.notify(acp.methods.client.session.update, { sessionId, update: withSeq(update, seq) })
   }
 
-  // 只留还开着的任务用到的 MCP 连接
+  // 只留还开着的任务用到的 MCP 连接；语言服务器只留这些任务所在项目的
   const retainMcp = () =>
-    mcpPool.retain([...sessions.values()].map((session) => ({ cwd: session.cwd, servers: session.mcpServers }))).catch((error: unknown) =>
-      console.error('[mcp] 清理连接失败', error),
-    )
+    Promise.all([
+      mcpPool.retain([...sessions.values()].map((session) => ({ cwd: session.cwd, servers: session.mcpServers }))).catch((error: unknown) =>
+        console.error('[mcp] 清理连接失败', error),
+      ),
+      lspPool.retain([...sessions.values()].map((session) => session.cwd)).catch((error: unknown) => console.error('[lsp] 清理语言服务器失败', error)),
+    ])
 
   const mcpTarget = async (params: z.infer<typeof mcpTargetParams>) => {
     if (!('sessionId' in params)) return { cwd: params.cwd, servers: [...params.servers, ...(await pluginMcpServers(params.plugins))] }
@@ -431,6 +438,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       pluginBlocks: blocks,
       mcpServers: [...mcpServers, ...(await pluginMcpServers(config.plugins))],
       mcpPool,
+      lsp: { pool: lspPool, servers: await pluginLspServers(config.plugins) },
       record,
       architecture,
     })
@@ -615,6 +623,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onConnect((connection) => {
       void connection.closed.then(() => {
         for (const session of externals.values()) void session.dispose()
+        void lspPool.dispose().catch((error: unknown) => console.error('[lsp] 停掉语言服务器失败', error))
       })
     })
     .onRequest(acp.methods.agent.initialize, () => ({
@@ -763,6 +772,21 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const { cwd, servers } = await mcpTarget(params.target)
       return mcpPool.status(cwd, servers, params.retry)
     })
+    .onRequest(SESSION_EXT_METHODS.lspStatus, z.object({ sessionId: z.string() }), ({ params }) => {
+      const session = sessionOf(params.sessionId)
+      return session.lsp ? lspPool.status(session.cwd, session.lsp.servers) : []
+    })
+    .onRequest(
+      SESSION_EXT_METHODS.lspControl,
+      z.object({ sessionId: z.string(), server: z.string().min(1), action: z.enum(['start', 'stop', 'restart']) }),
+      async ({ params }) => {
+        const session = sessionOf(params.sessionId)
+        const spec = session.lsp?.servers.find((item) => item.name === params.server)
+        if (!spec) throw new Error(`这个任务没有名为「${params.server}」的语言服务器`)
+        await lspPool.control(session.cwd, spec, params.action)
+        return lspPool.status(session.cwd, session.lsp!.servers)
+      },
+    )
     .onRequest(
       SESSION_EXT_METHODS.mcpPrompt,
       z.object({ target: mcpTargetParams, server: z.string().min(1), prompt: z.string().min(1), arguments: z.record(z.string(), z.string()) }),

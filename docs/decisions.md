@@ -20,7 +20,7 @@ v1：
 v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域网，互联网远程、P2P 打洞、离线暂存、自建中转、远程撤销不做）：
 - 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。已做，见「外接智能体」。
 - 多候选方案（每个候选一个 git worktree）、Java 适配器。
-- 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。进度见「扩展的 v2 部分」。
+- 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。已做，见「扩展的 v2 部分」。
 
 ## 技术栈
 
@@ -610,6 +610,14 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 换上：旧的克隆目录挪到 `plugins/.backup/<id>`，新的挪到原位置（插件路径不变，设置里只改钩子允许），再读一遍、写设置；任何一步失败都把旧的挪回来，说「更新失败，还是原来的版本：原因」。Windows 上插件文件被占用（比如任务里正跑着它的 MCP 服务器）挪不动时说清楚。换到一半应用崩了：下次启动时原位置没了就把备份挪回去，在就删掉备份。
   - 不做：自动定时检查、选分支或标签、版本回退到更早的提交。
 - 验证（插件更新）：`scripts/plugin-swap.test.ts` 测换成功、验证失败和新目录挪不过去时旧的原样恢复（连 `.git`）、启动时恢复备份、比文件（加删改、不看 `.git`、截断）。e2e `plugin-update.spec.ts` 用本地 Git 仓库里的插件：没新版本时说都是最新的；有新版本时看改了哪些文件、取消不留暂存克隆、更新后版本和文件换了、钩子没变照旧允许、不留备份；钩子变了列出新命令、不勾就变成没允许；新版本清单坏了、改了名都不换，原来的照常；仓库没了说没查成。
+- 插件的语言服务器（LSP，`core/src/lsp/`）：
+  - 配置兼容 Claude Code：插件根目录的 `.lsp.json`（服务器名 → 配置），加上 `plugin.json` 的 `lspServers`（`./` 开头的文件路径、内联配置或数组，后写的同名覆盖）。字段严格：`command`、`extensionToLanguage` 必填，`args`、`transport`（都按 stdio 跑）、`env`、`initializationOptions`、`settings`、`workspaceFolder`、`startupTimeout`、`shutdownTimeout`、`requestTimeout`、`restartOnCrash`、`maxRestarts`、`diagnostics` 可选，有不认识的字段这个服务器就不用，原因列进插件的「不支持」。`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PROJECT_DIR}` 在 command、args、env、workspaceFolder 里展开，也放进进程的环境变量。服务器名是「插件名-服务器名」。只有 `.lsp.json` 的文件夹也算插件；插件内容里写「N 个语言服务器」，装的时候提示它们会在本机运行命令（和插件的 MCP 服务器一样，不另外确认）。
+  - 进程（`lsp/pool.ts`）：同一项目、同样配置的服务器在各任务间共用一个进程。智能体改了它管的扩展名的文件才启动（Windows 上 .cmd 经 cmd.exe 起，和外接智能体同一套）；10 分钟没用就停掉，下次用到再起；删任务时只留还开着的任务所在项目的；core 和桌面端断开时全部停掉。停的时候先 `shutdown` / `exit`，`shutdownTimeout`（默认 3 秒）内不退就结束整个进程树。启动等 `initialize` 的回答最多 `startupTimeout`（默认 20 秒），找不到命令、一启动就退出、超时都停在「没在运行」，带上标准错误的最后几行。
+  - 崩溃：`restartOnCrash`（默认开）时按 1、2、4 秒退避重启，最多 `maxRestarts`（默认 3）次，重启后把打开过的文件按原来的内容和版本重新交给它；次数用完停在「没在运行」，不再自动启动。用户在任务监控里重启时次数清零。
+  - 诊断进任务：改完文件（`apply_patch` 的每个新建或修改的文件，项目 afterEdit 钩子跑完之后读现在的内容）交给管它的服务器（第一次 `didOpen`，之后整份 `didChange`，版本号往上数），等这个版本的 `publishDiagnostics` 最多 5 秒，收到后再等 150 毫秒合并后续的。错误和警告（最多 20 条，按严重程度和行号排）接在编辑结果后面给模型：`[Language server kit-go reports 1 error(s) and 0 warning(s) in src/a.go after this edit: …]`；没问题的不加。服务器配了 `diagnostics: false` 的不给模型。服务器起不来或崩了，在这个任务里提示用户一次（同样的不重复），不打扰模型。子智能体改的文件也一样；多候选方案在各自的 worktree 里跑，不带语言服务器。服务器反过来问的 `workspace/configuration` 按 section 从 `settings` 里取，注册能力、进度这类答空。
+  - 界面：任务监控多一块「语言服务器」（这个任务用到的才显示）：每个服务器的状态（用到时启动、启动中、运行中、重启过几次、崩溃了重启中、没在运行、已停止）、错误和警告数、出问题的文件和第一条诊断，能停止、启动、重启（没在运行时）。任务开着时每 3 秒查一次。停止后改文件也不再自动启动，直到点启动。
+  - 不做：跳转定义、查引用这类 LSP 查询工具（v3）；读文件时就打开文档（现在只在改后检查）；按文件保存（didSave）；socket 方式真的走 socket。
+- 验证（LSP）：core `lsp.test.ts` 用 `test/fixtures/fake-lsp.mjs`（stdio 上的假语言服务器，按行报 ERROR / WARN，能崩一次、一直崩、不回 initialize、一启动就退出，记下收到的方法）测配置合并和严格字段、只有 `.lsp.json` 的插件、按扩展名启动、版本对应的诊断和状态计数、回答配置请求、崩溃后退避重启并重新打开文件、重启次数用完停在失败和手动重启清零、停止后不自动启动、闲置停止、只留开着的项目、dispose 结束进程、找不到命令 / 启动就退出 / 握手超时 / 不发诊断的时限、任务里改文件后诊断接在结果后面且崩溃只提示一次。e2e `lsp.spec.ts` 从文件夹装只带语言服务器的插件，脚本模型改文件：模型收到错误诊断，崩了提示并自动重启，任务监控显示运行中（重启过 1 次）、警告数和文件，停止和启动。没有用真的 gopls、tsserver 这些跑过。
 
 ## 图片输入
 

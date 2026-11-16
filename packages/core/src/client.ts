@@ -32,6 +32,7 @@ import {
   type ListTarget,
   type LoadedSession,
   type McpServer,
+  type LspServerStatus,
   type McpServerStatus,
   type McpTarget,
   type PluginInfo,
@@ -266,6 +267,19 @@ export function mcpStatus(connection: acp.ClientConnection, target: McpTarget, r
   return requestOf(connection)<McpServerStatus[], { target: McpTarget; retry: boolean }>(
     SESSION_EXT_METHODS.mcpStatus,
     { target, retry },
+    { cancellationSignal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true },
+  )
+}
+
+// 插件的语言服务器（v2）：状态和诊断；启动、停止、重启（启动要等它握手，最多 startupTimeout）
+export function lspStatus(connection: acp.ClientConnection, sessionId: string): Promise<LspServerStatus[]> {
+  return requestOf(connection)<LspServerStatus[], { sessionId: string }>(SESSION_EXT_METHODS.lspStatus, { sessionId }, extRequestOptions())
+}
+
+export function lspControl(connection: acp.ClientConnection, sessionId: string, server: string, action: 'start' | 'stop' | 'restart'): Promise<LspServerStatus[]> {
+  return requestOf(connection)<LspServerStatus[], { sessionId: string; server: string; action: string }>(
+    SESSION_EXT_METHODS.lspControl,
+    { sessionId, server, action },
     { cancellationSignal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS), stopWaitingOnCancel: true },
   )
 }

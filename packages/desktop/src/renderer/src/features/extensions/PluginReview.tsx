@@ -16,7 +16,7 @@ export function PluginReview({ prepared, busy, onInstall, onCancel }: { prepared
           从 <span className="font-mono text-xs break-all">{prepared.location}</span> 取回了「{info.name}」{info.version && <span className="text-muted-foreground"> v{info.version.replace(/^v/i, '')}</span>}。
         </p>
         <p className="text-xs text-muted-foreground">{contentsSummary(info)}</p>
-        {info.mcpServers.length > 0 && <p className="text-xs text-muted-foreground">里面的 MCP 服务器会在本机运行命令。</p>}
+        {(info.mcpServers.length > 0 || (info.lspServers?.length ?? 0) > 0) && <p className="text-xs text-muted-foreground">里面的 MCP 服务器、语言服务器会在本机运行命令。</p>}
         {info.unsupported.length > 0 && (
           <p className="flex items-start gap-1.5 text-xs">
             <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />

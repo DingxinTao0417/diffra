@@ -17,6 +17,8 @@ import {
   commandRiskOf,
   applyDiff,
   stopProcess,
+  lspControl,
+  lspStatus,
   processOutput,
   configureSession,
   compactSession,
@@ -520,6 +522,10 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   )
   ipcMain.handle(IPC_CHANNELS.sessionProcessStop, async (_event, rawSessionId: unknown, rawId: unknown) =>
     stopProcess(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.number().int(), rawId)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionLspStatus, async (_event, rawSessionId: unknown) => lspStatus(await coreConnection(), parse(z.string().min(1), rawSessionId)))
+  ipcMain.handle(IPC_CHANNELS.sessionLspControl, async (_event, rawSessionId: unknown, rawServer: unknown, rawAction: unknown) =>
+    lspControl(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawServer), parse(z.enum(['start', 'stop', 'restart']), rawAction)),
   )
   ipcMain.handle(IPC_CHANNELS.sessionProcessOutput, async (_event, rawSessionId: unknown, rawId: unknown) =>
     processOutput(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.number().int(), rawId)),

@@ -633,6 +633,45 @@ async function afterEditHook(session: Session, path: string, written: string, si
   return now !== null && now !== written ? `\n[The project's after-edit hook changed ${basename(path)} (for example a formatter). Read it again before patching it further.]` : ''
 }
 
+// 插件的语言服务器（v2）：把改后的文件交给管它的服务器，错误和警告接在编辑结果后面给模型。
+// 读文件现在的内容（afterEdit 钩子可能刚格式化过）；服务器起不来、崩了只在这个任务里提示用户一次，不打扰模型
+const MAX_LSP_LINES = 20
+
+async function lspDiagnostics(session: Session, path: string, signal: AbortSignal, io: TurnIO): Promise<string> {
+  const lsp = session.lsp
+  if (!lsp) return ''
+  const specs = lsp.pool.matching(lsp.servers, path).filter((spec) => spec.diagnostics)
+  if (specs.length === 0) return ''
+  const text = await readFile(path, 'utf8').catch(() => null)
+  if (text === null) return ''
+  const shown = relative(session.cwd, path)
+  const display = shown.startsWith('..') || isAbsolute(shown) ? path : shown.replaceAll('\\', '/')
+  let result = ''
+  for (const spec of specs) {
+    const check = await lsp.pool.check(session.cwd, spec, path, text, signal)
+    if (check.diagnostics === null) {
+      const key = `${spec.name}:${check.state}`
+      if ((check.state === 'failed' || check.state === 'restarting') && !session.lspNoticed.has(key)) {
+        session.lspNoticed.add(key)
+        await notice(io, 'warning', check.state === 'failed' ? `语言服务器 ${spec.name} 没在运行，这个任务里拿不到它的诊断` : `语言服务器 ${spec.name} 崩溃了，正在重启`, check.note ?? undefined)
+      }
+      continue
+    }
+    session.lspNoticed.delete(`${spec.name}:failed`)
+    session.lspNoticed.delete(`${spec.name}:restarting`)
+    const items = check.diagnostics.filter((item) => item.severity <= 2).sort((a, b) => a.severity - b.severity || a.line - b.line || a.character - b.character)
+    if (items.length === 0) continue
+    const errors = items.filter((item) => item.severity === 1).length
+    const lines = items.slice(0, MAX_LSP_LINES).map((item) => {
+      const origin = item.source ? ` (${item.source}${item.code ? ` ${item.code}` : ''})` : ''
+      return `  ${display}:${item.line + 1}:${item.character + 1} ${item.severity === 1 ? 'error' : 'warning'}: ${item.message.split(/\r?\n/)[0]}${origin}`
+    })
+    const more = items.length > MAX_LSP_LINES ? `\n  ... and ${items.length - MAX_LSP_LINES} more` : ''
+    result += `\n[Language server ${spec.name} reports ${errors} error(s) and ${items.length - errors} warning(s) in ${display} after this edit:\n${lines.join('\n')}${more}]`
+  }
+  return result
+}
+
 // 每轮开始时取一次 MCP 工具，这一轮里不变；连不上的服务器提示一下，照常开始
 async function prepareMcpTools(session: Session, io: TurnIO): Promise<void> {
   if (!session.mcpPool || session.mcpServers.length === 0) return
@@ -1065,6 +1104,7 @@ export async function runToolCall(
     for (const diff of output.edited ? (output.diffs ?? []) : []) {
       scope?.onEdited(diff.path)
       if (!diff.deleted && session.config.hooks?.afterEdit) output.text += await afterEditHook(session, diff.path, diff.newText, signal)
+      if (!diff.deleted && session.lsp) output.text += await lspDiagnostics(session, diff.path, signal, io)
     }
     output.text += await postToolHooks(session.pluginHooks, name, call.input, output, hookContext(session, signal))
     await io.update({

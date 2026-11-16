@@ -278,7 +278,7 @@ function PluginRow({
           )}
           <span className="text-xs text-muted-foreground">内容</span>
           <div className="flex flex-wrap gap-1">
-            {[...info.commands.map((name) => `/${name}`), ...info.skills, ...info.agents, ...info.mcpServers, ...(info.blocks ?? []).map((kind) => `\`\`\`${kind}`)].map((name) => (
+            {[...info.commands.map((name) => `/${name}`), ...info.skills, ...info.agents, ...info.mcpServers, ...(info.lspServers ?? []), ...(info.blocks ?? []).map((kind) => `\`\`\`${kind}`)].map((name) => (
               <Badge key={name} variant="secondary" className="font-mono">
                 {name}
               </Badge>
