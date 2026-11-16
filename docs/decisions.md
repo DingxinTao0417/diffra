@@ -704,6 +704,15 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 在 Claude 桌面版（打包应用）的终端里跑测试时，写注册表和 `%LOCALAPPDATA%` 会被重定向到它私有的副本：注册表项用户的 Chrome 看不到，装在那里的 Chrome for Testing 启动报「并行配置不正确」。本机跑扩展的 e2e 时把 `PLAYWRIGHT_BROWSERS_PATH` 指到其他盘上的目录。
 - 不做（以后再说）：Firefox、Safari、Brave、Arc；Linux（macOS 见「macOS」）；Chrome 远程调试开关（`chrome://inspect`）当备用；自动识别付款、提交这类高风险按钮再确认；录 GIF；在浏览器侧边栏里聊天；在投屏画面上直接点。
 
+## 系统 Chrome 直连、开发者工具（v2 · M5）
+
+- 设置分区「浏览器」改名「浏览器与电脑操控」（电脑操控见下一节）。选「我的 Chrome」时多一项「Chrome 怎么连」：经扩展（原来的做法，用用户平时的 Chrome 和登录状态），或直接启动（`browser.chromeDirect`，可选字段，旧设置没有就是经扩展；旧版读到会忽略，`agent` 还是 v1 认得的 `chrome`）。
+- 直接启动（`main/browser-direct.ts`）：按 Chrome、Edge、Chromium 的顺序找系统里装的（Windows 看 Program Files 和 LocalAppData，Mac 看 /Applications 和 ~/Applications），用 Diffra 自己的配置目录（`userData/system-chrome`，登录状态留在这里，和用户平时的 Chrome 分开）启动，开调试端口（`--remote-debugging-port=0`，只听 127.0.0.1，从配置目录里的 `DevToolsActivePort` 读端口），WebSocket 连上去（Node 自带的 WebSocket，不加依赖）。Chrome 136 起不让默认配置开调试端口，所以只能用单独的配置。上次 Diffra 启动的那个还开着就直接连上去。智能体用到、或者在面板上输入网址时才启动，20 秒内没启动好、找不到程序都说清楚；Linux 暂不支持，设置里标出来。
+  - 不另写一套：在进程里模拟一个扩展连接（`BridgeConnection` 的传输换成函数），扩展的几个调用（开、关、切换标签页，接上调试，转发调试命令）换成调试协议的 `Target.*`，事件按扩展的格式交回去；标签页、投屏、`PageAgent` 都和经扩展的那条路共用。没有标签页分组（整个配置都是 Diffra 的）。网页开的新窗口（`Target.targetCreated` 带 openerId）照样交给这个任务。
+  - 退出 Diffra 时先 `Browser.close` 再结束进程。调试端口在本机上别的程序也连得上，这是直连的代价，设置里写了是单独的配置。
+- 开发者工具：浏览器面板顶栏多一个按钮。内置浏览器打开 Electron 的开发者工具（单独窗口）；直接启动的 Chrome 在那个 Chrome 里开一个新窗口，打开这个标签页的检查器（`/devtools/inspector.html?ws=…`）；经扩展的 Chrome、Edge 请用户按 F12（按钮不显示）。
+- 验证：e2e `browser-direct.spec.ts` 把「系统 Chrome」换成 Playwright 的 Chromium（无头，`DIFFRA_SYSTEM_CHROME`、`DIFFRA_SYSTEM_CHROME_ARGS`，只在测试数据目录里认）：设置里选直接启动并存进设置文件，智能体在里面打开、读本地页面，调试端口上看得到这个页面，面板显示投屏，点开发者工具后多了检查器页面，设置里显示运行中，关掉 Diffra 后调试端口连不上。`browser-settings.spec.ts` 跟着改了分区名。没有用真的 Chrome、Edge 跑过（本机测试不碰用户装的浏览器）。
+
 ## 前端任务
 
 - 前端效果差，主要是模型不知道项目已有的设计、看不到自己做出来的页面。所以给它三样东西：做法说明、设计 Skill、能「量」页面的工具。审美上限还是取决于模型本身。

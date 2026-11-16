@@ -15,8 +15,9 @@ export type ExternalKind = 'chrome' | 'edge'
 
 export const BROWSER_NAMES: Record<ExternalKind, string> = { chrome: 'Chrome', edge: 'Edge' }
 
-// Playwright 测试用的 Chromium 也当 Chrome 用
-const matches = (connection: BridgeConnection, kind: ExternalKind) => connection.browser === kind || (kind === 'chrome' && connection.browser === 'chromium')
+// Playwright 测试用的 Chromium 也当 Chrome 用；Chrome 选了直接启动（v2）时只用直连的那条
+const matches = (connection: BridgeConnection, kind: ExternalKind, direct: boolean) =>
+  kind === 'chrome' && direct ? connection.direct : !connection.direct && (connection.browser === kind || (kind === 'chrome' && connection.browser === 'chromium'))
 
 // 用户 Chrome、Edge 里的一个标签页：调试命令经扩展转发
 class ChromeTarget implements PageTarget {
@@ -121,6 +122,9 @@ interface ExternalTask {
 
 export interface ExternalHooks {
   connections(): BridgeConnection[]
+  // Chrome 是不是直接启动的系统 Chrome；是的话用之前先确保它在跑
+  direct(): boolean
+  ensure(kind: ExternalKind): Promise<void>
   title(sessionId: string): string
   publish(state: BrowserState): void
   frame(sessionId: string, data: string): void
@@ -137,10 +141,12 @@ export class ExternalBrowser {
   constructor(private readonly hooks: ExternalHooks) {}
 
   private pick(kind: ExternalKind): BridgeConnection {
-    const candidates = this.hooks.connections().filter((connection) => matches(connection, kind) && !connection.closed)
+    const direct = this.hooks.direct()
+    const candidates = this.hooks.connections().filter((connection) => matches(connection, kind, direct) && !connection.closed)
     const usable = candidates.filter((connection) => !connection.outdated)
     if (usable.length === 0) {
       const name = BROWSER_NAMES[kind]
+      if (kind === 'chrome' && direct) throw new Error('系统 Chrome 没有启动起来，请用户看「设置 → 浏览器与电脑操控」里的说明，或者在浏览器面板里改回内置浏览器')
       if (candidates.length > 0) throw new Error(`${name} 里的 Diffra 浏览器扩展版本和 Diffra 对不上，请用户把扩展和 Diffra 都更新到最新`)
       throw new Error(`用户选了让智能体用 ${name}，但 Diffra 浏览器扩展没有连上。请用户在 ${name} 里装好并启用 Diffra 浏览器扩展（Diffra 的「设置 → 浏览器」有入口），或者在浏览器面板里改回内置浏览器`)
     }
@@ -183,6 +189,7 @@ export class ExternalBrowser {
   }
 
   async act(sessionId: string, kind: ExternalKind, action: BrowserAction): Promise<BrowserActionResult> {
+    await this.hooks.ensure(kind)
     const task = this.task(sessionId, kind)
     if (task.paused) throw new Error(task.paused)
     try {
@@ -352,7 +359,15 @@ export class ExternalBrowser {
   }
 
   connected(kind: ExternalKind): boolean {
-    return this.hooks.connections().some((connection) => matches(connection, kind) && !connection.outdated)
+    const direct = this.hooks.direct()
+    return this.hooks.connections().some((connection) => matches(connection, kind, direct) && !connection.outdated)
+  }
+
+  // 当前标签页（开发者工具用）：哪条连接、哪个标签页
+  activeTab(sessionId: string): { connection: BridgeConnection; tabId: number } | null {
+    const task = this.tasks.get(sessionId)
+    const tab = task?.tabs[task.active]
+    return task && tab ? { connection: task.connection, tabId: tab.target.tabId } : null
   }
 
   state(sessionId: string, kind: ExternalKind): BrowserState {
@@ -369,7 +384,7 @@ export class ExternalBrowser {
       tabs: task?.tabs.map((item) => ({ title: item.target.title, url: item.target.hasPage() ? item.target.url : '' })) ?? [],
       activeTab: task?.active ?? 0,
       backend: kind,
-      external: { connected, paused: task?.paused ?? null },
+      external: { connected, paused: task?.paused ?? null, ...(kind === 'chrome' && this.hooks.direct() ? { direct: true } : {}) },
     }
   }
 
@@ -380,6 +395,7 @@ export class ExternalBrowser {
 
   // 面板上的操作
   async userNavigate(sessionId: string, kind: ExternalKind, url: string): Promise<void> {
+    await this.hooks.ensure(kind)
     const task = this.task(sessionId, kind)
     if (task.tabs.length === 0) await this.openTab(sessionId, task, url)
     else await task.tabs[task.active]!.agent.load(url)

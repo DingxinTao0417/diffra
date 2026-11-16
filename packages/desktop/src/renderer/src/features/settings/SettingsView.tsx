@@ -88,7 +88,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'permissions', label: '命令权限', icon: ShieldCheck, keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 规范审查 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
-      { id: 'browser', label: '浏览器', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 网站 允许 禁止 登录' },
+      { id: 'browser', label: '浏览器与电脑操控', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 系统 直接启动 开发者工具 网站 允许 禁止 登录 电脑操控 鼠标 键盘 屏幕' },
     ],
   },
   {

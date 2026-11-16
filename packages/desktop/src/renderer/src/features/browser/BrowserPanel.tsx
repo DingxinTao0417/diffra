@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AppWindow, ArrowLeft, ArrowRight, ChevronDown, ExternalLink, Globe, Info, Play, RotateCw, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, ArrowRight, Bug, ChevronDown, ExternalLink, Globe, Info, Play, RotateCw, X } from 'lucide-react'
 import type { AgentBrowser } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
@@ -93,7 +93,11 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
   }
 
   const hasPage = Boolean(state?.url)
-  const name = BROWSER_LABELS[backend]
+  // 直接启动的系统 Chrome（v2）：不经扩展，Diffra 单独的配置
+  const direct = state?.external?.direct === true
+  const name = direct ? '系统 Chrome' : BROWSER_LABELS[backend]
+  // 开发者工具：内置浏览器和直接启动的 Chrome 能从这里开；经扩展的请用户在浏览器里按 F12
+  const devTools = hasPage && (!external || direct)
 
   return (
     <SidePanel
@@ -143,6 +147,11 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
       actions={
         <>
           <BackendMenu sessionId={sessionId} backend={backend} />
+          {devTools && (
+            <ToolButton label="开发者工具" onClick={() => void window.diffra.browserDevTools(sessionId).catch((error: unknown) => showToast(errorMessage(error)))}>
+              <Bug className="size-4" />
+            </ToolButton>
+          )}
           {hasPage &&
             (external ? (
               <ToolButton label={`在 ${name} 里查看`} onClick={() => window.diffra.browserCommand(sessionId, 'external')}>
@@ -203,7 +212,7 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
       {/* 左边 ml-2 留给面板的拖动条：原生视图盖在上面时拖动条点不到 */}
       <div ref={body} className="relative ml-2 min-h-0 flex-1 bg-background" data-testid="browser-viewport">
         {external ? (
-          <ExternalBody sessionId={sessionId} name={name} connected={state?.external?.connected ?? false} hasPage={hasPage} frame={frame} />
+          <ExternalBody sessionId={sessionId} name={name} direct={direct} connected={state?.external?.connected ?? false} hasPage={hasPage} frame={frame} />
         ) : (
           !hasPage && (
             <div className="flex h-full items-center justify-center px-6">
@@ -238,8 +247,22 @@ export function BrowserPanel({ sessionId }: { sessionId: string }) {
   )
 }
 
-// 用户的 Chrome、Edge：扩展没连上时说怎么装；连上了显示智能体那个标签页的画面
-function ExternalBody({ sessionId, name, connected, hasPage, frame }: { sessionId: string; name: string; connected: boolean; hasPage: boolean; frame: string | null }) {
+// 用户的 Chrome、Edge：扩展没连上时说怎么装；连上了显示智能体那个标签页的画面。
+// 直接启动的系统 Chrome 没在跑不算问题：智能体用到、或者在上面输入网址时自动启动
+function ExternalBody({ sessionId, name, direct, connected, hasPage, frame }: { sessionId: string; name: string; direct: boolean; connected: boolean; hasPage: boolean; frame: string | null }) {
+  if (!connected && direct) {
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <EmptyState
+          icon={Globe}
+          title="智能体会在系统 Chrome 里操作"
+          description="用的是 Diffra 单独的 Chrome 配置，登录状态和你平时的 Chrome 分开。用到时自动启动，也可以在上面输入网址。"
+          variant="plain"
+          className="py-0"
+        />
+      </div>
+    )
+  }
   if (!connected) {
     return (
       <div className="flex h-full items-center justify-center px-6">
@@ -261,8 +284,10 @@ function ExternalBody({ sessionId, name, connected, hasPage, frame }: { sessionI
       <div className="flex h-full items-center justify-center px-6">
         <EmptyState
           icon={Globe}
-          title={hasPage ? '正在取画面…' : `智能体会在你的 ${name} 里操作`}
-          description={hasPage ? undefined : `用到浏览器时，它会在 ${name} 里开一个「Diffra · 任务名」分组的标签页，这里显示那个标签页的画面。也可以在上面输入网址。`}
+          title={hasPage ? '正在取画面…' : `智能体会在${direct ? '' : '你的 '}${name} 里操作`}
+          description={
+            hasPage ? undefined : direct ? `用到浏览器时，它会在 ${name} 里开标签页，这里显示那个标签页的画面。也可以在上面输入网址。` : `用到浏览器时，它会在 ${name} 里开一个「Diffra · 任务名」分组的标签页，这里显示那个标签页的画面。也可以在上面输入网址。`
+          }
           variant="plain"
           className="py-0"
         />

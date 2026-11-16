@@ -10,6 +10,12 @@ const AUTH_TIMEOUT_MS = 5_000
 // 一行消息的上限（整页截图的 base64 可能有十几 MB）
 const MAX_LINE_CHARS = 128 * 1024 * 1024
 
+// 一条连接的两头怎么传：扩展经宿主走管道（Socket）；直接启动的系统 Chrome（v2）在进程里模拟扩展，见 browser-direct.ts
+export interface BridgeTransport {
+  write(line: string): unknown
+  destroy(): void
+}
+
 // 一个浏览器（一个配置文件）里的扩展经宿主连上来的一条连接
 export class BridgeConnection {
   private static nextConnectionId = 1
@@ -20,11 +26,13 @@ export class BridgeConnection {
   outdated = false
   // 这个浏览器的窗口最近一次切到前台的时间；有多个连着时用最近的
   lastFocus = Date.now()
+  // 直接启动的系统 Chrome（调试端口直连，不经扩展）
+  direct = false
   private nextCallId = 1
   private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }>()
   closed = false
 
-  constructor(private readonly socket: Socket) {}
+  constructor(private readonly socket: BridgeTransport) {}
 
   send(message: DiffraMessage): void {
     if (!this.closed) this.socket.write(`${JSON.stringify(message)}\n`)

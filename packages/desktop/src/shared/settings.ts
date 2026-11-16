@@ -110,6 +110,8 @@ export interface BrowserSettings {
   agent: AgentBrowser
   allowSites: string[]
   blockSites: string[]
+  // v2：选了 Chrome 时不经扩展，直接启动系统里装的 Chrome（Diffra 单独的配置）；旧设置没有这一项（就是经扩展）
+  chromeDirect?: boolean
 }
 
 export const DEFAULT_BROWSER: BrowserSettings = { agent: 'builtin', allowSites: [], blockSites: [] }

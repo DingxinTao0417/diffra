@@ -106,6 +106,7 @@ export const browserSettingsSchema = z.object({
   agent: z.enum(AGENT_BROWSERS),
   allowSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
   blockSites: z.array(siteSchema).max(MAX_BROWSER_SITES),
+  chromeDirect: z.boolean().optional(),
 })
 
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])

@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { normalizeUrl } from '@diffra/core'
 import { setBrowserSites } from '@diffra/core'
 import type { BrowserAction, BrowserActionParams, BrowserActionResult } from '@diffra/core/types'
@@ -7,6 +8,7 @@ import type { BridgeTask } from '../shared/browser-bridge'
 import { type BridgeStatus, type BrowserRect, type BrowserState, IPC_CHANNELS } from '../shared/ipc'
 import type { AgentBrowser } from '../shared/settings'
 import { BridgeServer } from './browser-bridge'
+import { DirectChrome } from './browser-direct'
 import { BROWSER_NAMES, ExternalBrowser, type ExternalKind } from './browser-external'
 import { coreConnection } from './core-process'
 import { registerNativeHost } from './native-host-registry'
@@ -136,6 +138,14 @@ class BuiltinBrowser {
   private current(sessionId: string): Tab {
     const task = this.task(sessionId)
     return task.tabs[task.active]!
+  }
+
+  // 开发者工具（v2）：当前标签页的，单独开一个窗口
+  openDevTools(sessionId: string): void {
+    const task = this.tasks.get(sessionId)
+    const tab = task?.tabs[task.active]
+    if (!tab || tab.view.webContents.isDestroyed()) throw new Error('还没有打开网页')
+    tab.view.webContents.openDevTools({ mode: 'detach' })
   }
 
   private addTab(sessionId: string, task: TaskTabs): Tab {
@@ -328,13 +338,22 @@ export class BrowserHost {
   private readonly builtin = new BuiltinBrowser()
   private readonly external: ExternalBrowser
   private readonly bridge: BridgeServer
+  // 直接启动的系统 Chrome（v2）；启动时知道数据目录才建
+  private direct: DirectChrome | null = null
   private settings: SettingsStore | null = null
   private readonly overrides = new Map<string, AgentBrowser>()
   private readonly titles = new Map<string, string>()
 
   constructor() {
     this.external = new ExternalBrowser({
-      connections: () => this.bridge.connections(),
+      connections: () => [...this.bridge.connections(), ...(this.direct?.connections() ?? [])],
+      direct: () => this.chromeDirect(),
+      ensure: async (kind) => {
+        if (kind === 'chrome' && this.chromeDirect()) {
+          if (!this.direct) throw new Error('浏览器还没准备好')
+          await this.direct.start()
+        }
+      },
       title: (sessionId) => this.titles.get(sessionId) ?? '任务',
       publish: (state) => this.send(IPC_CHANNELS.browserState, state),
       frame: (sessionId, data) => this.send(IPC_CHANNELS.browserFrame, { sessionId, data }),
@@ -356,12 +375,22 @@ export class BrowserHost {
   async start(settings: SettingsStore, userDataDir: string): Promise<void> {
     this.settings = settings
     this.pushSites()
+    this.direct = new DirectChrome(join(userDataDir, 'system-chrome'), {
+      message: (connection, message) => void this.external.handle(connection, message).catch((error: unknown) => console.error('[browser] 处理系统 Chrome 的消息失败', error)),
+      closed: (connection) => this.external.closed(connection),
+      changed: () => this.send(IPC_CHANNELS.browserBridgeStatus, this.status()),
+    })
     const endpoint = await registerNativeHost(userDataDir)
     this.bridge.start(endpoint)
   }
 
   stop(): void {
     this.bridge.stop()
+    void this.direct?.stop().catch((error: unknown) => console.error('[browser] 关闭系统 Chrome 失败', error))
+  }
+
+  private chromeDirect(): boolean {
+    return this.settings?.get().browser.chromeDirect === true
   }
 
   pushSites(): void {
@@ -375,6 +404,7 @@ export class BrowserHost {
   status(): BridgeStatus {
     return {
       connections: this.bridge.connections().map((connection) => ({ id: connection.id, browser: connection.browser, version: connection.extensionVersion, outdated: connection.outdated })),
+      ...(this.direct ? { direct: this.direct.status() } : {}),
     }
   }
 
@@ -412,6 +442,10 @@ export class BrowserHost {
       return "Switched this task to Diffra's built-in browser. Its tabs are separate from the user's browser."
     }
     const name = BROWSER_NAMES[backend]
+    if (backend === 'chrome' && this.chromeDirect()) {
+      this.setBackend(sessionId, backend)
+      return 'Switched this task to the system Chrome that Diffra starts with its own profile (separate from the user\'s everyday Chrome). It starts when you next use the browser.'
+    }
     if (!this.external.connected(backend)) {
       throw new Error(`The Diffra browser extension is not connected in the user's ${name}. Did not switch. Ask the user to install and enable it (Settings → Browser in Diffra), then try again.`)
     }
@@ -449,6 +483,16 @@ export class BrowserHost {
   userTab(sessionId: string, op: 'select' | 'close', index: number): void {
     if (this.externalKind(sessionId)) this.external.userTab(sessionId, op, index)
     else this.builtin.userTab(sessionId, op, index)
+  }
+
+  // 浏览器面板的「开发者工具」（v2）：内置浏览器开 Electron 的；直接启动的 Chrome 在那个 Chrome 里开检查器；经扩展的 Chrome、Edge 请用户按 F12
+  async openDevTools(sessionId: string): Promise<void> {
+    const kind = this.externalKind(sessionId)
+    if (!kind) return this.builtin.openDevTools(sessionId)
+    const active = this.external.activeTab(sessionId)
+    if (!active) throw new Error('还没有打开网页')
+    if (!active.connection.direct || !this.direct) throw new Error(`在 ${BROWSER_NAMES[kind]} 里按 F12 打开开发者工具`)
+    await this.direct.inspect(active.tabId)
   }
 
   close(sessionId: string): void {
@@ -495,6 +539,7 @@ export function registerBrowserIpc(): void {
     browserHost.setBackend(parse(sessionIdSchema, rawSessionId), parse(z.enum(['builtin', 'chrome', 'edge']), rawBackend))
   })
   ipcMain.on(IPC_CHANNELS.browserResume, (_event, rawSessionId: unknown) => browserHost.resume(parse(sessionIdSchema, rawSessionId)))
+  ipcMain.handle(IPC_CHANNELS.browserDevTools, (_event, rawSessionId: unknown) => browserHost.openDevTools(parse(sessionIdSchema, rawSessionId)))
   ipcMain.handle(IPC_CHANNELS.browserBridgeGetStatus, () => browserHost.status())
   ipcMain.on(IPC_CHANNELS.browserBridgeTasks, (_event, rawTasks: unknown) => {
     browserHost.setTasks(parse(z.array(z.object({ sessionId: z.string().min(1), title: z.string().max(200), running: z.boolean() })).max(50), rawTasks))

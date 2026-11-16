@@ -149,6 +149,7 @@ const api: DiffraApi = {
   browserTab: (sessionId, op, index) => ipcRenderer.send(IPC_CHANNELS.browserTab, sessionId, op, index),
   browserSetBackend: (sessionId, backend) => ipcRenderer.send(IPC_CHANNELS.browserSetBackend, sessionId, backend),
   browserResume: (sessionId) => ipcRenderer.send(IPC_CHANNELS.browserResume, sessionId),
+  browserDevTools: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.browserDevTools, sessionId),
   onBrowserFrame: (listener) => subscribe<{ sessionId: string; data: string }>(IPC_CHANNELS.browserFrame, listener),
   onBrowserStopRequest: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.browserStopRequest, listener),
   getBrowserBridgeStatus: () => ipcRenderer.invoke(IPC_CHANNELS.browserBridgeGetStatus),

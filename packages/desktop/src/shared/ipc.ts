@@ -208,6 +208,7 @@ export const IPC_CHANNELS = {
   browserTab: 'browser:tab',
   browserSetBackend: 'browser:set-backend',
   browserResume: 'browser:resume',
+  browserDevTools: 'browser:devtools',
   browserFrame: 'browser:frame',
   browserStopRequest: 'browser:stop-request',
   browserBridgeStatus: 'browser:bridge-status',
@@ -283,7 +284,8 @@ export interface BrowserState {
   activeTab: number
   // 这个任务的智能体用哪个浏览器；用户的 Chrome、Edge 时 external 是扩展连没连上、用户有没有在浏览器里点过取消
   backend: AgentBrowser
-  external: { connected: boolean; paused: string | null } | null
+  // direct：Chrome 是直接启动的系统 Chrome（v2，不经扩展），没在跑时智能体一用就自动启动
+  external: { connected: boolean; paused: string | null; direct?: boolean } | null
 }
 
 export type BrowserCommand = 'back' | 'forward' | 'reload' | 'stop' | 'external'
@@ -291,6 +293,17 @@ export type BrowserCommand = 'back' | 'forward' | 'reload' | 'stop' | 'external'
 // 连着的 Diffra 浏览器扩展（每个浏览器的每个配置文件一条）
 export interface BridgeStatus {
   connections: Array<{ id: number; browser: 'chrome' | 'edge' | 'chromium'; version: string; outdated: boolean }>
+  // 直接启动的系统 Chrome（v2）；旧的状态里没有
+  direct?: DirectChromeStatus
+}
+
+// 系统 Chrome：找到的程序、在不在跑、上次没启动起来的原因；supported 为假是这个系统（Linux）不支持
+export interface DirectChromeStatus {
+  supported: boolean
+  executable: string | null
+  name: string | null
+  running: boolean
+  error: string | null
 }
 
 // 中文菜单里交给页面处理的命令
@@ -692,6 +705,8 @@ export interface DiffraApi {
   browserSetBackend(sessionId: string, backend: AgentBrowser): void
   // 用户在浏览器的调试提示条上点了取消之后，在面板上点「继续」
   browserResume(sessionId: string): void
+  // 当前标签页的开发者工具（v2）：内置浏览器单独开窗口，直接启动的 Chrome 在那里开检查器
+  browserDevTools(sessionId: string): Promise<void>
   // 用户 Chrome、Edge 里智能体那个标签页的画面（JPEG base64）
   onBrowserFrame(listener: (event: { sessionId: string; data: string }) => void): () => void
   // 用户在扩展里停下某个任务

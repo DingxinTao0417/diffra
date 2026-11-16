@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from 'react'
 import { X } from 'lucide-react'
 import { EXTENSION_STORE_URLS } from '../../../../shared/browser-bridge'
+import type { DirectChromeStatus } from '../../../../shared/ipc'
 import { AGENT_BROWSERS, type AgentBrowser, type BrowserSettings } from '../../../../shared/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,7 +13,12 @@ import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } 
 
 const AGENT_OPTIONS: Array<{ value: AgentBrowser; label: string }> = AGENT_BROWSERS.map((value) => ({ value, label: { builtin: '内置浏览器', chrome: '我的 Chrome', edge: '我的 Edge' }[value] }))
 
-// 智能体用哪个浏览器；用户自己的 Chrome、Edge 要装 Diffra 浏览器扩展；哪些网站直接打开、哪些不让打开
+const CHROME_MODES: Array<{ value: 'extension' | 'direct'; label: string }> = [
+  { value: 'extension', label: '经扩展' },
+  { value: 'direct', label: '直接启动' },
+]
+
+// 智能体用哪个浏览器；用户自己的 Chrome、Edge 要装 Diffra 浏览器扩展，Chrome 也可以直接启动（v2）；哪些网站直接打开、哪些不让打开
 export function BrowserSection() {
   const browser = useAppState((state) => state.settings?.browser ?? null)
   const bridge = useAppState((state) => state.bridge)
@@ -33,11 +39,22 @@ export function BrowserSection() {
 
   return (
     <>
-      <SettingsHeader title="浏览器" description="智能体打开网页、读页面、点击输入时用哪个浏览器，以及哪些网站不用问、哪些不让打开。" actions={<SavedHint saved={saved} />} />
+      <SettingsHeader title="浏览器与电脑操控" description="智能体打开网页、读页面、点击输入时用哪个浏览器，哪些网站不用问、哪些不让打开，以及要不要让它操作这台电脑。" actions={<SavedHint saved={saved} />} />
       <SettingsGroup title="智能体用的浏览器">
         <SettingsRow label="默认" hint="单个任务还可以在浏览器面板上换。">
           <Segmented label="智能体用的浏览器" value={browser.agent} options={AGENT_OPTIONS} onChange={(agent) => void save({ ...browser, agent })} />
         </SettingsRow>
+        <SettingsRow
+          label="Chrome 怎么连"
+          hint={
+            browser.chromeDirect
+              ? '直接启动系统里装的 Chrome，用 Diffra 单独的配置（登录状态和你平时的 Chrome 分开），不用装扩展。在浏览器面板上能打开开发者工具。'
+              : '经 Diffra 浏览器扩展，用你平时的 Chrome 和里面的登录状态。'
+          }
+        >
+          <Segmented label="Chrome 怎么连" value={browser.chromeDirect ? 'direct' : 'extension'} options={CHROME_MODES} onChange={(mode) => void save({ ...browser, chromeDirect: mode === 'direct' })} />
+        </SettingsRow>
+        {browser.chromeDirect && <DirectChromeRow status={bridge.direct ?? null} />}
         {(['chrome', 'edge'] as const).map((kind) => {
           const name = kind === 'chrome' ? 'Chrome' : 'Edge'
           // 测试用的 Chromium 也算 Chrome
@@ -89,6 +106,42 @@ export function BrowserSection() {
         />
       </SettingsGroup>
     </>
+  )
+}
+
+// 直接启动的系统 Chrome：找到了哪个程序、在不在跑、上次为什么没启动起来；Linux 不支持
+function DirectChromeRow({ status }: { status: DirectChromeStatus | null }) {
+  const badge = !status ? null : !status.supported ? (
+    <Badge variant="warning">这个系统不支持</Badge>
+  ) : !status.executable ? (
+    <Badge variant="warning">没找到 Chrome</Badge>
+  ) : status.running ? (
+    <Badge variant="secondary">运行中</Badge>
+  ) : (
+    <Badge variant="outline">用到时启动</Badge>
+  )
+  const hint = !status
+    ? '正在检测…'
+    : !status.supported
+      ? 'Linux 上暂不支持直接启动，请用内置浏览器或 Diffra 浏览器扩展。'
+      : !status.executable
+        ? '没找到 Chrome、Edge 或 Chromium，先装一个，或者改回「经扩展」。'
+        : `${status.name ?? 'Chrome'}：${status.executable}`
+  return (
+    <SettingsRow
+      label={
+        <span className="flex items-center gap-2" data-testid="direct-chrome-status">
+          系统 Chrome
+          {badge}
+        </span>
+      }
+      hint={
+        <span className="break-all">
+          {hint}
+          {status?.error && <span className="block text-destructive">上次没启动起来：{status.error}</span>}
+        </span>
+      }
+    />
   )
 }
 

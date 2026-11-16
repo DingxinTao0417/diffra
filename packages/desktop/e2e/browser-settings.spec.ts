@@ -23,8 +23,8 @@ test('设置 → 浏览器：选默认浏览器、管直接打开和不让打开
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
 
     await window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
-    await window.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '浏览器' }).click()
-    await expect(window.getByRole('heading', { name: '浏览器', exact: true })).toBeVisible()
+    await window.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '浏览器与电脑操控' }).click()
+    await expect(window.getByRole('heading', { name: '浏览器与电脑操控', exact: true })).toBeVisible()
     // 没装扩展：两个浏览器都是未连接
     await expect(window.getByText('Chrome 扩展')).toBeVisible()
     await expect(window.getByText('未连接')).toHaveCount(2)
