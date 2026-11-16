@@ -261,6 +261,27 @@ describe('外接智能体的任务', () => {
     }
   })
 
+  test('智能体一直发带报错的状态（像 Codex 连不上模型）：报错只提醒一次，状态不算输出，照样提示可能卡住了', async () => {
+    process.env.DIFFRA_MODEL_SILENCE_MS = '300'
+    try {
+      const core = await startCore()
+      const { sessionId } = await createExternalSession(core, project, config())
+      const running = sendPrompt(core, sessionId, 't1', '断网')
+      const silences = () =>
+        updatesOf(sessionId).flatMap((update) => (update.sessionUpdate === 'session_info_update' && update._meta?.diffra && 'modelSilentSince' in (update._meta.diffra as object) ? [(update._meta.diffra as Record<string, unknown>).modelSilentSince] : []))
+      const notices = () => updatesOf(sessionId).flatMap((update) => ((update as { sessionUpdate: string }).sessionUpdate === 'notice' ? [update as unknown as { title: string; description: string; severity: string }] : []))
+      await waitFor(() => replyText(sessionId).includes('开始干活') && typeof silences().at(-1) === 'string')
+      await cancelSession(core, sessionId)
+      expect(await running).toEqual({ stopReason: 'cancelled' })
+      const reported = notices().filter((notice) => notice.title.includes('Reconnecting... waiting for network'))
+      expect(reported).toHaveLength(1)
+      expect(reported[0]).toMatchObject({ severity: 'warning', description: 'Connection failed: error sending request' })
+      expect(reported[0]!.title).toContain('报错')
+    } finally {
+      delete process.env.DIFFRA_MODEL_SILENCE_MS
+    }
+  })
+
   test('等确认时停止：确认请求作废，这一轮停下', async () => {
     const core = await startCore()
     const { sessionId } = await createExternalSession(core, project, config())

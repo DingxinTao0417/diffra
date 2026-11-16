@@ -31,6 +31,19 @@ const IDLE_MS = 15 * 60_000
 // 跑着的一轮里没写进记录的更新，隔这么久存一次盘，应用崩了也不会整轮丢掉
 const PERSIST_EVERY_MS = 10_000
 
+// 智能体在 session_info_update 的 _meta 里报的错（比如 Codex 连不上模型时的「Reconnecting... waiting for network」）：
+// 各家放在自己的键下面，形状是 { error: { message, additionalDetails? } }；没有就是 null
+export function agentStatusError(meta: Record<string, unknown> | null | undefined): { message: string; detail: string | null } | null {
+  for (const [key, value] of Object.entries(meta ?? {})) {
+    if (key === 'diffra' || typeof value !== 'object' || value === null) continue
+    const error = (value as { error?: unknown }).error
+    if (typeof error !== 'object' || error === null) continue
+    const { message, additionalDetails } = error as { message?: unknown; additionalDetails?: unknown }
+    if (typeof message === 'string' && message.trim()) return { message: message.trim().slice(0, 300), detail: typeof additionalDetails === 'string' && additionalDetails.trim() ? additionalDetails.trim().slice(0, 1000) : null }
+  }
+  return null
+}
+
 // 和 Diffra 自己的智能体一样，这么久一点输出都没有就提示可能卡住了；DIFFRA_MODEL_SILENCE_MS 只给测试缩短用
 function silenceMs(): number {
   return Number(process.env.DIFFRA_MODEL_SILENCE_MS) || 3 * 60_000
@@ -272,8 +285,20 @@ export class ExternalSession {
     // 智能体的步骤清单（ACP 的 plan）画成和 Diffra 一样的步骤卡片
     const stepsId = `${turnId}:steps`
     let stepsShown = false
+    // 这一轮已经提醒过的智能体报错：同一句只提醒一次（Codex 重连时每隔几十秒报一次）
+    const reported = new Set<string>()
     this.sink = {
       update: (update) => {
+        // 智能体自己的状态不算有输出：Codex 断网重连时一直发状态，算进去的话「可能卡住了」永远不出来；里面带的报错显示成提醒
+        if (update.sessionUpdate === 'session_info_update') {
+          const error = agentStatusError(update._meta)
+          if (error && !reported.has(error.message)) {
+            reported.add(error.message)
+            void notice(`${this.agent.name} 报错：${error.message}`, error.detail ?? '', 'warning')
+          }
+          record(update)
+          return
+        }
         activity()
         if (update.sessionUpdate === 'plan') {
           const steps: StepItem[] = update.entries.map((entry) => ({ content: entry.content, status: entry.status }))
