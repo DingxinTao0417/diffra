@@ -42,6 +42,7 @@ const api: DiffraApi = {
   createSession: (projectPath, options) => ipcRenderer.invoke(IPC_CHANNELS.sessionCreate, projectPath, options),
   configureSession: (sessionId, options) => ipcRenderer.invoke(IPC_CHANNELS.sessionConfigure, sessionId, options),
   rewindSession: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionRewind, sessionId, turnId),
+  suggestNextPrompt: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.sessionSuggestNextPrompt, sessionId, turnId),
   checkpointDiff: (sessionId, turnId) => ipcRenderer.invoke(IPC_CHANNELS.checkpointDiff, sessionId, turnId),
   projectBranch: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectBranch, projectPath),
   projectGitState: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.projectGitState, projectPath),

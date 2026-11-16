@@ -20,7 +20,7 @@ import { errorMessage } from '@/lib/errors'
 import { folderName } from '@/lib/format'
 import { remPx } from '@/lib/shell'
 import { turnVerdict, type Verdict, type VerdictTone } from '@/lib/turn-verdict'
-import { cancelTask, compactTask, dequeue, regenerate, respondPermission, restoreTurn, saveLayout, sendMessage, setLayout, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
+import { cancelTask, compactTask, dequeue, dismissSuggestion, regenerate, respondPermission, restoreTurn, saveLayout, sendMessage, setLayout, setPermissionMode, setPlanMode, setTaskModel } from '@/state/actions'
 import { type LiveTask, type SidePanel, showToast, store, updateLive, useAppState } from '@/state/store'
 import { Composer, type ComposerCommand } from './Composer'
 import { composerDraftKey } from './composer-drafts'
@@ -73,6 +73,7 @@ export interface RemoteTaskSlots {
 export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRef?: Ref<HTMLElement>; remote?: RemoteTaskSlots }) {
   const panel = useAppState((state) => state.panel)
   const designChatWidth = useAppState((state) => state.settings?.layout.designChatWidth ?? null)
+  const suggestionsEnabled = useAppState((state) => state.settings?.suggestions?.nextPrompt !== false)
   const archived = useAppState((state) => state.tasks.find((item) => item.sessionId === task.sessionId)?.archived ?? false)
   const local = useProject(remote ? null : task.project)
   const project = remote ? remote.project : local.project
@@ -269,6 +270,9 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
                     agent={task.agent ?? null}
                     planMode={task.planMode}
                     onPlanModeChange={(planMode) => setPlanMode(task.sessionId, planMode)}
+                    suggestion={remote || task.running || task.permission || !suggestionsEnabled ? null : task.suggestion}
+                    onSuggestionUsed={() => dismissSuggestion(task.sessionId)}
+                    onSuggestionDismiss={() => dismissSuggestion(task.sessionId)}
                     onSend={(text, extras) => {
                       void sendMessage(task.sessionId, text, { plan: task.planMode, ...extras })
                       return true

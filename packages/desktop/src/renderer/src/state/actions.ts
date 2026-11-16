@@ -373,6 +373,7 @@ function liveFrom(handle: SessionHandle, title: string, planMode = false): LiveT
     queue: [],
     changeVersion: 0,
     unread: false,
+    suggestion: null,
   }
 }
 
@@ -752,7 +753,7 @@ async function runTurnOnCore(
   fromPlan?: string,
 ): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from, remote, fromPlan)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, suggestion: null, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from, remote, fromPlan)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏
@@ -777,7 +778,30 @@ async function runTurnOnCore(
     void checkUsageBudget()
     if (scanFirst) void runDeepScan(sessionId, 'task')
     else if (next) void sendMessage(sessionId, next.text, next.options)
+    else if (kind === 'prompt' || kind === 'goal') void requestNextPrompt(sessionId, turnId)
   }
+}
+
+// 一轮正常结束后预测下一句。只在任务空闲、没有待确认、设置开着、这一轮还是最后一轮时显示
+async function requestNextPrompt(sessionId: string, turnId: string): Promise<void> {
+  if (store.get().settings?.suggestions?.nextPrompt === false) return
+  const task = store.get().live[sessionId]
+  const turn = task?.turns.find((item) => item.id === turnId)
+  if (!task || task.running || task.permission || !turn || turn.error || turn.stopReason !== 'end_turn' || turn.outcome?.stop || task.turns.at(-1)?.id !== turnId) return
+  try {
+    const text = await window.diffra.suggestNextPrompt(sessionId, turnId)
+    if (!text) return
+    const current = store.get().live[sessionId]
+    if (!current || current.running || current.permission || current.turns.at(-1)?.id !== turnId) return
+    updateLive(sessionId, (latest) => ({ ...latest, suggestion: { turnId, text } }))
+  } catch (error) {
+    // 建议是锦上添花，失败不打扰输入
+    console.error('[suggest] 获取下一句建议失败', error)
+  }
+}
+
+export function dismissSuggestion(sessionId: string): void {
+  updateLive(sessionId, (task) => (task.suggestion ? { ...task, suggestion: null } : task))
 }
 
 export function dequeue(sessionId: string, id: string): void {

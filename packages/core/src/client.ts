@@ -495,6 +495,15 @@ export function checkpointDiff(connection: acp.ClientConnection, sessionId: stri
   )
 }
 
+// 用这一轮的实际上下文预测用户下一句；没有可用的快照或不适合预测时返回 null
+export function suggestNextPrompt(connection: acp.ClientConnection, sessionId: string, turnId: string): Promise<string | null> {
+  return requestOf(connection)<string | null, { sessionId: string; turnId: string }>(
+    SESSION_EXT_METHODS.suggestNextPrompt,
+    { sessionId, turnId },
+    { cancellationSignal: AbortSignal.timeout(12_000), stopWaitingOnCancel: true },
+  )
+}
+
 // 设备连接读一个会话的一页轮次；before 不给是最后一页
 export function remoteSnapshot(
   connection: acp.ClientConnection,

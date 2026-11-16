@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { securitySwitches } from './security-switches'
 import { STOCK_PROVIDERS, stockKeyId } from './stock-photos'
 import { IPC_CHANNELS } from '../shared/ipc'
-import { DEFAULT_USAGE, MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, reasoningChoiceKey, ROLES, type Settings, type SettingsView } from '../shared/settings'
+import { DEFAULT_SUGGESTIONS, DEFAULT_USAGE, MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, reasoningChoiceKey, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
@@ -94,7 +94,7 @@ function rememberReasoning(current: Settings, choice: { providerId: string; mode
 }
 
 export async function settingsView(settings: SettingsStore, secrets: SecretStore): Promise<SettingsView> {
-  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents, computerUse, system, usage } = settings.get()
+  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents, computerUse, system, suggestions, usage } = settings.get()
   return {
     providers: await Promise.all(
       providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -114,6 +114,7 @@ export async function settingsView(settings: SettingsStore, secrets: SecretStore
     mcpOAuth: await oauthStates(settings, secrets),
     computerUse: computerUse ?? { enabled: false, acknowledged: false },
     system: system ?? DEFAULT_SYSTEM,
+    suggestions: suggestions ?? DEFAULT_SUGGESTIONS,
     usage: usage ?? DEFAULT_USAGE,
     loadError: settings.loadError ?? secrets.loadError,
   }
@@ -182,6 +183,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
         execution: executionSchema.optional(),
         computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
         system: z.object({ tray: z.boolean(), launchAtLogin: z.boolean() }).optional(),
+        suggestions: z.object({ nextPrompt: z.boolean() }).optional(),
         usage: usageSettingsSchema.optional(),
         reasoningChoice: z.object({ providerId: z.string().min(1), modelId: z.string().min(1), effort: z.enum(REASONING_EFFORTS) }).optional(),
       }),

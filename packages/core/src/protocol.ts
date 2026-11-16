@@ -1135,6 +1135,8 @@ export const SESSION_EXT_METHODS = {
   deepScan: '_diffra/security/deep-scan',
   // 先出计划：规划模型只读地看代码，交一份计划，不改文件
   plan: '_diffra/session/plan',
+  // 一轮正常结束后，用最后一次请求的真实上下文预测用户下一句；只生成草稿，不写会话
+  suggestNextPrompt: '_diffra/session/suggest-next-prompt',
   // 模型很久没有输出时，用户让卡住的那一步重发请求（主智能体或某个子智能体），这一轮不停
   retryStep: '_diffra/session/retry-step',
   // 界面截好的可视化快照记回会话（第 670 步）

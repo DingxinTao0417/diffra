@@ -138,6 +138,13 @@ export interface SystemSettings {
   launchAtLogin: boolean
 }
 
+// 下一句建议（v2）：一轮正常结束后在输入框提示下一步，Tab 填入；只生成草稿，不自动发送
+export interface SuggestionSettings {
+  nextPrompt: boolean
+}
+
+export const DEFAULT_SUGGESTIONS: SuggestionSettings = { nextPrompt: true }
+
 // 这台电脑支不支持电脑操控（Windows、macOS 支持）
 export interface ComputerStatus {
   supported: boolean
@@ -270,6 +277,8 @@ export interface Settings {
   computerUse?: ComputerUseSettings
   // v2：托盘和开机自启；旧设置没有这一项（都关着）
   system?: SystemSettings
+  // v2：下一句建议；旧设置没有这一项（默认开）
+  suggestions: SuggestionSettings
   // v2：用量的单价、币种和每月预算；旧设置没有这一项（不算费用）
   usage?: UsageSettings
   // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
@@ -320,6 +329,7 @@ export interface SettingsView {
   // 电脑操控（v2）：没设过就是关着
   computerUse: ComputerUseSettings
   system: SystemSettings
+  suggestions: SuggestionSettings
   usage: UsageSettings
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null

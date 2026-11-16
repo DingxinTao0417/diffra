@@ -53,6 +53,7 @@ import {
   type SessionConfig,
   type SessionModel,
   sendPrompt,
+  suggestNextPrompt,
   type TaskActionResult,
   updateSession,
   usageSummary,
@@ -589,6 +590,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.checkpointDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
     checkpointDiff(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
+  )
+  ipcMain.handle(IPC_CHANNELS.sessionSuggestNextPrompt, async (_event, rawSessionId: unknown, rawTurnId: unknown) =>
+    suggestNextPrompt(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawTurnId)),
   )
 
   ipcMain.handle(IPC_CHANNELS.projectBranch, async (_event, rawPath: unknown) => currentBranch(parse(z.string().min(1), rawPath)))

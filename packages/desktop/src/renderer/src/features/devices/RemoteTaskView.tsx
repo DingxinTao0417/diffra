@@ -167,6 +167,7 @@ export function RemoteTaskView({ deviceId, sessionId }: { deviceId: string; sess
             queue: [],
             changeVersion,
             unread: false,
+            suggestion: null,
             progress: task.progress,
           }
         : null,

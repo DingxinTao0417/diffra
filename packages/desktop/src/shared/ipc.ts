@@ -45,6 +45,7 @@ import type {
   ComputerStatus,
   ComputerUseSettings,
   SystemSettings,
+  SuggestionSettings,
   ExecutionSettings,
   McpServerInput,
   ModelRef,
@@ -102,6 +103,7 @@ export const IPC_CHANNELS = {
   sessionCreate: 'session:create',
   sessionConfigure: 'session:configure',
   sessionRewind: 'session:rewind',
+  sessionSuggestNextPrompt: 'session:suggest-next-prompt',
   checkpointDiff: 'session:checkpoint-diff',
   projectBranch: 'project:branch',
   projectBranches: 'project:branches',
@@ -592,6 +594,8 @@ export interface DiffraApi {
   configureSession(sessionId: string, options: SessionOptions): Promise<{ modelLabel: string | null }>
   // edited：撤掉的这一轮改没改过文件（重新生成后它留成「上一次」，改过的换不回来）
   rewindSession(sessionId: string, turnId: string): Promise<{ filesRestored: boolean; edited: boolean }>
+  // 用这一轮的真实上下文预测用户下一句；没有可用建议时返回 null
+  suggestNextPrompt(sessionId: string, turnId: string): Promise<string | null>
   checkpointDiff(sessionId: string, turnId: string): Promise<string>
   projectBranch(projectPath: string): Promise<string | null>
   projectGitState(projectPath: string): Promise<ProjectGitState>
@@ -647,6 +651,8 @@ export interface DiffraApi {
     computerUse?: ComputerUseSettings
     // 托盘和开机自启（v2），马上生效
     system?: SystemSettings
+    // 下一句建议（v2）
+    suggestions?: SuggestionSettings
     // 用量的单价、币种和预算（v2）
     usage?: UsageSettings
     // 输入框里给这个模型选了思考程度，记下来

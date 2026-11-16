@@ -76,6 +76,8 @@ export interface LiveTask {
   changeVersion: number
   // 一轮在用户没看着这个任务时结束，侧栏标「完成未读」；打开任务后清掉，只在内存里
   unread: boolean
+  // 下一句建议：只对当前这一轮有效，输入后或新一轮开始就清掉；只在内存里
+  suggestion: { turnId: string; text: string } | null
 }
 
 // 底部终端面板里的一个终端；进程退出后标签留着，exitCode 不为 null

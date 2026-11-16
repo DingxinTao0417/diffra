@@ -25,6 +25,9 @@ import {
 } from '../shared/settings'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
+// 测试里的脚本模型按固定步数回复；e2e 启动时把下一句建议默认关掉，专门的用例再显式打开
+const defaultSuggestions = () => ({ nextPrompt: process.env.DIFFRA_SUGGESTIONS_OFF !== '1' })
+
 export const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1), reasoningEffort: z.enum(REASONING_EFFORTS).optional() })
 
 export const providerFieldsSchema = z.object({
@@ -206,6 +209,8 @@ const settingsSchema = z.object({
   computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
   // v2 加的：托盘和开机自启，默认都关
   system: z.object({ tray: z.boolean(), launchAtLogin: z.boolean() }).optional(),
+  // 下一句建议；旧设置没有，默认开
+  suggestions: z.object({ nextPrompt: z.boolean() }).default(defaultSuggestions),
   // v2 · M11：用量的单价和预算；旧设置没有
   usage: z.lazy(() => usageSettingsSchema).optional(),
   defaultPermissionMode: permissionModeSchema.default('ask'),
@@ -261,6 +266,7 @@ const EMPTY_SETTINGS: Settings = {
   lastSeenVersion: null,
   reasoningChoices: {},
   externalAgents: [],
+  suggestions: defaultSuggestions(),
 }
 
 export class SettingsStore {

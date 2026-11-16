@@ -35,6 +35,7 @@ import {
   type Appearance,
   COMPACT_AT_PERCENTS,
   CONTENT_WIDTHS,
+  DEFAULT_SUGGESTIONS,
   type ExecutionSettings,
   FONT_SIZES,
   FONT_STYLES,
@@ -219,6 +220,7 @@ function GeneralSection() {
     <>
       <SettingsHeader title="常规" />
       <StartupGroup />
+      <SuggestionSetting />
       <SettingsGroup title="连接">
         <SettingsRow label="智能体服务" hint="在后台运行任务的本地进程。">
           <CoreStatusView status={status} />
@@ -232,6 +234,25 @@ function GeneralSection() {
         ))}
       </SettingsGroup>
     </>
+  )
+}
+
+function SuggestionSetting() {
+  const suggestions = useAppState((state) => state.settings?.suggestions ?? DEFAULT_SUGGESTIONS)
+  const change = async (nextPrompt: boolean) => {
+    try {
+      const settings = await window.diffra.savePreferences({ suggestions: { nextPrompt } })
+      store.set((state) => ({ ...state, settings }))
+    } catch (error) {
+      showToast(`保存失败：${errorMessage(error)}`)
+    }
+  }
+  return (
+    <SettingsGroup title="输入框">
+      <SettingsRow label="推荐下一句" hint="一轮正常结束后，在输入框里提示下一步；按 Tab 填入，不自动发送。每轮多一次模型调用。">
+        <Switch label="推荐下一句" checked={suggestions.nextPrompt} onChange={(value) => void change(value)} />
+      </SettingsRow>
+    </SettingsGroup>
   )
 }
 

@@ -77,6 +77,10 @@ interface ComposerProps {
   // 开着时发的消息先由规划模型出计划，不改代码
   planMode: boolean
   onPlanModeChange(planMode: boolean): void
+  // 下一句建议：输入框为空时替换占位符，Tab 填入；不自动发送
+  suggestion?: { text: string } | null
+  onSuggestionUsed?(): void
+  onSuggestionDismiss?(): void
   // 返回 false 表示没发出去，输入框里的内容和选的目标、Skill 保留
   onSend(text: string, extras: { goal: boolean; skills: string[]; images: PromptImage[] }): boolean | Promise<boolean>
   onStop?(): void
@@ -168,7 +172,7 @@ export function Composer(props: ComposerProps) {
   // 右侧给滚动条留固定宽度：textarea 是 pr-2.5 加 10px 的滚动条位置，着色层直接留 0.625rem + 10px。
   // 不能写成 pr-5：rem 跟着字号设置变，只有根字号 16px 时 1.25rem 才等于 0.625rem + 10px，差一点换行位置就错开
   const textLayout = large ? 'pl-4.5 pt-4 pb-2 text-base' : 'pl-3.5 pt-3 pb-1'
-  const placeholder = COMPOSER_PLACEHOLDER
+  const basePlaceholder = COMPOSER_PLACEHOLDER
   const goalRounds = useAppState((state) => state.settings?.execution.goalMaxRounds ?? null)
   // 切页面前存在这里，回来接着写；只在这个组件第一次挂载时读一次
   const initialDraft = useRef<ComposerDraft | null>(readComposerDraft(props.draftKey)).current
@@ -303,6 +307,8 @@ export function Composer(props: ComposerProps) {
 
   const token = disabled ? null : slashToken(draft, caret)
   const menuOpen = token !== null && token.start !== dismissed
+  // 下一句建议只替换空输入框的占位符；开始输入或打开斜杠菜单后回到普通提示
+  const placeholder = draft === '' && !menuOpen && props.suggestion ? `${props.suggestion.text}（Tab 填入）` : basePlaceholder
   const ready = !disabled && !sending && !addingAttachments && hasMessage
   // 斜杠菜单开着时 Enter 用来选菜单项，按钮也不可发；Ctrl/Meta+Enter 仍原样发送，避免「清理 /tmp」这类文本无路可发
   const canSend = ready && !menuOpen
@@ -652,6 +658,17 @@ export function Composer(props: ComposerProps) {
         return
       }
     }
+    if (event.key === 'Tab' && !event.shiftKey && draft === '' && props.suggestion && !menuOpen) {
+      event.preventDefault()
+      replaceDraft(props.suggestion.text, '已填入建议')
+      props.onSuggestionUsed?.()
+      return
+    }
+    if (event.key === 'Escape' && draft === '' && props.suggestion && !menuOpen) {
+      event.preventDefault()
+      props.onSuggestionDismiss?.()
+      return
+    }
     // 光标在最前面时退格删掉最后一个标签
     const target = event.currentTarget
     if (event.key === 'Backspace' && target.selectionStart === 0 && target.selectionEnd === 0 && (skills.length > 0 || goal || props.planMode)) {
@@ -837,6 +854,7 @@ export function Composer(props: ComposerProps) {
           onChange={(event) => {
             setDraft(event.target.value)
             setCaret(event.target.selectionStart)
+            if (event.target.value !== '' && props.suggestion) props.onSuggestionDismiss?.()
           }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onClick={(event) => setPreview(previewAt(event.currentTarget.value, event.currentTarget.selectionStart))}

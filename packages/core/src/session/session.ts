@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentType } from '../subagents.js'
 import { join } from 'node:path'
 import type { McpServer, SessionUpdate, StopReason } from '@agentclientprotocol/sdk'
-import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
+import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { LspServerSpec } from '../lsp/config.js'
@@ -11,7 +11,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
+import { type CheckpointChange, type ModelProvider, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
 import type { CandidateRun, Compaction, SessionRecord } from './store.js'
@@ -27,12 +27,40 @@ import { designChars, designTools } from './design.js'
 import { TOOL_DEFINITION_CHARS, toolDefinitionChars, TOOLS, VIEW_IMAGE_TOOL } from './tools.js'
 import { ExecSessions } from '../tools/exec.js'
 import { knownWorldState, type WorldStateEntry } from './world-state.js'
+import type { ModelCallUsage } from '../usage/log.js'
+import { MODEL_CALL_HEADERS } from '../models/operations.js'
 
 // 会话标题默认取第一条提问的开头
 const TITLE_CHARS = 40
 
 // 图片在对话里是 base64，按字数算会大上百倍；估算上下文时每张按这么多字算（约一千多个 token）
 export const IMAGE_CHARS = 6000
+
+// 一轮最后一次模型请求的真实上下文：预测下一句时原样复用，不另做摘要
+export interface PredictionSource {
+  turnId: string
+  system: string
+  messages: ModelMessage[]
+  tools: ToolSet
+  model: LanguageModel
+  modelId: string
+  provider: ModelProvider | null
+  responseMessages: ModelMessage[]
+}
+
+const NEXT_PROMPT_INSTRUCTION = [
+  "Based on the actual task goal and progress above, propose the single most useful next message the user could send.",
+  "Reply with only that message text, in the user's language, one or two sentences, at most 200 characters.",
+  'Do not call tools, do not explain, do not repeat work that is already finished, and do not offer to continue on your own.',
+].join(' ')
+
+function hasPendingToolCall(updates: SessionUpdate[]): boolean {
+  const status = new Map<string, string>()
+  for (const update of updates) {
+    if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.status) status.set(update.toolCallId, update.status)
+  }
+  return [...status.values()].some((value) => value === 'pending' || value === 'in_progress')
+}
 
 export function messagesChars(messages: ModelMessage[]): number {
   let images = 0
@@ -165,6 +193,8 @@ export class Session {
   compaction: Compaction | null = null
   // 上一次模型调用的输入 token 数、当时发出去的字数和缓存用量，用来估算下一次调用有多大
   lastContext: { inputTokens: number; chars: number; cacheRead: number | null; cacheWrite: number | null } | null = null
+  // 最后一轮最后一次模型请求的真实上下文；预测下一句用，只在内存里
+  predictionSource: PredictionSource | null = null
   // 提交前问深度扫描：上次深度扫描跑完时的工作区指纹（代码没再变就不问），和用户选了「这个任务不再问」。只在内存里，重新打开任务后会再问
   deepScannedFingerprint: string | null = null
   deepScanDeclined = false
@@ -258,6 +288,43 @@ export class Session {
     return [{ role: 'user', content: this.compaction.summary }, ...this.messages.slice(this.compaction.upTo)]
   }
 
+  // 一轮正常结束后，用最后一次请求的真实上下文预测用户下一句。只生成文本：不执行工具、不写会话；
+  // 返回 null 表示这一轮不适合预测或预测失败，界面保留原来的占位符
+  async suggestNextPrompt(turnId: string, onUsage?: (call: ModelCallUsage) => Promise<void>): Promise<string | null> {
+    if (this.running || this.turns.at(-1)?.id !== turnId) return null
+    const source = this.predictionSource
+    if (!source || source.turnId !== turnId) return null
+    const turn = this.turns.find((item) => item.id === turnId)
+    if (!turn || !turn.endedAt || turn.stopReason !== 'end_turn' || hasPendingToolCall(turn.updates)) return null
+    try {
+      const result = streamText({
+        model: source.model,
+        system: source.system,
+        messages: [
+          ...source.messages,
+          ...source.responseMessages,
+          { role: 'user', content: NEXT_PROMPT_INSTRUCTION },
+        ],
+        tools: source.tools,
+        toolChoice: 'none',
+        maxRetries: 0,
+        maxOutputTokens: 300,
+        abortSignal: AbortSignal.timeout(8_000),
+        headers: MODEL_CALL_HEADERS,
+      })
+      const [text, toolCalls, usage] = await Promise.all([result.text, result.toolCalls, result.usage])
+      if (onUsage) await onUsage({ role: 'planner', provider: source.provider, modelId: source.modelId, usage }).catch((error: unknown) => console.error('[suggest] 记录预测用量失败', error))
+      if (toolCalls.length > 0) return null
+      const suggestion = text.trim().replace(/\s+/g, ' ').slice(0, 300)
+      return suggestion || null
+    } catch (error) {
+      // 预测要求不调工具；模型仍调了，或者等超时，都只是这次不给建议，不算错误
+      if (error instanceof Error && ['AI_ToolChoiceViolationError', 'AbortError', 'TimeoutError'].includes(error.name)) return null
+      console.error('[suggest] 预测下一句失败', error)
+      return null
+    }
+  }
+
   get trustedCommands(): string[] {
     return [this.config.checks.afterEdit, this.config.checks.beforeFinish].filter((item): item is string => item !== null)
   }
@@ -284,6 +351,7 @@ export class Session {
   }
 
   startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource, fromPlan?: string): void {
+    this.predictionSource = null
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine

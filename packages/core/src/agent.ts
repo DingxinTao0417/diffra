@@ -905,6 +905,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       }
       return result
     })
+    .onRequest(SESSION_EXT_METHODS.suggestNextPrompt, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1).max(100) }), async ({ params }) => {
+      if (externals.has(params.sessionId)) return null
+      const session = sessionOf(params.sessionId)
+      return session.suggestNextPrompt(params.turnId, async (call) => {
+        if (!usageLog) return
+        await usageLog.append(toUsageRecord(call, session, new Date()))
+      })
+    })
     .onRequest(SESSION_EXT_METHODS.retryStep, z.object({ sessionId: z.string().min(1), agent: z.string().min(1) }), ({ params }) => {
       // 那一步可能刚好已经有输出、结束了，这时什么也不做；外接智能体的请求由它自己管，重发不了
       if (externals.has(params.sessionId)) return { retried: false }

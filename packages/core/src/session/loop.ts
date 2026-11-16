@@ -736,18 +736,35 @@ async function changesOutsideEdits(session: Session, startFingerprint: string | 
 }
 
 async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO, extraTools?: ToolSet) {
+  const system = session.systemPrompt + designInstructions(session)
+  // 先复制这一请求实际用的消息；结束时预测下一句按这份上下文原样复用
+  const messages = [...session.contextMessages()]
+  const tools = extraTools ? { ...session.toolSet(), ...extraTools } : session.toolSet()
   const step = await streamModelStep(
     {
       model: active.language,
-      system: session.systemPrompt + designInstructions(session),
-      messages: session.contextMessages(),
-      tools: extraTools ? { ...session.toolSet(), ...extraTools } : session.toolSet(),
+      system,
+      messages,
+      tools,
       usage: { role: 'coder', provider: active.config.provider, modelId: active.config.modelId },
     },
     signal,
     io,
     { key: MAIN_AGENT_KEY, handles: session.stepRetries },
   )
+  const turnId = session.turns.at(-1)?.id
+  if (turnId) {
+    session.predictionSource = {
+      turnId,
+      system,
+      messages,
+      tools,
+      model: active.language,
+      modelId: active.config.modelId,
+      provider: active.config.provider,
+      responseMessages: [...step.responseMessages],
+    }
+  }
   session.messages.push(...step.responseMessages)
   return step
 }
