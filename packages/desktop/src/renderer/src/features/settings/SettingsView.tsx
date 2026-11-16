@@ -17,6 +17,7 @@ import {
   MonitorSmartphone,
   Moon,
   Palette,
+  PenTool,
   Search,
   Settings2,
   Shield,
@@ -60,6 +61,7 @@ import { BrowserSection } from './BrowserSection'
 import { ExternalAgentsSection } from './ExternalAgentsSection'
 import { ReleaseItems, ReleaseList } from './Changelog'
 import { UsageSection } from './UsageSection'
+import { DesignSection } from './DesignSection'
 import { DevicesSection } from '@/features/devices/DevicesSection'
 import { applyAppearance } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -90,6 +92,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
       { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 规范审查 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
       { id: 'browser', label: '浏览器与电脑操控', icon: Globe, keywords: '内置浏览器 Chrome Edge 扩展 系统 直接启动 开发者工具 网站 允许 禁止 登录 电脑操控 鼠标 键盘 屏幕' },
+      { id: 'design', label: '设计', icon: PenTool, keywords: '图库 图片 Pexels Unsplash 照片 API Key' },
     ],
   },
   {
@@ -186,6 +189,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <StorageSection />
     case 'usage':
       return <UsageSection />
+    case 'design':
+      return <DesignSection />
     case 'about':
       return <AboutSection />
   }

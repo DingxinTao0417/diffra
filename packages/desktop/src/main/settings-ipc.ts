@@ -6,6 +6,7 @@ import { REASONING_EFFORTS } from '@diffra/core/types'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
 import { securitySwitches } from './security-switches'
+import { STOCK_PROVIDERS, stockKeyId } from './stock-photos'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { DEFAULT_USAGE, MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRef, reasoningChoiceKey, ROLES, type Settings, type SettingsView } from '../shared/settings'
 import { coreConnection } from './core-process'
@@ -156,6 +157,14 @@ export async function saveMcpServer(settings: SettingsStore, secrets: SecretStor
 }
 
 export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStore): void {
+  // 图库的 API Key（v2）：界面只拿到掩码，存进 SecretStore
+  ipcMain.handle(IPC_CHANNELS.stockKeysGet, async () => Object.fromEntries(await Promise.all(STOCK_PROVIDERS.map(async (provider) => [provider, await secrets.hint(stockKeyId(provider))] as const))))
+  ipcMain.handle(IPC_CHANNELS.stockKeySet, async (_event, rawProvider: unknown, rawKey: unknown) => {
+    const provider = parse(z.enum(STOCK_PROVIDERS), rawProvider)
+    const key = parse(z.string().trim().max(200).nullable(), rawKey)
+    if (key) await secrets.set(stockKeyId(provider), key)
+    else await secrets.delete(stockKeyId(provider))
+  })
   const view = () => settingsView(settings, secrets)
 
   const endpointFor = (providerId: string) => providerEndpoint(settings, secrets, providerId)

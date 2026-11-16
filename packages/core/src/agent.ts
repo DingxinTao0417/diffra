@@ -18,6 +18,8 @@ import {
   CLIENT_EXT_NOTIFICATIONS,
   type DesignActionParams,
   type DesignActionResult,
+  type StockPhotoParams,
+  type StockPhotoResult,
   type DevServerParams,
   type DevServerResult,
   type ExternalAgentDetection,
@@ -592,6 +594,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
               { sessionId: session.id, ...params },
               { cancellationSignal: signal, stopWaitingOnCancel: true },
             )
+            .catch((error: unknown) => {
+              throw new Error(clientErrorMessage(error))
+            }),
+        stockPhotos: (params, signal) =>
+          client
+            .request<StockPhotoResult, StockPhotoParams>(CLIENT_EXT_METHODS.stockPhotos, { sessionId: session.id, ...params }, { cancellationSignal: signal, stopWaitingOnCancel: true })
             .catch((error: unknown) => {
               throw new Error(clientErrorMessage(error))
             }),

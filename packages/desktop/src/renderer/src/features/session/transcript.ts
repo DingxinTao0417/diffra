@@ -1,4 +1,5 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, CANDIDATES_META_KEY, type CandidateRunView, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, CANDIDATES_META_KEY, type CandidateRunView, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta, STOCK_PHOTOS_META_KEY } from '@diffra/core/types'
+import type { PhotoView } from '../task/cards/PhotosCard'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -37,6 +38,8 @@ export type TranscriptItem =
       diagnosis?: Diagnosis
       // show_visual 画的可视化
       visual?: { title: string; code: string }
+      // 设计任务里找到的图（v2）：缩略图和署名
+      photos?: PhotoView[]
       // 可视化画好后界面截的快照（第 670 步），远程会话里不跑脚本时显示它
       visualSnapshot?: VisualSnapshot
       // MCP 工具带的界面（第 683 步）
@@ -261,6 +264,25 @@ function visualOf(update: SessionUpdate): { visual?: { title: string; code: stri
   return typeof value?.title === 'string' && typeof value.code === 'string' ? { visual: { title: value.title, code: value.code } } : {}
 }
 
+const PHOTO_THUMB = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/
+
+// 找图卡片的缩略图只认 data: 图片；别的字段按字符串、数字取
+function photosOf(update: SessionUpdate): { photos?: PhotoView[] } {
+  const value = diffraMetaOf(update)?.[STOCK_PHOTOS_META_KEY]
+  if (!Array.isArray(value)) return {}
+  const text = (item: unknown) => (typeof item === 'string' ? item : '')
+  const photos = value.flatMap((raw: unknown): PhotoView[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const photo = raw as Record<string, unknown>
+    const provider = photo.provider === 'pexels' || photo.provider === 'unsplash' ? photo.provider : null
+    if (!provider) return []
+    const thumb = typeof photo.thumb === 'string' && PHOTO_THUMB.test(photo.thumb) ? photo.thumb : ''
+    const pageUrl = text(photo.pageUrl)
+    return [{ provider, thumb, alt: text(photo.alt), photographer: text(photo.photographer), photographerUrl: text(photo.photographerUrl), pageUrl: /^https:\/\//.test(pageUrl) ? pageUrl : '', width: Number(photo.width) || 0, height: Number(photo.height) || 0 }]
+  })
+  return photos.length > 0 ? { photos } : {}
+}
+
 export interface VisualSnapshot {
   mimeType: string
   data: string
@@ -422,6 +444,8 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         ...(existing?.visual ? { visual: existing.visual } : {}),
         ...(existing?.visualSnapshot ? { visualSnapshot: existing.visualSnapshot } : {}),
         ...visualSnapshotOf(update),
+        ...(existing?.photos ? { photos: existing.photos } : {}),
+        ...photosOf(update),
         ...(existing?.mcpUi ? { mcpUi: existing.mcpUi } : {}),
         ...mcpUiOf(update),
         ...(taskLinkOf(update).taskLink ? taskLinkOf(update) : existing?.taskLink ? { taskLink: existing.taskLink } : {}),

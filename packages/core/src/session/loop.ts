@@ -21,6 +21,8 @@ import {
   type CheckResult,
   type AgentTag,
   type DesignActionResult,
+  type StockPhotoParams,
+  type StockPhotoResult,
   type DevServerParams,
   type DevServerResult,
   DEEP_SCAN_ASK_SCOPE,
@@ -66,6 +68,7 @@ import { isPolling, newSpinTracker, noteCall, noteEdit, noteText, takeSpinRemind
 import { runShowVisual, SHOW_VISUAL_TOOL } from './visual.js'
 import { COMPUTER_TOOL, computerPermission, computerTitle, rememberComputerChoice, toComputerAction } from './computer.js'
 import { ARCHITECTURE_TOOL, runArchitectureTool } from './architecture-tool.js'
+import { FIND_PHOTOS_TOOL, findPhotosEnabled, runFindPhotos } from './design-photos.js'
 import { ASK_USER_TOOL, runAskUser, runTodoWrite, settleSteps, TODO_TOOL } from './interact.js'
 import { GOAL_TOOLS, type GoalStatus, goalContinuation, goalInput, goalRequest, UPDATE_GOAL_TOOL } from './goal.js'
 import { historySecretValues, projectSecretValues, redactSecretValues, secretValuesOf } from '../security/secret-values.js'
@@ -162,6 +165,8 @@ export interface TurnIO {
   devServer?(params: DistributiveOmit<DevServerParams, 'sessionId'>, signal: AbortSignal): Promise<DevServerResult>
   // 在客户端的设计页里执行设计工具（tool 是不带 design_ 前缀的工具名）；agent 是调用的子智能体，主智能体自己调时不传
   design?(tool: string, args: unknown, signal: AbortSignal, agent?: AgentTag): Promise<DesignActionResult>
+  // 设计任务里找图（v2）：客户端用用户的图库 Key 搜
+  stockPhotos?(params: Omit<StockPhotoParams, 'sessionId'>, signal: AbortSignal): Promise<StockPhotoResult>
   // 任务之间互通：列出、读别的任务，替它发消息、新建任务；没有会话列表时不提供
   tasks?: TaskBridge
 }
@@ -1073,6 +1078,7 @@ export async function runToolCall(
   if (name === COMPUTER_TOOL && session.config.computer && !call.invalid) return runComputerToolCall(session, call, signal, io)
   if (isDevServerTool(name) && session.config.browser && !call.invalid) return runDevServerToolCall(session, call, name, signal, io)
   if (name === PLACE_IMAGE_TOOL && session.design && !call.invalid) return runPlaceImage(session, call, signal, io)
+  if (name === FIND_PHOTOS_TOOL && findPhotosEnabled(session) && !call.invalid) return runFindPhotos(session, call, signal, io)
   if (name === SHOW_VISUAL_TOOL) return runShowVisual(call, io)
   if (name === ARCHITECTURE_TOOL && session.architecture && !call.invalid) return runArchitectureTool(session, call, io)
   // 步骤清单和提问只给主智能体：子智能体的进度看它的卡片，它也不能替主智能体去问用户

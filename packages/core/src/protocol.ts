@@ -279,6 +279,8 @@ export interface SessionConfig {
   designStyle?: string | null
   // 无项目任务：cwd 是客户端替任务建的文件夹，不是用户的项目。建会话时定下，存进会话记录
   noProject?: boolean
+  // 用户填了图库（Pexels / Unsplash）的 Key，设计任务里给找图工具（v2）
+  stockPhotos?: boolean
   // 用户在这个项目里选过「始终允许」的命令键（见 permissions.commandKey），建会话时就算允许过
   allowedCommands?: string[]
   // 项目钩子（见 session/hooks.ts）
@@ -596,6 +598,38 @@ export interface SessionDesign {
   instructions: string
 }
 
+// 设计任务里找图（v2 · M11，见 session/design-photos.ts）
+export interface StockPhotoParams {
+  sessionId: string
+  query: string
+  orientation: 'landscape' | 'portrait' | 'square' | null
+  count: number
+}
+
+export interface StockPhoto {
+  provider: 'pexels' | 'unsplash'
+  // 放进画布用的大图地址
+  url: string
+  // 缩略图，data: 地址（界面的 CSP 只许本地和 data 图片）
+  thumb: string
+  width: number
+  height: number
+  alt: string
+  photographer: string
+  photographerUrl: string
+  // 图库上这张图的页面
+  pageUrl: string
+}
+
+export interface StockPhotoResult {
+  photos: StockPhoto[]
+  // 某个图库失败的原因（另一个成功时照样返回结果）
+  errors: string[]
+}
+
+// 找图卡片上的缩略图和署名，放在 tool_call_update 的 _meta.diffra 里
+export const STOCK_PHOTOS_META_KEY = 'stockPhotos'
+
 // 智能体调用设计工具，core 通过 CLIENT_EXT_METHODS.designAction 请求客户端在设计页里执行
 export interface DesignActionParams {
   sessionId: string
@@ -644,6 +678,8 @@ export const CLIENT_EXT_METHODS = {
   computerAction: '_diffra/computer/action',
   devServer: '_diffra/devserver',
   designAction: '_diffra/design/action',
+  // 设计任务里找图（v2 · M11）：客户端用用户的 Pexels / Unsplash Key 搜，返回图片地址和缩略图
+  stockPhotos: '_diffra/design/stock-photos',
   // 任务之间互通：智能体给别的任务发消息、新建任务，由客户端载入任务、起一轮
   taskAction: '_diffra/task/action',
 } as const

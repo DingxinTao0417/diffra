@@ -111,6 +111,8 @@ export const IPC_CHANNELS = {
   attachmentDescribe: 'attachment:describe',
   sessionsStorage: 'sessions:storage',
   usageSummary: 'usage:summary',
+  stockKeysGet: 'stock:keys',
+  stockKeySet: 'stock:key-set',
   usageExport: 'usage:export',
   usageFiles: 'usage:files',
   usageCleanup: 'usage:cleanup',
@@ -577,6 +579,9 @@ export interface DiffraApi {
   getPathForFile(file: File): string
   sessionsStorage(): Promise<{ bytes: number; dir: string }>
   usageSummary(query: UsageQuery): Promise<UsageSummary>
+  // 图库的 API Key（v2）：只拿掩码；key 为 null 是删掉
+  stockKeys(): Promise<{ pexels: string | null; unsplash: string | null }>
+  setStockKey(provider: 'pexels' | 'unsplash', key: string | null): Promise<void>
   // v2：导出范围内的用量记录（弹保存对话框，取消返回 null）；各月的记录文件；删掉某个月（YYYY-MM）之前的
   exportUsage(query: UsageQuery): Promise<{ rows: number; skippedLines: number; path: string } | null>
   usageFiles(): Promise<Array<{ month: string; bytes: number }>>

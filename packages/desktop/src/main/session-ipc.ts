@@ -85,6 +85,7 @@ import { aroundTurn, emitSessionEvent } from './session-events'
 import { mcpServersFor } from './mcp-servers'
 import { enabledPlugins } from './plugins-ipc'
 import { SESSION_RULES } from './rule-packs'
+import { configuredStockProviders, searchStockPhotos } from './stock-photos'
 import type { SecretStore } from './secret-store'
 import { providerEndpoint, workspaceRoot } from './settings-ipc'
 import {
@@ -95,6 +96,9 @@ import {
   type SettingsStore,
 } from './settings-store'
 import { securitySwitches } from './security-switches'
+
+// 找图用的密钥库：core 的回调在注册 IPC 之前就定义好了，注册时填上
+let stockSecrets: SecretStore | null = null
 
 const sessionOptionsSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
@@ -203,6 +207,10 @@ export const coreClientHandlers: CoreClientHandlers = {
   onComputerAction: (params) => computerHost.act(params),
   onDevServer: (params) => devServer(params),
   onDesignAction: (params) => designHost.act(params),
+  onStockPhotos: (params) => {
+    if (!stockSecrets) throw new Error('图库还没准备好')
+    return searchStockPhotos(stockSecrets, params, AbortSignal.timeout(25_000))
+  },
   onArchitectureEvent: (event) => {
     broadcast(IPC_CHANNELS.architectureEvent, event)
   },
@@ -234,6 +242,7 @@ export function settlePermission(requestId: string, optionId: string | null, ans
 
 // 返回架构功能选模型的办法：和优化提示词一样先用「规划」角色，没配用「编码」
 export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore, userDataDir: string): { architectureModel: () => Promise<SessionModel> } {
+  stockSecrets = secrets
   const projectState = (path: string): ProjectState => {
     const project = settings.get().projects[path]
     return {
@@ -398,6 +407,8 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         browser: true,
         computer: computerEnabled(settings),
         design: options.design ?? false,
+        // 填了图库的 Key，设计任务里给找图工具（v2）
+        stockPhotos: (await configuredStockProviders(secrets)).length > 0,
         designStyle: options.design ? (options.designStyle ?? null) : null,
         checkpointDir: join(userDataDir, 'checkpoints', projectKey(path)),
         // 自动记忆开着时每个项目一个记忆目录；无项目任务的文件夹不是用户的项目，下面建会话时会去掉

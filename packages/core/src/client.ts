@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, SharedStatus, TargetArchitecture } from './architecture/model.js'
-import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, taskActionParamsSchema } from './session/config.js'
+import { browserActionParamsSchema, computerActionParamsSchema, designActionParamsSchema, devServerParamsSchema, stockPhotoParamsSchema, taskActionParamsSchema } from './session/config.js'
 import { taskProgressViewSchema } from './session/task-state.js'
 import type { SecurityTool, SecurityToolReport, SecurityToolsInfo } from './security/tools.js'
 import { EXT_METHODS, type ListModelsResult, type ModelEndpoint, type TestModelResult } from './models/types.js'
@@ -21,6 +21,8 @@ import {
   type CommandInfo,
   type DesignActionParams,
   type DesignActionResult,
+  type StockPhotoParams,
+  type StockPhotoResult,
   type ExternalAgentDetection,
   type ExternalAgentSpec,
   type ExternalSessionConfig,
@@ -77,6 +79,8 @@ export interface CoreClientHandlers {
   onDevServer?(params: DevServerParams): Promise<DevServerResult>
   // 智能体调用设计面板的工具；不提供时不要给会话配置设计工具
   onDesignAction?(params: DesignActionParams): Promise<DesignActionResult>
+  // 设计任务里找图（v2）
+  onStockPhotos?(params: StockPhotoParams): Promise<StockPhotoResult>
   // 智能体给别的任务发消息、新建任务；不提供时任务互通的发送和新建会报错
   onTaskAction?(params: TaskActionParams): Promise<TaskActionResult>
   // 架构分析、解读的进度和结束
@@ -109,6 +113,8 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
     if (onDevServer) app.onRequest(CLIENT_EXT_METHODS.devServer, devServerParamsSchema, ({ params }) => onDevServer(params))
     const onDesignAction = handlers.onDesignAction
     if (onDesignAction) app.onRequest(CLIENT_EXT_METHODS.designAction, designActionParamsSchema, ({ params }) => onDesignAction(params))
+    const onStockPhotos = handlers.onStockPhotos
+    if (onStockPhotos) app.onRequest(CLIENT_EXT_METHODS.stockPhotos, stockPhotoParamsSchema, ({ params }) => onStockPhotos(params))
     const onTaskAction = handlers.onTaskAction
     if (onTaskAction) app.onRequest(CLIENT_EXT_METHODS.taskAction, taskActionParamsSchema, ({ params }) => onTaskAction(params))
     const onArchitectureEvent = handlers.onArchitectureEvent

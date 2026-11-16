@@ -93,6 +93,7 @@ export const sessionConfigSchema = z.object({
   design: z.boolean().default(false),
   designStyle: z.string().min(1).nullable().default(null),
   noProject: z.boolean().default(false),
+  stockPhotos: z.boolean().optional(),
   checkpointDir: z.string().min(1).nullable(),
 }) satisfies z.ZodType<SessionConfig>
 
@@ -185,6 +186,14 @@ export const sessionDesignSchema = z.object({
   tools: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_]*$/), description: z.string(), inputSchema: z.record(z.string(), z.unknown()), readOnly: z.boolean() })),
   instructions: z.string(),
 }) satisfies z.ZodType<SessionDesign>
+
+// 设计任务里找图（v2）：core 发给客户端的请求
+export const stockPhotoParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  query: z.string().trim().min(1).max(100),
+  orientation: z.enum(['landscape', 'portrait', 'square']).nullable(),
+  count: z.number().int().min(1).max(12),
+})
 
 export const designActionParamsSchema = z.object({
   sessionId: z.string().min(1),

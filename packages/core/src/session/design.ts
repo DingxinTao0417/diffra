@@ -1,6 +1,7 @@
 import { jsonSchema, tool, type ToolResultPart, type ToolSet } from 'ai'
 import { designStyleById, type PromptImage } from '../protocol.js'
 import { PLACE_IMAGE_DEFINITION, PLACE_IMAGE_TOOL } from './design-image.js'
+import { FIND_PHOTOS_CHARS, FIND_PHOTOS_DEFINITION, FIND_PHOTOS_TOOL, findPhotosEnabled } from './design-photos.js'
 import { errorResult, type StepToolCall, textResult, type TurnIO } from './loop.js'
 import type { Session } from './session.js'
 import { toolDefinitionChars } from './tools.js'
@@ -21,6 +22,7 @@ export function designTools(session: Session): ToolSet {
     tools[PREFIX + spec.name] = tool({ description: spec.description, inputSchema: jsonSchema(spec.inputSchema) })
   }
   tools[PLACE_IMAGE_TOOL] = PLACE_IMAGE_DEFINITION
+  if (findPhotosEnabled(session)) tools[FIND_PHOTOS_TOOL] = FIND_PHOTOS_DEFINITION
   return tools
 }
 
@@ -30,7 +32,7 @@ export function designChars(session: Session): number {
   const tools = Object.keys(designTools(session))
   const specs = session.design.tools.filter((spec) => tools.includes(PREFIX + spec.name))
   const pageChars = specs.reduce((sum, spec) => sum + PREFIX.length + spec.name.length + spec.description.length + JSON.stringify(spec.inputSchema).length, 0)
-  return pageChars + toolDefinitionChars({ [PLACE_IMAGE_TOOL]: PLACE_IMAGE_DEFINITION }) + designInstructions(session).length
+  return pageChars + toolDefinitionChars({ [PLACE_IMAGE_TOOL]: PLACE_IMAGE_DEFINITION }) + (findPhotosEnabled(session) ? FIND_PHOTOS_CHARS : 0) + designInstructions(session).length
 }
 
 // 内置的设计 Skill；技能清单里有它（「- 名字: 说明」一行）时让模型先读
@@ -49,6 +51,9 @@ export function designInstructions(session: Session): string {
       ? `- After a visible change, look at the result with ${PREFIX}export_image on the affected nodes and fix what looks wrong.`
       : `- You cannot see images; check the result with ${PREFIX}describe and ${PREFIX}get_node instead.`,
     `- For photos, illustrations and logos use ${PLACE_IMAGE_TOOL} with an image URL or a local file; never hand-draw stand-ins for real images.` +
+      (findPhotosEnabled(session)
+        ? ` Find photos with ${FIND_PHOTOS_TOOL} (Pexels / Unsplash) and credit the photographers.`
+        : '') +
       (session.config.browser
         ? ' To find images on the web, open an image site in the built-in browser (for example https://unsplash.com/s/photos/<keywords>, https://www.pexels.com/search/<keywords>/ or https://commons.wikimedia.org), ' +
           'then call browser_images to list the image URLs on the page. Prefer freely licensed images and tell the user where they came from.'

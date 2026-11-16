@@ -38,6 +38,7 @@ import { PluginBlocksContext, useSessionPluginBlocks } from './rich/PluginBlock'
 import { McpAppCard } from './McpAppCard'
 import { useFullOutput } from './tool-output'
 import { VisualCard, VisualHistoryContext, type VisualVersion } from './VisualCard'
+import { PhotosCard } from './cards/PhotosCard'
 import { CARD_COMPACT, CardShell } from './cards/CardShell'
 import { AgentTeam } from './cards/AgentTeam'
 import { BrowserSummary, isBrowserStep } from './cards/BrowserSummary'
@@ -60,7 +61,7 @@ type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ProcessItem> }
   | { type: 'process'; id: string; items: ProcessItem[] }
   | { type: 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'candidates'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'photos' | 'mcp-ui' | 'wait' | 'task' | 'candidates'; item: ToolItem }
 
 const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' && item.status !== 'completed' && item.status !== 'failed'
 
@@ -132,8 +133,9 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'steps' | 'candidates' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'photos' | 'mcp-ui' | 'wait' | 'task' | 'steps' | 'candidates' | null {
   if (item.candidates) return 'candidates'
+  if (item.photos && !item.parentId) return 'photos'
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
   if (item.visual) return 'visual'
@@ -752,6 +754,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
             return <McpAppCard key={block.item.id} ui={block.item.mcpUi!} sessionId={task.sessionId} />
           case 'visual':
             return <VisualCard key={block.item.id} id={block.item.id} title={block.item.visual!.title} code={block.item.visual!.code} sessionId={task.sessionId} snapshot={block.item.visualSnapshot} />
+          case 'photos':
+            return <PhotosCard key={block.item.id} title={block.item.title} photos={block.item.photos!} />
         }
       })}
       {active && task.permission && <PermissionPending toolCall={task.permission.toolCall} />}
