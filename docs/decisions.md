@@ -17,8 +17,8 @@ v1：
 - 模型只通过 API Key 接入：预置各大厂商的 base URL、Coding Plan 模板（智谱、百炼、Kimi），以及自定义协议配置。
 - 不做订阅账号登录（用 OAuth 消耗 Claude / ChatGPT / Gemini 订阅额度）。Anthropic 和 Google 都禁止第三方应用这样用，分发出去后被封号的是用户；OpenAI 的第三方登录计划还没核实到官方原文。
 
-v2：
-- 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。
+v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域网，互联网远程、P2P 打洞、离线暂存、自建中转、远程撤销不做）：
+- 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。已做，见「外接智能体」。
 - 多候选方案（每个候选一个 git worktree）、Java 适配器。
 - 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。
 
@@ -402,6 +402,29 @@ v2：
 - 状态：「扩展 → 已安装」里每个服务器显示连上没有、几个工具和 prompt、失败原因；任务监控里显示这个任务用到的服务器。
 - v2 再做：OAuth 登录的远程服务器（扩展目录里的 Vercel 和 Railway 远程版靠它，现在标「下一版支持」）。
 - 不做（以后再说）：MCP 的资源（resources）和采样（sampling）、从 JSON 配置粘贴导入、按项目单独开关服务器、项目目录里的 MCP 配置文件、规划时用只读的 MCP 工具。
+
+## 外接智能体（v2 · M1）
+
+- 做什么：让 Claude Code、Codex、Gemini CLI、Copilot CLI 跑 Diffra 的任务。它们用自己的模型和账号，登录在终端里由各 CLI 自己完成，Diffra 不实现订阅 OAuth、不保存它们的账号密码（和 v1「不做订阅登录」不冲突：消耗订阅额度的是它们自己的客户端）。
+- 结构：core 当外部 CLI 的 ACP 客户端，桌面端照旧只和 core 说 ACP（`packages/core/src/external/`）。不在主进程里直接连外部 CLI，因为放在 core 里能复用会话记录（侧栏、搜索、重开）、检查点（看改动、撤销改动）和同一套会话更新；界面不用另做一套。
+  - `spawn.ts`：按 PATH 和常见安装位置找命令（npm 全局目录、`~/.local/bin`、Homebrew、pnpm、bun、volta 等），Windows 上只认 PATHEXT 里的扩展名（npm 目录里同名的无扩展名文件是给 sh 用的）；`.cmd`、`.bat` 经 `cmd.exe /d /s /c` 起，参数按 cross-spawn 的规则转义（单测覆盖空格、`&|`、`%PATH%`、引号、`^`）；结束时 Windows 用 `taskkill /T`，其他系统结束整个进程组。
+  - `connection.ts`：一个进程一条 ACP 连接。不声明文件和终端能力：它用自己的工具读写文件、跑命令，要确认的事经 `session/request_permission` 问过来。握手失败分成没装（找不到命令）、版本不对（不按 ACP 应答、报不认识参数、协议版本对不上）、启动失败（带退出码和它最后 4000 字输出）、超时（握手 2 分钟，第一次用 npx 要下载）、还没登录（ACP 的 -32000 或报错里像「要登录」）。
+  - `session.ts`：外接智能体的任务（`ExternalSession`）。每个任务一个进程，第一条消息时才起；一轮结束后空闲 15 分钟结束，下次发消息重新起，智能体支持 `session/load` 时接上原来的会话（重放的历史不转发），不支持时提示「开了新对话，之前的上下文它看不到」。设置里改了命令、参数、环境变量，下一轮换成新进程。
+- 预设（`packages/desktop/src/shared/external-agents.ts`，2026-11-15 按官方文档核对）：Claude Code 和 Codex 用 agentclientprotocol 组织维护的适配器，本机装了 `claude-agent-acp` / `codex-acp` 就用它，否则 `npx -y @agentclientprotocol/claude-agent-acp`、`npx -y @agentclientprotocol/codex-acp`（`@zed-industries/codex-acp` 已标废弃）；Gemini CLI 是 `gemini --acp`（旧版只认 `--experimental-acp`）；Copilot CLI 是 `copilot --acp`。每个预设写了安装命令、怎么登录和说明链接。也可以自定义任何支持 ACP 的命令。
+- 设置（「设置 → 智能体 → 外接智能体」）：已添加的列表（检测、编辑、删除）；四个预设和「自定义」，打开页面时在本机找各自的命令，找到标「已装」和路径，没找到给安装命令；添加、编辑在原地展开表单（名称、启动命令、参数一行一个、环境变量），表单里能先检测再保存。检测结果按类型给下一步（去装、升级、在终端登录、检查网络）。
+  - 存法：`settings.json` 的 `externalAgents`（id、预设、名称、命令、参数、环境变量名）；环境变量的值和 MCP 一样加密进 `secrets.json`（`external:<id>:env:<名字>`），编辑时不回显，留空沿用。启动时和改了之后整份交给 core（`_diffra/external/agents`），值只在内存里。
+- 任务：首页模型菜单里多一组「外接智能体」，选了就用它建任务（不需要配 Diffra 的模型）；设计首页不给（设计工具只有 Diffra 自己的智能体能用）。任务里输入框的模型菜单显示它的名字、锁住不能换。对话、工具调用卡片、改动卡片、确认卡、停止按钮、出错提示都是原来那套：它发来的标准 ACP 更新原样转给界面，它的步骤清单（ACP 的 `plan`）画成和 Diffra 一样的「步骤」卡片；它发来的 `_meta.diffra` 一律去掉，免得冒充 Diffra 的结论和任务状态。
+  - 权限：每次询问、自动审批都把它的确认请求原样转给用户（Diffra 看不懂它的工具，不替它分风险）；完全放行时替用户选它给的「允许」（优先只允许这一次）。
+  - 停止：先发 `session/cancel` 等它回 cancelled，10 秒还不回就结束进程；等确认时停止，确认作废。
+  - 崩溃、超时：进程中途退出、握手超时、没登录、智能体从设置里删了，这一轮都停下：结论「出错」，提示卡片写原因和它最后的输出，停下说明给「继续」（没装、版本不对时还有「打开外接智能体设置」）；任务不会卡在运行中。3 分钟没有输出时和 Diffra 自己的模型一样提示可能卡住了，但没有「重试这一步」（请求在它那边，重发不了）。
+  - 结论：Diffra 不管它怎么收尾，这一轮改了文件（按检查点算）就是「已完成」（`finish: unverified`），没改是「没有改动」；不过 Diffra 的完成门禁（检查命令、安全检查、规范审查、架构检查）。撤销改动照常；撤销后的下一条消息前面告诉它文件变了。
+  - 选了的 Skill 照样放在提问前面发给它；没有目标模式、出计划、压缩、深度扫描、重新生成、定位问题、换模型（输入框和停下说明里都不出这些按钮，core 收到也会说不支持）。
+- 兼容：会话记录、索引新加的 `agent`（id 和建任务时的名字）、`externalSessionId` 都是可选的；轮次的 `kind` 还是 `prompt`，旧版能读。旧版读到这种任务会当成没有对话历史的普通任务打开（它不认识 `agent`），不报错、不删记录。旧版 Diffra 读设置会丢掉 `externalAgents`，下次保存时就没了，任务记录不受影响。新加的结论 `agent-error` 旧版界面不认，当没有结论显示。
+- 没做 / 已知限制：
+  - 没在真的 CLI 上跑过：本机装了 Claude Code、Codex 和 VS Code 带的 Copilot 入口，但 Claude Code、Codex 的适配器要 npx 下载，没有擅自下载运行；Gemini CLI 没装。需要在有账号的机器上手动走一遍（见下面「验证」）。
+  - Diffra 配置的 MCP 服务器不传给外接智能体（会把解密后的密钥交给第三方进程），它用自己配置的 MCP。
+  - 它的 token 用量不进用量统计（ACP 没有标准的用量数字）；任务互通（`task_create`）建的仍是 Diffra 自己的任务；远程设备连接的远程任务页不区分外接智能体。
+- 验证：core `test/external.test.ts` 20 个用例（假 ACP 服务端 `test/fixtures/fake-acp-agent.mjs`，不依赖 SDK）：检测的五种结果、`.cmd` 启动和参数转义、常见安装位置、一问一答、改文件和撤销、确认（含完全放行）、停止（含不理停止的）、等确认时停止、很久没输出、中途崩溃后重起并接上会话、重启 core 后打开旧任务、不支持接上时的提示、没登录、智能体被删、步骤卡片和去掉 `_meta.diffra`、不支持的操作。e2e `external-agents.spec.ts`：设置里检测出没装、版本不对、可用，添加（环境变量值不落明文）、编辑、删除；不配 Diffra 模型用它建任务，对话、确认、改文件、停止、很久没输出、崩溃、任务监控、重启应用后打开旧任务接上会话、智能体删了再发消息。手动确认：在登录过的机器上添加 Claude Code、Codex 预设，检测、跑一个改文件的任务、停止一次。
 
 ## 外观与模型配置界面
 

@@ -105,6 +105,11 @@ export function stopSummary(turn: Turn): { text: string; actions: StopAction[] }
     const kind = turn.outcome?.errorKind ?? 'unknown'
     return { text: MODEL_ERROR_TEXT[kind], actions: kind === 'auth' || kind === 'not-found' ? ['settings', 'switch-model'] : ['continue', 'switch-model'] }
   }
+  // 外接智能体出错：原因在它报的错里（下面的提示卡片有它最后的输出）；没装、没登录要去设置或终端里处理
+  if (stop === 'agent-error') {
+    const failure = turn.outcome?.agentError
+    return { text: failure ? `${failure.message}，这一轮停在这里` : '外接智能体出错，这一轮停在这里', actions: failure?.kind === 'not-installed' || failure?.kind === 'version' ? ['settings', 'continue'] : ['continue'] }
+  }
   if (stop === 'context-limit' || turn.stopReason === 'max_tokens') return { text: '上下文快用完了，这一轮停在这里', actions: ['compact', 'continue'] }
   if (stop === 'step-limit' || turn.stopReason === 'max_turn_requests') return { text: '达到了单次任务的步数上限，这一轮停在这里', actions: ['continue', 'diagnose'] }
   if (stop === 'check-exhausted') return { text: '快速检查一直没修好，这一轮停在这里', actions: ['diagnose', 'continue'] }
@@ -261,7 +266,8 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   const workIndex = lastWorkIndex(task.turns)
   const { sessionId, project, running, permission, info, progress, modelLabel, modelRef } = task
-  const turnTask = useMemo<TurnTask>(() => ({ sessionId, project, running, permission, info, progress, modelLabel, modelRef }), [sessionId, project, running, permission, info, progress, modelLabel, modelRef])
+  const agent = task.agent
+  const turnTask = useMemo<TurnTask>(() => ({ sessionId, project, running, permission, info, progress, modelLabel, modelRef, agent }), [sessionId, project, running, permission, info, progress, modelLabel, modelRef, agent])
   // 上层每次都传新的回调；存进 ref、给每一轮一个不变的包装，已经结束的轮次才能跳过重画，调用时也总是最新的回调
   const callbacks = useRef({ onLocate, onRestore, onRegenerate })
   callbacks.current = { onLocate, onRestore, onRegenerate }
@@ -548,7 +554,7 @@ function EarlierRow({ earlier, pull }: { earlier: NonNullable<ConversationProps[
 
 // 每一轮用到的任务字段。只传这些（不传整个任务），流式输出时已经结束的轮次 props 不变，不用重画：
 // 长任务里每来一条更新就重画全部轮次，界面会卡住几十秒
-type TurnTask = Pick<LiveTask, 'sessionId' | 'project' | 'running' | 'permission' | 'info' | 'progress' | 'modelLabel' | 'modelRef'>
+type TurnTask = Pick<LiveTask, 'sessionId' | 'project' | 'running' | 'permission' | 'info' | 'progress' | 'modelLabel' | 'modelRef' | 'agent'>
 
 interface TurnViewProps {
   turn: Turn
@@ -626,7 +632,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
   const isStatic = useStatic()
   // 远程任务页只读（作用于本机的按钮都不显示），但对方开放了「可查看和操作」时撤销、重新生成经对方做
   const remote = useRemoteTask()
-  const canRegenerate = latestWork && (!readOnly || Boolean(remote?.regenerate))
+  // 外接智能体的对话在它自己那边，撤不回去，不能重新生成
+  const canRegenerate = latestWork && !task.agent && (!readOnly || Boolean(remote?.regenerate))
   // 定位轮不改文件、没有检查点
   const canRestore = (!readOnly || Boolean(remote?.restore)) && task.info.checkpoints && turn.kind !== 'compact' && turn.kind !== 'diagnose'
 
@@ -750,7 +757,7 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           进行中…
         </p>
       )}
-      {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} />}
+      {active && <ModelSilenceHint turn={turn} sessionId={task.sessionId} agent={task.agent?.name} />}
       {!active && <StopSummary turn={turn} task={task} actionable={!readOnly && latestWork && !task.running} />}
       {turn.error && (
         <CardShell
@@ -1239,6 +1246,8 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
 function StopSummary({ turn, task, actionable }: { turn: Turn; task: TurnTask; actionable: boolean }) {
   const summary = stopSummary(turn)
   if (!summary) return null
+  // 外接智能体用它自己的模型和上下文：没有换模型、压缩、定位问题
+  const actions = task.agent ? summary.actions.filter((action) => action === 'continue' || action === 'settings') : summary.actions
   const resume = () => void sendMessage(task.sessionId, '继续')
   const switchAndResume = async (model: ModelRef) => {
     if (await setTaskModel(task.sessionId, model)) await sendMessage(task.sessionId, '继续')
@@ -1269,7 +1278,11 @@ function StopSummary({ turn, task, actionable }: { turn: Turn; task: TurnTask; a
         压缩上下文
       </Button>
     ),
-    settings: (
+    settings: task.agent ? (
+      <Button key="settings" variant="outline" size="sm" className="h-7" onClick={() => openSettings('agents')}>
+        打开外接智能体设置
+      </Button>
+    ) : (
       <Button key="settings" variant="outline" size="sm" className="h-7" onClick={() => openSettings('models')}>
         打开模型设置
       </Button>
@@ -1287,13 +1300,14 @@ function StopSummary({ turn, task, actionable }: { turn: Turn; task: TurnTask; a
         <Square className="size-3.5 shrink-0" />
         {summary.text}
       </p>
-      {actionable && <div className="flex flex-wrap items-center gap-1.5">{summary.actions.map((action) => buttons[action])}</div>}
+      {actionable && <div className="flex flex-wrap items-center gap-1.5">{actions.map((action) => buttons[action])}</div>}
     </div>
   )
 }
 
 // 模型很久没有输出：可能卡住了，也可能还在想，不替用户停；可以让卡住的那一步重发。几个子智能体同时没输出时提示最久的那个
-function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }) {
+// 外接智能体（agent）的请求在它自己那边，重发不了：只提示，停不停由用户决定
+function ModelSilenceHint({ turn, sessionId, agent }: { turn: Turn; sessionId: string; agent?: string }) {
   const [key, longest] = Object.entries(turn.silence).sort(([, a], [, b]) => a.since - b.since)[0] ?? []
   const elapsed = useElapsed(longest?.since, longest !== undefined)
   const [retrying, setRetrying] = useState(false)
@@ -1313,9 +1327,9 @@ function ModelSilenceHint({ turn, sessionId }: { turn: Turn; sessionId: string }
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-warning" data-testid="model-silence">
       <p className="flex items-start gap-2">
         <CircleAlert className="mt-0.5 size-4 shrink-0" />
-        {longest.agent ? `子智能体「${longest.agent}」的模型` : '模型'}已 {formatDuration(elapsed)}没有输出，可能卡住了
+        {agent ?? (longest.agent ? `子智能体「${longest.agent}」的模型` : '模型')}已 {formatDuration(elapsed)}没有输出，可能卡住了{agent ? '，可以停止后再发一次' : ''}
       </p>
-      {!readOnly && (
+      {!readOnly && !agent && (
         <Button variant="outline" size="sm" className="h-7" disabled={retrying} onClick={retry}>
           重试这一步
         </Button>

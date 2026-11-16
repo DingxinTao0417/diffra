@@ -12,6 +12,7 @@ import { startCore, stopCore } from './core-process'
 import { parse } from './ipc-input'
 import { registerPluginsIpc } from './plugins-ipc'
 import { registerExtensionsIpc } from './extensions-ipc'
+import { registerExternalAgentsIpc, syncExternalAgents } from './external-agents-ipc'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
@@ -152,6 +153,9 @@ app
     registerArchitectureIpc(architectureModel)
     registerPluginsIpc(settings, userDataDir)
     registerExtensionsIpc(settings, secrets)
+    registerExternalAgentsIpc(settings, secrets)
+    // 外接智能体的清单交给 core；core 还没连上时等它，失败只记日志
+    void syncExternalAgents(settings, secrets)
     registerBrowserIpc()
     // 浏览器扩展的宿主登记和管道：失败了只影响用户自己的浏览器，内置浏览器照常
     browserHost.start(settings, userDataDir).catch((error: unknown) => console.error('[browser] 启动浏览器扩展通道失败', error))

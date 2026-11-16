@@ -17,10 +17,13 @@ import {
   type DesignActionResult,
   type DevServerParams,
   type DevServerResult,
+  type ExternalAgentDetection,
+  type ExternalAgentSpec,
   type LoadedSession,
   PROMPT_ENHANCE_USAGE_ID,
   PROMPT_IMAGE_TYPES,
   type PromptImage,
+  TASK_PROGRESS_META_KEY,
   type RemoteSnapshot,
   SESSION_EXT_METHODS,
   MANUAL_COMPACTION_PROMPT,
@@ -48,6 +51,9 @@ import { sessionStartContext } from './session/plugin-hooks.js'
 import {
   checkSwitchesSchema,
   endpointSchema,
+  externalAgentSpecSchema,
+  externalLoadMetaSchema,
+  externalSessionMetaSchema,
   mcpServerSchema,
   modelConfigSchema,
   newSessionMetaSchema,
@@ -77,6 +83,8 @@ import { type SessionRecord, SessionStore, toEntry } from './session/store.js'
 import { toUsageRecord, UsageLog } from './usage/log.js'
 import { isTimeZone, UsageAggregator } from './usage/summary.js'
 import { CORE_VERSION } from './version.js'
+import { ExternalAgentError, ExternalAgentProcess } from './external/connection.js'
+import { ExternalSession } from './external/session.js'
 
 export const AGENT_NAME = 'diffra-core'
 
@@ -179,7 +187,7 @@ function withSeq(update: acp.SessionUpdate, seq: number): acp.SessionUpdate {
 }
 
 // 确认请求：选中的 optionId，提问还带回答案（_meta.diffra.askAnswers）；取消、出错是 null
-async function askClient(session: Session, client: acp.AgentContext, toolCall: acp.ToolCallUpdate, options: acp.PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null> {
+async function askClient(session: Pick<Session, 'id' | 'activeTurn'>, client: acp.AgentContext, toolCall: acp.ToolCallUpdate, options: acp.PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null> {
   try {
     const response = await client.request(
       acp.methods.client.session.requestPermission,
@@ -223,6 +231,10 @@ async function selectedSkills(session: SessionType, names: string[]): Promise<Sk
 export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   const sessions = new Map<string, Session>()
   const infos = new Map<string, SessionInfo>()
+  // 外接智能体的任务（v2）：和 Diffra 自己的会话分开放，只支持提问、停止、撤销改动、看改动、改名归档
+  const externals = new Map<string, ExternalSession>()
+  // 设置里的外接智能体清单（SESSION_EXT_METHODS.externalAgents），按 id
+  const externalAgents = new Map<string, ExternalAgentSpec>()
   const store = options.sessionsDir ? new SessionStore(options.sessionsDir) : null
   const usageLog = options.usageDir ? new UsageLog(options.usageDir) : null
   const mcpPool = options.mcpPool ?? new McpPool()
@@ -246,6 +258,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
 
   const mcpTarget = async (params: z.infer<typeof mcpTargetParams>) => {
     if (!('sessionId' in params)) return { cwd: params.cwd, servers: [...params.servers, ...(await pluginMcpServers(params.plugins))] }
+    const external = externals.get(params.sessionId)
+    if (external) return { cwd: external.cwd, servers: [] }
     const session = sessionOf(params.sessionId)
     return { cwd: session.cwd, servers: session.mcpServers }
   }
@@ -253,14 +267,65 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   // 任务里按建任务时开着的插件列，和选 Skill 一致
   const listTarget = (params: z.infer<typeof listTargetParams>) => {
     if (!('sessionId' in params)) return params
+    // 外接智能体的任务：选的 Skill 照样放进提问；插件是 Diffra 的，不带
+    const external = externals.get(params.sessionId)
+    if (external) return { cwd: external.cwd, plugins: [] }
     const session = sessionOf(params.sessionId)
     return { cwd: session.cwd, plugins: session.config.plugins }
   }
 
   const sessionOf = (sessionId: string): Session => {
     const session = sessions.get(sessionId)
+    if (!session) {
+      const external = externals.get(sessionId)
+      if (external) throw new Error(`这是 ${external.agent.name} 的任务，不支持这个操作`)
+      throw acp.RequestError.resourceNotFound(sessionId)
+    }
+    return session
+  }
+
+  // 撤销改动、看改动这类两种任务都有的操作
+  const anySessionOf = (sessionId: string): Session | ExternalSession => {
+    const session = sessions.get(sessionId) ?? externals.get(sessionId)
     if (!session) throw acp.RequestError.resourceNotFound(sessionId)
     return session
+  }
+
+  const externalInfo = (session: ExternalSession): SessionInfo => ({
+    bashPath: null,
+    checkpoints: session.checkpoints !== null,
+    rulePacks: [],
+    security: { staticCheck: false, lightScan: false },
+    checks: { afterEdit: null, beforeFinish: null },
+  })
+
+  // 外接智能体的任务：设置每次用客户端传来的（权限模式、检查点），对话历史来自记录。旧任务的智能体从设置里删掉了也能打开看，发消息时再说明
+  const openExternal = async (cwd: string, rawMeta: unknown, record?: SessionRecord) => {
+    const dir = await stat(cwd).catch(() => null)
+    if (!dir?.isDirectory()) throw acp.RequestError.invalidParams(undefined, `项目目录不存在：${cwd}`)
+    const created = externalSessionMetaSchema.safeParse(rawMeta)
+    const loaded = created.success ? null : externalLoadMetaSchema.safeParse(rawMeta)
+    const meta = created.success ? created.data.diffra : loaded?.success ? loaded.data.diffra : null
+    if (!meta) throw acp.RequestError.invalidParams(undefined, '缺少或无效的 _meta.diffra 会话配置')
+    const agentId = record?.agent?.id ?? (created.success ? created.data.diffra.external.agentId : null)
+    const spec = agentId ? (externalAgents.get(agentId) ?? null) : null
+    const agent = record?.agent ?? (spec ? { id: spec.id, name: spec.name } : null)
+    if (!agent) throw acp.RequestError.invalidParams(undefined, `设置里没有这个外接智能体：${agentId ?? ''}`)
+    const live = record ? externals.get(record.id) : undefined
+    if (live) {
+      live.permissionMode = meta.permissionMode
+      live.spec = spec
+      return { session: live, info: externalInfo(live) }
+    }
+    const checkpoints = meta.checkpointDir
+      ? await Checkpoints.open(meta.checkpointDir, cwd, meta.readOnlyPaths).catch((error: unknown) => {
+          console.error('[session] 检查点仓库初始化失败', error)
+          return null
+        })
+      : null
+    const session = new ExternalSession({ cwd, agent, spec, permissionMode: meta.permissionMode, checkpoints, noProject: meta.noProject, record })
+    externals.set(session.id, session)
+    return { session, info: externalInfo(session) }
   }
 
   const requireStore = (): SessionStore => {
@@ -329,7 +394,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   }
 
   // 还没开始过任务的会话不落盘，免得每次打开项目都留下一条空记录
-  const persist = async (session: Session, notify: (update: acp.SessionUpdate) => Promise<void>, touch = true) => {
+  const persist = async (session: Pick<Session, 'turns' | 'toRecord'>, notify: (update: acp.SessionUpdate) => Promise<void>, touch = true) => {
     if (!store || session.turns.length === 0) return
     try {
       await store.save(session.toRecord(touch))
@@ -441,8 +506,55 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     return stopReason
   }
 
+  // 外接智能体的一轮：提问原样（选了 Skill 就放在前面）转给它，过程记进这一轮并推给界面，确认请求转给客户端
+  const runExternalTurn = async (session: ExternalSession, client: acp.AgentContext, params: acp.PromptRequest): Promise<acp.StopReason> => {
+    if (session.running) throw new Error('上一个任务还没结束')
+    session.turnRequested()
+    const meta = promptMetaSchema.safeParse(params._meta)
+    const turnId = meta.success ? meta.data.diffra.turnId : randomUUID()
+    if (meta.success && meta.data.diffra.goal) throw new Error(`${session.agent.name} 的任务不支持目标模式`)
+    const text = params.prompt.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
+    const images = params.prompt.flatMap((block): PromptImage[] => {
+      if (block.type !== 'image') return []
+      const mimeType = PROMPT_IMAGE_TYPES.find((type) => type === block.mimeType)
+      if (!mimeType) throw new Error(`不支持的图片格式：${block.mimeType}`)
+      return [{ mimeType, data: block.data }]
+    })
+    const skillNames = meta.success ? meta.data.diffra.skills : []
+    const skills = skillNames.length > 0 ? (await loadSkills(skillRoots(session.cwd, []))).filter((skill) => skillNames.includes(skill.name)) : []
+    const missing = skillNames.filter((name) => !skills.some((skill) => skill.name === name))
+    if (missing.length > 0) throw new Error(`找不到 Skill：${missing.join('、')}`)
+    const notify = notifier(client, session.id)
+    return session.runTurn(
+      turnId,
+      text,
+      images,
+      skillNames,
+      {
+        notify,
+        persist: () => persist(session, notify),
+        askClient: async (toolCall, options, signal) => {
+          try {
+            return await client.request(acp.methods.client.session.requestPermission, { sessionId: session.id, toolCall, options }, { cancellationSignal: signal, stopWaitingOnCancel: true })
+          } catch (error) {
+            if (!signal.aborted) console.error('[external] 权限请求失败', error)
+            return { outcome: { outcome: 'cancelled' } }
+          }
+        },
+      },
+      meta.success ? meta.data.diffra.from : undefined,
+      skills.length > 0 ? withSkills(text, skills) : undefined,
+    )
+  }
+
   const app = acp
     .agent({ name: AGENT_NAME })
+    // 客户端断开（桌面端退出）时结束外接智能体的进程：它们不是 core 的一部分，不会跟着 core 的 stdio 一起收尾
+    .onConnect((connection) => {
+      void connection.closed.then(() => {
+        for (const session of externals.values()) void session.dispose()
+      })
+    })
     .onRequest(acp.methods.agent.initialize, () => ({
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
@@ -453,12 +565,32 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       agentInfo: { name: AGENT_NAME, version: CORE_VERSION },
     }))
     .onRequest(acp.methods.agent.session.new, async ({ params }) => {
+      if (externalSessionMetaSchema.safeParse(params._meta).success) {
+        const { session, info } = await openExternal(params.cwd, params._meta)
+        return { sessionId: session.id, _meta: { diffra: info } }
+      }
       const { session, info } = await openSession(params.cwd, params._meta, params.mcpServers)
       return { sessionId: session.id, _meta: { diffra: info } }
     })
     // Diffra 的界面一次拿到整段历史，所以历史放在响应的 _meta 里，不逐条回放 session/update。
     // 旧记录的改动卡片带整份文件，发出去之前压缩（compactTurns），记录本身不动
     .onRequest(acp.methods.agent.session.load, async ({ params }) => {
+      const liveExternal = externals.get(params.sessionId)
+      const externalRecord = liveExternal ? liveExternal.toRecord(false) : sessions.has(params.sessionId) ? null : await requireStore().load(params.sessionId)
+      if (externalRecord?.agent) {
+        if (!sameDir(externalRecord.cwd, params.cwd)) throw acp.RequestError.invalidParams(undefined, '项目目录和会话记录不一致')
+        const { session, info } = await openExternal(externalRecord.cwd, params._meta, externalRecord)
+        const loaded: LoadedSession = {
+          info,
+          title: session.title,
+          turns: compactTurns(session.turns),
+          ...(session.running || session.taskState.status !== 'running' ? { taskState: taskStateView(session) } : {}),
+          design: false,
+          noProject: session.noProject,
+          agent: session.agent,
+        }
+        return { _meta: { diffra: loaded } }
+      }
       const live = sessions.get(params.sessionId)
       const liveInfo = infos.get(params.sessionId)
       if (live?.running && liveInfo) {
@@ -480,13 +612,16 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
           turnCount: entry.turnCount,
           design: entry.design,
           noProject: entry.noProject,
-          running: sessions.get(entry.id)?.running ?? false,
+          running: (sessions.get(entry.id) ?? externals.get(entry.id))?.running ?? false,
+          ...(entry.agent ? { agent: entry.agent } : {}),
         }
         return { sessionId: entry.id, cwd: entry.cwd, title: entry.title, updatedAt: entry.updatedAt, _meta: { diffra: meta } }
       }),
     }))
     .onRequest(acp.methods.agent.session.delete, async ({ params }) => {
-      if (sessions.get(params.sessionId)?.running) throw new Error('任务还在进行中，先停止再删除')
+      if ((sessions.get(params.sessionId) ?? externals.get(params.sessionId))?.running) throw new Error('任务还在进行中，先停止再删除')
+      await externals.get(params.sessionId)?.dispose()
+      externals.delete(params.sessionId)
       sessions.get(params.sessionId)?.execSessions.killAll()
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
@@ -497,6 +632,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return {}
     })
     .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
+      const external = externals.get(params.sessionId)
+      if (external) return { stopReason: await runExternalTurn(external, client, params) }
       const session = sessionOf(params.sessionId)
       if (session.running) throw new Error('上一个任务还没结束')
       session.turnRequested()
@@ -604,7 +741,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return result
     })
     .onRequest(SESSION_EXT_METHODS.retryStep, z.object({ sessionId: z.string().min(1), agent: z.string().min(1) }), ({ params }) => {
-      // 那一步可能刚好已经有输出、结束了，这时什么也不做
+      // 那一步可能刚好已经有输出、结束了，这时什么也不做；外接智能体的请求由它自己管，重发不了
+      if (externals.has(params.sessionId)) return { retried: false }
       const retry = sessionOf(params.sessionId).stepRetries.get(params.agent)
       retry?.()
       return { retried: retry !== undefined }
@@ -631,21 +769,21 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return output
     })
     .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
-      sessions.get(params.sessionId)?.cancel()
+      ;(sessions.get(params.sessionId) ?? externals.get(params.sessionId))?.cancel()
     })
     .onRequest(SESSION_EXT_METHODS.checkpointPreview, checkpointParams, ({ params }) =>
-      sessionOf(params.sessionId).checkpointChanges(params.turnId),
+      anySessionOf(params.sessionId).checkpointChanges(params.turnId),
     )
     .onRequest(SESSION_EXT_METHODS.checkpointRestore, checkpointParams, async ({ params, client }) => {
-      const session = sessionOf(params.sessionId)
+      const session = anySessionOf(params.sessionId)
       const notify = notifier(client, session.id)
       const changes = await session.restoreCheckpoint(params.turnId)
       await persist(session, notify)
-      await notify(taskStateUpdate(session))
+      await notify(session instanceof Session ? taskStateUpdate(session) : { sessionUpdate: 'session_info_update', _meta: { diffra: { [TASK_PROGRESS_META_KEY]: taskStateView(session) } } })
       return changes
     })
     .onRequest(SESSION_EXT_METHODS.sessionUpdate, sessionUpdateParams, async ({ params }) => {
-      const live = sessions.get(params.sessionId)
+      const live = sessions.get(params.sessionId) ?? externals.get(params.sessionId)
       // 还没跑过一轮的任务没有存盘记录（比如任务互通刚新建的），只改内存里的，第一轮结束时一起存
       if (live && live.turns.length === 0) {
         live.title = params.title ?? live.title
@@ -662,11 +800,11 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     // 不走 openSession：不建系统提示词、不连 MCP、不放进 sessions。不在内存里的读完文件再看一次，
     // 读的时候被载入、跑起来了就改取内存里的，免得文件里已有的更新又按序号补发一遍
     .onRequest(SESSION_EXT_METHODS.remoteSnapshot, remoteSnapshotParams, async ({ params }) => {
-      const stored = sessions.has(params.sessionId) ? null : await requireStore().load(params.sessionId)
-      const live = sessions.get(params.sessionId)
+      const stored = sessions.has(params.sessionId) || externals.has(params.sessionId) ? null : await requireStore().load(params.sessionId)
+      const live = sessions.get(params.sessionId) ?? externals.get(params.sessionId)
       const seq = updateSeqs.get(params.sessionId) ?? 0
       const source = live
-        ? { cwd: live.cwd, title: live.title, archived: live.archived, design: live.designTask, noProject: live.noProject, turns: live.turns, taskState: live.taskState, running: live.running }
+        ? { cwd: live.cwd, title: live.title, archived: live.archived, design: live instanceof Session ? live.designTask : false, noProject: live.noProject, turns: live.turns, taskState: live.taskState, running: live.running }
         : stored && { cwd: stored.cwd, title: stored.title, archived: stored.archived, design: stored.design ?? false, noProject: stored.noProject ?? false, turns: stored.turns.map(({ checkpoint: _checkpoint, messageStart: _messageStart, ...turn }) => turn), taskState: restoredTaskState(stored), running: false }
       // 读文件的时候会话被删了
       if (!source) throw acp.RequestError.resourceNotFound(params.sessionId)
@@ -702,6 +840,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.sessionConfigure, sessionConfigureParams, ({ params }) => {
+      const external = externals.get(params.sessionId)
+      if (external) {
+        if (params.model) throw new Error(`这是 ${external.agent.name} 的任务，用的是它自己的模型，在 Diffra 里换不了`)
+        if (params.permissionMode) external.permissionMode = params.permissionMode
+        return {}
+      }
       const session = sessionOf(params.sessionId)
       if (params.permissionMode) session.permissionMode = params.permissionMode
       if (params.model) session.setModel(params.model)
@@ -724,7 +868,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return { stopReason }
     })
     .onRequest(SESSION_EXT_METHODS.commandRisk, z.object({ command: z.string().max(20_000) }), ({ params }) => commandRisk(params.command))
-    .onRequest(SESSION_EXT_METHODS.sessionBlocks, z.object({ sessionId: z.string().min(1) }), ({ params }) => ({ blocks: sessionOf(params.sessionId).pluginBlocks }))
+    .onRequest(SESSION_EXT_METHODS.sessionBlocks, z.object({ sessionId: z.string().min(1) }), ({ params }) => ({ blocks: externals.has(params.sessionId) ? [] : sessionOf(params.sessionId).pluginBlocks }))
     .onRequest(SESSION_EXT_METHODS.useTurnVersion, z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), index: z.number().int().nonnegative() }), async ({ params, client }) => {
       const session = sessionOf(params.sessionId)
       const notify = notifier(client, session.id)
@@ -734,7 +878,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       return result
     })
     .onRequest(SESSION_EXT_METHODS.checkpointDiff, checkpointParams, ({ params }) =>
-      sessionOf(params.sessionId).checkpointDiff(params.turnId),
+      anySessionOf(params.sessionId).checkpointDiff(params.turnId),
     )
     .onRequest(SESSION_EXT_METHODS.usageSummary, usageQueryParams, async ({ params }) => {
       if (!usageLog) throw acp.RequestError.invalidRequest(undefined, '没有配置用量记录')
@@ -752,6 +896,34 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.projectRunCheck, z.object({ cwd: z.string().min(1), command: z.string().trim().min(1) }), async ({ params }) => {
       const result = await runShell({ cwd: params.cwd, bashPath: await findBash(), signal: new AbortController().signal }, params.command, CHECK_TIMEOUT_SECONDS)
       return { passed: result.exitCode === 0 && !result.timedOut && !result.aborted, summary: result.summary }
+    })
+    // 设置里的外接智能体清单：整份替换；已经打开的任务下次起进程时用新的命令
+    .onRequest(SESSION_EXT_METHODS.externalAgents, z.object({ agents: z.array(externalAgentSpecSchema).max(50) }), ({ params }) => {
+      externalAgents.clear()
+      for (const spec of params.agents) externalAgents.set(spec.id, spec)
+      for (const session of externals.values()) session.spec = externalAgents.get(session.agent.id) ?? null
+      return {}
+    })
+    // 检测：找命令、起进程、握手，拿到它的名字、版本和能力后结束进程
+    .onRequest(SESSION_EXT_METHODS.externalDetect, z.object({ spec: externalAgentSpecSchema, cwd: z.string().min(1).nullable().default(null) }), async ({ params }): Promise<ExternalAgentDetection> => {
+      try {
+        const process = await ExternalAgentProcess.start(params.spec, params.cwd ?? homedir(), { update: () => {}, permission: async () => ({ outcome: { outcome: 'cancelled' } }) })
+        await process.dispose()
+        const { info } = process
+        return {
+          ok: true,
+          path: process.path,
+          agentName: info.agentInfo?.title ?? info.agentInfo?.name ?? null,
+          agentVersion: info.agentInfo?.version ?? null,
+          protocolVersion: info.protocolVersion,
+          loadSession: process.loadSession,
+          images: process.images,
+          authMethods: (info.authMethods ?? []).map((method) => ({ id: method.id, name: method.name, description: method.description ?? null })),
+        }
+      } catch (error) {
+        if (error instanceof ExternalAgentError) return { ok: false, kind: error.kind, message: error.message, detail: error.detail }
+        return { ok: false, kind: 'start-failed', message: error instanceof Error ? error.message : String(error), detail: null }
+      }
     })
     .onRequest(EXT_METHODS.listModels, z.object({ endpoint: endpointSchema }), ({ params }) =>
       listModels(params.endpoint),

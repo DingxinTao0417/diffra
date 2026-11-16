@@ -17,7 +17,9 @@ import {
   configureSession,
   compactSession,
   type CoreClientHandlers,
+  createExternalSession,
   createSession,
+  type ExternalSessionConfig,
   deepScan,
   plan,
   deleteSession,
@@ -89,6 +91,8 @@ const sessionOptionsSchema = z.object({
     .optional(),
   // 无项目任务用它给文件夹起名，只在新建时有效
   title: z.string().max(200).optional(),
+  // 外接智能体的 id，只在新建时有效；给了就不用 Diffra 的模型
+  agent: z.string().min(1).max(100).optional(),
 })
 type SessionOptions = z.infer<typeof sessionOptionsSchema>
 
@@ -394,9 +398,55 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     return { ...prepared, cwd: path, created }
   }
 
+  // 外接智能体的任务：不要 Diffra 的模型配置，检查点照常打（看改动、撤销改动用）；进程等第一条消息时才起
+  const externalConfig = (agentId: string, cwd: string, permissionMode: SessionConfig['permissionMode'], noProject: boolean): ExternalSessionConfig => ({
+    external: { agentId },
+    permissionMode,
+    readOnlyPaths: projectState(cwd).readOnlyPaths,
+    noProject,
+    checkpointDir: join(userDataDir, 'checkpoints', projectKey(cwd)),
+  })
+
+  const createExternalTask = async (path: string | null, options: SessionOptions & { agent: string }): Promise<SessionHandle> => {
+    if (options.design) throw new Error('外接智能体不能做设计任务，设计任务请用 Diffra 自己的模型')
+    const agent = settings.get().externalAgents.find((item) => item.id === options.agent)
+    if (!agent) throw new Error(encodeStartTaskError('model-missing', '这个外接智能体已经不在设置里了，请到「设置 → 外接智能体」里重新添加'))
+    const permissionMode = options.permissionMode ?? settings.get().defaultPermissionMode
+    let cwd: string
+    if (path === null) {
+      const root = workspaceRoot(settings).path
+      cwd = await makeWorkspaceFolder(root, workspaceFolderName(options.title ?? ''))
+    } else {
+      const dir = await stat(path).catch(() => null)
+      if (!dir?.isDirectory()) throw new Error(encodeStartTaskError('project-missing', '项目文件夹不存在或已被移走，请重新选择项目'))
+      cwd = path
+    }
+    let created: Awaited<ReturnType<typeof createExternalSession>>
+    try {
+      created = await createExternalSession(await coreConnection(), cwd, externalConfig(agent.id, cwd, permissionMode, path === null))
+    } catch (error) {
+      if (path === null) await rmdir(cwd).catch(() => undefined)
+      throw error
+    }
+    if (path !== null) await rememberProject(path)
+    return {
+      sessionId: created.sessionId,
+      info: created.info,
+      modelLabel: agent.name,
+      planLabel: null,
+      fallbackLabel: null,
+      permissionMode,
+      design: false,
+      cwd,
+      noProject: path === null,
+      agent: { id: agent.id, name: agent.name },
+    }
+  }
+
   ipcMain.handle(IPC_CHANNELS.sessionCreate, async (_event, rawPath: unknown, rawOptions: unknown): Promise<SessionHandle> => {
     const path = parse(z.string().min(1).nullable(), rawPath)
     const options = parse(sessionOptionsSchema, rawOptions ?? {})
+    if (options.agent) return createExternalTask(path, { ...options, agent: options.agent })
     // 无项目任务不记 lastProject：它的文件夹不是用户的项目，下次启动和 MCP 设置页的检测目录都还用上一个项目
     const { config, modelLabel, planLabel, fallbackLabel, cwd, created } = path === null ? await createInWorkspace(options) : await createInProject(path, options)
     const { sessionId, info } = created
@@ -522,6 +572,29 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
   ipcMain.handle(IPC_CHANNELS.sessionLoad, async (_event, rawSessionId: unknown, rawPath: unknown): Promise<LoadedSessionHandle> => {
     const sessionId = parse(z.string().min(1), rawSessionId)
     const path = parse(z.string().min(1), rawPath)
+    // 外接智能体的任务不要 Diffra 的模型配置：没配模型也能打开。先从列表里认出来
+    const entry = (await listSessions(await coreConnection(), path)).find((item) => item.sessionId === sessionId)
+    if (entry?.agent) {
+      const permissionMode = settings.get().defaultPermissionMode
+      const loaded = await loadSession(await coreConnection(), sessionId, path, externalConfig(entry.agent.id, path, permissionMode, entry.noProject))
+      if (!loaded.noProject) await rememberProject(path)
+      const current = settings.get().externalAgents.find((item) => item.id === entry.agent?.id)
+      return {
+        sessionId,
+        info: loaded.info,
+        modelLabel: current?.name ?? entry.agent.name,
+        planLabel: null,
+        fallbackLabel: null,
+        permissionMode,
+        title: loaded.title,
+        turns: loaded.turns,
+        taskState: loaded.taskState,
+        design: false,
+        cwd: path,
+        noProject: loaded.noProject,
+        agent: loaded.agent ?? entry.agent,
+      }
+    }
     const { config, modelLabel, planLabel, fallbackLabel } = await sessionConfig(path)
     const loaded = await loadSession(await coreConnection(), sessionId, path, config, await mcpServersFor(settings, secrets))
     if (!loaded.noProject) await rememberProject(path)

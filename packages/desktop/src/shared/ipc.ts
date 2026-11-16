@@ -3,6 +3,7 @@ import type {
   CheckpointChange,
   CheckRunResult,
   CommandInfo,
+  ExternalAgentDetection,
   ListModelsResult,
   McpServerStatus,
   PromptEnhancement,
@@ -15,6 +16,7 @@ import type {
   PermissionOption,
   PluginInfo,
   RequestPermissionRequest,
+  SessionAgentRef,
   SessionChecks,
   SessionSearchResult,
   SkillInfo,
@@ -48,6 +50,7 @@ import type {
   SettingsView,
 } from './settings'
 import type { FileReference } from './attachments'
+import type { ExternalAgentDiscovery, ExternalAgentInput } from './external-agents'
 import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteTaskCall, RemoteTaskCallResult, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
@@ -163,6 +166,10 @@ export const IPC_CHANNELS = {
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
   mcpDelete: 'mcp:delete',
+  externalAgentDiscover: 'external-agent:discover',
+  externalAgentSave: 'external-agent:save',
+  externalAgentDelete: 'external-agent:delete',
+  externalAgentDetect: 'external-agent:detect',
   mcpStatus: 'mcp:status',
   mcpPrompt: 'mcp:prompt',
   commandsList: 'commands:list',
@@ -346,11 +353,15 @@ export interface SessionHandle {
   // 任务的目录：项目任务就是项目，无项目任务是主进程在默认保存位置下替它建的文件夹
   cwd: string
   noProject: boolean
+  // 外接智能体的任务（v2）：用它自己的模型，modelLabel 是它的名字
+  agent?: SessionAgentRef
 }
 
 export interface SessionOptions {
   permissionMode?: PermissionMode
   model?: ModelRef
+  // 外接智能体的 id（设置里的 ExternalAgentConfig.id）；给了就不用 model，只在新建时有效
+  agent?: string
   design?: boolean
   // 设计任务的风格预设 id（DESIGN_STYLES）；不填是不用预设。只在新建设计任务时有效
   designStyle?: string
@@ -594,6 +605,11 @@ export interface DiffraApi {
   listSkills(target: McpStatusTarget): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>
   deleteMcpServer(serverId: string): Promise<SettingsView>
+  // 外接智能体：本机找预设要的命令、保存、删除、检测（起进程握手一次，第一次用 npx 可能要等下载）
+  discoverExternalAgents(): Promise<ExternalAgentDiscovery[]>
+  saveExternalAgent(input: ExternalAgentInput): Promise<SettingsView>
+  deleteExternalAgent(agentId: string): Promise<SettingsView>
+  detectExternalAgent(input: ExternalAgentInput): Promise<ExternalAgentDetection>
   // retry 为 true 时连不上的马上重连
   mcpStatus(target: McpStatusTarget, retry: boolean): Promise<McpServerStatus[]>
   // 把 MCP prompt 展开成文字

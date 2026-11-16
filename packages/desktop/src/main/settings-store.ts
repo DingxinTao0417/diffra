@@ -136,6 +136,17 @@ export const mcpServerConfigSchema = z.object({
   headerNames: z.array(z.string().min(1)),
 })
 
+export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+
+export const externalAgentConfigSchema = z.object({
+  id: z.string().min(1).max(100),
+  presetId: z.string().min(1).nullable(),
+  name: z.string().trim().min(1).max(60),
+  command: z.string().trim().min(1).max(1000),
+  args: z.array(z.string().max(2000)).max(50),
+  envNames: z.array(z.string().regex(ENV_NAME_PATTERN)).max(50),
+})
+
 // projects 和 lastProject 是第 4 步加的，带默认值，第 3 步写下的设置文件照样能读
 const settingsSchema = z.object({
   version: z.literal(1),
@@ -186,6 +197,8 @@ const settingsSchema = z.object({
   lastSeenVersion: z.string().nullable().default(null),
   // 第 531 步加的
   reasoningChoices: z.record(z.string(), z.enum(REASONING_EFFORTS)).default({}),
+  // 外接智能体（v2）加的；旧版 Diffra 读到会丢掉这一项，下次保存时就没了，任务记录不受影响
+  externalAgents: z.array(externalAgentConfigSchema).default([]),
 })
 
 const EMPTY_SETTINGS: Settings = {
@@ -206,6 +219,7 @@ const EMPTY_SETTINGS: Settings = {
   defaultWorkspace: null,
   lastSeenVersion: null,
   reasoningChoices: {},
+  externalAgents: [],
 }
 
 export class SettingsStore {

@@ -176,10 +176,18 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
               <span className="text-foreground">提交或推送</span>
             </Row>
           )}
-          {!task.info.bashPath && (
-            <Row leading={<IconBox icon={TriangleAlert} tone="bad" />}>
-              <span className="truncate text-destructive">没找到 Git Bash，命令跑不了</span>
+          {/* 外接智能体用它自己的方式跑命令，不靠 Diffra 找的 Git Bash */}
+          {task.agent ? (
+            <Row leading={<IconBox icon={SquareTerminal} />} testId="monitor-agent">
+              <span className="truncate text-foreground">{task.agent.name}</span>
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">外接智能体</span>
             </Row>
+          ) : (
+            !task.info.bashPath && (
+              <Row leading={<IconBox icon={TriangleAlert} tone="bad" />}>
+                <span className="truncate text-destructive">没找到 Git Bash，命令跑不了</span>
+              </Row>
+            )
           )}
           {mcpFailed && (
             <Row leading={<IconBox icon={TriangleAlert} tone="bad" />} onClick={mcp.retry} label="MCP 连接失败，重新连接">

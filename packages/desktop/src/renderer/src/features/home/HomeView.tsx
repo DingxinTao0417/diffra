@@ -71,6 +71,8 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const choicesKey = homeChoicesKey(design)
   const initialChoices = useRef(readHomeChoices(choicesKey)).current
   const [model, setModel] = useState<ModelRef | null>(initialChoices.model)
+  // 外接智能体（v2）：设计首页不给（设计工具只有 Diffra 自己的智能体能用）
+  const [agentId, setAgentId] = useState<string | null>(design ? null : (initialChoices.agent ?? null))
   const [planMode, setPlanMode] = useState(initialChoices.planMode)
   const [error, setError] = useState<{ code: StartTaskErrorCode; message: string } | null>(null)
   const [projectPrompt, setProjectPrompt] = useState(false)
@@ -81,7 +83,7 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   useEffect(() => {
     if (projectPath || projects.length > 0) setProjectPrompt(false)
   }, [projectPath, projects.length])
-  useEffect(() => writeHomeChoices(choicesKey, { model, planMode, designStyle }), [choicesKey, model, planMode, designStyle])
+  useEffect(() => writeHomeChoices(choicesKey, { model, planMode, designStyle, agent: agentId }), [choicesKey, model, planMode, designStyle, agentId])
 
   // 只有设计首页列任务（设计任务），普通首页不列
   const listed = useMemo(() => (live ? designTasksOf(tasks, live) : []), [tasks, live])
@@ -91,6 +93,8 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
   const coder = useMemo(() => (settings?.roles.coder ? withRememberedEffort(settings.roles.coder, settings.providers, settings.reasoningChoices) : null), [settings])
   // 选过的模型后来被删掉或停用了，就当没选过，用编码角色的模型
   const chosenModel = modelLabelOf(settings, model) ? model : null
+  // 选过的外接智能体后来从设置里删掉了，就当没选过
+  const chosenAgent = settings?.externalAgents.find((item) => item.id === agentId) ?? null
   const modelLabel = modelLabelOf(settings, chosenModel ?? coder)
   const permissionMode = settings?.defaultPermissionMode ?? 'ask'
   const workspacePath = settings?.defaultWorkspace.path
@@ -120,11 +124,12 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
     setProjectPrompt(false)
     try {
       const designOptions = design ? { design: true, ...(designStyle ? { designStyle } : {}) } : {}
-      await startTask(projectPath, text, { permissionMode, ...(chosenModel ? { model: chosenModel } : {}), ...designOptions }, { plan: planMode, ...extras })
+      if (chosenAgent) await startTask(projectPath, text, { permissionMode, agent: chosenAgent.id }, { plan: false, ...extras, goal: false })
+      else await startTask(projectPath, text, { permissionMode, ...(chosenModel ? { model: chosenModel } : {}), ...designOptions }, { plan: planMode, ...extras })
       // 出计划和输入框里的目标、Skill 标签一样只管这一次；模型和风格留着给下一个任务。
       // 发出后已经跳到任务页、这个组件卸载了，直接写进表里
       setPlanMode(false)
-      writeHomeChoices(choicesKey, { model, planMode: false, designStyle })
+      writeHomeChoices(choicesKey, { model, planMode: false, designStyle, agent: agentId })
       return true
     } catch (caught) {
       setError(decodeStartTaskError(errorMessage(caught)))
@@ -252,7 +257,19 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
           onPermissionModeChange={(mode) => void setPermissionMode(null, mode)}
           modelLabel={modelLabel}
           modelRef={chosenModel ?? coder ?? undefined}
-          onModelChange={setModel}
+          onModelChange={(ref) => {
+            setModel(ref)
+            setAgentId(null)
+          }}
+          agent={chosenAgent ? { id: chosenAgent.id, name: chosenAgent.name } : null}
+          {...(design
+            ? {}
+            : {
+                onAgentChange: (id: string) => {
+                  setAgentId(id)
+                  setPlanMode(false)
+                },
+              })}
           planMode={planMode}
           onPlanModeChange={setPlanMode}
           onSend={send}
@@ -262,8 +279,8 @@ export function HomeView({ projectPath, design = false }: { projectPath: string 
             <CircleAlert className="size-4 shrink-0 text-destructive" />
             <span className="flex-1">{error.message}</span>
             {(error.code === 'model-missing' || error.code === 'model-auth') && (
-              <Button variant="outline" size="xs" className="shrink-0" onClick={() => openSettings('models')}>
-                去设置模型
+              <Button variant="outline" size="xs" className="shrink-0" onClick={() => openSettings(chosenAgent || agentId ? 'agents' : 'models')}>
+                {chosenAgent || agentId ? '去设置外接智能体' : '去设置模型'}
               </Button>
             )}
             {error.code === 'workspace-missing' && (

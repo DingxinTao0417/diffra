@@ -11,6 +11,7 @@ import {
   SCREENSHOT_MAX_WIDTH,
   SCREENSHOT_MIN_WIDTH,
   TERMINAL_MAX_LINES,
+  type ExternalAgentSpec,
   type SessionConfig,
   type SessionDesign,
 } from '../protocol.js'
@@ -82,6 +83,36 @@ export const sessionConfigSchema = z.object({
 }) satisfies z.ZodType<SessionConfig>
 
 export const newSessionMetaSchema = z.object({ diffra: sessionConfigSchema })
+
+// 外接智能体（ExternalAgentSpec）：设置里的一项，环境变量的值可能是密钥
+export const externalAgentSpecSchema = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().trim().min(1).max(60),
+  command: z.string().trim().min(1).max(1000),
+  args: z.array(z.string().max(2000)).max(50),
+  env: z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), value: z.string().max(10_000) })).max(50),
+}) satisfies z.ZodType<ExternalAgentSpec>
+
+// 建外接智能体任务时 session/new 的 _meta.diffra（ExternalSessionConfig）
+export const externalSessionMetaSchema = z.object({
+  diffra: z.object({
+    external: z.object({ agentId: z.string().min(1) }),
+    permissionMode: z.enum(['ask', 'auto', 'full']),
+    readOnlyPaths: z.array(z.string().trim().min(1)).default([]),
+    noProject: z.boolean().default(false),
+    checkpointDir: z.string().min(1).nullable(),
+  }),
+})
+
+// 打开外接智能体的旧任务时客户端可能传的是普通会话配置：只取用得上的几项
+export const externalLoadMetaSchema = z.object({
+  diffra: z.object({
+    permissionMode: z.enum(['ask', 'auto', 'full']),
+    readOnlyPaths: z.array(z.string().trim().min(1)).default([]),
+    noProject: z.boolean().default(false),
+    checkpointDir: z.string().min(1).nullable().default(null),
+  }),
+})
 
 const browserPointSchema = z.union([z.object({ ref: z.string().min(1) }), z.object({ x: z.number().finite(), y: z.number().finite() })])
 

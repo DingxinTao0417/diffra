@@ -70,7 +70,7 @@ export function turnVerdict(task: Pick<LiveTask, 'permission' | 'running' | 'tur
   if (last.error && !last.restoredAt) return verdict('error')
   // 结论那一轮或之后撤销过：文件变了，原来的完成或停止都不再算数
   if (subject && task.turns.slice(task.turns.indexOf(subject)).some((turn) => turn.restoredAt)) return verdict('unfinished', progress?.reason ?? RESTORED_REASON)
-  if (stop === 'model-error') return verdict('error')
+  if (stop === 'model-error' || stop === 'agent-error') return verdict('error', outcome?.agentError?.message ?? null)
   if (progress?.status === 'waiting') return verdict('waiting')
   if (progress?.status === 'blocked' && (stop === 'paused' || progress.requirements.some((item) => !item.receiptId))) return verdict('blocked', progress.reason)
   if (stop === 'gate-exhausted' || stop === 'check-exhausted') return verdict('failed')

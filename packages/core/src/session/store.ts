@@ -3,7 +3,7 @@ import { access, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } fro
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
-import { PROMPT_IMAGE_TYPES, type SessionSearchResult, type StoredTurn } from '../protocol.js'
+import { PROMPT_IMAGE_TYPES, type SessionAgentRef, type SessionSearchResult, type StoredTurn } from '../protocol.js'
 import { taskStateSchema, type TaskState } from './task-state.js'
 
 // 会话 id 拼进文件名，只接受 UUID 这类字符，防止路径穿越
@@ -46,6 +46,10 @@ export interface SessionRecord {
   designStyle?: string | null
   // 无项目任务（见 SessionConfig.noProject）；旧记录没有
   noProject?: boolean
+  // 外接智能体的任务（v2）：用的哪个智能体、它那边的会话 id（重开时用 session/load 接上）。Diffra 自己的任务没有；
+  // 旧版读到会丢掉这两项，当成没有对话历史的普通任务打开
+  agent?: SessionAgentRef
+  externalSessionId?: string | null
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
   compaction: Compaction | null
@@ -61,7 +65,10 @@ export interface SessionIndexEntry {
   turnCount: number
   design: boolean
   noProject: boolean
+  agent?: SessionAgentRef
 }
+
+const agentRefSchema = z.object({ id: z.string().min(1), name: z.string().min(1) })
 
 const indexEntrySchema = z.object({
   id: z.string(),
@@ -75,6 +82,8 @@ const indexEntrySchema = z.object({
   design: z.boolean(),
   // 旧任务都不是无项目任务，不用重建
   noProject: z.boolean().default(false),
+  // 外接智能体（v2）加的，旧任务都是 Diffra 自己的
+  agent: agentRefSchema.optional(),
 })
 const indexSchema = z.object({ version: z.literal(1), sessions: z.array(indexEntrySchema) })
 // 消息和更新是 AI SDK / ACP 的结构，这里只检查外层，内容原样还给它们
@@ -93,6 +102,9 @@ const recordSchema = z.object({
   designStyle: z.string().nullable().default(null),
   // 无项目任务加的，旧记录都在项目里
   noProject: z.boolean().default(false),
+  // 外接智能体（v2）加的，旧记录都是 Diffra 自己的任务
+  agent: agentRefSchema.optional(),
+  externalSessionId: z.string().min(1).nullable().optional(),
   turns: z.array(
     z.object({
       id: z.string(),
@@ -334,6 +346,7 @@ export function toEntry(record: SessionRecord): SessionIndexEntry {
     turnCount: record.turns.length,
     design: record.design ?? false,
     noProject: record.noProject ?? false,
+    ...(record.agent ? { agent: record.agent } : {}),
   }
 }
 

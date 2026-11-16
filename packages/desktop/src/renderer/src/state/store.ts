@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { DiagramKind } from '@diffra/core/architecture'
-import type { BackgroundProcess, PermissionMode, PromptImage, RemoteSource, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
+import type { BackgroundProcess, PermissionMode, PromptImage, RemoteSource, SessionAgentRef, SessionInfo, StoredSessionSummary, TaskProgressView, TaskSource } from '@diffra/core/types'
 import type { FileReference } from '../../../shared/attachments'
 import type { BridgeStatus, BrowserState, PermissionRequestEvent } from '../../../shared/ipc'
 import type { RemoteView } from '../../../shared/remote'
@@ -9,7 +9,7 @@ import type { ModelRef, SettingsView } from '../../../shared/settings'
 import type { Todo } from '../../../shared/todos'
 import type { Turn, Usage } from '../features/session/transcript'
 
-export type SettingsSection = 'general' | 'appearance' | 'models' | 'permissions' | 'security' | 'execution' | 'browser' | 'devices' | 'storage' | 'usage' | 'about'
+export type SettingsSection = 'general' | 'appearance' | 'models' | 'agents' | 'permissions' | 'security' | 'execution' | 'browser' | 'devices' | 'storage' | 'usage' | 'about'
 
 // 扩展页的分栏：推荐、MCP 目录、插件目录、已安装（第 595 步）
 export type ExtensionsTab = 'recommended' | 'mcp' | 'plugins' | 'installed'
@@ -54,6 +54,8 @@ export interface LiveTask {
   title: string
   modelLabel: string
   modelRef?: ModelRef
+  // 外接智能体的任务（v2）：用它自己的模型，没有 Diffra 的出计划、目标、压缩、深度扫描、重新生成
+  agent?: SessionAgentRef
   planLabel: string | null
   fallbackLabel: string | null
   permissionMode: PermissionMode

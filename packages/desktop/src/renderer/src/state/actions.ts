@@ -354,6 +354,7 @@ function liveFrom(handle: SessionHandle, title: string, planMode = false): LiveT
     title,
     modelLabel: handle.modelLabel,
     modelRef: handle.modelRef,
+    ...(handle.agent ? { agent: handle.agent } : {}),
     planLabel: handle.planLabel,
     fallbackLabel: handle.fallbackLabel,
     permissionMode: handle.permissionMode,

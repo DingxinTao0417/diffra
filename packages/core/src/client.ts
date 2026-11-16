@@ -18,6 +18,10 @@ import {
   type CommandInfo,
   type DesignActionParams,
   type DesignActionResult,
+  type ExternalAgentDetection,
+  type ExternalAgentSpec,
+  type ExternalSessionConfig,
+  type SessionAgentRef,
   type TaskActionParams,
   type TaskActionResult,
   type RemoteSource,
@@ -54,6 +58,7 @@ export * from './protocol.js'
 export { parseRulePack, RulePackError } from './rules/pack.js'
 export { isLocalHost, localUrlIn, normalizeUrl } from './urls.js'
 export { isProtectedFile } from './tools/protected.js'
+export { locateCommand } from './external/spawn.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {
@@ -300,7 +305,8 @@ export async function loadSession(
   connection: acp.ClientConnection,
   sessionId: string,
   cwd: string,
-  config: SessionConfig,
+  // 外接智能体的任务传 ExternalSessionConfig（core 只取权限模式、检查点这几项）
+  config: SessionConfig | ExternalSessionConfig,
   mcpServers: McpServer[] = [],
 ): Promise<LoadedSession> {
   const response = await requestOf(connection)(acp.methods.agent.session.load, {
@@ -319,7 +325,13 @@ export async function loadSession(
     ...(taskState.success ? { taskState: taskState.data } : {}),
     design: diffra.design === true,
     noProject: diffra.noProject === true,
+    ...(agentRefOf(diffra.agent) ? { agent: agentRefOf(diffra.agent)! } : {}),
   }
+}
+
+function agentRefOf(value: unknown): SessionAgentRef | null {
+  if (typeof value !== 'object' || value === null || !('id' in value) || !('name' in value)) return null
+  return typeof value.id === 'string' && typeof value.name === 'string' ? { id: value.id, name: value.name } : null
 }
 
 export async function listSessions(connection: acp.ClientConnection, cwd?: string): Promise<StoredSessionSummary[]> {
@@ -337,6 +349,7 @@ export async function listSessions(connection: acp.ClientConnection, cwd?: strin
       design: meta.design === true,
       noProject: meta.noProject === true,
       running: meta.running === true,
+      ...(agentRefOf(meta.agent) ? { agent: agentRefOf(meta.agent)! } : {}),
     }
   })
 }
@@ -359,6 +372,26 @@ export async function setBrowserSites(connection: acp.ClientConnection, sites: B
 
 export async function configureSecurity(connection: acp.ClientConnection, switches: CheckSwitches): Promise<void> {
   await requestOf(connection)(SESSION_EXT_METHODS.securityConfigure, switches, extRequestOptions())
+}
+
+// 设置里的外接智能体清单交给 core（整份替换）
+export async function setExternalAgents(connection: acp.ClientConnection, agents: ExternalAgentSpec[]): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.externalAgents, { agents }, extRequestOptions())
+}
+
+// 检测外接智能体：第一次用 npx 起适配器要先下载，core 那边握手最多等 2 分钟，这里多留一点
+export function detectExternalAgent(connection: acp.ClientConnection, spec: ExternalAgentSpec, cwd: string | null = null): Promise<ExternalAgentDetection> {
+  return requestOf(connection)<ExternalAgentDetection, { spec: ExternalAgentSpec; cwd: string | null }>(
+    SESSION_EXT_METHODS.externalDetect,
+    { spec, cwd },
+    { cancellationSignal: AbortSignal.timeout(150_000), stopWaitingOnCancel: true },
+  )
+}
+
+// 建外接智能体的任务：不要模型配置，进程等第一条消息时才起
+export async function createExternalSession(connection: acp.ClientConnection, cwd: string, config: ExternalSessionConfig): Promise<{ sessionId: string; info: SessionInfo }> {
+  const response = await requestOf(connection)(acp.methods.agent.session.new, { cwd, mcpServers: [], _meta: { diffra: config } }, extRequestOptions())
+  return { sessionId: response.sessionId, info: readSessionInfo(response._meta) }
 }
 
 export async function configureSession(

@@ -1,6 +1,6 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { type CommandInfo, type PermissionMode, type PromptImage, type PromptQuestion, type ReasoningEffort, type SkillInfo, type SkillSource } from '@diffra/core/types'
-import { ArrowUp, Check, ChevronDown, ChevronUp, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, PenLine, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, Target, Undo2, WandSparkles, X } from 'lucide-react'
+import { type CommandInfo, type PermissionMode, type PromptImage, type PromptQuestion, type ReasoningEffort, type SessionAgentRef, type SkillInfo, type SkillSource } from '@diffra/core/types'
+import { ArrowUp, Check, ChevronDown, ChevronUp, File as FileIcon, FileText, Folder, ListChecks, LoaderCircle, type LucideIcon, PenLine, Plug, Settings2, Shield, ShieldAlert, ShieldCheck, Sparkles, Square, SquareSlash, SquareTerminal, Target, Undo2, WandSparkles, X } from 'lucide-react'
 import type { McpStatusTarget } from '../../../../shared/ipc'
 import { COMPOSER_PLACEHOLDER, IMAGE_ONLY_PROMPT, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../../shared/attachments'
 import { modelDisplayName, type ModelRef } from '../../../../shared/settings'
@@ -70,6 +70,10 @@ interface ComposerProps {
   modelRef?: ModelRef
   modelLocked?: boolean
   onModelChange(ref: ModelRef): void
+  // 外接智能体（v2）：选中的或这个任务用的；它用自己的模型，没有目标模式和出计划
+  agent?: SessionAgentRef | null
+  // 首页给：模型菜单里列出外接智能体，选了就用它建任务
+  onAgentChange?(agentId: string): void
   // 开着时发的消息先由规划模型出计划，不改代码
   planMode: boolean
   onPlanModeChange(planMode: boolean): void
@@ -197,10 +201,10 @@ export function Composer(props: ComposerProps) {
       if (attachPickers.get(pickerTarget) === pick) attachPickers.delete(pickerTarget)
     }
   }, [pickerTarget])
-  // 当前模型打开了「视觉」没有；对不上设置里的模型时为 null，交给 core 判断
+  // 当前模型打开了「视觉」没有；对不上设置里的模型时为 null，交给 core 判断。外接智能体收不收图片由 core 按它握手时报的能力判断
   const imagesSupported = useAppState((state) => {
     const ref = props.modelRef
-    if (!ref) return null
+    if (!ref || props.agent) return null
     const model = state.settings?.providers.find((provider) => provider.id === ref.providerId)?.models.find((item) => item.id === ref.modelId)
     return model ? model.images : null
   })
@@ -352,7 +356,8 @@ export function Composer(props: ComposerProps) {
     props.onPlanModeChange(planMode)
   }
 
-  const items: MenuItem[] = [
+  // 外接智能体用它自己的循环：没有 Diffra 的目标模式和出计划
+  const builtinCommands: MenuItem[] = props.agent ? [] : [
     {
       key: 'goal',
       group: '命令' as const,
@@ -376,6 +381,10 @@ export function Composer(props: ComposerProps) {
       matches: (query: string) => includes(['计划', 'plan'], query),
       select: () => changePlanMode(true),
     },
+  ]
+
+  const items: MenuItem[] = [
+    ...builtinCommands,
     ...(props.commands ?? []).map((command) => ({
       key: command.id,
       group: '命令' as const,
@@ -888,7 +897,7 @@ export function Composer(props: ComposerProps) {
             <TooltipContent>优化提示词：写得更具体，并列出需要你定的地方</TooltipContent>
           </Tooltip>
         )}
-        <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} />
+        <ModelMenu label={props.modelLabel} modelRef={props.modelRef} locked={props.modelLocked} onChange={props.onModelChange} agent={props.agent} onAgentChange={props.onAgentChange} />
         <ArgumentsDialog
           request={argumentsRequest?.request ?? null}
           onCancel={() => setArgumentsRequest(null)}
@@ -1083,6 +1092,8 @@ export function ModelMenu({
   onChange,
   trigger,
   modelsOnly,
+  agent,
+  onAgentChange,
 }: {
   label: string | null
   modelRef?: ModelRef
@@ -1090,6 +1101,9 @@ export function ModelMenu({
   onChange(ref: ModelRef): void
   trigger?: ReactNode
   modelsOnly?: boolean
+  // 选中的外接智能体；任务页上给了它又没给 onAgentChange，菜单锁住（任务中途不能在两种智能体之间换）
+  agent?: SessionAgentRef | null
+  onAgentChange?(agentId: string): void
 }) {
   // 远程任务换成对方的模型服务；对方的模型不记思考程度
   const remote = useRemoteTask()
@@ -1109,7 +1123,9 @@ export function ModelMenu({
     () => (icons && selectedProvider && selectedModelId ? (icons.matchModelIcon(selectedModelId) ?? icons.matchProviderIcon(selectedProvider)) : null),
     [icons, selectedProvider, selectedModelId],
   )
-  const modelName = label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'
+  const externalAgents = remote ? [] : (settings?.externalAgents ?? [])
+  const agentLocked = Boolean(agent) && !onAgentChange
+  const modelName = agent ? agent.name : label ? (selectedModel ? modelDisplayName(selectedModel) : label) : '未配置'
   const enabled = (providers ?? []).flatMap((provider) => provider.models.filter((model) => model.enabled !== false).map((model) => ({ provider, model })))
   const words = query.trim().toLowerCase()
   const matches = (provider: { name: string }, model: { id: string }) =>
@@ -1170,6 +1186,27 @@ export function ModelMenu({
         })}
         {providers?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">还没有配置模型</p>}
         {noMatch && <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的模型</p>}
+        {onAgentChange && externalAgents.length > 0 && (
+          <div data-testid="external-agent-list">
+            <DropdownMenuLabel className="truncate pt-2 pb-1 text-xs font-normal text-muted-foreground">外接智能体</DropdownMenuLabel>
+            {externalAgents
+              .filter((item) => !words || item.name.toLowerCase().includes(words))
+              .map((item) => (
+                <DropdownMenuItem
+                  key={item.id}
+                  // primary-color-allow: 选中的底色，表示当前选择
+                  className={cn('items-center gap-2.5', agent?.id === item.id && 'bg-soft focus:bg-soft')}
+                  onSelect={() => onAgentChange(item.id)}
+                >
+                  <SquareTerminal className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">自己的模型</span>
+                  {/* primary-color-allow: 选中标记 */}
+                  <Check className={cn('size-4 shrink-0 text-primary', agent?.id === item.id ? 'visible' : 'invisible')} />
+                </DropdownMenuItem>
+              ))}
+          </div>
+        )}
       </div>
       {/* 分隔线带负的左右外边距，放在滚动区外面：放在里面会比滚动区宽，出横向滚动条（第 532 步） */}
       <DropdownMenuSeparator />
@@ -1177,6 +1214,12 @@ export function ModelMenu({
         <Settings2 />
         模型与角色…
       </DropdownMenuItem>
+      {onAgentChange && (
+        <DropdownMenuItem onSelect={() => openSettings('agents')}>
+          <SquareTerminal />
+          外接智能体…
+        </DropdownMenuItem>
+      )}
     </>
   )
 
@@ -1195,13 +1238,13 @@ export function ModelMenu({
             type="button"
             aria-label={supportsReasoning ? `模型 ${modelName}，思考程度 ${effort}` : `模型 ${modelName}`}
             data-testid="model-menu"
-            disabled={locked}
-            title={locked ? '运行中不能切换模型' : undefined}
+            disabled={locked || agentLocked}
+            title={agentLocked ? `${agent?.name} 的任务用它自己的模型，在 Diffra 里换不了` : locked ? '运行中不能切换模型' : undefined}
             className={cn(MENU_TRIGGER, 'max-w-72 min-w-0 text-muted-foreground hover:text-foreground disabled:opacity-80 aria-expanded:text-foreground')}
           >
-            {label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
+            {agent ? <SquareTerminal className="size-4 shrink-0" /> : label && <BrandIcon id={selectedIcon} fallbackText={selectedProvider?.name ?? label} size={16} className="size-4" />}
             <span className="truncate text-foreground">{modelName}</span>
-            {label && supportsReasoning && (
+            {label && !agent && supportsReasoning && (
               <span className="shrink-0" data-testid="reasoning-label">
                 {effort}
               </span>
@@ -1210,7 +1253,7 @@ export function ModelMenu({
           </button>
         )}
       </DropdownMenuTrigger>
-      {modelsOnly || !modelRef ? (
+      {modelsOnly || !modelRef || agent ? (
         <DropdownMenuContent align="end" className="w-72" data-testid="model-panel">
           {modelList}
         </DropdownMenuContent>

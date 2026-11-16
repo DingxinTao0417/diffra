@@ -85,7 +85,8 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
 
   const status = turnVerdict(task)
   // 斜杠菜单里的深度扫描；和任务监控里的按钮一样，运行中不能扫，还没跑过任务时没有「本任务改动」
-  const commands: ComposerCommand[] = [
+  // 外接智能体用它自己的上下文和循环：没有压缩和深度扫描
+  const commands: ComposerCommand[] = task.agent ? [] : [
     ...(!task.running ? [{ id: 'compact', label: 'compact', description: '手动压缩早期上下文，保留最近内容和完整聊天历史', keywords: ['compact', '压缩', '上下文'], icon: Archive, run: () => { compactTask(task.sessionId).catch((error: unknown) => showToast(`压缩失败：${errorMessage(error)}`)) } }] : []),
     ...(deepScanEnabled && !task.running ? [
       ...(task.turns.length > 0 ? [{ id: 'deep-scan-task', label: '深度扫描 · 本任务改动', description: '只读地跨文件追踪这个任务改过的代码，出一份安全报告', keywords: ['scan', 'security'], icon: ScanSearch, run: () => setScanScope('task') }] : []),
@@ -255,6 +256,7 @@ export function TaskPage({ task, columnRef, remote }: { task: LiveTask; columnRe
                     modelRef={task.modelRef}
                     modelLocked={task.running}
                     onModelChange={(ref) => void setTaskModel(task.sessionId, ref)}
+                    agent={task.agent ?? null}
                     planMode={task.planMode}
                     onPlanModeChange={(planMode) => setPlanMode(task.sessionId, planMode)}
                     onSend={(text, extras) => {

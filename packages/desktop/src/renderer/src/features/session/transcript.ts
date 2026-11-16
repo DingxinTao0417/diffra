@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -158,7 +158,8 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
 }
 
 const FINISH_OUTCOMES = ['verified', 'unverified', 'no-edits'] as const satisfies readonly NonNullable<TurnOutcome['finish']>[]
-const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted', 'deep-scan'] as const satisfies readonly TurnStop[]
+const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted', 'deep-scan', 'agent-error'] as const satisfies readonly TurnStop[]
+const AGENT_ERROR_KINDS = ['not-installed', 'version', 'start-failed', 'timeout', 'auth', 'exited', 'unsupported'] as const satisfies readonly ExternalAgentErrorKind[]
 const MODEL_ERROR_KINDS = ['auth', 'not-found', 'unsupported', 'rate-limit', 'server', 'timeout', 'network', 'unknown'] as const satisfies readonly ModelErrorKind[]
 const CHECK_RESULTS = ['passed', 'warned', 'partial', 'error', 'failed'] as const satisfies readonly CheckResult[]
 const FINISH_VERIFICATIONS = ['verified', 'reused', 'unverified', 'no-edits', 'failed'] as const satisfies readonly FinishVerification[]
@@ -178,7 +179,10 @@ export function turnOutcomeOf(update: SessionUpdate): TurnOutcome | null {
   if (finish !== null && !oneOf(FINISH_OUTCOMES, finish)) return null
   if (stop !== null && !oneOf(TURN_STOPS, stop)) return null
   const errorKind = 'errorKind' in outcome && oneOf(MODEL_ERROR_KINDS, outcome.errorKind) ? outcome.errorKind : undefined
-  return errorKind ? { finish, stop, errorKind } : { finish, stop }
+  const failure = 'agentError' in outcome && typeof outcome.agentError === 'object' && outcome.agentError !== null ? outcome.agentError : null
+  const agentError =
+    failure && 'kind' in failure && oneOf(AGENT_ERROR_KINDS, failure.kind) && 'message' in failure && typeof failure.message === 'string' ? { kind: failure.kind, message: failure.message } : undefined
+  return { finish, stop, ...(errorKind ? { errorKind } : {}), ...(agentError ? { agentError } : {}) }
 }
 
 // 模型没有输出的提示：key 是子智能体 id，主智能体是 main；since 为 null 是又有输出了

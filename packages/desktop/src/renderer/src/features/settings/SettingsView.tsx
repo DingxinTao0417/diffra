@@ -22,6 +22,7 @@ import {
   Shield,
   ShieldCheck,
   Sun,
+  Terminal,
   TriangleAlert,
 } from 'lucide-react'
 import type { ChangelogRelease } from '../../../../shared/changelog'
@@ -55,6 +56,7 @@ import { BrandMark } from '@/features/shell/BrandMark'
 import { TaskMenu } from '@/features/shell/TaskMenu'
 import { SavedHint, SettingsGroup, SettingsHeader, SettingsRow, useSavedFlash } from './SettingsLayout'
 import { BrowserSection } from './BrowserSection'
+import { ExternalAgentsSection } from './ExternalAgentsSection'
 import { ReleaseItems, ReleaseList } from './Changelog'
 import { UsageSection } from './UsageSection'
 import { DevicesSection } from '@/features/devices/DevicesSection'
@@ -82,6 +84,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
     name: '智能体',
     items: [
       { id: 'models', label: '模型与角色', icon: Bot, keywords: '供应商 API Key 编码 评审 规划' },
+      { id: 'agents', label: '外接智能体', icon: Terminal, keywords: 'Claude Code Codex Gemini Copilot ACP 命令行 CLI 外部' },
       { id: 'permissions', label: '命令权限', icon: ShieldCheck, keywords: '权限模式 询问 自动 完全访问' },
       { id: 'security', label: '安全', icon: Shield, keywords: '静态检查 轻量扫描 深度扫描 规范审查 漏洞 注入 密钥' },
       { id: 'execution', label: '任务执行', icon: ListChecks, keywords: '上下文 压缩 摘要 步数 上限 卡死 重复 目标 轮数' },
@@ -166,6 +169,8 @@ function SectionBody({ section }: { section: SettingsSection }) {
       return <AppearanceSection />
     case 'models':
       return <ModelSettings />
+    case 'agents':
+      return <ExternalAgentsSection />
     case 'permissions':
       return <PermissionsSection />
     case 'security':

@@ -7,9 +7,11 @@ export interface HomeChoices {
   planMode: boolean
   // null 是「自动」
   designStyle: string | null
+  // 选了外接智能体（设置里的 id）时用它建任务，不用 model；没有这一项是没选
+  agent?: string | null
 }
 
-const EMPTY_HOME_CHOICES: HomeChoices = { model: null, planMode: false, designStyle: null }
+const EMPTY_HOME_CHOICES: HomeChoices = { model: null, planMode: false, designStyle: null, agent: null }
 
 const choices = new Map<string, HomeChoices>()
 

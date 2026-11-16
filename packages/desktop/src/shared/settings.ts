@@ -1,4 +1,5 @@
 import { BROWSER_BACKENDS, type BrowserBackend, type PermissionMode, type PluginInfo, type Protocol, type ReasoningEffort, type SessionChecks } from '@diffra/core/types'
+import type { ExternalAgentConfig } from './external-agents'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
@@ -216,6 +217,8 @@ export interface Settings {
   lastSeenVersion: string | null
   // 输入框里给各模型选的思考程度，键见 reasoningChoiceKey；新任务、重开的任务按它（第 531 步）
   reasoningChoices: Record<string, ReasoningEffort>
+  // 外接智能体（v2）；旧设置文件没有
+  externalAgents: ExternalAgentConfig[]
 }
 
 // 界面看到的供应商：多一个密钥掩码，拿不到密钥本身
@@ -238,6 +241,7 @@ export interface SettingsView {
   archivedProjects: string[]
   // 无项目任务的保存位置，已经按默认值解析好
   defaultWorkspace: { path: string; isDefault: boolean }
+  externalAgents: ExternalAgentConfig[]
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

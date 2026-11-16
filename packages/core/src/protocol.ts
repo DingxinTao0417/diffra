@@ -110,12 +110,15 @@ export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edit
 // stop 是没过结束门禁就停下的原因，正常结束为 null。no-finish 只有旧记录里有（以前改了文件没调 finish）
 export const TURN_OUTCOME_META_KEY = 'turnOutcome'
 // check-exhausted 只有旧记录里有：快速检查不再每步跑，不会再因它停下。deep-scan 是用户在提交前选了先做深度扫描，客户端接着发起一轮深度扫描
-export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted' | 'deep-scan'
+// agent-error 是外接智能体（ExternalAgentSpec）的进程没起来、中途退出或没有应答，这一轮停在这里
+export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted' | 'deep-scan' | 'agent-error'
 export interface TurnOutcome {
   finish: 'verified' | 'unverified' | 'no-edits' | null
   stop: TurnStop | null
   // stop 是 model-error 时模型接口出错的类型，界面按它说明原因、给出下一步
   errorKind?: ModelErrorKind
+  // stop 是 agent-error 时外接智能体出错的类型和原因
+  agentError?: { kind: ExternalAgentErrorKind; message: string }
 }
 // 模型一直没吐数据时的 session_info_update._meta.diffra.modelSilentSince：最后一次收到数据的时刻（ISO），
 // 又收到数据、重发了这一步或这一步正常结束时发 null；被停止时不发，记录里留着「停下时模型已经多久没输出」。
@@ -674,6 +677,8 @@ export interface LoadedSession {
   taskState?: TaskProgressView
   design: boolean
   noProject: boolean
+  // 外接智能体的任务；Diffra 自己的智能体没有
+  agent?: SessionAgentRef
 }
 
 // session/list 里每个会话 _meta.diffra 带的字段
@@ -685,6 +690,54 @@ export interface StoredSessionMeta {
   noProject: boolean
   // core 里这个会话正在跑一轮
   running: boolean
+  // 外接智能体的任务；Diffra 自己的智能体没有
+  agent?: SessionAgentRef
+}
+
+// 外接智能体（v2）：通过 ACP 驱动的命令行智能体（Claude Code、Codex、Gemini CLI、Copilot CLI）。core 起它的进程，
+// 当它的 ACP 客户端，把它的会话更新和确认请求转给界面；账号登录由各 CLI 自己完成，Diffra 不经手。
+// 设置里的整份清单由客户端经 SESSION_EXT_METHODS.externalAgents 交给 core，环境变量的值可能是密钥，只在内存里
+export interface ExternalAgentSpec {
+  id: string
+  name: string
+  command: string
+  args: string[]
+  env: Array<{ name: string; value: string }>
+}
+
+// 会话记录、列表和 session/load 里记的是哪个外接智能体（名字是建任务时的，设置里改名不影响旧任务的显示）
+export interface SessionAgentRef {
+  id: string
+  name: string
+}
+
+// not-installed：找不到命令；version：起来了但不按 ACP 应答或协议版本不对（多半是版本太旧）；start-failed：启动后出错退出；
+// timeout：在时限内没有应答；auth：要先在终端里登录这个 CLI；exited：这一轮中途进程退出了；unsupported：它不支持这次请求（比如图片）
+export type ExternalAgentErrorKind = 'not-installed' | 'version' | 'start-failed' | 'timeout' | 'auth' | 'exited' | 'unsupported'
+
+// 检测一个外接智能体：找到命令、起进程、做一次 ACP 握手就结束它
+export type ExternalAgentDetection =
+  | {
+      ok: true
+      // 实际找到的可执行文件
+      path: string
+      agentName: string | null
+      agentVersion: string | null
+      protocolVersion: number
+      loadSession: boolean
+      images: boolean
+      authMethods: Array<{ id: string; name: string; description: string | null }>
+    }
+  | { ok: false; kind: ExternalAgentErrorKind; message: string; detail: string | null }
+
+// 建外接智能体任务时 session/new 的 _meta.diffra：不要模型配置
+export interface ExternalSessionConfig {
+  external: { agentId: string }
+  permissionMode: PermissionMode
+  readOnlyPaths: string[]
+  noProject?: boolean
+  // 检查点仓库：这一轮改了哪些文件、撤销改动都靠它
+  checkpointDir: string | null
 }
 
 // _diffra/remote/snapshot 的结果（设备连接用）：不载入会话、不连 MCP 地读一页轮次。
@@ -902,6 +955,10 @@ export const SESSION_EXT_METHODS = {
   architectureSource: '_diffra/architecture/source',
   // 设备连接：读一个会话的一页轮次，见 RemoteSnapshot
   remoteSnapshot: '_diffra/remote/snapshot',
+  // 外接智能体：设置里的整份清单（ExternalAgentSpec[]），启动时和设置改了时发
+  externalAgents: '_diffra/external/agents',
+  // 外接智能体：检测一条启动命令能不能用（ExternalAgentDetection）
+  externalDetect: '_diffra/external/detect',
 } as const
 
 // core 主动推给客户端的通知
