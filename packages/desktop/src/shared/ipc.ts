@@ -55,7 +55,7 @@ import type { ExternalAgentDiscovery, ExternalAgentInput } from './external-agen
 import type { RemoteResumed, RemoteSnapshotPage, RemoteToolOutput, RequestCall, SessionList } from '@diffra/remote/messages'
 import type { RemoteAction, RemoteActionResult, RemoteAddResult, RemoteAuditEntry, RemoteProjectGrant, RemoteSyncEvent, RemoteTaskCall, RemoteTaskCallResult, RemoteView } from './remote'
 import type { ChangelogRelease } from './changelog'
-import type { PrerequisiteState } from './extensions'
+import type { CatalogView, PrerequisiteState } from './extensions'
 import type { Todo } from './todos'
 import type { AnalysisProgress, ArchitectureBundle, ArchitectureEvent, ArchitectureLayout, ArchitectureProject, ArchitectureProjectSummary, BlockDiagram, FlowChart, InterpretPart, ModuleNote, TargetArchitecture } from '@diffra/core/architecture'
 
@@ -190,6 +190,7 @@ export const IPC_CHANNELS = {
   pluginDelete: 'plugins:delete',
   extensionInstallMcp: 'extensions:install-mcp',
   extensionPrerequisites: 'extensions:prerequisites',
+  extensionCatalog: 'extensions:catalog',
   windowChrome: 'window:chrome',
   menuPopup: 'menu:popup',
   menuCommand: 'menu:command',
@@ -686,6 +687,8 @@ export interface DiffraApi {
   installCatalogMcp(catalogId: string, key: string | null): Promise<SettingsView>
   // 本机有没有 npx、uvx、docker、railway 这些命令
   extensionPrerequisites(): Promise<PrerequisiteState>
+  // 扩展目录（v2 联网更新）：cached 不联网，check 一小时内查过就不查，force 现在查
+  extensionCatalog(mode: 'cached' | 'check' | 'force'): Promise<CatalogView>
   cancelSession(sessionId: string): Promise<void>
   onSessionUpdate(listener: (notification: SessionNotification) => void): () => void
   onPermissionRequest(listener: (request: PermissionRequestEvent) => void): () => void

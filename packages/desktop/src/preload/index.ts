@@ -167,6 +167,7 @@ const api: DiffraApi = {
   deletePlugin: (pluginId) => ipcRenderer.invoke(IPC_CHANNELS.pluginDelete, pluginId),
   installCatalogMcp: (catalogId, key) => ipcRenderer.invoke(IPC_CHANNELS.extensionInstallMcp, catalogId, key),
   extensionPrerequisites: () => ipcRenderer.invoke(IPC_CHANNELS.extensionPrerequisites),
+  extensionCatalog: (mode) => ipcRenderer.invoke(IPC_CHANNELS.extensionCatalog, mode),
   cancelSession: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.sessionCancel, sessionId),
   onSessionUpdate: (listener) => subscribe<SessionNotification>(IPC_CHANNELS.sessionUpdate, listener),
   onPermissionRequest: (listener) => subscribe<PermissionRequestEvent>(IPC_CHANNELS.sessionPermission, listener),

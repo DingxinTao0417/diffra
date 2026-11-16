@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { catalogMcp, PREREQUISITES, type CatalogConnection, type Prerequisite, type PrerequisiteState } from '../shared/extensions'
 import { IPC_CHANNELS } from '../shared/ipc'
 import type { McpServerInput } from '../shared/settings'
+import { loadCatalog } from './catalog'
 import { coreConnection } from './core-process'
 import { loginWithCancel, oauthFor } from './mcp-oauth'
 import { parse } from './ipc-input'
@@ -49,6 +50,7 @@ function freeName(base: string, taken: string[]): string {
 
 export function registerExtensionsIpc(settings: SettingsStore, secrets: SecretStore): void {
   ipcMain.handle(IPC_CHANNELS.extensionPrerequisites, () => prerequisiteState())
+  ipcMain.handle(IPC_CHANNELS.extensionCatalog, (_event, raw: unknown) => loadCatalog(parse(z.enum(['cached', 'check', 'force']), raw)))
 
   // 浏览器登录的服务（v2）：先在系统浏览器里登录，再带着令牌连一次，都成了才保存；连不上就退出登录，不留半截
   const installWithLogin = async (id: string, label: string, url: string) => {
@@ -68,7 +70,7 @@ export function registerExtensionsIpc(settings: SettingsStore, secrets: SecretSt
 
   // 一键装：只收目录 id 和用户填的 Key，地址、命令都按目录来。先连一次，连不上就不保存，把原因告诉用户
   ipcMain.handle(IPC_CHANNELS.extensionInstallMcp, async (_event, rawId: unknown, rawKey: unknown) => {
-    const entry = catalogMcp(parse(z.string().min(1), rawId))
+    const entry = catalogMcp(parse(z.string().min(1), rawId), (await loadCatalog('cached')).mcp)
     const key = parse(z.string().trim().max(4000).nullable(), rawKey) || null
     if (!entry) throw new Error('目录里没有这个服务')
     const override = catalogOverrides().mcp[entry.id]

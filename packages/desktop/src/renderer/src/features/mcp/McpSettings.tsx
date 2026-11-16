@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { CircleAlert, Ellipsis, ExternalLink, Loader2, Pencil, Plug, Trash2, TriangleAlert } from 'lucide-react'
 import type { McpServerStatus } from '@diffra/core/types'
-import { catalogEntryOf, PREREQUISITES, type PrerequisiteState } from '../../../../shared/extensions'
+import { type CatalogMcp, catalogEntryOf, PREREQUISITES, type PrerequisiteState } from '../../../../shared/extensions'
 import type { McpOAuthState } from '../../../../shared/mcp-oauth'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
@@ -24,6 +24,7 @@ import type { useMcpStatus } from './useMcpStatus'
 export function McpInstalled({
   view,
   status,
+  catalog,
   prerequisites,
   onChange,
   onRecheck,
@@ -31,6 +32,8 @@ export function McpInstalled({
 }: {
   view: SettingsView
   status: ReturnType<typeof useMcpStatus>
+  // 当前的目录（可能是联网取到的），认装上的服务器对应目录里哪一项
+  catalog: CatalogMcp[]
   prerequisites: PrerequisiteState | null
   onChange(view: SettingsView): void
   onRecheck(): void
@@ -67,6 +70,7 @@ export function McpInstalled({
             server={server}
             status={status.statuses?.find((item) => item.name === server.name) ?? null}
             oauth={view.mcpOAuth[server.id] ?? null}
+            catalog={catalog}
             loading={status.loading}
             prerequisites={prerequisites}
             onChange={onChange}
@@ -149,6 +153,7 @@ interface McpServerRowProps {
   server: McpServerConfig
   status: McpServerStatus | null
   oauth: McpOAuthState | null
+  catalog: CatalogMcp[]
   loading: boolean
   prerequisites: PrerequisiteState | null
   onChange(view: SettingsView): void
@@ -157,7 +162,7 @@ interface McpServerRowProps {
   onRecheck(): void
 }
 
-function McpServerRow({ server, status, oauth, loading, prerequisites, onChange, onEdit, onRetry, onRecheck }: McpServerRowProps) {
+function McpServerRow({ server, status, oauth, catalog, loading, prerequisites, onChange, onEdit, onRetry, onRecheck }: McpServerRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [showTools, setShowTools] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -191,7 +196,7 @@ function McpServerRow({ server, status, oauth, loading, prerequisites, onChange,
   const names = stdio ? server.envNames : server.headerNames
   const state: ConnectionState = !server.enabled ? 'disabled' : status ? status.state : loading ? 'connecting' : 'idle'
   // 目录里要先装命令的服务：本机没有那个命令时直接说缺什么，不给一大段启动失败的日志
-  const entry = catalogEntryOf(server)
+  const entry = catalogEntryOf(server, catalog)
   const requires = entry?.connection.transport === 'stdio' ? entry.connection.requires : null
   const missing = requires && prerequisites && !prerequisites[requires] && state !== 'connected' ? PREREQUISITES[requires] : null
   // 失败原因的第一行是摘要，后面是 stdio 服务器的 stderr

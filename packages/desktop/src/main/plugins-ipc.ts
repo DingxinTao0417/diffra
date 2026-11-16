@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { catalogPlugin } from '../shared/extensions'
 import { IPC_CHANNELS, type PluginPrepared } from '../shared/ipc'
 import type { InstalledPlugin, PluginView } from '../shared/settings'
+import { loadCatalog } from './catalog'
 import { catalogOverrides } from './extensions-ipc'
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
@@ -137,7 +138,7 @@ export function registerPluginsIpc(settings: SettingsStore, userDataDir: string)
       return stage({ id: randomUUID(), dir, clone: null, source: 'folder', url: null, subdir: null })
     }
     if (source.kind === 'git') return stage(await clone(source.url, source.subdir || null))
-    const entry = catalogPlugin(source.id)
+    const entry = catalogPlugin(source.id, (await loadCatalog('cached')).plugins)
     if (!entry) throw new Error('目录里没有这个插件')
     const override = catalogOverrides().plugins[entry.id]
     return stage(await clone(override?.repo ?? entry.repo, override ? override.path : entry.path))

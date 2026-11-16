@@ -1,10 +1,12 @@
 // 生成官网：node scripts/build-website.ts → out/website/
 // - website/layout.html 是公共页头页脚，website/pages/*.html 是各页正文，website/public/ 原样拷到网站根目录
 // - 更新日志页（按 tag 从提交信息生成）、第三方许可页（从 NOTICE.md 生成）、sitemap.xml、robots.txt 也在这里生成
+// - extensions/catalog.json：应用里内置的扩展目录，老版本的应用联网取它，不升级也能看到新加的扩展（v2）
 // 只是拼静态文件，不用网站框架
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { builtinCatalog, parseCatalog } from '../src/main/catalog-schema.ts'
 import type { ChangelogRelease } from '../src/shared/changelog.ts'
 import { readChangelog } from './changelog.ts'
 
@@ -156,6 +158,12 @@ export function buildWebsite(): string[] {
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${listed.map((page) => `  <url><loc>${SITE_ORIGIN}/${page.file === 'index.html' ? '' : page.file}</loc></url>`).join('\n')}\n</urlset>\n`,
   )
   writeFileSync(join(WEBSITE_OUT, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`)
+  // 应用按同一份校验收目录：有一项过不了就别发出去（应用会丢掉它）
+  const catalog = builtinCatalog()
+  const { dropped } = parseCatalog(JSON.parse(JSON.stringify(catalog)))
+  if (dropped.length > 0) throw new Error(`内置扩展目录里有过不了校验的项：\n${dropped.map((entry) => `${entry.kind}:${entry.id} ${entry.reason}`).join('\n')}`)
+  mkdirSync(join(WEBSITE_OUT, 'extensions'), { recursive: true })
+  writeFileSync(join(WEBSITE_OUT, 'extensions', 'catalog.json'), `${JSON.stringify(catalog)}\n`)
   const broken = brokenLinks(all.map((page) => page.file))
   if (broken.length > 0) throw new Error(`站内链接有错：\n${broken.join('\n')}`)
   return all.map((page) => page.file)

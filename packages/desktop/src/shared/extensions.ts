@@ -1,6 +1,7 @@
 import type { McpServerConfig } from './settings'
 
-// 「扩展」页的内置目录（第 594 步）：随版本更新，不从网上拉。地址、请求头写法、插件仓库都按各家官方文档核对过（2026-11-13）。
+// 「扩展」页的内置目录（第 594 步）：随版本更新。地址、请求头写法、插件仓库都按各家官方文档核对过（2026-11-13）。
+// v2 起官网发布同样格式的 extensions/catalog.json（构建官网时从这里生成），扩展页打开时联网取，比内置的新才用，见 main/catalog.ts
 // 「贴 Token 一键装」和浏览器登录（OAuth，v2 起，Vercel 和 Railway 的远程版靠它）两种
 
 // 本机要先装好的命令；只检测、给安装说明，不替用户装
@@ -79,6 +80,23 @@ export interface CatalogPlugin {
 }
 
 const OFFICIAL_PLUGINS = 'https://github.com/anthropics/claude-plugins-official.git'
+
+// 内置目录的日期：改了下面两个列表就改它。联网取到的目录日期不比它新时用内置的
+export const CATALOG_UPDATED_AT = '2026-11-15'
+
+// 扩展页用的目录：内置的，或者联网取到、缓存的
+export type CatalogSource = 'builtin' | 'online' | 'cache'
+
+export interface CatalogView {
+  mcp: CatalogMcp[]
+  plugins: CatalogPlugin[]
+  updatedAt: string
+  source: CatalogSource
+  // 上次联网取到（或确认没变）的时间；没取到过是 null
+  fetchedAt: string | null
+  // 这次联网没取到的原因；用的是缓存或内置目录
+  error: string | null
+}
 
 export const CATALOG_MCP: CatalogMcp[] = [
   {
@@ -443,12 +461,12 @@ export const CATALOG_PLUGINS: CatalogPlugin[] = [
   },
 ]
 
-export function catalogMcp(id: string): CatalogMcp | undefined {
-  return CATALOG_MCP.find((entry) => entry.id === id)
+export function catalogMcp(id: string, entries: CatalogMcp[] = CATALOG_MCP): CatalogMcp | undefined {
+  return entries.find((entry) => entry.id === id)
 }
 
-export function catalogPlugin(id: string): CatalogPlugin | undefined {
-  return CATALOG_PLUGINS.find((entry) => entry.id === id)
+export function catalogPlugin(id: string, entries: CatalogPlugin[] = CATALOG_PLUGINS): CatalogPlugin | undefined {
+  return entries.find((entry) => entry.id === id)
 }
 
 const sameUrl = (a: string, b: string) => a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase()
@@ -465,6 +483,6 @@ export function installedServer(entry: CatalogMcp, servers: McpServerConfig[]): 
 }
 
 // 装上的服务器对应目录里的哪一项（已安装页显示前置条件用）
-export function catalogEntryOf(server: McpServerConfig): CatalogMcp | undefined {
-  return CATALOG_MCP.find((entry) => installedServer(entry, [server]) !== undefined)
+export function catalogEntryOf(server: McpServerConfig, entries: CatalogMcp[] = CATALOG_MCP): CatalogMcp | undefined {
+  return entries.find((entry) => installedServer(entry, [server]) !== undefined)
 }

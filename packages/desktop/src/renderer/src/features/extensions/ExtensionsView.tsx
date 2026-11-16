@@ -5,6 +5,7 @@ import {
   CATALOG_PLUGINS,
   type CatalogMcp,
   type CatalogPlugin,
+  type CatalogView,
   installedServer,
   MCP_GROUP_LABELS,
   type McpGroup,
@@ -15,12 +16,14 @@ import {
 import type { PluginView, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Segmented } from '@/components/ui/segmented'
 import { McpInstalled } from '@/features/mcp/McpSettings'
 import { useMcpStatus } from '@/features/mcp/useMcpStatus'
 import { ManualPluginInstall, PluginInstalled } from '@/features/plugins/PluginSettings'
 import { errorMessage } from '@/lib/errors'
+import { formatTime } from '@/lib/format'
 import { openExtensions } from '@/state/actions'
 import type { ExtensionsTab } from '@/state/store'
 import { CatalogMcpRow } from './CatalogMcpRow'
@@ -39,6 +42,9 @@ export function ExtensionsView({ tab }: { tab: ExtensionsTab }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pluginError, setPluginError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  // 目录：先用缓存的（或内置的）显示出来，再联网看有没有更新
+  const [catalog, setCatalog] = useState<CatalogView | null>(null)
+  const [checking, setChecking] = useState(false)
   // 同一时间只展开一个目录项的安装面板
   const [expanded, setExpanded] = useState<string | null>(null)
   // 配置改了重新查连接状态；只在「已安装」里查，目录页不去连服务器
@@ -56,7 +62,23 @@ export function ExtensionsView({ tab }: { tab: ExtensionsTab }) {
       (error: unknown) => setLoadError(errorMessage(error)),
     )
     recheck()
+    window.diffra
+      .extensionCatalog('cached')
+      .then((cached) => {
+        setCatalog((current) => current ?? cached)
+        return checkCatalog('check')
+      })
+      .catch((error: unknown) => setLoadError(errorMessage(error)))
   }, [])
+
+  const checkCatalog = async (mode: 'check' | 'force') => {
+    setChecking(true)
+    try {
+      setCatalog(await window.diffra.extensionCatalog(mode))
+    } finally {
+      setChecking(false)
+    }
+  }
 
   const settingsChanged = (next: SettingsView) => {
     setView(next)
@@ -80,8 +102,10 @@ export function ExtensionsView({ tab }: { tab: ExtensionsTab }) {
   const pluginRow = (entry: CatalogPlugin) => (
     <CatalogPluginRow key={entry.id} entry={entry} installed={pluginNames.has(entry.pluginName)} onInstalled={(next) => setPlugins(next)} />
   )
-  const mcpEntries = useMemo(() => CATALOG_MCP.filter((entry) => matches(text, entry.name, entry.description, entry.publisher)), [text])
-  const pluginEntries = useMemo(() => CATALOG_PLUGINS.filter((entry) => matches(text, entry.name, entry.description, entry.publisher)), [text])
+  const catalogMcp = catalog?.mcp ?? CATALOG_MCP
+  const catalogPlugins = catalog?.plugins ?? CATALOG_PLUGINS
+  const mcpEntries = useMemo(() => catalogMcp.filter((entry) => matches(text, entry.name, entry.description, entry.publisher)), [catalogMcp, text])
+  const pluginEntries = useMemo(() => catalogPlugins.filter((entry) => matches(text, entry.name, entry.description, entry.publisher)), [catalogPlugins, text])
   const nothing = <p className="py-6 text-sm text-muted-foreground">没有匹配「{query.trim()}」的扩展</p>
 
   const body = () => {
@@ -128,7 +152,15 @@ export function ExtensionsView({ tab }: { tab: ExtensionsTab }) {
         return (
           <div className="space-y-8">
             {view && (
-              <McpInstalled view={view} status={status} prerequisites={prerequisites} onChange={settingsChanged} onRecheck={recheck} onBrowse={() => openExtensions('mcp')} />
+              <McpInstalled
+                view={view}
+                status={status}
+                catalog={catalogMcp}
+                prerequisites={prerequisites}
+                onChange={settingsChanged}
+                onRecheck={recheck}
+                onBrowse={() => openExtensions('mcp')}
+              />
             )}
             <PluginInstalled
               plugins={plugins}
@@ -192,7 +224,28 @@ export function ExtensionsView({ tab }: { tab: ExtensionsTab }) {
           </Alert>
         )}
         <div className={cn('mt-6', tab !== 'installed' && 'space-y-8')}>{body()}</div>
+        {tab !== 'installed' && catalog && (
+          <CatalogStatus catalog={catalog} checking={checking} onCheck={() => void checkCatalog('force').catch((error: unknown) => setLoadError(errorMessage(error)))} />
+        )}
       </div>
+    </div>
+  )
+}
+
+// 目录从哪来：联网取到的、联网失败用的缓存、内置的；能手动检查更新
+function CatalogStatus({ catalog, checking, onCheck }: { catalog: CatalogView; checking: boolean; onCheck(): void }) {
+  const checked = catalog.fetchedAt ? `，${formatTime(catalog.fetchedAt)} 联网检查过` : ''
+  const label = catalog.error
+    ? catalog.source === 'cache'
+      ? `没连上目录服务器（${catalog.error}），用的是${catalog.fetchedAt ? ` ${formatTime(catalog.fetchedAt)} ` : '上次'}取到的目录（${catalog.updatedAt} 版）`
+      : `没连上目录服务器（${catalog.error}），用的是内置目录（${catalog.updatedAt} 版）`
+    : `目录 ${catalog.updatedAt} 版${catalog.source === 'builtin' && !catalog.fetchedAt ? '（内置）' : checked}`
+  return (
+    <div className="mt-8 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground" data-testid="catalog-source" data-source={catalog.source}>
+      <span className={cn('break-words', catalog.error && 'text-warning')}>{label}。已经装上的不受目录变化影响。</span>
+      <Button size="xs" variant="ghost" disabled={checking} onClick={onCheck}>
+        {checking ? '正在检查…' : '检查更新'}
+      </Button>
     </div>
   )
 }
