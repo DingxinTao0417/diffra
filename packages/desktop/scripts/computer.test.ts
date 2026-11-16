@@ -43,8 +43,9 @@ test('Windows 的驱动进程：起得来，回 ping，读得到鼠标位置，�
   const driver = new ScriptDriver(dir)
   try {
     assert.equal(await driver.send({ op: 'ping' }), '')
+    // 比例是相对主屏算的：鼠标在副屏上时会小于 0 或大于 1（副屏在左边、右边），只要求读得到数
     const cursor = await driver.cursor()
-    assert.ok(cursor.fx >= 0 && cursor.fx <= 1.01 && cursor.fy >= 0 && cursor.fy <= 1.01, JSON.stringify(cursor))
+    assert.ok(Number.isFinite(cursor.fx) && Number.isFinite(cursor.fy), JSON.stringify(cursor))
     await assert.rejects(driver.send({ op: 'nope' }), /unknown op nope/)
     driver.dispose()
     assert.equal(await driver.send({ op: 'ping' }), '')
