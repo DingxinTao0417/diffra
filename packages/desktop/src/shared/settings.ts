@@ -122,6 +122,12 @@ export interface ComputerUseSettings {
   acknowledged: boolean
 }
 
+// 托盘和开机自启（v2）：开着托盘时关窗口留在托盘里；开机自启开着托盘时藏在托盘里启动
+export interface SystemSettings {
+  tray: boolean
+  launchAtLogin: boolean
+}
+
 // 这台电脑支不支持电脑操控（Windows、macOS 支持）
 export interface ComputerStatus {
   supported: boolean
@@ -242,6 +248,8 @@ export interface Settings {
   plugins: InstalledPlugin[]
   // v2：电脑操控；旧设置没有这一项（就是关着）
   computerUse?: ComputerUseSettings
+  // v2：托盘和开机自启；旧设置没有这一项（都关着）
+  system?: SystemSettings
   // 无项目任务建在这里；null 表示用默认值（打包版是「文档\Diffra」，开发版和 e2e 是数据目录下的 workspace）
   defaultWorkspace: string | null
   // 上次启动的版本；升级后第一次启动据此提示改了什么，界面不显示
@@ -277,6 +285,7 @@ export interface SettingsView {
   mcpOAuth: Record<string, McpOAuthState>
   // 电脑操控（v2）：没设过就是关着
   computerUse: ComputerUseSettings
+  system: SystemSettings
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }
