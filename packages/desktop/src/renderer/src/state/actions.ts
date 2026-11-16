@@ -1,10 +1,10 @@
-import { type AskAnswer, DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
+import { type AskAnswer, type CandidateSpec, DEEP_SCAN_TITLES, MANUAL_COMPACTION_PROMPT, type PermissionMode, type PromptImage, type RemoteSource, restoreNotice, type StopReason, type StoredSessionSummary, type TaskActionParams, type TaskActionResult, type TaskSource, type TurnKind } from '@diffra/core/types'
 import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult, type RemoteTaskDetails } from '../../../shared/remote'
 import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
 import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
-import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withVisualSnapshot } from '../features/session/transcript'
+import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withCandidatesUpdate, withVisualSnapshot } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
 import { shrinkImage } from '../lib/images'
@@ -203,6 +203,9 @@ export function wireCoreEvents(): () => void {
     updateLive(sessionId, (task) => {
       if (usage) return { ...task, usage }
       if (visualSnapshotOf(update).visualSnapshot) return { ...task, turns: withVisualSnapshot(task.turns, update) }
+      // 候选方案卡片在生成它的那一轮，应用、放弃后的更新补到那一轮
+      const candidateTurns = withCandidatesUpdate(task.turns, update)
+      if (candidateTurns) return { ...task, turns: candidateTurns }
       const last = task.turns.at(-1)
       if (!last) return task
       if (silence) return { ...task, turns: [...task.turns.slice(0, -1), { ...last, silence: applySilence(last.silence, silence) }] }
@@ -537,10 +540,43 @@ export async function sendMessage(sessionId: string, text: string, options: Part
       message.goal ? 'goal' : 'prompt',
       skills,
       images,
-      (turnId) => window.diffra.sendPrompt(sessionId, turnId, text, { skills, goal: message.goal, images, ...(message.from ? { from: message.from } : {}), ...(message.remote ? { remote: message.remote } : {}) }),
+      (turnId) =>
+        window.diffra.sendPrompt(sessionId, turnId, text, {
+          skills,
+          goal: message.goal,
+          images,
+          ...(message.from ? { from: message.from } : {}),
+          ...(message.remote ? { remote: message.remote } : {}),
+          ...(message.fromPlan ? { fromPlan: message.fromPlan } : {}),
+        }),
       message.from,
       message.remote,
+      message.fromPlan?.turnId,
     )
+}
+
+// 多候选方案（v2）：生成是一轮（和出计划一样），项目不动
+export async function generateCandidates(sessionId: string, params: { request: string; plan: string | null; candidates: CandidateSpec[] }): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  const title = `生成 ${params.candidates.length} 个候选方案`
+  await runTurnOnCore(sessionId, title, 'plan', [], [], (turnId) => window.diffra.generateCandidates(sessionId, turnId, { title, ...params }))
+}
+
+// 应用一个候选：一轮 apply，能撤销；冲突时 core 什么都不改、在卡片上列出冲突
+export async function applyCandidate(sessionId: string, runTurnId: string, candidate: { id: string; name: string }): Promise<void> {
+  const task = store.get().live[sessionId]
+  if (!task || task.running) return
+  const title = `应用候选方案「${candidate.name}」`
+  await runTurnOnCore(sessionId, title, 'apply', [], [], (turnId) => window.diffra.applyCandidate(sessionId, turnId, { title, runTurnId, candidateId: candidate.id }))
+}
+
+export async function discardCandidates(sessionId: string, runTurnId: string): Promise<void> {
+  try {
+    await window.diffra.discardCandidates(sessionId, runTurnId)
+  } catch (error) {
+    showToast(`放弃候选方案失败：${errorMessage(error)}`)
+  }
 }
 
 export function setPlanMode(sessionId: string, planMode: boolean): void {
@@ -701,9 +737,10 @@ async function runTurnOnCore(
   run: (turnId: string) => Promise<StopReason>,
   from?: TaskSource,
   remote?: RemoteSource,
+  fromPlan?: string,
 ): Promise<void> {
   const turnId = crypto.randomUUID()
-  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from, remote)] }))
+  updateLive(sessionId, (current) => ({ ...current, running: true, turns: [...current.turns, newTurn(turnId, text, kind, skills, images, from, remote, fromPlan)] }))
   const patchTurn = (change: (turn: LiveTask['turns'][number]) => LiveTask['turns'][number]) =>
     updateLive(sessionId, (current) => ({ ...current, turns: current.turns.map((turn) => (turn.id === turnId ? change(turn) : turn)) }))
   // 第一轮开始后 core 才保存会话，这时再刷新侧栏

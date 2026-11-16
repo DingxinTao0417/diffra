@@ -21,6 +21,7 @@ import {
   type ExternalAgentDetection,
   type ExternalAgentSpec,
   type ExternalSessionConfig,
+  type CandidateSpec,
   type SessionAgentRef,
   type TaskActionParams,
   type TaskActionResult,
@@ -134,6 +135,8 @@ export interface PromptOptions {
   from?: TaskSource
   // 配对的远程设备发来的消息（设备连接）
   remote?: RemoteSource
+  // 按计划执行：出计划那一轮的 id 和计划的步骤
+  fromPlan?: { turnId: string; steps: string[] }
 }
 
 export function sendPrompt(
@@ -146,7 +149,7 @@ export function sendPrompt(
   return requestOf(connection)(acp.methods.agent.session.prompt, {
     sessionId,
     prompt: [{ type: 'text', text }, ...(options.images ?? []).map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.data }))],
-    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false, ...(options.from ? { from: options.from } : {}), ...(options.remote ? { remote: options.remote } : {}) } },
+    _meta: { diffra: { turnId, skills: options.skills ?? [], goal: options.goal ?? false, ...(options.from ? { from: options.from } : {}), ...(options.remote ? { remote: options.remote } : {}), ...(options.fromPlan ? { fromPlan: options.fromPlan } : {}) } },
   })
 }
 
@@ -372,6 +375,31 @@ export async function setBrowserSites(connection: acp.ClientConnection, sites: B
 
 export async function configureSecurity(connection: acp.ClientConnection, switches: CheckSwitches): Promise<void> {
   await requestOf(connection)(SESSION_EXT_METHODS.securityConfigure, switches, extRequestOptions())
+}
+
+// 多候选方案：生成和一轮任务一样可能跑很久，不设超时；用 cancelSession 停止
+export function generateCandidates(
+  connection: acp.ClientConnection,
+  params: { sessionId: string; turnId: string; title: string; request: string; plan: string | null; candidates: CandidateSpec[] },
+): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, typeof params>(SESSION_EXT_METHODS.candidates, params)
+}
+
+export async function candidateDiff(connection: acp.ClientConnection, sessionId: string, runTurnId: string, candidateId: string): Promise<string> {
+  const result = await requestOf(connection)<{ diff: string }, { sessionId: string; runTurnId: string; candidateId: string }>(SESSION_EXT_METHODS.candidateDiff, { sessionId, runTurnId, candidateId }, extRequestOptions())
+  return result.diff
+}
+
+// 应用一个候选：记成一轮 apply；git 合补丁和读改动的文件可能要一会儿，不设超时
+export function applyCandidate(
+  connection: acp.ClientConnection,
+  params: { sessionId: string; turnId: string; title: string; runTurnId: string; candidateId: string },
+): Promise<{ stopReason: acp.StopReason }> {
+  return requestOf(connection)<{ stopReason: acp.StopReason }, typeof params>(SESSION_EXT_METHODS.candidateApply, params)
+}
+
+export async function discardCandidates(connection: acp.ClientConnection, sessionId: string, runTurnId: string): Promise<void> {
+  await requestOf(connection)(SESSION_EXT_METHODS.candidateDiscard, { sessionId, runTurnId }, { cancellationSignal: AbortSignal.timeout(300_000), stopWaitingOnCancel: true })
 }
 
 // 设置里的外接智能体清单交给 core（整份替换）

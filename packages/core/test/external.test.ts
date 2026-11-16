@@ -250,7 +250,8 @@ describe('外接智能体的任务', () => {
       const running = sendPrompt(core, sessionId, 't1', '卡住')
       const silences = () =>
         updatesOf(sessionId).flatMap((update) => (update.sessionUpdate === 'session_info_update' && update._meta?.diffra && 'modelSilentSince' in (update._meta.diffra as object) ? [(update._meta.diffra as Record<string, unknown>).modelSilentSince] : []))
-      await waitFor(() => silences().some((value) => typeof value === 'string'))
+      // 机器忙时进程起得慢，起来之前就可能先提示一次、出字后收回：等它开始干活之后再出的提示
+      await waitFor(() => replyText(sessionId).includes('开始干活') && typeof silences().at(-1) === 'string')
       await cancelSession(core, sessionId)
       expect(await running).toEqual({ stopReason: 'cancelled' })
       // 被停止时不收回：记录里留着停下时已经多久没输出

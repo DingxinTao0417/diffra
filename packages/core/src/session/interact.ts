@@ -60,6 +60,21 @@ async function showSteps(session: Session, steps: StepItem[], io: TurnIO): Promi
   return done
 }
 
+// 按计划执行（v2）：一开始就把计划的步骤列成清单（都还没开始），智能体用 update_plan 照着打勾，计划卡片跟着显示每一步的状态
+export async function presetSteps(session: Session, steps: string[], io: TurnIO): Promise<void> {
+  await showSteps(session, steps.map((content) => ({ content, status: 'pending' as const })), io)
+}
+
+// 发给模型的提问后面接一段：照着这几步用 update_plan 打勾（存下来的提问还是原话）
+export function planStepsInstruction(steps: string[]): string {
+  return [
+    '',
+    '',
+    '[Diffra] The plan steps are already listed as your step list. Keep them in this exact order and wording, and use update_plan to mark each one in_progress when you start it and completed when it is done:',
+    ...steps.map((step, index) => `${index + 1}. ${step}`),
+  ].join('\n')
+}
+
 export async function runTodoWrite(session: Session, call: StepToolCall, io: TurnIO): Promise<{ result: ToolResultPart; edited: boolean }> {
   const parsed = todoInput.safeParse(call.input)
   if (!parsed.success) return { result: errorResult(call, invalid(parsed.error.issues)), edited: false }

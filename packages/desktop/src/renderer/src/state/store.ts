@@ -42,6 +42,8 @@ export interface MessageOptions {
   from?: TaskSource
   // 配对的远程设备发来的（设备连接）
   remote?: RemoteSource
+  // 计划卡片上点「按计划执行」（v2）：出计划那一轮的 id 和计划的步骤
+  fromPlan?: { turnId: string; steps: string[] }
 }
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载

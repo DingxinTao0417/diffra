@@ -8,6 +8,7 @@ createAgent({
   sessionsDir: process.env.DIFFRA_SESSIONS_DIR || null,
   usageDir: process.env.DIFFRA_USAGE_DIR || null,
   architectureDir: process.env.DIFFRA_ARCHITECTURE_DIR || null,
+  worktreesDir: process.env.DIFFRA_WORKTREES_DIR || null,
 }).connect(
   acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin), { maxMessageBytes: ACP_MAX_MESSAGE_BYTES }),
 )

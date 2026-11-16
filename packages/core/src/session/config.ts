@@ -186,6 +186,8 @@ export const promptMetaSchema = z.object({
     goal: z.boolean().default(false),
     from: taskSourceSchema.optional(),
     remote: remoteSourceSchema.optional(),
+    // 按计划执行（v2）：出计划那一轮的 id 和计划的步骤，开始时先列成步骤清单，智能体照着打勾
+    fromPlan: z.object({ turnId: z.string().min(1), steps: z.array(z.string().trim().min(1).max(300)).min(1).max(20) }).optional(),
   }),
 })
 

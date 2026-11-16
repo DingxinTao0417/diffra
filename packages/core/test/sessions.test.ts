@@ -126,6 +126,28 @@ function config(baseUrl: string): SessionConfig {
   }
 }
 
+describe('按计划执行（计划逐步打勾）', () => {
+  test('一开始就把计划的步骤列成清单；模型被要求照着打勾；记录里记下是哪一轮的计划，重开还在', async () => {
+    server = await startScriptedServer([
+      { toolCalls: [{ name: 'update_plan', input: { plan: [{ step: '读代码', status: 'completed' }, { step: '改代码', status: 'in_progress' }, { step: '跑测试', status: 'pending' }] } }] },
+      { text: '做了前两步' },
+    ])
+    const core = await startCore()
+    const { sessionId } = await createSession(core, project, config(server.baseUrl))
+    await sendPrompt(core, sessionId, 'run', '按下面的计划完成任务。', { fromPlan: { turnId: 'plan-1', steps: ['读代码', '改代码', '跑测试'] } })
+    const steps = notifications.filter((item) => item.update.sessionUpdate === 'tool_call' || item.update.sessionUpdate === 'tool_call_update').map((item) => item.update as acp.ToolCallUpdate)
+    // 第一张是 core 先列出来的，都还没开始；之后是模型打的勾；这一轮正常结束时进行中的那一步算做完（第 466 步）
+    expect(steps[0]).toMatchObject({ title: '步骤', content: [{ type: 'content', content: { type: 'text', text: '[ ] 读代码\n[ ] 改代码\n[ ] 跑测试' } }] })
+    const texts = steps.filter((step) => step.toolCallId === steps[0]!.toolCallId).map((step) => (step.content?.[0] as { content: { text: string } }).content.text)
+    expect(texts).toContain('[x] 读代码\n[>] 改代码\n[ ] 跑测试')
+    expect(texts.at(-1)).toBe('[x] 读代码\n[x] 改代码\n[ ] 跑测试')
+    // 模型看到的提问后面带着照着打勾的要求，存下来的提问还是原话
+    expect(server.bodies[0]).toContain('use update_plan to mark each one in_progress')
+    const loaded = await loadSession(await startCore(), sessionId, project, config(server.baseUrl))
+    expect(loaded.turns[0]).toMatchObject({ prompt: '按下面的计划完成任务。', fromPlan: 'plan-1' })
+  })
+})
+
 describe('会话持久化', () => {
   test('手动压缩：交接摘要和用户说过的原话存进记录，重启后接着用摘要，模型以前的回复不再发；历史仍可加载', async () => {
     server = await startScriptedServer([{ text: '早期回复' }, { text: '最新回复' }, { text: '用户要求保留项目偏好，下一步继续。' }, { text: '已按摘要继续' }])

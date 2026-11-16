@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import * as acp from '@agentclientprotocol/sdk'
 import { z } from 'zod'
@@ -20,6 +21,7 @@ import {
   type ExternalAgentDetection,
   type ExternalAgentSpec,
   type LoadedSession,
+  MAX_CANDIDATES,
   PROMPT_ENHANCE_USAGE_ID,
   PROMPT_IMAGE_TYPES,
   type PromptImage,
@@ -48,6 +50,7 @@ import { memoryPrompt, readMemory, rememberTurn } from './session/memory.js'
 import { inspectPlugin, pluginBlocks, pluginHooks, pluginMcpServers, pluginSkillRoots } from './plugins.js'
 import { commandRisk } from './permissions.js'
 import { sessionStartContext } from './session/plugin-hooks.js'
+import { planStepsInstruction, presetSteps } from './session/interact.js'
 import {
   checkSwitchesSchema,
   endpointSchema,
@@ -85,6 +88,7 @@ import { isTimeZone, UsageAggregator } from './usage/summary.js'
 import { CORE_VERSION } from './version.js'
 import { ExternalAgentError, ExternalAgentProcess } from './external/connection.js'
 import { ExternalSession } from './external/session.js'
+import { applyCandidate, type CandidateHost, candidateDiff, candidateRunOf, cleanupRun, discardCandidates, recoverRuns, runCandidates, runCardUpdate } from './session/candidates.js'
 
 export const AGENT_NAME = 'diffra-core'
 
@@ -97,6 +101,8 @@ export interface AgentOptions {
   mcpPool?: McpPool
   // 架构分析的数据目录；不给就不提供架构功能
   architectureDir?: string | null
+  // 多候选方案的 git worktree 放在这里；不给就用系统临时目录
+  worktreesDir?: string | null
 }
 
 const checkpointParams = z.object({ sessionId: z.string().min(1), turnId: z.string().min(1) })
@@ -284,6 +290,55 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     return session
   }
 
+  // 多候选方案：候选在 worktree 里起的会话和主会话同样的模型、规则、插件、权限模式，不带浏览器、设计、MCP 和记忆，检查点放在 worktree 旁边
+  const worktreesDir = options.worktreesDir ?? join(tmpdir(), 'diffra-worktrees')
+  const candidateHost = (parent: Session): CandidateHost => ({
+    worktreesDir,
+    child: async (cwd, checkpointDir, readOnlyPaths) => {
+      const config = {
+        ...parent.config,
+        permissionMode: parent.permissionMode,
+        browser: false,
+        design: false,
+        designStyle: null,
+        memoryDir: null,
+        checkpointDir,
+        readOnlyPaths: [...parent.config.readOnlyPaths, ...readOnlyPaths],
+      }
+      const checkpoints = await Checkpoints.open(checkpointDir, cwd, config.readOnlyPaths).catch((error: unknown) => {
+        console.error('[candidates] 候选的检查点仓库初始化失败', error)
+        return null
+      })
+      return new Session({
+        cwd,
+        config,
+        environment: parent.environment,
+        checkpoints,
+        rulePacks: parent.rulePacks,
+        systemPrompt: parent.systemPrompt,
+        workerPrompt: parent.workerPrompt,
+        readRoots: parent.readRoots,
+        outputRoot: null,
+        agentTypes: parent.agentTypes,
+        pluginHooks: parent.pluginHooks,
+        pluginBlocks: parent.pluginBlocks,
+        model: parent.model,
+        reviewModel: parent.reviewModel,
+        planModel: parent.planModel,
+        ...(parent.fallbackModel ? { fallbackModel: parent.fallbackModel } : {}),
+      })
+    },
+  })
+
+  // 候选方案卡片在生成它的那一轮里：应用、放弃后补一条更新，推给界面、存盘（不改更新时间）
+  const updateRunCard = async (session: Session, client: acp.AgentContext, runTurnId: string) => {
+    const update = runCardUpdate(candidateRunOf(session, runTurnId), false)
+    if (!session.appendToTurn(runTurnId, update)) return
+    const notify = notifier(client, session.id)
+    await notify(update)
+    await persist(session, notify, false)
+  }
+
   // 撤销改动、看改动这类两种任务都有的操作
   const anySessionOf = (sessionId: string): Session | ExternalSession => {
     const session = sessions.get(sessionId) ?? externals.get(sessionId)
@@ -388,6 +443,12 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     }
     sessions.set(session.id, session)
     infos.set(session.id, info)
+    // 上次生成候选方案到一半应用就退出了：清掉那些 worktree
+    if (record && session.candidateRuns.some((run) => run.status === 'running')) {
+      void recoverRuns(session)
+        .then((changed) => (changed && store ? store.save(session.toRecord(false)) : undefined))
+        .catch((error: unknown) => console.error('[candidates] 清理上次没跑完的候选方案失败', error))
+    }
     void retainMcp()
     mcpPool.warmUp(cwd, session.mcpServers)
     return { session, info }
@@ -421,12 +482,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     run: (io: TurnIO) => Promise<acp.StopReason>,
     from?: TaskSource,
     remote?: RemoteSource,
+    fromPlan?: string,
   ): Promise<acp.StopReason> => {
     const notify = notifier(client, session.id)
     // 后台命令在一轮结束后还会退出：用这一轮的客户端推，不进会话记录（重开应用时进程已经不在了）
     session.execSessions.onChange = () =>
       void client.notify(CLIENT_EXT_NOTIFICATIONS.processes, { sessionId: session.id, processes: session.execSessions.background() }).catch(() => {})
-    session.startTurn(turnId, text, kind, skills, images, from, remote)
+    session.startTurn(turnId, text, kind, skills, images, from, remote, fromPlan)
     await persist(session, notify)
     let stopReason: acp.StopReason = 'end_turn'
     try {
@@ -622,6 +684,9 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       if ((sessions.get(params.sessionId) ?? externals.get(params.sessionId))?.running) throw new Error('任务还在进行中，先停止再删除')
       await externals.get(params.sessionId)?.dispose()
       externals.delete(params.sessionId)
+      // 还留着的候选方案 worktree 一起清掉（不在内存里的从记录里读）
+      const runs = sessions.get(params.sessionId)?.candidateRuns ?? (store ? ((await store.load(params.sessionId).catch(() => null))?.candidateRuns ?? []) : [])
+      for (const run of runs) if (run.worktrees.length > 0) await cleanupRun(run)
       sessions.get(params.sessionId)?.execSessions.killAll()
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
@@ -657,6 +722,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const skills = await selectedSkills(session, skillNames)
       const from = meta.success ? meta.data.diffra.from : undefined
       const remote = meta.success ? meta.data.diffra.remote : undefined
+      const fromPlan = meta.success ? meta.data.diffra.fromPlan : undefined
       const stopReason = await runRecordedTurn(
         session,
         client,
@@ -665,9 +731,14 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
         goal ? 'goal' : 'prompt',
         skillNames,
         images,
-        (io) => runTurn(session, { id: turnId, text: withSkills(text, skills), images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {}),
+        async (io) => {
+          if (fromPlan) await presetSteps(session, fromPlan.steps, io)
+          const prompt = withSkills(text, skills) + (fromPlan ? planStepsInstruction(fromPlan.steps) : '')
+          return runTurn(session, { id: turnId, text: prompt, images }, io, goal ? { goalMaxRounds: session.config.limits.goalMaxRounds } : {})
+        },
         from,
         remote,
+        fromPlan?.turnId,
       )
       return { stopReason }
     })
@@ -896,6 +967,51 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     .onRequest(SESSION_EXT_METHODS.projectRunCheck, z.object({ cwd: z.string().min(1), command: z.string().trim().min(1) }), async ({ params }) => {
       const result = await runShell({ cwd: params.cwd, bashPath: await findBash(), signal: new AbortController().signal }, params.command, CHECK_TIMEOUT_SECONDS)
       return { passed: result.exitCode === 0 && !result.timedOut && !result.aborted, summary: result.summary }
+    })
+    // 多候选方案：生成（一轮 plan，项目不改）
+    .onRequest(
+      SESSION_EXT_METHODS.candidates,
+      z.object({
+        sessionId: z.string().min(1),
+        turnId: z.string().min(1),
+        title: z.string().trim().min(1).max(200),
+        request: z.string().trim().min(1).max(100_000),
+        plan: z.string().trim().min(1).max(100_000).nullable(),
+        candidates: z.array(z.object({ name: z.string().trim().min(1).max(40), approach: z.string().trim().min(1).max(2000) })).min(2).max(MAX_CANDIDATES),
+      }),
+      async ({ params, client }) => {
+        const session = sessionOf(params.sessionId)
+        if (session.running) throw new Error('上一个任务还没结束')
+        session.turnRequested()
+        const stopReason = await runRecordedTurn(session, client, params.turnId, params.title, 'plan', [], [], (io) =>
+          runCandidates(session, candidateHost(session), { id: params.turnId, request: params.request, plan: params.plan, specs: params.candidates }, io),
+        )
+        return { stopReason }
+      },
+    )
+    .onRequest(SESSION_EXT_METHODS.candidateDiff, z.object({ sessionId: z.string().min(1), runTurnId: z.string().min(1), candidateId: z.string().min(1) }), async ({ params }) => ({
+      diff: await candidateDiff(candidateRunOf(sessionOf(params.sessionId), params.runTurnId), params.candidateId),
+    }))
+    // 应用一个候选：一轮 apply（能撤销）；冲突时什么都不改
+    .onRequest(
+      SESSION_EXT_METHODS.candidateApply,
+      z.object({ sessionId: z.string().min(1), turnId: z.string().min(1), title: z.string().trim().min(1).max(200), runTurnId: z.string().min(1), candidateId: z.string().min(1) }),
+      async ({ params, client }) => {
+        const session = sessionOf(params.sessionId)
+        if (session.running) throw new Error('上一个任务还没结束')
+        const run = candidateRunOf(session, params.runTurnId)
+        session.turnRequested()
+        const stopReason = await runRecordedTurn(session, client, params.turnId, params.title, 'apply', [], [], (io) => applyCandidate(session, params.turnId, run, params.candidateId, io))
+        await updateRunCard(session, client, params.runTurnId)
+        return { stopReason }
+      },
+    )
+    .onRequest(SESSION_EXT_METHODS.candidateDiscard, z.object({ sessionId: z.string().min(1), runTurnId: z.string().min(1) }), async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running) throw new Error('任务还在进行中，结束后再放弃候选方案')
+      await discardCandidates(candidateRunOf(session, params.runTurnId))
+      await updateRunCard(session, client, params.runTurnId)
+      return {}
     })
     // 设置里的外接智能体清单：整份替换；已经打开的任务下次起进程时用新的命令
     .onRequest(SESSION_EXT_METHODS.externalAgents, z.object({ agents: z.array(externalAgentSpecSchema).max(50) }), ({ params }) => {

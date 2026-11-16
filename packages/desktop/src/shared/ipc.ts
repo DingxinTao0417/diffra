@@ -1,4 +1,5 @@
 import type {
+  CandidateSpec,
   CheckDetection,
   CheckpointChange,
   CheckRunResult,
@@ -170,6 +171,10 @@ export const IPC_CHANNELS = {
   externalAgentSave: 'external-agent:save',
   externalAgentDelete: 'external-agent:delete',
   externalAgentDetect: 'external-agent:detect',
+  candidatesGenerate: 'candidates:generate',
+  candidateDiff: 'candidates:diff',
+  candidateApply: 'candidates:apply',
+  candidatesDiscard: 'candidates:discard',
   mcpStatus: 'mcp:status',
   mcpPrompt: 'mcp:prompt',
   commandsList: 'commands:list',
@@ -412,6 +417,8 @@ export interface PromptOptions {
   skills: string[]
   goal: boolean
   images: PromptImage[]
+  // 计划卡片上点「按计划执行」：出计划那一轮的 id 和计划的步骤（v2，计划逐步打勾）
+  fromPlan?: { turnId: string; steps: string[] }
 }
 
 // 打开历史任务时多带标题和每轮的记录
@@ -605,6 +612,11 @@ export interface DiffraApi {
   listSkills(target: McpStatusTarget): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>
   deleteMcpServer(serverId: string): Promise<SettingsView>
+  // 多候选方案（v2）：生成（像出计划一样记成一轮，等它跑完）、看某个候选的改动、应用一个（记成一轮 apply）、全部放弃
+  generateCandidates(sessionId: string, turnId: string, params: { title: string; request: string; plan: string | null; candidates: CandidateSpec[] }): Promise<StopReason>
+  candidateDiff(sessionId: string, runTurnId: string, candidateId: string): Promise<string>
+  applyCandidate(sessionId: string, turnId: string, params: { title: string; runTurnId: string; candidateId: string }): Promise<StopReason>
+  discardCandidates(sessionId: string, runTurnId: string): Promise<void>
   // 外接智能体：本机找预设要的命令、保存、删除、检测（起进程握手一次，第一次用 npx 可能要等下载）
   discoverExternalAgents(): Promise<ExternalAgentDiscovery[]>
   saveExternalAgent(input: ExternalAgentInput): Promise<SettingsView>

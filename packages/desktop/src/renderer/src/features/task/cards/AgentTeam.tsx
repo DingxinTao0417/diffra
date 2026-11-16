@@ -13,7 +13,7 @@ export function AgentTeam({ items, onJump }: { items: ToolItem[]; onJump(id: str
     <div className="flex flex-col gap-1.5 text-xs" data-testid="agent-team">
       <p className="flex items-center gap-1.5 text-muted-foreground">
         <Users className="size-3.5 shrink-0" aria-hidden="true" />
-        主智能体派出 {items.length} 个子智能体
+        {items[0]?.title.startsWith('候选方案 ') ? `同时生成 ${items.length} 个候选方案` : `主智能体派出 ${items.length} 个子智能体`}
         {running > 0 && <span>· 进行中 {running}</span>}
         {done > 0 && <span>· 完成 {done}</span>}
         {failed > 0 && <span className="text-destructive">· 没完成 {failed}</span>}

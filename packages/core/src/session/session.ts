@@ -12,7 +12,7 @@ import { canRememberCommand } from '../permissions.js'
 import { type CheckpointChange, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
-import type { Compaction, SessionRecord } from './store.js'
+import type { CandidateRun, Compaction, SessionRecord } from './store.js'
 import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
 import { INTERACT_TOOL_CHARS, INTERACT_TOOLS } from './interact.js'
@@ -170,6 +170,8 @@ export class Session {
   readonly editedTexts = new Map<string, string>()
   // 正在等模型输出的那一步：智能体（主智能体是 main，子智能体是它的 id）→ 让它重发请求
   readonly stepRetries = new Map<string, () => void>()
+  // 多候选方案（v2）：各组候选的记录，存进会话记录
+  candidateRuns: CandidateRun[] = []
 
   constructor(options: SessionOptions) {
     const record = options.record
@@ -185,6 +187,7 @@ export class Session {
     this.alwaysAllowed = new Set((options.config.allowedCommands ?? []).filter(canRememberCommand))
     if (record) {
       this.taskState = restoredTaskState(record)
+      this.candidateRuns = record.candidateRuns ?? []
       this.messages.push(...record.messages)
       this.compaction = record.compaction
       for (const { checkpoint, gitBase, messageStart, ...turn } of record.turns) {
@@ -263,7 +266,7 @@ export class Session {
     return controller
   }
 
-  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource): void {
+  startTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource, fromPlan?: string): void {
     if (!this.title) {
       const firstLine = prompt.trim().split(/\r?\n/)[0] ?? ''
       this.title = firstLine.length > TITLE_CHARS ? `${firstLine.slice(0, TITLE_CHARS)}…` : firstLine
@@ -272,7 +275,7 @@ export class Session {
     this.editedTexts.clear()
     const versions = this.regenerated?.prompt === prompt ? this.regenerated.versions : null
     this.regenerated = null
-    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}), ...(remote ? { remote } : {}), ...(versions ? { versions } : {}) })
+    this.turns.push({ id, kind, prompt, startedAt: new Date().toISOString(), endedAt: null, stopReason: null, updates: [], skills, images, ...(from ? { from } : {}), ...(remote ? { remote } : {}), ...(versions ? { versions } : {}), ...(fromPlan ? { fromPlan } : {}) })
   }
 
   // 流式文字会拆成很多小块，存的时候把连续的同类块合并；上下文用量只留最后一次
@@ -337,7 +340,16 @@ export class Session {
       })),
       messages: this.messages,
       compaction: this.compaction,
+      ...(this.candidateRuns.length > 0 ? { candidateRuns: this.candidateRuns } : {}),
     }
+  }
+
+  // 往已经结束的某一轮里补一条更新（候选方案卡片应用、放弃后改状态）；找不到这一轮是 false
+  appendToTurn(turnId: string, update: SessionUpdate): boolean {
+    const turn = this.turns.find((item) => item.id === turnId)
+    if (!turn) return false
+    turn.updates.push(update)
+    return true
   }
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上

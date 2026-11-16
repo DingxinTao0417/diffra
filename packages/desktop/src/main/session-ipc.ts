@@ -2,8 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  applyCandidate,
+  candidateDiff,
   cancelSession,
   checkpointDiff,
+  discardCandidates,
+  generateCandidates,
   diagnose,
   enhancePrompt,
   retryStep,
@@ -43,7 +47,7 @@ import {
   updateSession,
   usageSummary,
 } from '@diffra/core'
-import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES, ASK_ANSWERS_META_KEY } from '@diffra/core/types'
+import { DEEP_SCAN_TITLES, designStyleById, MANUAL_COMPACTION_PROMPT, MAX_CANDIDATES, PERMISSION_OPTIONS, PROJECT_COMMANDS_META_KEY, type ProjectCommandsMeta, PROMPT_IMAGE_TYPES, VISUAL_SNAPSHOT_MAX_CHARS, VISUAL_SNAPSHOT_TYPES, ASK_ANSWERS_META_KEY } from '@diffra/core/types'
 import { askAnswersSchema } from '@diffra/remote/messages'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { z } from 'zod'
@@ -106,6 +110,7 @@ const promptOptionsSchema = z.object({
   images: promptImagesSchema,
   from: z.object({ sessionId: z.string().min(1), title: z.string() }).optional(),
   remote: z.object({ deviceId: z.string().regex(/^[0-9a-f]{32}$/), name: z.string().min(1).max(60) }).optional(),
+  fromPlan: z.object({ turnId: z.string().min(1), steps: z.array(z.string().trim().min(1).max(300)).min(1).max(20) }).optional(),
 })
 
 const mcpTargetSchema = z.union([
@@ -795,6 +800,36 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
       design: request.design,
     })
   })
+
+  // 多候选方案（v2）：生成像出计划一样是一轮（kind plan），应用是一轮 apply；放弃不算一轮
+  ipcMain.handle(IPC_CHANNELS.candidatesGenerate, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawParams: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const params = parse(
+      z.object({
+        title: z.string().trim().min(1).max(200),
+        request: z.string().trim().min(1).max(100_000),
+        plan: z.string().trim().min(1).max(100_000).nullable(),
+        candidates: z.array(z.object({ name: z.string().trim().min(1, '候选方案要有名字').max(40), approach: z.string().trim().min(1, '每个候选方案要写思路').max(2000) })).min(2).max(MAX_CANDIDATES),
+      }),
+      rawParams,
+    )
+    const response = await aroundTurn(sessionId, turnId, 'plan', params.title, async () => generateCandidates(await coreConnection(), { sessionId, turnId, ...params }))
+    return response.stopReason
+  })
+  ipcMain.handle(IPC_CHANNELS.candidateDiff, async (_event, rawSessionId: unknown, rawRunTurnId: unknown, rawCandidateId: unknown) =>
+    candidateDiff(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawRunTurnId), parse(z.string().min(1).max(10), rawCandidateId)),
+  )
+  ipcMain.handle(IPC_CHANNELS.candidateApply, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawParams: unknown) => {
+    const sessionId = parse(z.string().min(1), rawSessionId)
+    const turnId = parse(z.string().min(1), rawTurnId)
+    const params = parse(z.object({ title: z.string().trim().min(1).max(200), runTurnId: z.string().min(1), candidateId: z.string().min(1).max(10) }), rawParams)
+    const response = await aroundTurn(sessionId, turnId, 'apply', params.title, async () => applyCandidate(await coreConnection(), { sessionId, turnId, ...params }))
+    return response.stopReason
+  })
+  ipcMain.handle(IPC_CHANNELS.candidatesDiscard, async (_event, rawSessionId: unknown, rawRunTurnId: unknown) =>
+    discardCandidates(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawRunTurnId)),
+  )
 
   ipcMain.handle(IPC_CHANNELS.sessionDiagnose, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawText: unknown, rawTarget: unknown) => {
     const sessionId = parse(z.string().min(1), rawSessionId)

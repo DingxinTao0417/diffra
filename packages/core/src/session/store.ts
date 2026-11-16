@@ -3,7 +3,7 @@ import { access, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } fro
 import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
-import { PROMPT_IMAGE_TYPES, type SessionAgentRef, type SessionSearchResult, type StoredTurn } from '../protocol.js'
+import { type CandidateRunView, PROMPT_IMAGE_TYPES, type SessionAgentRef, type SessionSearchResult, type StoredTurn } from '../protocol.js'
 import { taskStateSchema, type TaskState } from './task-state.js'
 
 // 会话 id 拼进文件名，只接受 UUID 这类字符，防止路径穿越
@@ -50,6 +50,8 @@ export interface SessionRecord {
   // 旧版读到会丢掉这两项，当成没有对话历史的普通任务打开
   agent?: SessionAgentRef
   externalSessionId?: string | null
+  // 多候选方案（v2）：每组候选在哪个仓库、起点是哪棵树、各自的 worktree 在哪；清理、应用、重开后接着选都靠它。旧记录没有
+  candidateRuns?: CandidateRun[]
   turns: StoredTurnRecord[]
   messages: ModelMessage[]
   compaction: Compaction | null
@@ -69,6 +71,38 @@ export interface SessionIndexEntry {
 }
 
 const agentRefSchema = z.object({ id: z.string().min(1), name: z.string().min(1) })
+
+// 一组候选方案的内部记录：界面看到的（CandidateRunView）加上 worktree 的位置
+export interface CandidateRun extends CandidateRunView {
+  repoRoot: string
+  subdir: string
+  baseTree: string | null
+  worktrees: Array<{ id: string; dir: string; links: string[]; tree: string | null }>
+}
+
+const candidateRunSchema = z.object({
+  turnId: z.string(),
+  status: z.enum(['running', 'ready', 'applied', 'discarded', 'cancelled', 'failed']),
+  appliedId: z.string().nullable(),
+  conflicts: z.array(z.string()).optional(),
+  candidates: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      approach: z.string(),
+      status: z.enum(['running', 'done', 'failed', 'cancelled']),
+      verification: z.enum(['verified', 'unverified', 'no-edits', 'failed']).nullable(),
+      summary: z.string().nullable(),
+      error: z.string().nullable(),
+      stats: z.object({ files: z.number(), added: z.number(), removed: z.number() }).nullable(),
+      paths: z.array(z.string()),
+    }),
+  ),
+  repoRoot: z.string(),
+  subdir: z.string(),
+  baseTree: z.string().nullable(),
+  worktrees: z.array(z.object({ id: z.string(), dir: z.string(), links: z.array(z.string()), tree: z.string().nullable() })),
+}) satisfies z.ZodType<CandidateRun>
 
 const indexEntrySchema = z.object({
   id: z.string(),
@@ -105,6 +139,8 @@ const recordSchema = z.object({
   // 外接智能体（v2）加的，旧记录都是 Diffra 自己的任务
   agent: agentRefSchema.optional(),
   externalSessionId: z.string().min(1).nullable().optional(),
+  // 多候选方案（v2）加的，旧记录没有
+  candidateRuns: z.array(candidateRunSchema).optional(),
   turns: z.array(
     z.object({
       id: z.string(),
@@ -127,6 +163,8 @@ const recordSchema = z.object({
       from: z.object({ sessionId: z.string(), title: z.string() }).optional(),
       // 第 360 步加的，旧记录没有
       remote: z.object({ deviceId: z.string(), name: z.string() }).optional(),
+      // v2 按计划执行加的，旧记录没有
+      fromPlan: z.string().optional(),
       // 第 676 步加的：重新生成之前的那几次，和这一轮的更新一起存在轮次文件里
       versions: z
         .array(z.object({ startedAt: z.string(), endedAt: z.string().nullable(), stopReason: z.string().nullable(), updates: z.array(z.unknown()), edited: z.boolean(), messages: z.array(z.unknown()).optional() }))

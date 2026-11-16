@@ -17,7 +17,7 @@ import { errorMessage } from '@/lib/errors'
 import { formatDuration, formatTokens } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
 import { finishVerdict } from '@/lib/turn-verdict'
-import { compactTask, diagnose, fillComposer, openSettings, openTask, sendMessage, setTaskModel, switchTurnVersion } from '@/state/actions'
+import { compactTask, diagnose, fillComposer, generateCandidates, openSettings, openTask, sendMessage, setTaskModel, switchTurnVersion } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
 import { AnswerContext, type AnswerTarget } from './answer-links'
@@ -42,7 +42,8 @@ import { CARD_COMPACT, CardShell } from './cards/CardShell'
 import { AgentTeam } from './cards/AgentTeam'
 import { BrowserSummary, isBrowserStep } from './cards/BrowserSummary'
 import { CompactionBar } from './cards/CompactionBar'
-import { PlanSteps } from './cards/PlanSteps'
+import { PlanSteps, planProgressText, splitPlan, stepStatuses } from './cards/PlanSteps'
+import { CandidatesCard, CandidatesDialog } from './cards/CandidatesCard'
 import { FINDING_PATTERN, levelStyle, ReviewFindings, SecurityFindings } from './cards/FindingLists'
 import { LocationLink } from './cards/LocationLink'
 import { ShellAction } from './rich/BlockShell'
@@ -59,7 +60,7 @@ type Block =
   | { type: 'item'; item: Exclude<TranscriptItem, ProcessItem> }
   | { type: 'process'; id: string; items: ProcessItem[] }
   | { type: 'checks'; id: string; items: ToolItem[] }
-  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task'; item: ToolItem }
+  | { type: 'edit' | 'deep-scan' | 'compaction' | 'plan' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'candidates'; item: ToolItem }
 
 const isRunning = (item: TranscriptItem | undefined) => item?.kind === 'tool' && item.status !== 'completed' && item.status !== 'failed'
 
@@ -131,7 +132,8 @@ const SECURITY_TITLES = new Map([
   ['安全扫描', '轻量扫描'],
 ])
 
-function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'steps' | null {
+function toolBlockType(item: ToolItem): 'edit' | 'check' | 'review' | 'architecture' | 'security' | 'deep-scan' | 'compaction' | 'plan' | 'finish' | 'verify' | 'agent' | 'diagnosis' | 'visual' | 'mcp-ui' | 'wait' | 'task' | 'steps' | 'candidates' | null {
+  if (item.candidates) return 'candidates'
   if (item.agentCard) return 'agent'
   if (item.diagnosis) return 'diagnosis'
   if (item.visual) return 'visual'
@@ -719,7 +721,9 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           case 'compaction':
             return <CompactionRow key={block.item.id} item={block.item} />
           case 'plan':
-            return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} />
+            return <PlanCard key={block.item.id} item={block.item} request={turn.prompt} task={task} planTurnId={turn.id} />
+          case 'candidates':
+            return block.item.candidates ? <CandidatesCard key={block.item.id} run={block.item.candidates} sessionId={task.sessionId} running={task.running} /> : null
           case 'verify':
             // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
             return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
@@ -1153,6 +1157,8 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
   const longResult = result.split('\n').length > 6 || result.length > 600
   const duration = card.startedAt !== undefined && card.endedAt !== undefined ? card.endedAt - card.startedAt : null
   const queued = running && card.startedAt === undefined && card.tokens !== undefined
+  // 多候选方案（v2）的每个候选也用这张卡片，叫法换成「候选方案」
+  const role = item.title.startsWith('候选方案 ') ? '候选方案' : '子智能体'
   return (
     <div
       className={cn(CARD_COMPACT, 'text-sm')}
@@ -1163,7 +1169,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
       // 定位结果指到工人的某一步、卡片收着时，滚到这张卡片
       data-item-ids={steps.map((step) => step.id).join(' ')}
     >
-      <button type="button" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}子智能体 ${card.name} 的步骤`} className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-accent/60" onClick={() => setOpen(!open)}>
+      <button type="button" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}${role} ${card.name} 的步骤`} className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-accent/60" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
         <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: card.color }} aria-hidden="true" />
         <span className="shrink-0 font-bold">{card.name}</span>
@@ -1480,14 +1486,22 @@ function diagnosisMarkdown(diagnosis: NonNullable<ToolItem['diagnosis']>, prompt
 }
 
 // 计划：可以直接改文字；点「按计划执行」，把这一轮的需求和改过的计划作为新的一轮发给编码模型
-function PlanCard({ item, request, task }: { item: ToolItem; request: string; task: TurnTask }) {
+function PlanCard({ item, request, task, planTurnId }: { item: ToolItem; request: string; task: TurnTask; planTurnId: string }) {
   const original = textOf(item)
   const [text, setText] = useState(original)
   const readOnly = useReadOnly()
-  const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
+  // 按计划执行时把计划的步骤带上（v2，计划逐步打勾）：core 先把它们列成步骤清单，这张卡片按清单给每一步打勾
+  const steps = splitPlan(text).steps.map((step) => step.title.trim()).filter(Boolean)
+  const fromPlan = steps.length > 0 ? { turnId: planTurnId, steps: steps.slice(0, 20) } : undefined
+  const progressText = useAppState((state) => planProgressText(state.live[task.sessionId]?.turns ?? [], planTurnId))
+  const progress = useMemo(() => stepStatuses(steps, progressText), [steps.join('\n'), progressText])
+  const execute = () => void sendMessage(task.sessionId, `按下面的计划完成任务。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`, fromPlan ? { fromPlan } : {})
   // 步骤视图里点「从第 N 步开始执行」（第 663 步）：勾掉的步骤写明已经做完
   const runFrom = (step: number, done: number[]) =>
-    void sendMessage(task.sessionId, `按下面的计划完成任务，从第 ${step} 步开始${done.length > 0 ? `（第 ${done.join('、')} 步已经做完，不用再做）` : ''}。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`)
+    void sendMessage(task.sessionId, `按下面的计划完成任务，从第 ${step} 步开始${done.length > 0 ? `（第 ${done.join('、')} 步已经做完，不用再做）` : ''}。\n\n需求：\n${request}\n\n计划：\n${text.trim()}`, fromPlan ? { fromPlan } : {})
+  const doneCount = progress?.filter((status) => status === 'completed').length ?? 0
+  // 多候选方案（v2）：按这份计划让几个候选各在一个 worktree 里做，比较后选一个
+  const [choosing, setChoosing] = useState(false)
   return (
     <CardShell
       data-testid="tool-call"
@@ -1498,7 +1512,12 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
       copy={{ label: '复制计划', text: () => text }}
       exportMarkdown={{ name: '计划', text: () => `# 计划\n\n${text}` }}
     >
-      <PlanSteps text={text} readOnly={readOnly} running={task.running} onChange={setText} onRunFrom={runFrom} />
+      {progress && (
+        <p className="text-xs text-muted-foreground" data-testid="plan-progress">
+          {progressText?.startsWith('running') ? '正在按计划执行' : '按计划执行过'}：做完 {doneCount} / {progress.length} 步
+        </p>
+      )}
+      <PlanSteps text={text} readOnly={readOnly} running={task.running} onChange={setText} onRunFrom={runFrom} progress={progress} />
       <textarea
         aria-label="计划内容"
         readOnly={readOnly}
@@ -1512,6 +1531,19 @@ function PlanCard({ item, request, task }: { item: ToolItem; request: string; ta
         <Button disabled={task.running || text.trim() === ''} className="px-3.5" onClick={execute}>
           按计划执行
         </Button>
+        {!task.agent && (
+          <Button variant="outline" disabled={task.running || text.trim() === ''} onClick={() => setChoosing(true)}>
+            生成候选方案…
+          </Button>
+        )}
+        <CandidatesDialog
+          open={choosing}
+          onCancel={() => setChoosing(false)}
+          onSubmit={(candidates) => {
+            setChoosing(false)
+            void generateCandidates(task.sessionId, { request, plan: text.trim(), candidates })
+          }}
+        />
         {text !== original && (
           <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={() => setText(original)}>
             恢复原计划

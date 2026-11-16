@@ -1,4 +1,4 @@
-import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
+import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, CANDIDATES_META_KEY, type CandidateRunView, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta } from '@diffra/core/types'
 import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
 
 export type TranscriptItem =
@@ -43,6 +43,8 @@ export type TranscriptItem =
       mcpUi?: McpUiMeta
       // 任务互通的卡片指向的那个任务
       taskLink?: TaskSource
+      // 多候选方案（v2）的卡片：这组候选现在的样子
+      candidates?: CandidateRunView
     }
   | { kind: 'notice'; id: string; severity: string; title: string; description: string | null }
 
@@ -76,6 +78,8 @@ export interface Turn {
   pendingImages?: number
   // 重新生成之前的那几次（第 676 步），按先后排；edited 是那一次改没改过文件（改过的换不回来）
   versions?: Array<{ turn: Turn; edited: boolean }>
+  // 计划卡片上点「按计划执行」发的：出计划那一轮的 id（v2）
+  fromPlan?: string
 }
 
 export interface Usage {
@@ -89,9 +93,9 @@ export interface Usage {
   cacheInput: number
 }
 
-export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource): Turn {
+export function newTurn(id: string, prompt: string, kind: TurnKind = 'prompt', skills: string[] = [], images: PromptImage[] = [], from?: TaskSource, remote?: RemoteSource, fromPlan?: string): Turn {
   return {
-    ...(from ? { from } : {}), ...(remote ? { remote } : {}), id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
+    ...(from ? { from } : {}), ...(remote ? { remote } : {}), ...(fromPlan ? { fromPlan } : {}), id, kind, prompt, skills, images, items: [{ kind: 'user', id: `${id}-user`, text: prompt }], stopReason: null, error: null, startedAt: Date.now(), endedAt: null, silence: {} }
 }
 
 // 打开历史任务：按存下来的更新重放出这一轮的记录
@@ -115,6 +119,7 @@ export function turnFromStored(turn: StoredTurn): Turn {
     outcome: turn.updates.map(turnOutcomeOf).filter((item) => item !== null).at(-1),
     ...(turn.from ? { from: turn.from } : {}),
     ...(turn.remote ? { remote: turn.remote } : {}),
+    ...(turn.fromPlan ? { fromPlan: turn.fromPlan } : {}),
     silence: turn.updates.reduce((silence, update) => {
       const change = modelSilenceOf(update)
       return change ? applySilence(silence, change) : silence
@@ -271,6 +276,19 @@ export function visualSnapshotOf(update: SessionUpdate): { visualSnapshot?: Visu
 }
 
 // MCP 工具带的界面（第 683 步）；远程同步时换成了 { omitted: true }，不算
+function candidatesOf(update: SessionUpdate): { candidates?: CandidateRunView } {
+  const value = diffraMetaOf(update)?.[CANDIDATES_META_KEY] as Partial<CandidateRunView> | undefined
+  return typeof value?.turnId === 'string' && typeof value.status === 'string' && Array.isArray(value.candidates) ? { candidates: value as CandidateRunView } : {}
+}
+
+// 候选方案卡片应用、放弃后的更新补在生成它的那一轮：按卡片 id 找那一轮；不是这种卡片的更新不管
+export function withCandidatesUpdate<T extends { items: TranscriptItem[] }>(turns: T[], update: SessionUpdate): T[] | null {
+  if (update.sessionUpdate !== 'tool_call_update' || !candidatesOf(update).candidates) return null
+  const index = turns.findIndex((turn) => turn.items.some((item) => item.kind === 'tool' && item.id === update.toolCallId))
+  if (index < 0 || index === turns.length - 1) return null
+  return turns.map((turn, position) => (position === index ? { ...turn, items: applyUpdate(turn.items, update) } : turn))
+}
+
 function mcpUiOf(update: SessionUpdate): { mcpUi?: McpUiMeta } {
   const value = diffraMetaOf(update)?.[MCP_UI_META_KEY] as Partial<McpUiMeta> | undefined
   return typeof value?.html === 'string' && typeof value.uri === 'string' && typeof value.tool === 'string' && typeof value.server === 'string' ? { mcpUi: value as McpUiMeta } : {}
@@ -378,6 +396,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         ...diagnosisOf(update),
         ...visualOf(update),
         ...taskLinkOf(update),
+        ...candidatesOf(update),
       }
       return upsertTool(items, update.toolCallId, (existing) => ({ ...item, startedAt: existing?.startedAt ?? Date.now() }))
     }
@@ -406,6 +425,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         ...(existing?.mcpUi ? { mcpUi: existing.mcpUi } : {}),
         ...mcpUiOf(update),
         ...(taskLinkOf(update).taskLink ? taskLinkOf(update) : existing?.taskLink ? { taskLink: existing.taskLink } : {}),
+        ...(candidatesOf(update).candidates ? candidatesOf(update) : existing?.candidates ? { candidates: existing.candidates } : {}),
       }))
     case 'notice':
       return [

@@ -198,7 +198,7 @@ export function MonitorPanel({ task, branch, device, diff, onLocate }: MonitorPa
         </Section>
 
         {agents.length > 0 && (
-          <Section title="子智能体">
+          <Section title={agents.every(({ item }) => item.title.startsWith('候选方案 ')) ? '候选方案' : '子智能体'}>
             {agents.slice(0, show.agents ? agents.length : COLLAPSED_LIMIT).map(({ item, card }) => {
               const running = item.status !== 'completed' && item.status !== 'failed'
               const state = running ? '进行中' : item.status === 'completed' ? '已交回' : '未完成'

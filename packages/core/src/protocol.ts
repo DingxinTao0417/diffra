@@ -653,6 +653,8 @@ export interface StoredTurn {
   remote?: RemoteSource
   // 重新生成之前的那几次（第 676 步），按先后排
   versions?: TurnVersion[]
+  // 这一轮是在计划卡片上点「按计划执行」发的（v2）：那一轮出计划的 id。计划卡片按这一轮的步骤卡片给每一步打勾；旧记录没有
+  fromPlan?: string
 }
 
 // 重新生成之前的那一次（第 676 步）：重新生成时旧的这一轮留成只读的「上一次」，挂在新的这一轮上，界面能切换着看、并排对比；
@@ -729,6 +731,40 @@ export type ExternalAgentDetection =
       authMethods: Array<{ id: string; name: string; description: string | null }>
     }
   | { ok: false; kind: ExternalAgentErrorKind; message: string; detail: string | null }
+
+// 多候选方案（v2）：同一个需求（和计划）让几个候选各自在一个 git worktree 里做，比较后选一个合回项目。
+// 「候选方案」卡片（标题 CANDIDATES_CARD_TITLE）的 _meta.diffra.candidates 是 CandidateRunView，每次状态变了整张替换
+export const CANDIDATES_META_KEY = 'candidates'
+export const CANDIDATES_CARD_TITLE = '候选方案'
+export const MAX_CANDIDATES = 3
+export interface CandidateSpec {
+  name: string
+  // 这个候选的思路，接在需求后面发给它
+  approach: string
+}
+export type CandidateStatus = 'running' | 'done' | 'failed' | 'cancelled'
+export interface CandidateView extends CandidateSpec {
+  id: string
+  status: CandidateStatus
+  // 它在自己的 worktree 里过完成门禁的结论；没跑完、出错是 null
+  verification: 'verified' | 'unverified' | 'no-edits' | 'failed' | null
+  // 它最后说的话（截短）
+  summary: string | null
+  error: string | null
+  stats: { files: number; added: number; removed: number } | null
+  // 改了哪些文件（相对仓库根目录）
+  paths: string[]
+}
+// ready：等用户选；applied、discarded 之后 worktree 都清掉了
+export type CandidateRunStatus = 'running' | 'ready' | 'applied' | 'discarded' | 'cancelled' | 'failed'
+export interface CandidateRunView {
+  turnId: string
+  status: CandidateRunStatus
+  appliedId: string | null
+  // 上一次应用前检查出的冲突文件；没有冲突、没检查过时没有
+  conflicts?: string[]
+  candidates: CandidateView[]
+}
 
 // 建外接智能体任务时 session/new 的 _meta.diffra：不要模型配置
 export interface ExternalSessionConfig {
@@ -959,6 +995,11 @@ export const SESSION_EXT_METHODS = {
   externalAgents: '_diffra/external/agents',
   // 外接智能体：检测一条启动命令能不能用（ExternalAgentDetection）
   externalDetect: '_diffra/external/detect',
+  // 多候选方案：生成（记成一轮 plan）、看某个候选的改动、应用一个（记成一轮 apply）、全部放弃
+  candidates: '_diffra/session/candidates',
+  candidateDiff: '_diffra/session/candidate-diff',
+  candidateApply: '_diffra/session/candidate-apply',
+  candidateDiscard: '_diffra/session/candidate-discard',
 } as const
 
 // core 主动推给客户端的通知
