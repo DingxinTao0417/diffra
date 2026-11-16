@@ -444,7 +444,11 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 选了的 Skill 照样放在提问前面发给它；没有目标模式、出计划、压缩、深度扫描、重新生成、定位问题、换模型（输入框和停下说明里都不出这些按钮，core 收到也会说不支持）。
 - 兼容：会话记录、索引新加的 `agent`（id 和建任务时的名字）、`externalSessionId` 都是可选的；轮次的 `kind` 还是 `prompt`，旧版能读。旧版读到这种任务会当成没有对话历史的普通任务打开（它不认识 `agent`），不报错、不删记录。旧版 Diffra 读设置会丢掉 `externalAgents`，下次保存时就没了，任务记录不受影响。新加的结论 `agent-error` 旧版界面不认，当没有结论显示。
 - 没做 / 已知限制：
-  - 没在真的 CLI 上跑过：本机装了 Claude Code、Codex 和 VS Code 带的 Copilot 入口，但 Claude Code、Codex 的适配器要 npx 下载，没有擅自下载运行；Gemini CLI 没装。需要在有账号的机器上手动走一遍（见下面「验证」）。
+  - 真的 CLI（2026-11-15，经用户同意用 npx 下载官方适配器、用掉一点订阅额度；e2e `external-real.spec.ts`，`DIFFRA_E2E_REAL_AGENTS=1` 才跑）：
+    - Claude Code 2.1.283 + `@agentclientprotocol/claude-agent-acp` 0.107.0：检测连上、能接着原来的对话；第一次跑时它的登录过期了，任务停在「Claude Code 还没登录」的提示卡，用户在任务的终端里 `/login` 后点「继续」，回了「好的」、结论「没有改动」、项目里没多文件。
+    - Codex 0.143.0 + `@agentclientprotocol/codex-acp` 2.6.0：检测连上；任务发出去后一直在跑——用户的 Codex 配的是自定义的模型网关，连不上（`codex exec` 直接跑也一样一直「Reconnecting... waiting for network」），不是 Diffra 的问题，网关通了再试。
+    - 顺着这个修了：智能体在 `session_info_update` 的 `_meta.<它自己的键>.error` 里报的错（Codex 就是这样报断网重连的），以前 Diffra 不显示，而且这些状态被当成「有输出」，「可能卡住了」的提示一直出不来，用户只看到「运行中」。现在这类报错按原文提醒一次（「Codex 报错：Reconnecting... waiting for network」），状态不算输出，3 分钟照常提示可能卡住了。core `external.test.ts` 用假智能体的「断网」模式测，也接真的 codex-acp 看到了这条提醒。
+    - Copilot：本机的 `copilot` 只是 VS Code 带的占位程序（运行时说没装 Copilot CLI），用户说不试；Gemini CLI 没装。
   - Diffra 配置的 MCP 服务器不传给外接智能体（会把解密后的密钥交给第三方进程），它用自己配置的 MCP。
   - 它的 token 用量不进用量统计（ACP 没有标准的用量数字）；任务互通（`task_create`）建的仍是 Diffra 自己的任务；远程设备连接的远程任务页不区分外接智能体。
 - 验证：core `test/external.test.ts` 20 个用例（假 ACP 服务端 `test/fixtures/fake-acp-agent.mjs`，不依赖 SDK）：检测的五种结果、`.cmd` 启动和参数转义、常见安装位置、一问一答、改文件和撤销、确认（含完全放行）、停止（含不理停止的）、等确认时停止、很久没输出、中途崩溃后重起并接上会话、重启 core 后打开旧任务、不支持接上时的提示、没登录、智能体被删、步骤卡片和去掉 `_meta.diffra`、不支持的操作。e2e `external-agents.spec.ts`：设置里检测出没装、版本不对、可用，添加（环境变量值不落明文）、编辑、删除；不配 Diffra 模型用它建任务，对话、确认、改文件、停止、很久没输出、崩溃、任务监控、重启应用后打开旧任务接上会话、智能体删了再发消息。手动确认：在登录过的机器上添加 Claude Code、Codex 预设，检测、跑一个改文件的任务、停止一次。
@@ -623,7 +627,12 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 诊断进任务：改完文件（`apply_patch` 的每个新建或修改的文件，项目 afterEdit 钩子跑完之后读现在的内容）交给管它的服务器（第一次 `didOpen`，之后整份 `didChange`，版本号往上数），等这个版本的 `publishDiagnostics` 最多 5 秒，收到后再等 150 毫秒合并后续的。错误和警告（最多 20 条，按严重程度和行号排）接在编辑结果后面给模型：`[Language server kit-go reports 1 error(s) and 0 warning(s) in src/a.go after this edit: …]`；没问题的不加。服务器配了 `diagnostics: false` 的不给模型。服务器起不来或崩了，在这个任务里提示用户一次（同样的不重复），不打扰模型。子智能体改的文件也一样；多候选方案在各自的 worktree 里跑，不带语言服务器。服务器反过来问的 `workspace/configuration` 按 section 从 `settings` 里取，注册能力、进度这类答空。
   - 界面：任务监控多一块「语言服务器」（这个任务用到的才显示）：每个服务器的状态（用到时启动、启动中、运行中、重启过几次、崩溃了重启中、没在运行、已停止）、错误和警告数、出问题的文件和第一条诊断，能停止、启动、重启（没在运行时）。任务开着时每 3 秒查一次。停止后改文件也不再自动启动，直到点启动。
   - 不做：跳转定义、查引用这类 LSP 查询工具（v3）；读文件时就打开文档（现在只在改后检查）；按文件保存（didSave）；socket 方式真的走 socket。
-- 验证（LSP）：core `lsp.test.ts` 用 `test/fixtures/fake-lsp.mjs`（stdio 上的假语言服务器，按行报 ERROR / WARN，能崩一次、一直崩、不回 initialize、一启动就退出，记下收到的方法）测配置合并和严格字段、只有 `.lsp.json` 的插件、按扩展名启动、版本对应的诊断和状态计数、回答配置请求、崩溃后退避重启并重新打开文件、重启次数用完停在失败和手动重启清零、停止后不自动启动、闲置停止、只留开着的项目、dispose 结束进程、找不到命令 / 启动就退出 / 握手超时 / 不发诊断的时限、任务里改文件后诊断接在结果后面且崩溃只提示一次。e2e `lsp.spec.ts` 从文件夹装只带语言服务器的插件，脚本模型改文件：模型收到错误诊断，崩了提示并自动重启，任务监控显示运行中（重启过 1 次）、警告数和文件，停止和启动。没有用真的 gopls、tsserver 这些跑过。
+- 验证（LSP）：core `lsp.test.ts` 用 `test/fixtures/fake-lsp.mjs`（stdio 上的假语言服务器，按行报 ERROR / WARN，能崩一次、一直崩、不回 initialize、一启动就退出，记下收到的方法）测配置合并和严格字段、只有 `.lsp.json` 的插件、按扩展名启动、版本对应的诊断和状态计数、回答配置请求、崩溃后退避重启并重新打开文件、重启次数用完停在失败和手动重启清零、停止后不自动启动、闲置停止、只留开着的项目、dispose 结束进程、找不到命令 / 启动就退出 / 握手超时 / 不发诊断的时限、任务里改文件后诊断接在结果后面且崩溃只提示一次。e2e `lsp.spec.ts` 从文件夹装只带语言服务器的插件，脚本模型改文件：模型收到错误诊断，崩了提示并自动重启，任务监控显示运行中（重启过 1 次）、警告数和文件，停止和启动。
+- 真的语言服务器（2026-11-15，core `real-tools.test.ts`，`DIFFRA_REAL_TOOLS=1` 才跑）：gopls v0.24.0、TypeScript 7.0.2 自带的 `tsc --lsp --stdio`、typescript-language-server 6.1.0 配 TypeScript 5.9 的 tsserver（`DIFFRA_TSSERVER_PATH`），都是改出类型错误报诊断、改对后清空；typescript-language-server 在项目里没有 TypeScript 时起不来，原因原样给用户。跑的时候查出两个只在真服务器上才有的问题，修了：
+  - Windows 上地址对不上：服务器发回来的诊断地址和我们发的写法不一样（typescript-language-server 是 `file:///d%3A/...`，盘符小写、冒号转义；TypeScript 7 连整条路径都转成小写），以前按原样比，永远等不到诊断。现在先解码，Windows 盘符路径按小写比（`uriKey`）；状态里显示的路径用我们自己的地址，大小写不变。
+  - 拉取式诊断（LSP 3.17 `textDocument/diagnostic`）：TypeScript 7 自带的语言服务器不推送打开的文件的诊断，要客户端去拉。initialize 时声明支持；服务器声明了 `diagnosticProvider` 就改完直接拉，「没变」沿用上次的。
+  - 假语言服务器加了 `FAKE_LSP_URI=lower`、`FAKE_LSP_PULL=1` 两种模式，`lsp.test.ts` 各一个用例，以后不用真服务器也测得到。
+  - TypeScript 7 没有 `tsserver.js` 了，typescript-language-server 只能配 TypeScript 6 及以前的；项目用 TypeScript 7 的，插件里写 `tsc --lsp --stdio`。
 
 ## 图片输入
 
@@ -1839,7 +1848,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
 - 动态测试（`security/dynamic.ts`）：只对本机服务（localhost、127.0.0.1、::1，core 和主进程都查），从代码里认 GET 接口（Express/Koa/Fastify、Flask/FastAPI、Spring、Django 的路由写法，路径参数换成 1），也可以自己填。每个接口发几种只读的 GET 探测：常见参数名里塞一个标签看是否原样回显在 HTML 里（反射型 XSS）、跳转参数塞外部地址看 Location（开放跳转）、文件参数塞 `../` 看有没有读到 hosts 或 win.ini（路径穿越）、id 参数带引号看有没有数据库报错（SQL 注入）或 500 时返回堆栈（错误泄露），再看页面有没有 `X-Content-Type-Options: nosniff`。每个请求 5 秒超时、最多 60 个接口、可以取消；连不上就说先把服务跑起来。会真的打到服务上，有副作用的 GET 接口也会被调到，开始前写清楚。
 - 任务页「更多安全检查」：输入框斜杠菜单里「安全 · 依赖许可证」「安全 · 外部扫描器」「安全 · 动态测试」，弹窗里跑（core 的 `_diffra/security/run`，每样有自己的超时，可以取消），列出问题，默认勾上中高危的，「填进输入框」把勾选的写成一段话交给智能体，不直接发。许可证还能展开看全部依赖。
 - 按项目单独设开关：项目设置里多了「安全检查」一节，七项各自「跟设置 / 开 / 关」，只存和全局不一样的几项（`ProjectSettings.security`，旧版读到会丢掉）。建会话时按「全局 + 项目」组装；全局或项目的开关改了，主进程把全局的和每个设过的项目一起推给 core（`CheckSwitches.projects`），core 按会话所在目录套上，已经打开的任务立即按新值。
-- 验证：core 的 `security-v2.test.ts`（JS 的六种污点流向和校验、重新赋值、关掉不查；Python 的 SQL、shell=True、文件、跳转、SSRF，列表参数的 subprocess 不算，只看新增行，和规则重复时取更严重的；许可证分类、node_modules 和 LICENSE 文件、没装的说明、完成前只提醒新加的；Python 虚拟环境；假的 Semgrep：没装、装了、完成前只留新增行；假的 CodeQL：要确认许可、建库分析读 SARIF；本机 HTTP 服务上的反射 XSS、开放跳转、路径穿越、SQL 报错，正常接口不报，连不上时说明；只许本机地址、从代码里认路由），`loop-review.test.ts` 里专测轻量扫描的用例关掉了污点分析（它的读文件写法现在在静态检查就被拦下）。e2e `security-v2.spec.ts`：项目设置里关掉轻量扫描和规范审查后同一个任务接着做，静态检查里污点分析打回、许可证提醒、评审模型一次没调；斜杠菜单的三样（许可证填进输入框、本机服务的反射 XSS、假的 Semgrep 出结果、没装 CodeQL 时不能跑）。`security.spec.ts` 的设置断言加上了三个新开关。真的 Semgrep、CodeQL 没在本机装过试，要手动确认。
+- 验证：core 的 `security-v2.test.ts`（JS 的六种污点流向和校验、重新赋值、关掉不查；Python 的 SQL、shell=True、文件、跳转、SSRF，列表参数的 subprocess 不算，只看新增行，和规则重复时取更严重的；许可证分类、node_modules 和 LICENSE 文件、没装的说明、完成前只提醒新加的；Python 虚拟环境；假的 Semgrep：没装、装了、完成前只留新增行；假的 CodeQL：要确认许可、建库分析读 SARIF；本机 HTTP 服务上的反射 XSS、开放跳转、路径穿越、SQL 报错，正常接口不报，连不上时说明；只许本机地址、从代码里认路由），`loop-review.test.ts` 里专测轻量扫描的用例关掉了污点分析（它的读文件写法现在在静态检查就被拦下）。e2e `security-v2.spec.ts`：项目设置里关掉轻量扫描和规范审查后同一个任务接着做，静态检查里污点分析打回、许可证提醒、评审模型一次没调；斜杠菜单的三样（许可证填进输入框、本机服务的反射 XSS、假的 Semgrep 出结果、没装 CodeQL 时不能跑）。`security.spec.ts` 的设置断言加上了三个新开关。真的扫描器（2026-11-15，core `real-tools.test.ts`，`DIFFRA_REAL_TOOLS=1` 才跑；CodeQL 不在 PATH 上时用 `DIFFRA_CODEQL_PATH`）：Semgrep 1.185.0 按项目里的 `.semgrep.yml` 扫出 eval 请求参数，完成前只留新增行上的；CodeQL 2.27.4（官方 bundle）对几行 Express 示例建库、跑 security-extended，报出 `js/path-injection` 和 `js/code-injection`。示例代码是测试里现写的。
 
 
 ## 用量统计
