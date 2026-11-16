@@ -5,8 +5,17 @@ import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, typ
 import type { RemoteAction, RemoteSyncEvent, RemoteTaskCall, RemoteView } from '../shared/remote'
 import type { Todo } from '../shared/todos'
 
+// 页面在这些回调里抛的错留在 preload 这边（隔离的上下文），页面的 window error 收不到：在这里记进 renderer.log 再照常抛出
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
-  const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
+  const handler = (_event: IpcRendererEvent, payload: T) => {
+    try {
+      listener(payload)
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+      ipcRenderer.send(IPC_CHANNELS.rendererError, `[ipc ${channel}] ${detail}`.slice(0, 8000))
+      throw error
+    }
+  }
   ipcRenderer.on(channel, handler)
   return () => ipcRenderer.removeListener(channel, handler)
 }

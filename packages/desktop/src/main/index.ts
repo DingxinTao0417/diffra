@@ -7,6 +7,7 @@ import { browserHost, registerBrowserIpc } from './browser'
 import { computerHost, registerComputerIpc } from './computer/host'
 import { designHost, registerDesignIpc } from './design'
 import { logEvent, registerRendererLog } from './app-log'
+import { captureRendererProfile } from './renderer-profile'
 import { registerAttachmentIpc } from './attachments'
 import { recordVersion, registerChangelogIpc } from './changelog'
 import { startCore, stopCore } from './core-process'
@@ -79,6 +80,10 @@ function createWindow(settings: SettingsStore): void {
   watchPresented(window)
   watchAppCommands(window)
   watchFullScreen(window)
+  // 界面主线程被占住时录一份 CPU profile；开着开发者工具时不录（停在断点上也算无响应）
+  window.on('unresponsive', () => {
+    if (!window.webContents.isDevToolsOpened()) void captureRendererProfile(window.webContents, '窗口无响应')
+  })
   // 开着托盘（v2）时关窗口只是藏到托盘，任务照常跑；从托盘菜单退出才真正退出
   if (!HIDE_ON_CLOSE) {
     window.on('close', (event) => {
@@ -183,7 +188,7 @@ app
     registerExportIpc()
     setupUpdater()
     setupWindowChrome()
-    registerRendererLog()
+    registerRendererLog((contents) => void captureRendererProfile(contents, '界面无限更新（React #185）'))
     setupTray(settings, () => {
       quitting = true
       app.quit()
