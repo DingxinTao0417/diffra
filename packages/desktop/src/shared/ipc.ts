@@ -188,6 +188,9 @@ export const IPC_CHANNELS = {
   pluginSetEnabled: 'plugins:set-enabled',
   pluginSetHooks: 'plugins:set-hooks',
   pluginDelete: 'plugins:delete',
+  pluginCheckUpdates: 'plugins:check-updates',
+  pluginPrepareUpdate: 'plugins:prepare-update',
+  pluginCommitUpdate: 'plugins:commit-update',
   extensionInstallMcp: 'extensions:install-mcp',
   extensionPrerequisites: 'extensions:prerequisites',
   extensionCatalog: 'extensions:catalog',
@@ -414,6 +417,32 @@ export interface PluginPrepared {
   info: PluginInfo
   source: 'folder' | 'git'
   location: string
+}
+
+// 从 Git 装的插件有没有新版本（v2）：比本机克隆的提交和远端默认分支的提交
+export interface PluginUpdateCheck {
+  pluginId: string
+  state: 'latest' | 'available' | 'error'
+  current: string | null
+  latest: string | null
+  error: string | null
+}
+
+// 取回的新版本，换上之前给用户看：版本、提交、改了哪些文件、钩子变没变
+export interface PluginUpdatePrepared {
+  token: string
+  pluginId: string
+  info: PluginInfo
+  fromVersion: string | null
+  fromCommit: string | null
+  toCommit: string | null
+  added: string[]
+  removed: string[]
+  modified: string[]
+  // 改动的文件太多，上面只列了一部分
+  truncated: boolean
+  // none：新版本没有钩子；same：和允许时一样，照旧允许；changed：新的或变了的钩子，要重新允许才跑
+  hooks: 'none' | 'same' | 'changed'
 }
 
 // 这一轮带上的 Skill（按名字）；goal 为目标模式，没达成就自动接着做
@@ -683,6 +712,10 @@ export interface DiffraApi {
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginView[]>
   setPluginHooks(pluginId: string, allowed: boolean): Promise<PluginView[]>
   deletePlugin(pluginId: string): Promise<PluginView[]>
+  // 插件更新（v2）：查哪些从 Git 装的插件有新版本；取回新版本给用户看（取消用 discardPlugin）；换上，失败恢复原来的
+  checkPluginUpdates(): Promise<PluginUpdateCheck[]>
+  preparePluginUpdate(pluginId: string): Promise<PluginUpdatePrepared>
+  commitPluginUpdate(token: string, allowHooks: boolean): Promise<PluginView[]>
   // 扩展目录里的 MCP 服务一键装：先连一次，连上了才保存；key 是用户填的 Token，没有就是 null
   installCatalogMcp(catalogId: string, key: string | null): Promise<SettingsView>
   // 本机有没有 npx、uvx、docker、railway 这些命令

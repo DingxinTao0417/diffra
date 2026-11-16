@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from 'react'
-import { Ellipsis, Folder, GitBranch, Puzzle, Trash2, TriangleAlert } from 'lucide-react'
-import type { PluginPrepared } from '../../../../shared/ipc'
+import { Ellipsis, Folder, GitBranch, Loader2, Puzzle, Trash2, TriangleAlert } from 'lucide-react'
+import type { PluginPrepared, PluginUpdateCheck, PluginUpdatePrepared } from '../../../../shared/ipc'
 import type { PluginView } from '../../../../shared/settings'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -39,10 +39,50 @@ export function PluginInstalled({ plugins, error, onChange, onError, onBrowse }:
   }
   const empty = plugins !== null && plugins.length === 0
   const manual = <ManualPluginInstall onInstalled={onChange} onError={onError} />
+  // 插件更新（v2）：手动查，只查从 Git 装的；结果按插件 id
+  const [updates, setUpdates] = useState<Record<string, PluginUpdateCheck> | null>(null)
+  const [checking, setChecking] = useState(false)
+  const gitPlugins = (plugins ?? []).filter((plugin) => plugin.source === 'git')
+  const checkUpdates = async () => {
+    setChecking(true)
+    onError(null)
+    try {
+      setUpdates(Object.fromEntries((await window.diffra.checkPluginUpdates()).map((item) => [item.pluginId, item])))
+    } catch (caught) {
+      onError(errorMessage(caught))
+    } finally {
+      setChecking(false)
+    }
+  }
+  const results = updates ? Object.values(updates) : []
+  const available = results.filter((item) => item.state === 'available').length
+  const failed = results.filter((item) => item.state === 'error').length
 
   return (
     <section>
-      <SectionTitle actions={!empty && manual}>插件</SectionTitle>
+      <SectionTitle
+        actions={
+          !empty && (
+            <>
+              {gitPlugins.length > 0 && (
+                <Button size="sm" variant="ghost" disabled={checking} onClick={() => void checkUpdates()}>
+                  {checking && <Loader2 aria-hidden className="size-3.5 animate-spin" />}
+                  {checking ? '正在检查…' : '检查更新'}
+                </Button>
+              )}
+              {manual}
+            </>
+          )
+        }
+      >
+        插件
+      </SectionTitle>
+      {updates && !checking && (
+        <p className="mb-2 text-xs text-muted-foreground" data-testid="plugin-update-summary">
+          {available > 0 ? `${available} 个插件有新版本` : failed > 0 ? '' : '从 Git 装的插件都是最新的'}
+          {failed > 0 && <span className="text-warning">{available > 0 ? '；' : ''}{failed} 个没查成，原因写在插件下面</span>}
+        </p>
+      )}
       {error && (
         <Alert variant="destructive" className="mb-3">
           <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
@@ -62,6 +102,11 @@ export function PluginInstalled({ plugins, error, onChange, onError, onBrowse }:
           <PluginRow
             key={plugin.id}
             plugin={plugin}
+            update={updates?.[plugin.id] ?? null}
+            onUpdated={(next) => {
+              onChange(next)
+              setUpdates((current) => current && { ...current, [plugin.id]: { pluginId: plugin.id, state: 'latest', current: null, latest: null, error: null } })
+            }}
             onToggle={(enabled) => void run(() => window.diffra.setPluginEnabled(plugin.id, enabled))}
             onHooks={(allowed) => void run(() => window.diffra.setPluginHooks(plugin.id, allowed))}
             onDelete={() => void run(() => window.diffra.deletePlugin(plugin.id))}
@@ -72,9 +117,52 @@ export function PluginInstalled({ plugins, error, onChange, onError, onBrowse }:
   )
 }
 
-function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView; onToggle(enabled: boolean): void; onHooks(allowed: boolean): void; onDelete(): void }) {
+function PluginRow({
+  plugin,
+  update,
+  onUpdated,
+  onToggle,
+  onHooks,
+  onDelete,
+}: {
+  plugin: PluginView
+  update: PluginUpdateCheck | null
+  onUpdated(plugins: PluginView[]): void
+  onToggle(enabled: boolean): void
+  onHooks(allowed: boolean): void
+  onDelete(): void
+}) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  // 更新：取回新版本（fetching）→ 给用户看（review）→ 换上（applying）
+  const [updating, setUpdating] = useState<{ phase: 'fetching' } | { phase: 'review' | 'applying'; prepared: PluginUpdatePrepared } | null>(null)
+  const [updateError, setUpdateError] = useState<string | null>(null)
+  const fetchUpdate = async () => {
+    setUpdating({ phase: 'fetching' })
+    setUpdateError(null)
+    try {
+      setUpdating({ phase: 'review', prepared: await window.diffra.preparePluginUpdate(plugin.id) })
+    } catch (caught) {
+      setUpdating(null)
+      setUpdateError(errorMessage(caught))
+    }
+  }
+  const applyUpdate = async (prepared: PluginUpdatePrepared, allowHooks: boolean) => {
+    setUpdating({ phase: 'applying', prepared })
+    setUpdateError(null)
+    try {
+      const next = await window.diffra.commitPluginUpdate(prepared.token, allowHooks)
+      setUpdating(null)
+      onUpdated(next)
+    } catch (caught) {
+      setUpdating(null)
+      setUpdateError(errorMessage(caught))
+    }
+  }
+  const cancelUpdate = (prepared: PluginUpdatePrepared) => {
+    setUpdating(null)
+    window.diffra.discardPlugin(prepared.token).catch((caught: unknown) => setUpdateError(errorMessage(caught)))
+  }
   const info = plugin.info
   const git = plugin.source === 'git'
   const SourceIcon = git ? GitBranch : Folder
@@ -89,6 +177,11 @@ function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView
         <>
           {plugin.name}
           {info?.version && <span className="ml-2 text-xs font-normal text-muted-foreground">v{info.version.replace(/^v/i, '')}</span>}
+          {update?.state === 'available' && (
+            <Badge variant="warning" className="ml-2" data-testid="plugin-update-available">
+              有新版本
+            </Badge>
+          )}
         </>
       }
       wide
@@ -108,10 +201,22 @@ function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView
               </span>
             )
           )}
+          {update?.state === 'error' && <span className="basis-full text-warning break-words">检查新版本失败：{update.error}</span>}
         </span>
       }
       actions={
         <>
+          {update?.state === 'available' && !updating && (
+            <Button size="sm" variant="outline" onClick={() => void fetchUpdate()}>
+              更新
+            </Button>
+          )}
+          {updating?.phase === 'fetching' && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Loader2 aria-hidden className="size-3.5 animate-spin" />
+              正在取回新版本…
+            </span>
+          )}
           {info && (
             <Button size="sm" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
               {expanded ? '收起' : '查看'}
@@ -135,6 +240,20 @@ function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView
         </>
       }
     >
+      {updateError && (
+        <Alert variant="destructive" className="mt-3 ml-13 w-auto" data-testid="plugin-update-error">
+          <AlertDescription className="break-words whitespace-pre-wrap">{updateError}</AlertDescription>
+        </Alert>
+      )}
+      {(updating?.phase === 'review' || updating?.phase === 'applying') && (
+        <PluginUpdateReview
+          plugin={plugin}
+          prepared={updating.prepared}
+          busy={updating.phase === 'applying'}
+          onApply={(allowHooks) => void applyUpdate(updating.prepared, allowHooks)}
+          onCancel={() => cancelUpdate(updating.prepared)}
+        />
+      )}
       {expanded && info && (
         <RowPanel className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-4 gap-y-3 space-y-0 text-sm" data-testid="plugin-detail">
           <span className="text-xs text-muted-foreground">来源</span>
@@ -192,6 +311,76 @@ function PluginRow({ plugin, onToggle, onHooks, onDelete }: { plugin: PluginView
         </AlertDialogContent>
       </AlertDialog>
     </ExtensionRow>
+  )
+}
+
+const shortCommit = (commit: string | null) => commit?.slice(0, 7) ?? '?'
+
+// 换上新版本前给用户看：版本和提交、哪些文件加了删了改了；钩子新加或变了的列出命令，勾了才允许（和安装时一样）
+function PluginUpdateReview({ plugin, prepared, busy, onApply, onCancel }: { plugin: PluginView; prepared: PluginUpdatePrepared; busy: boolean; onApply(allowHooks: boolean): void; onCancel(): void }) {
+  const [allowHooks, setAllowHooks] = useState(false)
+  const { info } = prepared
+  const version = (value: string | null) => (value ? `v${value.replace(/^v/i, '')}` : '没写版本')
+  const files: Array<[string, string[]]> = [
+    ['新加', prepared.added],
+    ['删掉', prepared.removed],
+    ['改了', prepared.modified],
+  ]
+  const unchanged = files.every(([, list]) => list.length === 0)
+  return (
+    <RowPanel data-testid="plugin-update">
+      <div className="space-y-1">
+        <p className="text-sm">
+          「{plugin.name}」{version(prepared.fromVersion)} → {version(info.version || null)}
+          <span className="ml-2 font-mono text-xs text-muted-foreground">
+            {shortCommit(prepared.fromCommit)} → {shortCommit(prepared.toCommit)}
+          </span>
+        </p>
+        <p className="text-xs text-muted-foreground">新版本：{contentsSummary(info)}</p>
+      </div>
+      <div className="space-y-1 text-xs" data-testid="plugin-update-files">
+        {unchanged ? (
+          <p className="text-muted-foreground">插件目录里的文件没有变化（仓库别处改了）。</p>
+        ) : (
+          files.map(
+            ([label, list]) =>
+              list.length > 0 && (
+                <p key={label} className="break-all">
+                  <span className="text-muted-foreground">{label}：</span>
+                  <span className="font-mono">{list.join('、')}</span>
+                </p>
+              ),
+          )
+        )}
+        {prepared.truncated && <p className="text-muted-foreground">改动的文件太多，只列了一部分。</p>}
+      </div>
+      {prepared.hooks === 'changed' && (
+        <>
+          <div className="rounded-lg border bg-background">
+            <div className="border-b px-3.5 py-2.5 text-sm font-bold">{plugin.hooksApproved ? '钩子变了，新版本会在这些时候自动运行命令' : '新版本会在这些时候自动运行命令'}</div>
+            <div className="px-3.5 py-2.5">
+              <HookList hooks={info.hooks} />
+            </div>
+          </div>
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox className="mt-0.5" checked={allowHooks} onCheckedChange={(value) => setAllowHooks(value === true)} />
+            <span>
+              允许这{info.hooks.length > 1 ? '些' : '个'}钩子在本机自动运行
+              <span className="block text-xs text-muted-foreground">不勾也能更新，只是钩子不跑；以后可以在下面的「查看」里改。</span>
+            </span>
+          </label>
+        </>
+      )}
+      {prepared.hooks === 'same' && <p className="text-xs text-muted-foreground">钩子没变，照旧允许。</p>}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" disabled={busy} onClick={onCancel}>
+          取消
+        </Button>
+        <Button disabled={busy} onClick={() => onApply(allowHooks)}>
+          {busy ? '正在更新…' : '更新'}
+        </Button>
+      </div>
+    </RowPanel>
   )
 }
 
