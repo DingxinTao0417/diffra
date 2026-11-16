@@ -36,6 +36,19 @@ test('重复：每月按第一次的日子算，31 号在小月落到月底、�
   assert.equal(repeatLabel(repeat('weekday', '2026-01-15T09:00:00')), '每个工作日')
 })
 
+test('重复：闰年的 2 月——31 号、30 号、29 号开始的每月在闰年落到 29 日、平年落到 28 日；隔 12 个月的 2 月 29 日平年落到 28 日、下一个闰年回到 29 日', () => {
+  for (const start of ['2027-12-31T09:00:00', '2027-12-30T09:00:00', '2028-01-29T09:00:00']) {
+    assert.equal(localText(nextOccurrence(repeat('month', start), local('2028-02-01T00:00:00'))), '2028-02-29 09:00')
+  }
+  assert.equal(localText(nextOccurrence(repeat('month', '2026-12-29T09:00:00'), local('2027-02-01T00:00:00'))), '2027-02-28 09:00')
+  const leapDay = repeat('month', '2028-02-29T09:00:00', 12)
+  assert.equal(localText(nextOccurrence(leapDay, local('2028-02-29T10:00:00'))), '2029-02-28 09:00')
+  assert.equal(localText(nextOccurrence(leapDay, local('2031-03-01T00:00:00'))), '2032-02-29 09:00')
+  // 每天、每周跨过闰日不跳天
+  assert.equal(localText(nextOccurrence(repeat('day', '2028-02-27T09:00:00'), local('2028-02-28T10:00:00'))), '2028-02-29 09:00')
+  assert.equal(localText(nextOccurrence(repeat('week', '2028-02-22T09:00:00'), local('2028-02-23T00:00:00'))), '2028-02-29 09:00')
+})
+
 test('嵌套标签：按 / 分层，每层去空白；按上一层筛选时下面各层都算；标签树补出各层上级', () => {
   assert.deepEqual(normalizeTodoTags([' 工作 / 项目A ', '工作//', '#生活/购物，工作/项目a']), ['工作/项目A', '工作', '生活/购物'])
   assert.equal(tagMatches('工作/项目A', '工作'), true)
