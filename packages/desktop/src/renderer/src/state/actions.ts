@@ -3,7 +3,7 @@ import type { SessionHandle, SessionOptions } from '../../../shared/ipc'
 import type { Layout, ModelRef } from '../../../shared/settings'
 import { REMOTE_DEVICE_CONNECTION_ENABLED, type RemoteAction, type RemoteActionResult, type RemoteTaskCall, type RemoteTaskCallResult, type RemoteTaskDetails } from '../../../shared/remote'
 import { type FileReference, MAX_PROMPT_FILE_REFERENCES, promptWithFileReferences } from '../../../shared/attachments'
-import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoSchedule } from '../../../shared/todos'
+import { normalizeTodoTags, type Todo, todoAttachments, TODO_MAX_IMAGES, type TodoPriority, type TodoRepeatKind, type TodoSchedule } from '../../../shared/todos'
 import { applySilence, applyUpdate, lastUsage, modelSilenceOf, newTurn, taskProgressOf, type Turn, turnFromStored, turnOutcomeOf, usageOf, visualSnapshotOf, withCandidatesUpdate, withVisualSnapshot } from '../features/session/transcript'
 import { applyRemoteEvent } from '@/features/devices/remote-tasks'
 import { applyAppearance } from '../lib/appearance'
@@ -611,12 +611,18 @@ export function setTodoSchedule(id: string, schedule: TodoSchedule | null): Prom
 }
 
 // 先改界面再存；存失败时提示，界面上的改动留着，下次改动会连同它一起再存
+// 改过的、新加的记下改动时间（v2，局域网同步按它决定谁新）；存的时候带上改之前有哪些，主进程据此分清删掉的和同步进来的
 export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void> {
   const current = store.get().todos ?? (await window.diffra.listTodos())
-  const next = change(current)
+  const before = new Map(current.map((todo) => [todo.id, JSON.stringify(todo)]))
+  const now = new Date().toISOString()
+  const next = change(current).map((todo) => (before.get(todo.id) === JSON.stringify(todo) ? todo : { ...todo, updatedAt: now }))
   store.set((state) => ({ ...state, todos: next }))
   try {
-    await window.diffra.saveTodos(next)
+    await window.diffra.saveTodos(
+      next,
+      current.map((todo) => todo.id),
+    )
   } catch (error) {
     showToast(`保存待办失败：${errorMessage(error)}`)
   }
@@ -624,7 +630,11 @@ export async function saveTodos(change: (todos: Todo[]) => Todo[]): Promise<void
 
 // 记一条待办；不传 project 时带上所在页面当前的项目，at 有值时到时提醒
 // body：对话框里写的正文（可以是空字符串，表示按新格式存、不再从标题里拆）；快速记不带
-export function addTodo(text: string, at?: Date, options: { project?: string | null; tags?: string[]; body?: string; priority?: TodoPriority | null; images?: string[]; files?: FileReference[] } = {}): Promise<void> {
+export function addTodo(
+  text: string,
+  at?: Date,
+  options: { project?: string | null; tags?: string[]; body?: string; priority?: TodoPriority | null; images?: string[]; files?: FileReference[]; repeat?: TodoRepeatKind } = {},
+): Promise<void> {
   const todo: Todo = {
     id: crypto.randomUUID(),
     text: text.trim(),
@@ -635,7 +645,7 @@ export function addTodo(text: string, at?: Date, options: { project?: string | n
     createdAt: new Date().toISOString(),
     done: false,
     sentTo: null,
-    ...(at ? { schedule: { at: at.toISOString(), action: { kind: 'remind' as const }, result: null } } : {}),
+    ...(at ? { schedule: { at: at.toISOString(), action: { kind: 'remind' as const }, result: null, ...(options.repeat ? { repeat: { every: options.repeat, interval: 1, start: at.toISOString() } } : {}) } } : {}),
     ...(options.images?.length ? { images: options.images } : {}),
     ...(options.files?.length ? { files: options.files } : {}),
   }

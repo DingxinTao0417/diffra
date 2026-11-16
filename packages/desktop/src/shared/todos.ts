@@ -20,6 +20,8 @@ export interface Todo {
   acceptedAt?: string | null
   // 定了时间的待办；旧数据没有这个字段
   schedule?: TodoSchedule | null
+  // 最近一次改动的时间（v2，局域网同步按它决定谁新）；旧数据没有，按 createdAt 算
+  updatedAt?: string
   // 附件（第 638 步），派给任务时一起发；旧数据没有这两个字段。图片存在数据目录的 todo-attachments 里，这里只记 id；
   // 文件和输入框里加的一样只记路径，不复制内容
   images?: string[]
@@ -45,6 +47,10 @@ export interface TodoSchedule {
   action: { kind: 'remind' } | { kind: 'send'; text: string; target: TodoSendTarget }
   // 到点后怎么处理的，没到点为 null。missed：应用没开着或晚了太久，定时发送不自动补发，等用户决定
   result: { kind: 'reminded' | 'sent' | 'missed' | 'failed'; at: string; error?: string } | null
+  // 重复（v2）：到点处理完就挪到下一次（result 清空），这一次怎么处理的记在 last；旧版读到会丢掉这两项，待办停在下一次
+  repeat?: TodoRepeat | null
+  // done 是用户把这一次勾掉了
+  last?: { kind: 'reminded' | 'sent' | 'missed' | 'failed' | 'done'; at: string; error?: string } | null
 }
 
 export type TodoPriority = 0 | 1 | 2 | 3
@@ -65,7 +71,15 @@ export function normalizeTodoTags(values: readonly string[]): string[] {
   const tags: string[] = []
   for (const value of values) {
     for (const part of value.split(/[,，]/)) {
-      const tag = part.trim().replace(/^#+/, '').slice(0, TODO_MAX_TAG_LENGTH)
+      // 嵌套标签按 / 分层：每层去掉首尾空白，空的层去掉
+      const tag = part
+        .trim()
+        .replace(/^#+/, '')
+        .split('/')
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+        .join('/')
+        .slice(0, TODO_MAX_TAG_LENGTH)
       if (tag === '') continue
       const key = tag.toLowerCase()
       if (seen.has(key)) continue
@@ -95,4 +109,127 @@ export function todoMessage(todo: Pick<Todo, 'text' | 'body'>): string {
 export function parseTodoPriority(input: string): { text: string; priority: TodoPriority | null } {
   const match = /^\s*[pP]([0-3])\s+(\S[\s\S]*)$/.exec(input)
   return match ? { text: match[2]!, priority: Number(match[1]) as TodoPriority } : { text: input, priority: null }
+}
+
+// 重复（v2 · M8）：每天、每个工作日、每周、每月，可以隔几个周期；按本机时区算（钟点不变，跨夏令时也一样），
+// 从第一次的时刻（start）往后数，按月重复时 31 号在小月落到月底、下个月回到 31 号，不越漂越早
+export const TODO_REPEAT_KINDS = ['day', 'weekday', 'week', 'month'] as const
+export type TodoRepeatKind = (typeof TODO_REPEAT_KINDS)[number]
+export const TODO_REPEAT_LABELS: Record<TodoRepeatKind, string> = { day: '每天', weekday: '每个工作日', week: '每周', month: '每月' }
+
+export interface TodoRepeat {
+  every: TodoRepeatKind
+  // 隔几个周期，1 是每个周期；工作日不用
+  interval: number
+  // 第一次的时刻（UTC ISO），后面的都从它算
+  start: string
+}
+
+function occurrence(start: Date, repeat: TodoRepeat, index: number): Date {
+  const next = new Date(start)
+  if (repeat.every === 'day') next.setDate(start.getDate() + index * repeat.interval)
+  else if (repeat.every === 'week') next.setDate(start.getDate() + index * 7 * repeat.interval)
+  else if (repeat.every === 'month') {
+    const day = start.getDate()
+    next.setDate(1)
+    next.setMonth(start.getMonth() + index * repeat.interval)
+    const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()
+    next.setDate(Math.min(day, last))
+  }
+  return next
+}
+
+// 晚于 after 的下一次（UTC ISO）。工作日：往后一天一天找，跳过周六周日
+export function nextOccurrence(repeat: TodoRepeat, after: number): string {
+  const start = new Date(repeat.start)
+  if (repeat.every === 'weekday') {
+    const next = new Date(start)
+    while (next.getTime() <= after || next.getDay() === 0 || next.getDay() === 6) next.setDate(next.getDate() + 1)
+    return next.toISOString()
+  }
+  // 先按平均周期估一个起点，再往后数，不用从第一次一个个试
+  const days = repeat.every === 'day' ? 1 : repeat.every === 'week' ? 7 : 30
+  let index = Math.max(1, Math.floor((after - start.getTime()) / (days * repeat.interval * 86_400_000)) - 1)
+  while (occurrence(start, repeat, index).getTime() <= after) index++
+  return occurrence(start, repeat, index).toISOString()
+}
+
+// 重复的待办这一次处理完（到点提醒、发送、错过，或者用户勾掉）：挪到下一次，不标完成
+export function advanceRepeat(todo: Todo, last: NonNullable<TodoSchedule['last']>, now: number): Todo {
+  const schedule = todo.schedule
+  if (!schedule?.repeat) return todo
+  const at = nextOccurrence(schedule.repeat, Math.max(now, Date.parse(schedule.at)))
+  return { ...todo, schedule: { ...schedule, at, result: null, last } }
+}
+
+export function repeatLabel(repeat: TodoRepeat): string {
+  if (repeat.every === 'weekday' || repeat.interval === 1) return TODO_REPEAT_LABELS[repeat.every]
+  return { day: `每 ${repeat.interval} 天`, week: `每 ${repeat.interval} 周`, month: `每 ${repeat.interval} 个月` }[repeat.every]
+}
+
+// 嵌套标签（v2 · M8）：「工作/项目A」写成一个标签，用 / 分层；按上一层筛选时下面各层都算
+export function tagMatches(tag: string, filter: string): boolean {
+  const lower = tag.toLowerCase()
+  const parent = filter.toLowerCase()
+  return lower === parent || lower.startsWith(`${parent}/`)
+}
+
+// 标签树：每个标签和它的各层上级（「工作/项目A」也列出「工作」），按层排好，depth 是第几层
+export function tagTree(tags: readonly string[]): Array<{ tag: string; label: string; depth: number }> {
+  const all = new Map<string, string>()
+  for (const tag of tags) {
+    const parts = tag.split('/')
+    for (let index = 1; index <= parts.length; index++) {
+      const path = parts.slice(0, index).join('/')
+      if (!all.has(path.toLowerCase())) all.set(path.toLowerCase(), path)
+    }
+  }
+  return [...all.values()]
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase(), 'zh-CN'))
+    .map((tag) => ({ tag, label: tag.split('/').at(-1)!, depth: tag.split('/').length - 1 }))
+}
+
+// 局域网同步（v2 · M8）：两台电脑的待办合在一起。同一条取改得晚的（updatedAt，旧数据按 createdAt），
+// 删掉的记墓碑（id 和删的时间），墓碑晚于那一条最后一次改动就删掉。墓碑留 90 天、最多 2000 条
+export interface TodoTombstone {
+  id: string
+  at: string
+}
+
+const TOMBSTONE_KEEP_MS = 90 * 24 * 3600_000
+const MAX_TOMBSTONES = 2000
+
+export const todoStamp = (todo: Pick<Todo, 'updatedAt' | 'createdAt'>) => Date.parse(todo.updatedAt ?? todo.createdAt)
+
+// 先出现的那份为准（a 在前）：一样新时留 a 的；顺序按 a、再接 b 里新的
+export function mergeTodoLists(a: readonly Todo[], b: readonly Todo[], tombstones: readonly TodoTombstone[]): Todo[] {
+  const deleted = new Map(tombstones.map((item) => [item.id, Date.parse(item.at)]))
+  const chosen = new Map<string, Todo>()
+  for (const todo of [...a, ...b]) {
+    const existing = chosen.get(todo.id)
+    if (!existing || todoStamp(todo) > todoStamp(existing)) chosen.set(todo.id, todo)
+  }
+  const order = [...new Set([...a.map((todo) => todo.id), ...b.map((todo) => todo.id)])]
+  return order.flatMap((id) => {
+    const todo = chosen.get(id)!
+    const gone = deleted.get(id)
+    return gone !== undefined && gone >= todoStamp(todo) ? [] : [todo]
+  })
+}
+
+export function mergeTombstones(a: readonly TodoTombstone[], b: readonly TodoTombstone[], now: number): TodoTombstone[] {
+  const latest = new Map<string, TodoTombstone>()
+  for (const item of [...a, ...b]) {
+    const existing = latest.get(item.id)
+    if (!existing || Date.parse(item.at) > Date.parse(existing.at)) latest.set(item.id, item)
+  }
+  return [...latest.values()]
+    .filter((item) => now - Date.parse(item.at) <= TOMBSTONE_KEEP_MS)
+    .sort((x, y) => Date.parse(y.at) - Date.parse(x.at))
+    .slice(0, MAX_TOMBSTONES)
+}
+
+// 同步哪些：定时发给任务的不同步（任务只在这台电脑上，到另一台去发会发错地方）
+export function syncableTodo(todo: Pick<Todo, 'schedule'>): boolean {
+  return todo.schedule?.action.kind !== 'send'
 }

@@ -30,10 +30,10 @@ const stateSchema = z.object({
   version: z.literal(1),
   name: deviceNameSchema,
   allowIncoming: z.boolean(),
-  // 本机授权给它们的设备（本机是被连接端）
-  grants: z.array(deviceSchema.extend({ projects: z.array(projectGrantSchema).max(200) })),
-  // 本机去连接的设备（本机是连接端）
-  peers: z.array(deviceSchema),
+  // 本机授权给它们的设备（本机是被连接端）；todos：允许它同步待办（v2，旧记录没有就是不允许）
+  grants: z.array(deviceSchema.extend({ projects: z.array(projectGrantSchema).max(200), todos: z.boolean().optional() })),
+  // 本机去连接的设备（本机是连接端）；todos：和它同步待办（v2，对方也要允许）
+  peers: z.array(deviceSchema.extend({ todos: z.boolean().optional() })),
 })
 
 export type RemoteState = z.infer<typeof stateSchema>

@@ -108,7 +108,18 @@ export const requestCallSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('permission.respond'), requestId, optionId: remotePermissionOption.nullable(), answers: askAnswersSchema.optional() }),
   // 连接端删除了这台设备：请被连接端也撤销对它的授权（只会收紧，照办）
   z.object({ method: z.literal('device.forget') }),
+  // 待办同步（v2，接口版本 3 起）：连接端的待办和墓碑，被连接端合起来回整份。待办的格式由桌面端校验
+  z.object({
+    method: z.literal('todos.sync'),
+    todos: z.array(z.unknown()).max(1000),
+    deleted: z.array(z.object({ id: z.string().min(1).max(64), at: z.string().max(40) })).max(5000),
+  }),
 ])
+
+export const todosSyncResultSchema = z.object({
+  todos: z.array(z.unknown()).max(1000),
+  deleted: z.array(z.object({ id: z.string().min(1).max(64), at: z.string().max(40) })).max(5000),
+})
 
 export const requestSchema = z.object({ type: z.literal('request'), id: z.number().int().nonnegative(), call: requestCallSchema })
 
@@ -225,6 +236,8 @@ export const eventSchema = z.discriminatedUnion('event', [
   z.object({ type: z.literal('event'), event: z.literal('pair.result'), approved: z.boolean() }),
   // 配对时连接端放弃了（取消、等太久）：被连接端收起确认弹窗
   z.object({ type: z.literal('event'), event: z.literal('pair.cancel') }),
+  // 被连接端的待办改了（v2）：允许同步待办的连接端收到后马上同步一次（旧版不认识，丢掉，照样定时同步）
+  z.object({ type: z.literal('event'), event: z.literal('todos.changed') }),
 ])
 
 export const remoteMessageSchema = z.union([helloSchema, requestSchema, responseSchema, eventSchema])

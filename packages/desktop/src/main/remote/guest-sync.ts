@@ -20,6 +20,7 @@ import {
   sessionDiffSchema,
   skillsListSchema,
   terminalOpenedSchema,
+  todosSyncResultSchema,
   toolOutputSchema,
 } from '@diffra/remote/messages'
 import type { AskAnswer } from '@diffra/core/types'
@@ -54,6 +55,7 @@ const RESULT_SCHEMAS: Partial<Record<RequestCall['method'], z.ZodType>> = {
   'commands.list': commandsListSchema,
   'session.restorePreview': restorePreviewSchema,
   'session.setModel': okSchema,
+  'todos.sync': todosSyncResultSchema,
   'session.setPermissionMode': okSchema,
   'session.compact': okSchema,
   'session.regenerate': okSchema,
@@ -101,6 +103,11 @@ export class GuestSync {
     const schema = RESULT_SCHEMAS[call.method]
     if (!schema) return Promise.reject(new Error(`不支持的请求：${call.method}`))
     return this.request(deviceId, call, schema)
+  }
+
+  // 待办同步（v2）：发本机的，回对方合好的整份
+  syncTodos(deviceId: string, todos: unknown[], deleted: Array<{ id: string; at: string }>): Promise<z.infer<typeof todosSyncResultSchema>> {
+    return this.request(deviceId, { method: 'todos.sync', todos, deleted }, todosSyncResultSchema)
   }
 
   toolOutput(deviceId: string, sessionId: string, turn: number, turnId: string, toolCallId: string): Promise<RemoteToolOutput> {

@@ -72,6 +72,8 @@ export interface HostSyncDeps {
   // 项目的本地分支、切换分支（和本机任务页底栏同一套检查，见 main/project-branch.ts）
   branches(cwd: string): Promise<{ current: string | null; branches: string[] }>
   switchBranch(cwd: string, branch: string): Promise<void>
+  // 待办同步（v2）：合进对方的，回合好的整份
+  syncTodos(todos: unknown[], deleted: Array<{ id: string; at: string }>): Promise<{ todos: unknown[]; deleted: Array<{ id: string; at: string }> }>
 }
 
 // 发出去的一页：轮次是脱敏后的 StoredTurn（连接端按 snapshotSchema 校验）
@@ -419,6 +421,11 @@ export class HostSync {
       case 'device.forget':
         // 先回复再撤销：撤销会断开通道
         return { value: {}, after: () => this.deps.forget(deviceId) }
+      case 'todos.sync':
+        // 授权时勾了「同步待办」才合；和项目授权无关
+        if (!grant.todos) throw new Error('对方没有允许同步待办')
+        this.limit(deviceId, 'lists', LISTS_PER_MINUTE)
+        return { value: await this.deps.syncTodos(call.todos, call.deleted.flatMap((item) => (Number.isFinite(Date.parse(item.at)) ? [item] : []))), compress: true }
       case 'permission.respond': {
         const pending = this.permissions.get(call.requestId)
         if (!pending?.sentTo.has(deviceId)) throw new Error('这个确认已经处理过了')
@@ -797,6 +804,11 @@ export class HostSync {
       const ok = this.deps.send(deviceId, { type: 'event', event: 'session.updates', sessionId: subscription.sessionId, epoch: subscription.ready.epoch, updates: updates.slice(start, start + BATCH_MAX) })
       if (!ok) return this.deps.drop(deviceId)
     }
+  }
+
+  // 本机待办改了：告诉连着的、允许同步待办的设备，它那边马上同步
+  todosChanged(): void {
+    for (const deviceId of this.devices.keys()) if (this.deps.grant(deviceId)?.todos) this.deps.send(deviceId, { type: 'event', event: 'todos.changed' })
   }
 
   // 列表可能变了：每台设备最多一秒说一次

@@ -17,6 +17,7 @@ import { errorMessage } from '@/lib/errors'
 import { formatTime } from '@/lib/format'
 import { cn } from 'cn'
 import { showToast, useAppState } from '@/state/store'
+import { TodoSyncChoice } from './PairRequestDialog'
 import { describeGrants, ProjectGrantPicker } from './ProjectGrantPicker'
 
 type Tab = 'connect' | 'allow'
@@ -106,8 +107,19 @@ function ConnectTab({ remote }: { remote: RemoteView }) {
                 <OnlineBadge device={peer} />
               </span>
             }
-            hint={deviceHint(peer, `配对于 ${formatTime(peer.pairedAt)}`)}
+            hint={
+              <>
+                {deviceHint(peer, `配对于 ${formatTime(peer.pairedAt)}`)}
+                {peer.todos && (
+                  <span className={cn('block', peer.todosSync.error && 'text-warning')} data-testid="peer-todos-sync">
+                    {peer.todosSync.error ? `待办没同步成：${peer.todosSync.error}` : peer.todosSync.at ? `待办 ${formatTime(peer.todosSync.at)} 同步过` : '待办还没同步过（对方在线时同步）'}
+                  </span>
+                )}
+              </>
+            }
           >
+            <Switch label={`和「${peer.name}」同步待办`} checked={peer.todos} onChange={(enabled) => void run(() => window.diffra.setRemotePeerTodos(peer.deviceId, enabled))} />
+            <span className="text-xs text-muted-foreground">同步待办</span>
             <Button variant="outline" size="sm" onClick={() => setRemoving(peer)}>
               删除
             </Button>
@@ -428,7 +440,7 @@ function AllowTab({ remote }: { remote: RemoteView }) {
                 <OnlineBadge device={grant} />
               </span>
             }
-            hint={deviceHint(grant, `开放：${describeGrants(grant.projects)}`)}
+            hint={deviceHint(grant, `开放：${describeGrants(grant.projects)}${grant.todos ? '；允许同步待办' : ''}`)}
           >
             <Button variant="outline" size="sm" onClick={() => setEditing(grant)}>
               修改授权
@@ -503,9 +515,10 @@ function NameRow({ name, disabled }: { name: string; disabled: boolean }) {
 
 function GrantDialog({ grant, onClose }: { grant: RemoteGrantView; onClose(): void }) {
   const [projects, setProjects] = useState<RemoteProjectGrant[]>(grant.projects)
+  const [todos, setTodos] = useState(grant.todos)
   const save = async () => {
     try {
-      await window.diffra.updateRemoteGrant(grant.deviceId, projects)
+      await window.diffra.updateRemoteGrant(grant.deviceId, projects, todos)
       onClose()
     } catch (error) {
       showToast(errorMessage(error))
@@ -519,6 +532,7 @@ function GrantDialog({ grant, onClose }: { grant: RemoteGrantView; onClose(): vo
           <DialogDescription>指纹 {grant.fingerprint}。取消勾选的项目，对方马上看不到。</DialogDescription>
         </DialogHeader>
         <ProjectGrantPicker value={projects} onChange={setProjects} />
+        <TodoSyncChoice checked={todos} onChange={setTodos} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             取消

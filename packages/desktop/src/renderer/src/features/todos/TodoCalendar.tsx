@@ -4,6 +4,7 @@ import { type Todo, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { addDays, atTime, dayKey, formatClock, isDue, monthGrid, sameDay, startOfDay } from '@/lib/todo-time'
+import { saveTodos } from '@/state/actions'
 import { TodoInput } from './TodoInput'
 import { priorityLabel } from './TodoPriority'
 import { TodoRow } from './TodoRow'
@@ -12,14 +13,38 @@ const WEEK_HEADER = ['一', '二', '三', '四', '五', '六', '日']
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 // 每格最多列几条，多的写「还有 N 条」
 const CELL_ITEMS = 3
+// 拖动的是哪条待办（v2 · M8）
+const DRAG_TYPE = 'application/x-diffra-todo'
+
+// 拖到某一天：钟点不变（没定过时间的按早上 9 点提醒）；重复的整串跟着挪
+function moveToDay(id: string, day: Date): Promise<void> {
+  return saveTodos((todos) =>
+    todos.map((todo) => {
+      if (todo.id !== id) return todo
+      const current = todo.schedule ? new Date(todo.schedule.at) : null
+      const at = (current ? new Date(day.getFullYear(), day.getMonth(), day.getDate(), current.getHours(), current.getMinutes()) : atTime(day, 9)).toISOString()
+      if (!todo.schedule) return { ...todo, schedule: { at, action: { kind: 'remind' }, result: null } }
+      if (todo.schedule.at === at) return todo
+      return { ...todo, schedule: { ...todo.schedule, at, result: null, ...(todo.schedule.repeat ? { repeat: { ...todo.schedule.repeat, start: at } } : {}) } }
+    }),
+  )
+}
+
+const startDrag = (id: string) => (event: React.DragEvent) => {
+  event.dataTransfer.setData(DRAG_TYPE, id)
+  event.dataTransfer.effectAllowed = 'move'
+}
 
 type RowProps = (todo: Todo) => { todo: Todo; now: Date; onSend(): void; onScheduleSend(at: Date): void }
 
-// 日历：按月看定了时间的待办，点某一天在右边看这天的、给这天加一条；没定时间的列在右边下面
+// 日历：按月看定了时间的待办，点某一天在右边看这天的、给这天加一条；没定时间的列在右边下面。
+// 格子里的待办、右边没定时间的待办能拖到另一天改日期（v2）
 export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo[]; now: Date; rowProps: RowProps; initialDay?: Date }) {
   const start = initialDay ?? now
   const [month, setMonth] = useState(() => new Date(start.getFullYear(), start.getMonth(), 1))
   const [selected, setSelected] = useState(() => startOfDay(start))
+  // 拖着待办经过的那天，标出来
+  const [dropDay, setDropDay] = useState<string | null>(null)
   const byDay = useMemo(() => {
     const map = new Map<string, Todo[]>()
     for (const todo of todos) {
@@ -89,10 +114,26 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
                     index >= 35 && 'border-b-0',
                     !inMonth && 'bg-muted/30 text-muted-foreground',
                     isSelected && 'bg-soft hover:bg-soft',
+                    dropDay === dayKey(day) && 'bg-accent ring-2 ring-ring/50 ring-inset',
                   )}
                   onClick={() => {
                     setSelected(startOfDay(day))
                     if (!inMonth) setMonth(new Date(day.getFullYear(), day.getMonth(), 1))
+                  }}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(DRAG_TYPE)) return
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'move'
+                    setDropDay(dayKey(day))
+                  }}
+                  onDragLeave={() => setDropDay((current) => (current === dayKey(day) ? null : current))}
+                  onDrop={(event) => {
+                    const id = event.dataTransfer.getData(DRAG_TYPE)
+                    setDropDay(null)
+                    if (!id) return
+                    event.preventDefault()
+                    void moveToDay(id, day)
+                    setSelected(startOfDay(day))
                   }}
                 >
                   <span className={cn('flex size-6 items-center justify-center rounded-full text-xs tabular-nums', isToday && 'bg-foreground font-bold text-background')}>{day.getDate()}</span>
@@ -101,8 +142,11 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
                     return (
                       <span
                         key={todo.id}
+                        draggable
+                        onDragStart={startDrag(todo.id)}
+                        data-testid="calendar-item"
                         className={cn(
-                          'w-full truncate rounded-sm px-1 py-px text-xs leading-4',
+                          'w-full cursor-grab truncate rounded-sm px-1 py-px text-xs leading-4',
                           todo.done ? 'text-muted-foreground line-through' : overdue ? 'bg-warning-soft text-warning' : 'bg-background/80 text-foreground ring-1 ring-border',
                         )}
                         title={todoParts(todo).title}
@@ -145,7 +189,7 @@ export function TodoCalendar({ todos, now, rowProps, initialDay }: { todos: Todo
             </h2>
             <ul className="flex flex-col">
               {unscheduled.map((todo) => (
-                <TodoRow key={todo.id} {...rowProps(todo)} />
+                <TodoRow key={todo.id} {...rowProps(todo)} onDragStart={startDrag(todo.id)} />
               ))}
             </ul>
           </section>

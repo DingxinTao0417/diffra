@@ -1,43 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { createSocket } from 'node:dgram'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { type ElectronApplication, expect, type Page, test } from '@playwright/test'
-import { chooseProject, settingsNav, startTask, waitTaskDone } from './flows'
-import { launchApp, makeUserDataDir } from './launch'
+import { expect, test } from '@playwright/test'
+import { chooseProject, startTask, waitTaskDone } from './flows'
+import { freeUdpPort, lanEnv, launchDevice, openDevices } from './lan'
 import { configureCoderModel } from './model-setup'
 import { startScriptedModel } from './scripted-model'
 
-// 局域网设备连接（v2 · M6）：同一台机器上两个实例，都只听 127.0.0.1（不惊动防火墙），发现消息互相单发（不发组播、广播）
-interface Device {
-  app: ElectronApplication
-  window: Page
-  userDataDir: string
-  env: Record<string, string>
-}
-
-async function freeUdpPort(): Promise<number> {
-  const socket = createSocket('udp4')
-  await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve))
-  const port = socket.address().port
-  await new Promise<void>((resolve) => socket.close(() => resolve()))
-  return port
-}
-
-const lanEnv = (own: number, other: number) => ({ DIFFRA_LAN_BIND: '127.0.0.1', DIFFRA_LAN_BROADCAST: '0', DIFFRA_LAN_DISCOVERY_PORT: String(own), DIFFRA_LAN_ANNOUNCE_TO: `127.0.0.1:${other}` })
-
-async function launchDevice(env: Record<string, string>, userDataDir = makeUserDataDir()): Promise<Device> {
-  const app = await launchApp(userDataDir, env)
-  return { app, window: await app.firstWindow(), userDataDir, env }
-}
-
-async function openDevices(window: Page, tab: '连接其他设备' | '允许连接本机'): Promise<void> {
-  if (!(await settingsNav(window).isVisible())) await window.getByTestId('sidebar').getByRole('button', { name: '设置', exact: true }).click()
-  await settingsNav(window).getByRole('button', { name: '设备连接' }).click()
-  await window.getByRole('radio', { name: tab }).click()
-}
-
+// 局域网设备连接（v2 · M6）：同一台机器上两个实例（见 lan.ts）
 test('局域网设备连接：发现对方、核对证书指纹、输入 6 位配对码，对方选项目后允许；只连局域网地址，证书钉住；连接端看到授权项目里的任务、能远程发消息；对方重启后自动连回来；撤销后马上离线', async () => {
   test.setTimeout(240_000)
   const [hostPort, guestPort] = [await freeUdpPort(), await freeUdpPort()]

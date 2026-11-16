@@ -3,6 +3,7 @@ import type { PromptImage, SessionNotification, SessionProcesses } from '@diffra
 import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import { type BridgeStatus, type BrowserState, type DiffraApi, IPC_CHANNELS, type MenuCommand, type PermissionRequestEvent, type TaskActionEvent, type TerminalOpenedEvent, type UpdateStatus } from '../shared/ipc'
 import type { RemoteAction, RemoteSyncEvent, RemoteTaskCall, RemoteView } from '../shared/remote'
+import type { Todo } from '../shared/todos'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: T) => listener(payload)
@@ -94,7 +95,8 @@ const api: DiffraApi = {
   useTurnVersion: (sessionId, turnId, index) => ipcRenderer.invoke(IPC_CHANNELS.sessionUseVersion, sessionId, turnId, index),
   recordVisualSnapshot: (sessionId, toolCallId, image) => ipcRenderer.invoke(IPC_CHANNELS.sessionVisualSnapshot, sessionId, toolCallId, image),
   listTodos: () => ipcRenderer.invoke(IPC_CHANNELS.todosList),
-  saveTodos: (todos) => ipcRenderer.invoke(IPC_CHANNELS.todosSave, todos),
+  saveTodos: (todos, base) => ipcRenderer.invoke(IPC_CHANNELS.todosSave, todos, base),
+  onTodosChanged: (listener) => subscribe<Todo[]>(IPC_CHANNELS.todosChanged, listener),
   notifyTodo: (notice) => ipcRenderer.invoke(IPC_CHANNELS.todosNotify, notice),
   saveTodoImage: (image) => ipcRenderer.invoke(IPC_CHANNELS.todosSaveImage, image),
   readTodoImage: (id) => ipcRenderer.invoke(IPC_CHANNELS.todosReadImage, id),
@@ -192,8 +194,9 @@ const api: DiffraApi = {
   setRemoteName: (name) => ipcRenderer.invoke(IPC_CHANNELS.remoteSetName, name),
   createRemoteInvite: () => ipcRenderer.invoke(IPC_CHANNELS.remoteCreateInvite),
   cancelRemoteInvite: () => ipcRenderer.invoke(IPC_CHANNELS.remoteCancelInvite),
-  respondRemoteRequest: (deviceId, approved, projects) => ipcRenderer.invoke(IPC_CHANNELS.remoteRespond, deviceId, approved, projects),
-  updateRemoteGrant: (deviceId, projects) => ipcRenderer.invoke(IPC_CHANNELS.remoteUpdateGrant, deviceId, projects),
+  respondRemoteRequest: (deviceId, approved, projects, todos) => ipcRenderer.invoke(IPC_CHANNELS.remoteRespond, deviceId, approved, projects, todos),
+  updateRemoteGrant: (deviceId, projects, todos) => ipcRenderer.invoke(IPC_CHANNELS.remoteUpdateGrant, deviceId, projects, todos),
+  setRemotePeerTodos: (deviceId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.remoteSetPeerTodos, deviceId, enabled),
   revokeRemoteDevice: (deviceId) => ipcRenderer.invoke(IPC_CHANNELS.remoteRevoke, deviceId),
   addRemoteDevice: (invite, name) => ipcRenderer.invoke(IPC_CHANNELS.remoteAddDevice, invite, name),
   addRemoteLanDevice: (deviceId, code, name) => ipcRenderer.invoke(IPC_CHANNELS.remoteAddLanDevice, deviceId, code, name),

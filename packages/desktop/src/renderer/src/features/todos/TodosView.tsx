@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { AlarmClock, ChevronDown, ChevronRight, ListTodo, Send } from 'lucide-react'
-import { parseTodoPriority, type Todo, type TodoPriority, TODO_PRIORITIES } from '../../../../shared/todos'
+import { parseTodoPriority, tagMatches, tagTree, type Todo, type TodoPriority, TODO_PRIORITIES } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -47,10 +47,13 @@ export function TodosView() {
   const [calendarDay, setCalendarDay] = useState<Date | null>(null)
 
   const projects = useMemo(() => [...new Set((todos ?? []).map((todo) => todo.project ?? NO_PROJECT))], [todos])
-  const allTags = useMemo(
-    () => [...new Set((todos ?? []).flatMap((todo) => todo.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
-    [todos],
-  )
+  // 嵌套标签（v2）：「工作/项目A」也列出上一层「工作」；第一层一直显示，下一层在选中它的上一层（或它下面的）时展开
+  const tagEntries = useMemo(() => tagTree((todos ?? []).flatMap((todo) => todo.tags)), [todos])
+  const shownTags = tagEntries.filter((entry) => {
+    if (entry.depth === 0) return true
+    const parent = entry.tag.slice(0, entry.tag.lastIndexOf('/'))
+    return tagFilter !== null && (tagMatches(tagFilter, parent) || tagMatches(parent, tagFilter))
+  })
   // 有待办设了优先级才出这一组筛选；只列出用到的几档
   const priorities = useMemo(() => {
     const used = new Set((todos ?? []).map((todo) => todo.priority ?? 'none'))
@@ -61,7 +64,7 @@ export function TodosView() {
       (todos ?? []).filter(
         (todo) =>
           (filter === ALL || (todo.project ?? NO_PROJECT) === filter) &&
-          (tagFilter === null || todo.tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) &&
+          (tagFilter === null || todo.tags.some((tag) => tagMatches(tag, tagFilter))) &&
           (priorityFilter === null || (todo.priority ?? 'none') === priorityFilter),
       ),
     [todos, filter, tagFilter, priorityFilter],
@@ -113,19 +116,24 @@ export function TodosView() {
                 {value === ALL ? '全部' : value === NO_PROJECT ? '无项目' : folderName(value)}
               </button>
             ))}
-            {allTags.length > 0 && (
+            {shownTags.length > 0 && (
               <>
                 <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
-                {allTags.map((tag) => (
+                {shownTags.map((entry) => (
                   <button
-                    key={tag}
+                    key={entry.tag}
                     type="button"
-                    aria-pressed={tagFilter?.toLowerCase() === tag.toLowerCase()}
-                    className="rounded-full border px-2.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:border-foreground/30 aria-pressed:bg-soft aria-pressed:text-foreground"
+                    aria-pressed={tagFilter?.toLowerCase() === entry.tag.toLowerCase()}
+                    aria-label={`#${entry.tag}`}
+                    title={entry.tag}
+                    className="flex items-center gap-0.5 rounded-full border px-2.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:border-foreground/30 aria-pressed:bg-soft aria-pressed:text-foreground"
                     data-testid="todo-tag-filter"
-                    onClick={() => setTagFilter((current) => (current?.toLowerCase() === tag.toLowerCase() ? null : tag))}
+                    data-depth={entry.depth}
+                    onClick={() => setTagFilter((current) => (current?.toLowerCase() === entry.tag.toLowerCase() ? null : entry.tag))}
                   >
-                    #{tag}
+                    {entry.depth > 0 ? `↳ ${entry.label}` : `#${entry.label}`}
+                    {tagEntries.some((other) => other.depth === entry.depth + 1 && tagMatches(other.tag, entry.tag)) &&
+                      (tagFilter !== null && tagMatches(tagFilter, entry.tag) ? <ChevronDown className="size-3 text-muted-foreground/70" aria-hidden /> : <ChevronRight className="size-3 text-muted-foreground/70" aria-hidden />)}
                   </button>
                 ))}
               </>

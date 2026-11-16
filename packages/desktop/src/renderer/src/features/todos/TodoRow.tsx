@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlarmClock, Bell, CircleCheck, Paperclip, Pencil, Send, Tags, Trash2 } from 'lucide-react'
-import { type Todo, type TodoSendTarget, todoParts } from '../../../../shared/todos'
+import { AlarmClock, Bell, CircleCheck, Paperclip, Pencil, Repeat, Send, Tags, Trash2 } from 'lucide-react'
+import { advanceRepeat, repeatLabel, type Todo, type TodoSendTarget, todoParts } from '../../../../shared/todos'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -29,6 +29,7 @@ export function TodoRow({
   onSelect,
   onSend,
   onScheduleSend,
+  onDragStart,
 }: {
   todo: Todo
   now: Date
@@ -40,6 +41,8 @@ export function TodoRow({
   onSelect?: () => void
   onSend(): void
   onScheduleSend(at: Date): void
+  // 日历旁边没定时间的那几条能拖到某一天（v2）
+  onDragStart?: (event: React.DragEvent) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -56,6 +59,7 @@ export function TodoRow({
   const live = useAppState((state) => (todo.sentTo ? state.live[todo.sentTo.sessionId] : undefined))
   const finished = !todo.done && taskFinishedForTodo(live)
   const schedule = todo.schedule ?? null
+  const repeating = Boolean(schedule?.repeat)
   const overdue = isDue(todo, now)
   const result = schedule?.result ?? null
 
@@ -82,19 +86,26 @@ export function TodoRow({
       ref={row}
       className={cn('group flex items-start gap-3 py-2.5 transition-colors hover:bg-accent/40', layout === 'list' ? 'px-4' : 'rounded-lg px-2', focused && 'bg-soft ring-1 ring-ring/40')}
       data-testid="todo-row"
+      draggable={onDragStart !== undefined}
+      onDragStart={onDragStart}
       data-done={todo.done}
       data-overdue={overdue}
     >
       {layout === 'list' && <TimeColumn todo={todo} now={now} overdue={overdue} onPick={schedule ? reschedule : pickTime} />}
       <Checkbox
         className="mt-0.5"
-        aria-label={selecting ? `选中：${title}` : `完成：${title}`}
+        aria-label={selecting ? `选中：${title}` : repeating ? `完成这一次：${title}` : `完成：${title}`}
         checked={selecting ? selected : todo.done}
         onCheckedChange={() =>
           selecting
             ? onSelect?.()
             : save((todos) =>
-                todos.map((item) => (item.id === todo.id ? { ...item, done: !item.done, acceptedAt: item.done ? null : item.acceptedAt } : item)),
+                todos.map((item) => {
+                  if (item.id !== todo.id) return item
+                  // 重复的待办勾掉的是这一次：挪到下一次，不标完成
+                  if (!item.done && item.schedule?.repeat) return advanceRepeat(item, { kind: 'done', at: new Date().toISOString() }, Date.now())
+                  return { ...item, done: !item.done, acceptedAt: item.done ? null : item.acceptedAt }
+                }),
               )
         }
       />
@@ -140,6 +151,12 @@ export function TodoRow({
               #{tag}
             </button>
           ))}
+          {schedule?.repeat && (
+            <span className="flex items-center gap-0.5" data-testid="todo-repeat" title={schedule.last ? `上一次：${formatTime(schedule.last.at)}${schedule.last.kind === 'missed' ? '（错过了）' : ''}` : undefined}>
+              <Repeat className="size-3" />
+              {repeatLabel(schedule.repeat)}
+            </span>
+          )}
           {layout === 'list' && schedule?.action.kind === 'send' && <span className="max-w-60 truncate">发给 {sendTargetLabel(schedule.action.target)}</span>}
           {layout === 'compact' && schedule && (
             <SchedulePicker

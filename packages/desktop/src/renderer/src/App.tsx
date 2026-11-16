@@ -119,12 +119,15 @@ export function App() {
       openTodos()
       store.set((state) => ({ ...state, todoFocus: todoId }))
     })
+    // 主进程合进了别的设备同步来的待办（v2）
+    const offTodosChanged = window.diffra.onTodosChanged((todos) => store.set((state) => ({ ...state, todos })))
     void initialize()
     return () => {
       unwire()
       unwireTerminals()
       stopTodoScheduler()
       offTodoFocus()
+      offTodosChanged()
     }
   }, [])
 

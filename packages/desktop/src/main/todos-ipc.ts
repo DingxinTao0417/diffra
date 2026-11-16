@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '../shared/ipc'
 import { MAX_ATTACHMENT_PATH_LENGTH, MAX_PROMPT_FILE_REFERENCES } from '../shared/attachments'
-import { type Todo, TODO_MAX_IMAGES, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT } from '../shared/todos'
+import { mergeTodoLists, mergeTombstones, syncableTodo, type Todo, TODO_MAX_IMAGES, TODO_MAX_ITEMS, TODO_MAX_TAGS, TODO_MAX_TAG_LENGTH, TODO_MAX_TEXT, TODO_REPEAT_KINDS, type TodoTombstone } from '../shared/todos'
 import { parse } from './ipc-input'
 import { readJsonFile, WriteQueue, writeJsonFileAtomic } from './json-file'
 
@@ -45,9 +46,17 @@ const todoSchema = z.object({
       result: z
         .object({ kind: z.enum(['reminded', 'sent', 'missed', 'failed']), at: z.iso.datetime(), error: z.string().max(2000).optional() })
         .nullable(),
+      // v2 加的：重复和上一次的处理结果，都是选填（旧版读到会丢掉，待办停在下一次）
+      repeat: z.object({ every: z.enum(TODO_REPEAT_KINDS), interval: z.number().int().min(1).max(366), start: z.iso.datetime() }).nullable().optional(),
+      last: z
+        .object({ kind: z.enum(['reminded', 'sent', 'missed', 'failed', 'done']), at: z.iso.datetime(), error: z.string().max(2000).optional() })
+        .nullable()
+        .optional(),
     })
     .nullable()
     .optional(),
+  // v2：最近一次改动的时间（局域网同步按它决定谁新），选填
+  updatedAt: z.iso.datetime().optional(),
   images: z.array(z.string().regex(IMAGE_ID)).max(TODO_MAX_IMAGES).optional(),
   files: z
     .array(z.object({ path: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH).refine(isAbsolute, '必须是本地绝对路径'), name: z.string().min(1).max(MAX_ATTACHMENT_PATH_LENGTH), kind: z.enum(['file', 'directory']) }))
@@ -56,14 +65,42 @@ const todoSchema = z.object({
 }) satisfies z.ZodType<Todo>
 
 const fileSchema = z.object({ version: z.literal(1), todos: z.array(todoSchema) })
+// 局域网同步（v2）：删掉的待办的墓碑，单独一个文件（todos.json 的格式不动，旧版照样读）
+const tombstoneSchema = z.object({ id: z.string().min(1).max(64), at: z.iso.datetime() })
+const syncFileSchema = z.object({ version: z.literal(1), deleted: z.array(tombstoneSchema) })
+
+// 局域网同步用：本机的待办和墓碑；合进对方的（主进程写盘、推给界面）。注册 IPC 时填上
+export const todoSync: {
+  snapshot(): Promise<{ todos: Todo[]; deleted: TodoTombstone[] }>
+  merge(todos: unknown[], deleted: TodoTombstone[]): Promise<{ todos: Todo[]; deleted: TodoTombstone[] }>
+  // 本机的待办变了（同步的那边据此尽快推给对方）
+  onChange(listener: () => void): void
+} = {
+  snapshot: () => Promise.reject(new Error('待办还没准备好')),
+  merge: () => Promise.reject(new Error('待办还没准备好')),
+  onChange: () => {},
+}
+
+// 对方发来的待办：一条条校验，不对的丢掉；本机没有的图片去掉（图片只在记下它的那台电脑上）
+export function parseSyncedTodos(raw: unknown[], hasImage: (id: string) => boolean): Todo[] {
+  return raw.flatMap((item) => {
+    const parsed = todoSchema.safeParse(item)
+    if (!parsed.success || !syncableTodo(parsed.data)) return []
+    const todo = parsed.data
+    return [todo.images ? { ...todo, images: todo.images.filter(hasImage) } : todo]
+  })
+}
 
 // 待办：存在数据目录的 todos.json，整份读写。条数有上限，一份文件不会大到拖慢
 export function registerTodosIpc(userDataDir: string): void {
   const path = join(userDataDir, 'todos.json')
   const imageDir = join(userDataDir, 'todo-attachments')
   const imagePath = (id: string) => join(imageDir, `${id}.webp`)
+  const syncPath = join(userDataDir, 'todos-sync.json')
   const queue = new WriteQueue()
   let cache: Todo[] | null = null
+  let tombstones: TodoTombstone[] | null = null
+  const listeners: Array<() => void> = []
   const shown = new Set<Notification>()
   // 还没写完的保存次数。退出时有没写完的就先等写完再退（第 498 步）：主进程不等异步写盘，
   // Ctrl+J 记完马上退出应用，最后几条会丢（界面上的条数是内存里的，看着已经记上了）
@@ -125,15 +162,56 @@ export function registerTodosIpc(userDataDir: string): void {
     return { mimeType: 'image/webp', data: (await readFile(imagePath(id))).toString('base64') }
   })
 
+  const loadTombstones = async (): Promise<TodoTombstone[]> => {
+    if (tombstones) return tombstones
+    const content = await readJsonFile(syncPath, syncFileSchema)
+    tombstones = content.state === 'loaded' ? content.value.deleted : []
+    return tombstones
+  }
+
+  // 写盘；和界面手里的不一样（合进了对方的）时推给界面换上
+  const write = async (todos: Todo[], deleted: TodoTombstone[], shown: Todo[] | null) => {
+    await writeJsonFileAtomic(path, { version: 1, todos })
+    if (deleted !== tombstones) await writeJsonFileAtomic(syncPath, { version: 1, deleted })
+    cache = todos
+    tombstones = deleted
+    if (shown === null || JSON.stringify(shown) !== JSON.stringify(todos)) for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC_CHANNELS.todosChanged, todos)
+    await removeOrphanImages(todos).catch((error: unknown) => console.error('[todos] 清理没用的附件图片失败', error))
+  }
+
   ipcMain.handle(IPC_CHANNELS.todosList, () => load())
-  ipcMain.handle(IPC_CHANNELS.todosSave, (_event, raw: unknown) => {
+  // 界面存的是它手里的整份；base 是它改之前手里有哪些（v2）：基准里有、新列表里没有的才算界面删的，
+  // 其间同步进来的（基准里没有）留着；同一条按改动时间取新的。没传 base 的（旧界面）按整份覆盖
+  ipcMain.handle(IPC_CHANNELS.todosSave, (_event, raw: unknown, rawBase: unknown) => {
     const todos = parse(z.array(todoSchema).max(TODO_MAX_ITEMS, `待办最多 ${TODO_MAX_ITEMS} 条，先删掉一些已完成的`), raw)
+    const base = parse(z.array(z.string().min(1).max(64)).max(TODO_MAX_ITEMS * 2).optional(), rawBase)
     pending++
-    return queue.run(async () => {
-      await writeJsonFileAtomic(path, { version: 1, todos })
-      cache = todos
-      await removeOrphanImages(todos).catch((error: unknown) => console.error('[todos] 清理没用的附件图片失败', error))
-      return todos
-    }).finally(() => pending--)
+    return queue
+      .run(async () => {
+        const current = await load()
+        const kept = new Set(todos.map((todo) => todo.id))
+        const removed = (base ?? current.map((todo) => todo.id)).filter((id) => !kept.has(id))
+        const now = new Date().toISOString()
+        const deleted = removed.length > 0 ? mergeTombstones(await loadTombstones(), removed.map((id) => ({ id, at: now })), Date.now()) : await loadTombstones()
+        const merged = base ? mergeTodoLists(todos, current, deleted).slice(0, TODO_MAX_ITEMS) : todos
+        await write(merged, deleted, todos)
+        for (const listener of listeners) listener()
+        return merged
+      })
+      .finally(() => pending--)
   })
+
+  todoSync.snapshot = async () => ({ todos: (await load()).filter(syncableTodo), deleted: await loadTombstones() })
+  todoSync.merge = (raw, deleted) =>
+    queue.run(async () => {
+      const current = await load()
+      const incoming = parseSyncedTodos(raw, (id) => existsSync(imagePath(id)))
+      const allDeleted = mergeTombstones(await loadTombstones(), deleted, Date.now())
+      const merged = mergeTodoLists(current, incoming, allDeleted).slice(0, TODO_MAX_ITEMS)
+      if (JSON.stringify(merged) !== JSON.stringify(current) || allDeleted.length !== (tombstones?.length ?? 0)) await write(merged, allDeleted, current)
+      return { todos: merged.filter(syncableTodo), deleted: allDeleted }
+    })
+  todoSync.onChange = (listener) => {
+    listeners.push(listener)
+  }
 }

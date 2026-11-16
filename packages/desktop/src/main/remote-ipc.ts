@@ -14,6 +14,7 @@ import { parse } from './ipc-input'
 import { onSessionEvent } from './session-events'
 import { settlePermission } from './session-ipc'
 import { DISCOVERY_PORT } from './remote/lan-discovery'
+import { todoSync } from './todos-ipc'
 import { type LanOptions, RemoteService } from './remote/service'
 import { testOverridesAllowed } from './test-overrides'
 import { deviceNameSchema, projectGrantSchema } from './remote/state'
@@ -125,6 +126,7 @@ export function registerRemoteIpc(userDataDir: string): void {
   if (!REMOTE_DEVICE_CONNECTION_ENABLED) return
   const opening = RemoteService.open(userDataDir, {
     transport: DEVICE_TRANSPORT,
+    todos: todoSync,
     lan: lanOptions(),
     relayUrl: relayUrl(),
     appVersion: app.getVersion(),
@@ -156,10 +158,13 @@ export function registerRemoteIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.remoteSetName, async (_event, raw: unknown) => (await service()).setName(parse(deviceNameSchema, raw)))
   ipcMain.handle(IPC_CHANNELS.remoteCreateInvite, async () => (await service()).createInvite())
   ipcMain.handle(IPC_CHANNELS.remoteCancelInvite, async () => (await service()).cancelInvite())
-  ipcMain.handle(IPC_CHANNELS.remoteRespond, async (_event, rawId: unknown, rawApproved: unknown, rawProjects: unknown) =>
-    (await service()).respond(parse(deviceId, rawId), parse(z.boolean(), rawApproved), parse(projects, rawProjects)),
+  ipcMain.handle(IPC_CHANNELS.remoteRespond, async (_event, rawId: unknown, rawApproved: unknown, rawProjects: unknown, rawTodos: unknown) =>
+    (await service()).respond(parse(deviceId, rawId), parse(z.boolean(), rawApproved), parse(projects, rawProjects), parse(z.boolean().optional(), rawTodos) ?? false),
   )
-  ipcMain.handle(IPC_CHANNELS.remoteUpdateGrant, async (_event, rawId: unknown, rawProjects: unknown) => (await service()).updateGrant(parse(deviceId, rawId), parse(projects, rawProjects)))
+  ipcMain.handle(IPC_CHANNELS.remoteUpdateGrant, async (_event, rawId: unknown, rawProjects: unknown, rawTodos: unknown) =>
+    (await service()).updateGrant(parse(deviceId, rawId), parse(projects, rawProjects), parse(z.boolean().optional(), rawTodos)),
+  )
+  ipcMain.handle(IPC_CHANNELS.remoteSetPeerTodos, async (_event, rawId: unknown, rawEnabled: unknown) => (await service()).setPeerTodos(parse(deviceId, rawId), parse(z.boolean(), rawEnabled)))
   ipcMain.handle(IPC_CHANNELS.remoteRevoke, async (_event, rawId: unknown) => (await service()).revoke(parse(deviceId, rawId)))
   ipcMain.handle(IPC_CHANNELS.remoteAddDevice, async (_event, rawInvite: unknown, rawName: unknown) => {
     const name = parse(z.string().trim().max(60).nullable(), rawName)

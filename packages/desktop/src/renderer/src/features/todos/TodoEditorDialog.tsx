@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { AlarmClock, Bell, Paperclip, Send, X } from 'lucide-react'
 import type { FileReference } from '../../../../shared/attachments'
-import { type Todo, type TodoPriority, TODO_MAX_TEXT, TODO_MAX_TITLE, TODO_PRIORITIES, type TodoSchedule, todoParts } from '../../../../shared/todos'
+import { type Todo, type TodoPriority, TODO_MAX_TEXT, TODO_MAX_TITLE, TODO_PRIORITIES, TODO_REPEAT_KINDS, TODO_REPEAT_LABELS, type TodoRepeatKind, type TodoSchedule, todoParts } from '../../../../shared/todos'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Segmented } from '@/components/ui/segmented'
@@ -17,6 +17,9 @@ import { priorityLabel } from './TodoPriority'
 import { TodoTagEditor } from './TodoTagEditor'
 
 type PriorityChoice = 'none' | `${TodoPriority}`
+type RepeatChoice = 'none' | TodoRepeatKind
+
+const REPEAT_OPTIONS: Array<{ value: RepeatChoice; label: string }> = [{ value: 'none', label: '不重复' }, ...TODO_REPEAT_KINDS.map((value) => ({ value, label: TODO_REPEAT_LABELS[value] }))]
 
 export interface TodoDraft {
   title: string
@@ -38,6 +41,7 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
   const [project, setProject] = useState(todo ? todo.project : (draft?.project ?? null))
   const original = todo?.schedule ?? null
   const [at, setAt] = useState<Date | null>(original ? new Date(original.at) : (draft?.at ?? null))
+  const [repeat, setRepeat] = useState<RepeatChoice>(original?.repeat?.every ?? 'none')
   const [busy, setBusy] = useState(false)
   const attachments = useTodoAttachments({ images: todo?.images ?? draft?.images ?? [], files: todo?.files ?? draft?.files ?? [] })
   const picker = useRef<HTMLInputElement>(null)
@@ -50,9 +54,9 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
     const chosen = priority === 'none' ? null : (Number(priority) as TodoPriority)
     try {
       if (todo) {
-        await updateTodo(todo.id, { text: title, body, priority: chosen, tags, project, schedule: nextSchedule(original, at), images: attachments.images, files: attachments.files })
+        await updateTodo(todo.id, { text: title, body, priority: chosen, tags, project, schedule: nextSchedule(original, at, repeat), images: attachments.images, files: attachments.files })
       } else {
-        await addTodo(title, at ?? undefined, { project, tags, body, priority: chosen, images: attachments.images, files: attachments.files })
+        await addTodo(title, at ?? undefined, { project, tags, body, priority: chosen, images: attachments.images, files: attachments.files, repeat: at && repeat !== 'none' ? repeat : undefined })
       }
       onClose(true)
     } catch {
@@ -120,6 +124,12 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
               </Button>
             )}
           </div>
+          {at && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-12 shrink-0 text-xs text-muted-foreground">重复</span>
+              <Segmented<RepeatChoice> label="重复" size="sm" value={repeat} options={REPEAT_OPTIONS} onChange={setRepeat} />
+            </div>
+          )}
           <div className="flex items-start gap-2">
             <span className="mt-1 w-12 shrink-0 text-xs text-muted-foreground">附件</span>
             <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
@@ -157,10 +167,13 @@ export function TodoEditorDialog({ todo, draft, onClose }: { todo?: Todo; draft?
   )
 }
 
-// 时间没变保持原样（包括到点后的结果）；改了时间就重新等，定时发送保留发给谁和发什么
-function nextSchedule(original: TodoSchedule | null, at: Date | null): TodoSchedule | null {
+// 时间和重复都没变保持原样（包括到点后的结果）；改了就重新等，定时发送保留发给谁和发什么。
+// 重复从这次定的时刻算起；原来就是同一种重复的保留隔几个周期
+function nextSchedule(original: TodoSchedule | null, at: Date | null, repeat: RepeatChoice): TodoSchedule | null {
   if (!at) return null
-  if (original && new Date(original.at).getTime() === at.getTime()) return original
-  if (original?.action.kind === 'send') return { ...original, at: at.toISOString(), result: null }
-  return { at: at.toISOString(), action: { kind: 'remind' }, result: null }
+  const every = repeat === 'none' ? null : repeat
+  if (original && new Date(original.at).getTime() === at.getTime() && (original.repeat?.every ?? null) === every) return original
+  const base: TodoSchedule = original?.action.kind === 'send' ? { ...original, at: at.toISOString(), result: null } : { at: at.toISOString(), action: { kind: 'remind' }, result: null }
+  if (every) return { ...base, repeat: { every, interval: original?.repeat?.every === every ? original.repeat.interval : 1, start: at.toISOString() } }
+  return original?.repeat ? { ...base, repeat: null } : base
 }

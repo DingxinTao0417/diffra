@@ -1,4 +1,4 @@
-import { type Todo, todoMessage, todoParts, type TodoSchedule } from '../../../shared/todos'
+import { advanceRepeat, type Todo, todoMessage, todoParts, type TodoSchedule } from '../../../shared/todos'
 import { errorMessage } from '@/lib/errors'
 import { saveTodos, sendInBackground, startInBackground, todoMessageWithAttachments } from './actions'
 import { showToast, store } from './store'
@@ -53,7 +53,7 @@ export function startTodoScheduler(): () => void {
       return
     }
     if (whileClosed || now - at > SEND_LATE_MS) {
-      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '错过了定时发送', body: `${todoParts(todo).title}\n到待办页选择现在发送或取消。` })
+      if (!whileClosed) await window.diffra.notifyTodo({ todoId: todo.id, title: '错过了定时发送', body: `${todoParts(todo).title}\n${schedule.repeat ? '这一次跳过，到下一次再发。' : '到待办页选择现在发送或取消。'}` })
       await record(todo.id, schedule.at, { kind: 'missed', at: new Date().toISOString() })
       return
     }
@@ -67,10 +67,15 @@ export function startTodoScheduler(): () => void {
     }
   }
 
-  // 存结果时按 id 和到期时刻对上：处理期间用户改了时间，就不覆盖
+  // 存结果时按 id 和到期时刻对上：处理期间用户改了时间，就不覆盖。
+  // 重复的（v2）：这一次的结果记进 last，挪到下一次接着等；错过的（应用没开着）也直接跳到下一次，不等用户补发
   const record = (id: string, at: string, result: Result, sentTo?: Todo['sentTo']) =>
     saveTodos((todos) =>
-      todos.map((todo) => (todo.id === id && todo.schedule?.at === at ? { ...todo, schedule: { ...todo.schedule, result }, ...(sentTo ? { sentTo } : {}) } : todo)),
+      todos.map((todo) => {
+        if (todo.id !== id || todo.schedule?.at !== at) return todo
+        const withSent = sentTo ? { ...todo, sentTo } : todo
+        return todo.schedule.repeat ? advanceRepeat(withSent, result, Date.now()) : { ...withSent, schedule: { ...todo.schedule, result } }
+      }),
     )
 
   const unsubscribe = store.subscribe(() => {

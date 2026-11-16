@@ -149,6 +149,7 @@ export const IPC_CHANNELS = {
   todosSave: 'todos:save',
   todosNotify: 'todos:notify',
   todosFocus: 'todos:focus',
+  todosChanged: 'todos:changed',
   todosSaveImage: 'todos:save-image',
   todosReadImage: 'todos:read-image',
   architectureList: 'architecture:list',
@@ -250,6 +251,7 @@ export const IPC_CHANNELS = {
   remoteAddDevice: 'remote:add-device',
   remoteAddLanDevice: 'remote:add-lan-device',
   remoteBrowse: 'remote:browse',
+  remoteSetPeerTodos: 'remote:set-peer-todos',
   remoteCancelAdd: 'remote:cancel-add',
   remoteRemovePeer: 'remote:remove-peer',
   remoteResetIdentity: 'remote:reset-identity',
@@ -628,7 +630,10 @@ export interface DiffraApi {
   recordVisualSnapshot(sessionId: string, toolCallId: string, image: PromptImage): Promise<{ recorded: boolean }>
   // 待办：整份读、整份存
   listTodos(): Promise<Todo[]>
-  saveTodos(todos: Todo[]): Promise<Todo[]>
+  // base：改之前界面手里有哪些待办（主进程据此分清界面删掉的和同步进来的，v2）
+  saveTodos(todos: Todo[], base?: string[]): Promise<Todo[]>
+  // 主进程合进了别的设备同步来的待办（v2）：界面换上这一份
+  onTodosChanged(listener: (todos: Todo[]) => void): () => void
   // 待办到时间的系统通知；点通知把窗口调到前面，onTodoFocus 收到这条待办的 id
   notifyTodo(notice: { todoId: string; title: string; body: string }): Promise<void>
   onTodoFocus(listener: (todoId: string) => void): () => void
@@ -779,8 +784,11 @@ export interface DiffraApi {
   createRemoteInvite(): Promise<void>
   cancelRemoteInvite(): Promise<void>
   // 本机的人对配对请求点了允许或拒绝；允许时带上开放哪些项目
-  respondRemoteRequest(deviceId: string, approved: boolean, projects: RemoteProjectGrant[]): Promise<void>
-  updateRemoteGrant(deviceId: string, projects: RemoteProjectGrant[]): Promise<void>
+  // todos：允许它同步待办（v2）
+  respondRemoteRequest(deviceId: string, approved: boolean, projects: RemoteProjectGrant[], todos?: boolean): Promise<void>
+  updateRemoteGrant(deviceId: string, projects: RemoteProjectGrant[], todos?: boolean): Promise<void>
+  // 和本机去连的这台设备同步待办（v2，对方也要允许）
+  setRemotePeerTodos(deviceId: string, enabled: boolean): Promise<void>
   revokeRemoteDevice(deviceId: string): Promise<void>
   // 粘贴邀请串添加设备：对方点了允许或拒绝、或者出错才返回
   addRemoteDevice(invite: string, name: string | null): Promise<RemoteAddResult>

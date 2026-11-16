@@ -28,9 +28,21 @@ export interface LanOptions {
   broadcast: boolean
 }
 
+// 待办同步（v2）用的本机待办：主进程的待办模块（todos-ipc 的 todoSync）
+export interface TodoSyncStore {
+  snapshot(): Promise<{ todos: unknown[]; deleted: Array<{ id: string; at: string }> }>
+  merge(todos: unknown[], deleted: Array<{ id: string; at: string }>): Promise<{ todos: unknown[]; deleted: Array<{ id: string; at: string }> }>
+  onChange(listener: () => void): void
+}
+
+// 待办多久同步一次（对方改的最晚这么久后看到）；本机改了以后等一会儿再推
+const TODO_SYNC_MS = 30_000
+const TODO_PUSH_DELAY_MS = 2000
+
 export interface RemoteServiceOptions {
   // 局域网直连（v2）还是经中转（已下线）
   transport: 'lan' | 'relay'
+  todos: TodoSyncStore
   lan: LanOptions
   relayUrl: string
   appVersion: string
@@ -67,6 +79,11 @@ export class RemoteService {
   private readonly hostSync: HostSync
   private readonly guestSync: GuestSync
   private adding: { controller: AbortController; host: string | null } | null = null
+  // 待办同步：每台设备上次的结果、正在同步的、定时器
+  private readonly todoSyncs = new Map<string, { at: string | null; error: string | null }>()
+  private readonly todoSyncing = new Set<string>()
+  private todoTimer: NodeJS.Timeout | null = null
+  private todoPush: NodeJS.Timeout | null = null
   // 局域网版：「添加设备」开着，要听发现消息（平时不监听，免得没用这个功能的人也被防火墙问）
   private browsing = false
   private readonly directListeners = new Map<string, (payload: Buffer) => void>()
@@ -97,12 +114,27 @@ export class RemoteService {
       branches: (cwd) => options.branches(cwd),
       switchBranch: (cwd, branch) => options.switchBranch(cwd, branch),
       compressImages: (images) => options.compressImages(images),
+      syncTodos: (todos, deleted) => options.todos.merge(todos, deleted),
     })
+    // 本机待办改了：一会儿后推给开着同步的设备，并告诉连着本机的设备来同步；另外定时拉一次，兜底对方没收到通知的情况
+    options.todos.onChange(() => {
+      if (this.todoPush) clearTimeout(this.todoPush)
+      this.todoPush = setTimeout(() => {
+        this.syncAllTodos()
+        this.hostSync.todosChanged()
+      }, TODO_PUSH_DELAY_MS)
+      this.todoPush.unref()
+    })
+    this.todoTimer = setInterval(() => this.syncAllTodos(), TODO_SYNC_MS)
+    this.todoTimer.unref()
     this.guestSync = new GuestSync({
       // 通道表是收到第一个直发帧时才建的，本机先开口时要在这里建；还没连中转就不建（不在这里起连接）
       open: (deviceId) => (this.identity && this.relay ? this.linksFor(this.identity).open(deviceId) : Promise.resolve({ ok: false, reason: 'relay' })),
       send: (deviceId, message) => this.links?.send(deviceId, 'guest', message) ?? false,
-      publish: (event) => options.publishSync(event),
+      publish: (event) => {
+        if ('event' in event && event.event.event === 'todos.changed') return void this.syncTodos(event.deviceId)
+        options.publishSync(event)
+      },
     })
   }
 
@@ -125,6 +157,36 @@ export class RemoteService {
   remotePage(deviceId: string, sessionId: string, before: number): Promise<RemoteSnapshotPage> {
     this.requirePeer(deviceId)
     return this.guestSync.page(deviceId, sessionId, before)
+  }
+
+  // 待办同步（v2）：把本机的发给对方，对方合好回整份，本机再合一次（其间本机又改的不丢）
+  async syncTodos(deviceId: string): Promise<void> {
+    const peer = this.store.get().peers.find((item) => item.deviceId === deviceId)
+    if (!peer?.todos || this.todoSyncing.has(deviceId) || !this.relay?.isOnline(deviceId)) return
+    this.todoSyncing.add(deviceId)
+    try {
+      const local = await this.options.todos.snapshot()
+      const result = await this.guestSync.syncTodos(deviceId, local.todos, local.deleted)
+      await this.options.todos.merge(result.todos, result.deleted)
+      this.todoSyncs.set(deviceId, { at: new Date().toISOString(), error: null })
+    } catch (error) {
+      logRemote('同步待办失败', error)
+      this.todoSyncs.set(deviceId, { at: this.todoSyncs.get(deviceId)?.at ?? null, error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      this.todoSyncing.delete(deviceId)
+      this.changed()
+    }
+  }
+
+  private syncAllTodos(): void {
+    for (const peer of this.store.get().peers) if (peer.todos) void this.syncTodos(peer.deviceId)
+  }
+
+  async setPeerTodos(deviceId: string, enabled: boolean): Promise<void> {
+    await this.store.update((state) => ({ ...state, peers: state.peers.map((item) => (item.deviceId === deviceId ? { ...item, todos: enabled } : item)) }))
+    if (!enabled) this.todoSyncs.delete(deviceId)
+    this.changed()
+    if (enabled) void this.syncTodos(deviceId)
   }
 
   // 新加的请求都走这里
@@ -211,8 +273,8 @@ export class RemoteService {
         name: request.name,
         previous: state.grants.find((grant) => grant.deviceId === request.deviceId)?.projects ?? null,
       })),
-      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, ...this.hostSync.activity(grant.deviceId) })),
-      peers: state.peers.map(device),
+      grants: state.grants.map((grant) => ({ ...device(grant), projects: grant.projects, todos: grant.todos === true, ...this.hostSync.activity(grant.deviceId) })),
+      peers: state.peers.map((peer) => ({ ...device(peer), todos: peer.todos === true, todosSync: this.todoSyncs.get(peer.deviceId) ?? { at: null, error: null } })),
       lan:
         this.options.transport === 'lan'
           ? {
@@ -258,7 +320,7 @@ export class RemoteService {
     this.host?.cancel()
   }
 
-  async respond(deviceId: string, approved: boolean, projects: RemoteProjectGrant[]): Promise<void> {
+  async respond(deviceId: string, approved: boolean, projects: RemoteProjectGrant[], todos = false): Promise<void> {
     // 局域网版：记下对方配对时出示的证书，以后只认这张
     const tls = this.lan?.fingerprintOf(deviceId) ?? null
     const device = this.host?.respond(deviceId, approved)
@@ -269,19 +331,20 @@ export class RemoteService {
       await this.store.update((state) => ({
         ...state,
         // 重新配对：整条换掉，授权按这次选的
-        grants: [...state.grants.filter((grant) => grant.deviceId !== device.deviceId), { ...device, pairedAt: now, lastSeenAt: now, projects, ...(tls ? { tls } : {}) }],
+        grants: [...state.grants.filter((grant) => grant.deviceId !== device.deviceId), { ...device, pairedAt: now, lastSeenAt: now, projects, ...(todos ? { todos } : {}), ...(tls ? { tls } : {}) }],
       }))
     }
-    await this.audit.append({ deviceId: device.deviceId, name: device.name, action: approved ? `允许配对：${describe(projects)}` : '拒绝配对' })
+    await this.audit.append({ deviceId: device.deviceId, name: device.name, action: approved ? `允许配对：${describe(projects)}${todos ? '，同步待办' : ''}` : '拒绝配对' })
     this.hostSync.grantsChanged()
     this.sync()
   }
 
-  async updateGrant(deviceId: string, projects: RemoteProjectGrant[]): Promise<void> {
+  async updateGrant(deviceId: string, projects: RemoteProjectGrant[], todos?: boolean): Promise<void> {
     const grant = this.store.get().grants.find((item) => item.deviceId === deviceId)
     if (!grant) throw new Error('这台设备已经不在授权列表里了')
-    await this.store.update((state) => ({ ...state, grants: state.grants.map((item) => (item.deviceId === deviceId ? { ...item, projects } : item)) }))
-    await this.audit.append({ deviceId, name: grant.name, action: `修改授权：${describe(projects)}` })
+    const allowTodos = todos ?? grant.todos === true
+    await this.store.update((state) => ({ ...state, grants: state.grants.map((item) => (item.deviceId === deviceId ? { ...item, projects, todos: allowTodos } : item)) }))
+    await this.audit.append({ deviceId, name: grant.name, action: `修改授权：${describe(projects)}${allowTodos ? '，同步待办' : '，不同步待办'}` })
     this.hostSync.grantsChanged()
     this.changed()
   }
@@ -469,6 +532,8 @@ export class RemoteService {
           this.links?.close(deviceId, 'guest')
         }
         void this.touch(deviceId)
+        // 连上了：马上同步一次待办
+        if (online) void this.syncTodos(deviceId)
       },
       frame: (kind, from, payload) => {
         if (kind === FRAME.rendezvous) {

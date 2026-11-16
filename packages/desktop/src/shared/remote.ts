@@ -13,7 +13,7 @@ export const DEVICE_TRANSPORT: 'lan' | 'relay' = 'lan'
 
 // 被连接端在列表里报的设备连接接口版本：2 起认 session.details、session.diff 这些新请求（0.3.x 不报，按 1 算）。
 // 连接端按它决定发不发新请求：老版本被连接端收到不认识的请求会当成格式不对、断开通道
-export const REMOTE_API = 2
+export const REMOTE_API = 3
 
 // 「完全控制」包含「可查看和操作」，再加上开终端、把权限模式切成「完全访问」：等于在本机执行任意命令，不限于开放的项目
 export const REMOTE_LEVELS = ['view', 'control', 'full'] as const
@@ -43,6 +43,8 @@ export interface RemoteDeviceView {
 // 本机授权给它的设备。terminals：它在本机开着几个终端（「完全控制」）；watching：它正在看的任务标题；lastActionAt：最近一次操作的时刻（毫秒）
 export interface RemoteGrantView extends RemoteDeviceView {
   projects: RemoteProjectGrant[]
+  // 允许它同步待办（v2）
+  todos: boolean
   terminals: number
   watching: string[]
   lastActionAt: number | null
@@ -71,7 +73,7 @@ export interface RemoteView {
   invite: { text: string; expiresAt: string } | null
   requests: RemotePairRequest[]
   grants: RemoteGrantView[]
-  peers: RemoteDeviceView[]
+  peers: RemotePeerView[]
   // 局域网版（v2）：本机证书的指纹（配对时给对方核对）和局域网里看到的设备；中转版是 null
   lan: { certificate: string | null; discovered: RemoteDiscoveredDevice[] } | null
 }
@@ -88,6 +90,12 @@ export interface RemoteDiscoveredDevice {
   pairing: boolean
   // 已经是本机连接的设备
   paired: boolean
+}
+
+// 本机去连的设备：和它同步待办（v2）、上次同步的时刻和没成的原因
+export interface RemotePeerView extends RemoteDeviceView {
+  todos: boolean
+  todosSync: { at: string | null; error: string | null }
 }
 
 export type RemoteAddResult = { ok: true; device: RemoteDeviceView } | { ok: false; error: string }
