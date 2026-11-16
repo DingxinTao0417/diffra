@@ -172,6 +172,8 @@ const settingsSchema = z.object({
   browser: browserSettingsSchema.default(() => ({ ...DEFAULT_BROWSER })),
   // v2 加的：电脑操控，默认关
   computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
+  // v2 加的：托盘和开机自启，默认都关
+  system: z.object({ tray: z.boolean(), launchAtLogin: z.boolean() }).optional(),
   defaultPermissionMode: permissionModeSchema.default('ask'),
   // 第 14 步加的
   security: securitySchema.default(() => ({ ...DEFAULT_SECURITY })),

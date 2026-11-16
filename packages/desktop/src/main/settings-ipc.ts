@@ -12,6 +12,7 @@ import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
 import { oauthFor, oauthStates } from './mcp-oauth'
 import { browserHost } from './browser'
+import { applyLoginItem, applyTray, DEFAULT_SYSTEM } from './tray'
 import type { SecretStore } from './secret-store'
 import {
   appearanceSchema,
@@ -90,7 +91,7 @@ function rememberReasoning(current: Settings, choice: { providerId: string; mode
 }
 
 export async function settingsView(settings: SettingsStore, secrets: SecretStore): Promise<SettingsView> {
-  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents, computerUse } = settings.get()
+  const { providers, roles, appearance, layout, browser, defaultPermissionMode, security, execution, mcpServers, reasoningChoices, archivedProjects, externalAgents, computerUse, system } = settings.get()
   return {
     providers: await Promise.all(
       providers.map(async (provider) => ({ ...provider, keyHint: await secrets.hint(provider.id) })),
@@ -109,6 +110,7 @@ export async function settingsView(settings: SettingsStore, secrets: SecretStore
     externalAgents,
     mcpOAuth: await oauthStates(settings, secrets),
     computerUse: computerUse ?? { enabled: false, acknowledged: false },
+    system: system ?? DEFAULT_SYSTEM,
     loadError: settings.loadError ?? secrets.loadError,
   }
 }
@@ -167,6 +169,7 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
         security: securitySchema.optional(),
         execution: executionSchema.optional(),
         computerUse: z.object({ enabled: z.boolean(), acknowledged: z.boolean() }).optional(),
+        system: z.object({ tray: z.boolean(), launchAtLogin: z.boolean() }).optional(),
         reasoningChoice: z.object({ providerId: z.string().min(1), modelId: z.string().min(1), effort: z.enum(REASONING_EFFORTS) }).optional(),
       }),
       raw,
@@ -174,6 +177,10 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     const { reasoningChoice, ...preferences } = change
     await settings.update((current) => ({ ...current, ...preferences, ...(reasoningChoice ? { reasoningChoices: rememberReasoning(current, reasoningChoice) } : {}) }))
     if (change.browser) browserHost.pushSites()
+    if (change.system) {
+      applyTray(settings)
+      applyLoginItem(settings)
+    }
     // 检查开关对已经打开的任务立即生效；推送失败时设置照样存下，之后新建、载入的任务按设置
     if (change.security) {
       const switches = change.security

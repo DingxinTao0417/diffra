@@ -44,6 +44,7 @@ import type {
   ComputerAuditEntry,
   ComputerStatus,
   ComputerUseSettings,
+  SystemSettings,
   ExecutionSettings,
   McpServerInput,
   ModelRef,
@@ -584,6 +585,8 @@ export interface DiffraApi {
     execution?: ExecutionSettings
     // 电脑操控（v2）：开了对新任务生效，关掉马上生效
     computerUse?: ComputerUseSettings
+    // 托盘和开机自启（v2），马上生效
+    system?: SystemSettings
     // 输入框里给这个模型选了思考程度，记下来
     reasoningChoice?: { providerId: string; modelId: string; effort: ReasoningEffort }
   }): Promise<SettingsView>

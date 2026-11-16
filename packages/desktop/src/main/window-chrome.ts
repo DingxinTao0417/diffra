@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions, nativeTheme, shell } from 'electron'
 import { z } from 'zod'
 import { IPC_CHANNELS, type MenuCommand } from '../shared/ipc'
+import { initialShowHeld } from './tray'
 import { parse } from './ipc-input'
 
 // Windows 上去掉系统标题栏，最小化 / 最大化 / 关闭用系统的窗口按钮（titleBarOverlay），
@@ -184,15 +185,23 @@ export function setupWindowChrome(): void {
 
   ipcMain.handle(IPC_CHANNELS.windowFullScreen, (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false)
 
-  // 页面套用外观后把顶栏颜色告诉系统窗口按钮，原生菜单跟着深浅色；第一次套用后才显示窗口，免得先闪一下浅色
+  // 页面套用外观后把顶栏颜色告诉系统窗口按钮，原生菜单跟着深浅色；第一次套用后才显示窗口，免得先闪一下浅色。
+  // 只在窗口还没显示过时显示：藏到托盘（v2）、Mac 上关掉的窗口，换深浅色时不该自己跳出来；开机自启藏在托盘里时也不显示
   ipcMain.handle(IPC_CHANNELS.windowChrome, (event, raw: unknown) => {
     const { color, symbolColor, theme } = parse(chromeSchema, raw)
     nativeTheme.themeSource = theme
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return
     if (USE_TITLE_BAR_OVERLAY) window.setTitleBarOverlay({ color, symbolColor, height: TITLE_BAR_HEIGHT })
-    if (!window.isVisible()) window.show()
+    if (!window.isVisible() && !presented.has(window) && !initialShowHeld()) window.show()
   })
+}
+
+// 显示过的窗口（之后藏起来的不再因为换外观自己跳出来）
+const presented = new WeakSet<BrowserWindow>()
+
+export function watchPresented(window: BrowserWindow): void {
+  window.on('show', () => presented.add(window))
 }
 
 // 鼠标侧键前进后退（Windows 上是 app-command）

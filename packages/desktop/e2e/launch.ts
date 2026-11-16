@@ -34,6 +34,8 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
     DIFFRA_BROWSER_HOST_TARGETS: 'none',
     // 扩展页会联网取目录：测试里默认连本机一个没人听的端口（马上失败，用内置目录），不去请求真的官网；要测的用例自己换
     DIFFRA_CATALOG_URL: 'http://127.0.0.1:9/extensions/catalog.json',
+    // 藏到托盘时不在用户桌面上冒真的气泡通知
+    DIFFRA_TRAY_QUIET: '1',
     ...extraEnv,
   }
   const executable = packagedExecutable()

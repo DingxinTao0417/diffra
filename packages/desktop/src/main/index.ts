@@ -27,7 +27,8 @@ import { killAllTerminals, registerTerminalIpc } from './terminal-ipc'
 import { registerFileIpc } from './file-ipc'
 import { registerExportIpc } from './export-ipc'
 import { setupUpdater } from './updater'
-import { setupWindowChrome, titleBarOptions, watchAppCommands, watchFullScreen } from './window-chrome'
+import { applyLoginItem, hideToTray, initialShowHeld, setupTray, trayEnabled } from './tray'
+import { setupWindowChrome, titleBarOptions, watchAppCommands, watchFullScreen, watchPresented } from './window-chrome'
 
 // 开发模式和 e2e 不碰正式安装版的数据目录（%APPDATA%\Diffra），必须在 ready 之前设置
 if (!app.isPackaged) {
@@ -54,7 +55,7 @@ app.on('second-instance', () => {
   window.focus()
 })
 
-function createWindow(): void {
+function createWindow(settings: SettingsStore): void {
   const window = new BrowserWindow({
     width: 1200,
     height: 820,
@@ -71,11 +72,20 @@ function createWindow(): void {
   // 页面第一次套用外观时显示（见 window-chrome）；页面没来得及发就按时显示，免得窗口一直不出来
   window.once('ready-to-show', () =>
     setTimeout(() => {
-      if (!window.isDestroyed() && !window.isVisible()) window.show()
+      if (!window.isDestroyed() && !window.isVisible() && !initialShowHeld()) window.show()
     }, 1500),
   )
+  watchPresented(window)
   watchAppCommands(window)
   watchFullScreen(window)
+  // 开着托盘（v2）时关窗口只是藏到托盘，任务照常跑；从托盘菜单退出才真正退出
+  if (!HIDE_ON_CLOSE) {
+    window.on('close', (event) => {
+      if (quitting || !trayEnabled(settings)) return
+      event.preventDefault()
+      hideToTray(window)
+    })
+  }
   if (HIDE_ON_CLOSE) {
     window.on('close', (event) => {
       if (quitting) return
@@ -172,7 +182,12 @@ app
     setupUpdater()
     setupWindowChrome()
     registerRendererLog()
-    createWindow()
+    setupTray(settings, () => {
+      quitting = true
+      app.quit()
+    })
+    applyLoginItem(settings)
+    createWindow(settings)
   })
   .catch((error: unknown) => {
     console.error('[app] 启动失败', error)

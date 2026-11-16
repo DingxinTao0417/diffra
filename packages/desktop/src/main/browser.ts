@@ -15,6 +15,7 @@ import { registerNativeHost } from './native-host-registry'
 import type { SettingsStore } from './settings-store'
 import { clip, PageAgent, type PageTarget, sleep, withTimeout } from './browser-page'
 import { parse } from './ipc-input'
+import { setRunningTasks } from './tray'
 
 // 内置浏览器：每个任务一组标签页（WebContentsView），当前那个叠在窗口里浏览器面板的位置上；
 // 所有任务共用一个和应用、和用户自己浏览器都分开的浏览器配置。智能体的操作在 PageAgent 里，通过 Chrome 调试协议做
@@ -542,6 +543,9 @@ export function registerBrowserIpc(): void {
   ipcMain.handle(IPC_CHANNELS.browserDevTools, (_event, rawSessionId: unknown) => browserHost.openDevTools(parse(sessionIdSchema, rawSessionId)))
   ipcMain.handle(IPC_CHANNELS.browserBridgeGetStatus, () => browserHost.status())
   ipcMain.on(IPC_CHANNELS.browserBridgeTasks, (_event, rawTasks: unknown) => {
-    browserHost.setTasks(parse(z.array(z.object({ sessionId: z.string().min(1), title: z.string().max(200), running: z.boolean() })).max(50), rawTasks))
+    const tasks = parse(z.array(z.object({ sessionId: z.string().min(1), title: z.string().max(200), running: z.boolean() })).max(50), rawTasks)
+    browserHost.setTasks(tasks)
+    // 同一份任务列表：托盘上显示几个任务在跑
+    setRunningTasks(tasks.filter((task) => task.running).length)
   })
 }

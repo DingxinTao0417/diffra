@@ -28,6 +28,7 @@ import {
 import type { ChangelogRelease } from '../../../../shared/changelog'
 import type { CoreStatus, UpdateStatus } from '../../../../shared/ipc'
 import { REMOTE_DEVICE_CONNECTION_ENABLED } from '../../../../shared/remote'
+import { StartupGroup } from './StartupGroup'
 import {
   type Appearance,
   COMPACT_AT_PERCENTS,
@@ -76,7 +77,7 @@ const GROUPS: Array<{ name: string; items: Array<{ id: SettingsSection; label: s
   {
     name: '通用',
     items: [
-      { id: 'general', label: '常规', icon: Settings2, keywords: '快捷键 连接 core' },
+      { id: 'general', label: '常规', icon: Settings2, keywords: '快捷键 连接 core 托盘 后台 开机 自动启动 菜单栏' },
       { id: 'appearance', label: '外观', icon: Palette, keywords: '主题 深色 浅色 配色 字号 文字大小 宽度' },
     ],
   },
@@ -207,6 +208,7 @@ function GeneralSection() {
   return (
     <>
       <SettingsHeader title="常规" />
+      <StartupGroup />
       <SettingsGroup title="连接">
         <SettingsRow label="智能体服务" hint="在后台运行任务的本地进程。">
           <CoreStatusView status={status} />
