@@ -27,7 +27,9 @@ function isBrandIconId(id: string): id is BrandIconId {
 }
 
 export function brandIcon(id: string): BrandIconId | null {
-  return isBrandIconId(id) ? id : null
+  // 同一家的远程版用同一个图标
+  const brand = id.replace(/-remote$/, '')
+  return isBrandIconId(brand) ? brand : null
 }
 
 const ICONS: Record<BrandIconId, { viewBox: string; body: ReactNode }> = {

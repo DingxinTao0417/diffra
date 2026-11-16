@@ -18,7 +18,7 @@ export function openLink(url: string): void {
 // 目录里的说明行：要填什么、要先装什么
 function needs(entry: CatalogMcp): string {
   const { connection, key } = entry
-  if (connection.transport === 'oauth') return entry.note ?? '只支持浏览器登录'
+  if (connection.transport === 'oauth') return '用浏览器登录'
   if (connection.transport === 'stdio') return '在本机运行'
   if (!key) return '不用填 Key'
   return key.optional ? '不填 Key 也能用' : `贴一个 ${key.label}`
@@ -54,10 +54,6 @@ export function CatalogMcpRow({
   const missing = connection.transport === 'stdio' && prerequisites !== null && !prerequisites[connection.requires] ? PREREQUISITES[connection.requires] : null
   const action = installed ? (
     <span className="text-xs text-muted-foreground">已安装</span>
-  ) : connection.transport === 'oauth' ? (
-    <Button size="sm" variant="outline" disabled>
-      下一版支持
-    </Button>
   ) : missing ? (
     <Button size="sm" variant="ghost" onClick={onRecheck}>
       重新检测
@@ -121,6 +117,8 @@ function McpInstallPanel({ entry, summary, onCancel, onInstalled }: { entry: Cat
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const id = `catalog-key-${entry.id}`
+  // 浏览器登录的（v2）：点了以后在系统浏览器里登录，这里等着，可以取消
+  const oauth = entry.connection.transport === 'oauth'
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -164,11 +162,17 @@ function McpInstallPanel({ entry, summary, onCancel, onInstalled }: { entry: Cat
           </Alert>
         )}
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
-            取消
-          </Button>
+          {oauth && busy ? (
+            <Button type="button" variant="ghost" onClick={() => void window.diffra.cancelMcpLogin(`catalog:${entry.id}`)}>
+              取消登录
+            </Button>
+          ) : (
+            <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
+              取消
+            </Button>
+          )}
           <Button type="submit" disabled={busy}>
-            {busy ? '正在连接…' : '安装并测试'}
+            {oauth ? (busy ? '等你在浏览器里登录…' : '在浏览器里登录并安装') : busy ? '正在连接…' : '安装并测试'}
           </Button>
         </div>
       </form>

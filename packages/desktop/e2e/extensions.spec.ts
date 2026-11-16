@@ -56,7 +56,8 @@ test('扩展：目录里的 MCP 一键装，Key 不对不保存、改对后连�
     await expect(view.getByRole('heading', { name: '接上常用服务' })).toBeVisible()
     await expect(view.getByRole('heading', { name: '更好的工作方法' })).toBeVisible()
     const vercel = view.getByTestId('catalog-mcp').filter({ hasText: 'Vercel' })
-    await expect(vercel.getByRole('button', { name: '下一版支持' })).toBeDisabled()
+    await expect(vercel).toContainText('用浏览器登录')
+    await expect(vercel.getByRole('button', { name: '安装 Vercel' })).toBeVisible()
     await window.screenshot({ path: 'test-results/extensions-recommended.png' })
     // 按名称、说明搜目录
     const search = view.getByLabel('搜索扩展')
@@ -86,7 +87,7 @@ test('扩展：目录里的 MCP 一键装，Key 不对不保存、改对后连�
 
     // Railway 要本机的 railway 命令：没有时说缺什么、不能装；放上假的再检测就能装
     await openExtensions(window, 'MCP')
-    const railway = view.getByTestId('catalog-mcp').filter({ hasText: 'Railway' })
+    const railway = view.getByTestId('catalog-mcp').filter({ hasText: 'Railway', hasNotText: '远程版' })
     await expect(railway.getByTestId('catalog-missing')).toContainText('没检测到 railway 命令')
     await expect(railway.getByRole('button', { name: '安装 Railway' })).toHaveCount(0)
     await window.screenshot({ path: 'test-results/extensions-mcp.png' })

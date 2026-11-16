@@ -8,6 +8,7 @@ import { catalogMcp, PREREQUISITES, type CatalogConnection, type Prerequisite, t
 import { IPC_CHANNELS } from '../shared/ipc'
 import type { McpServerInput } from '../shared/settings'
 import { coreConnection } from './core-process'
+import { loginWithCancel, oauthFor } from './mcp-oauth'
 import { parse } from './ipc-input'
 import type { SecretStore } from './secret-store'
 import { saveMcpServer, settingsView } from './settings-ipc'
@@ -49,14 +50,30 @@ function freeName(base: string, taken: string[]): string {
 export function registerExtensionsIpc(settings: SettingsStore, secrets: SecretStore): void {
   ipcMain.handle(IPC_CHANNELS.extensionPrerequisites, () => prerequisiteState())
 
+  // 浏览器登录的服务（v2）：先在系统浏览器里登录，再带着令牌连一次，都成了才保存；连不上就退出登录，不留半截
+  const installWithLogin = async (id: string, label: string, url: string) => {
+    const auth = oauthFor(secrets, url)
+    await loginWithCancel(`catalog:${id}`, auth)
+    const token = await auth.accessToken()
+    const name = freeName(id, settings.get().mcpServers.map((server) => server.name))
+    const cwd = settings.get().lastProject ?? app.getPath('home')
+    const [status] = token ? await mcpStatus(await coreConnection(), { cwd, servers: [{ type: 'http', name, url, headers: [{ name: 'Authorization', value: `Bearer ${token}` }] }] }, true) : []
+    if (!status || status.state !== 'connected') {
+      await auth.logout().catch(() => undefined)
+      throw new Error(`登录了，但连不上 ${label}：${status?.error ?? '没拿到令牌'}`)
+    }
+    await saveMcpServer(settings, secrets, { name, enabled: true, transport: 'http', command: '', args: [], url, env: [], headers: [], auth: 'oauth' })
+    return settingsView(settings, secrets)
+  }
+
   // 一键装：只收目录 id 和用户填的 Key，地址、命令都按目录来。先连一次，连不上就不保存，把原因告诉用户
   ipcMain.handle(IPC_CHANNELS.extensionInstallMcp, async (_event, rawId: unknown, rawKey: unknown) => {
     const entry = catalogMcp(parse(z.string().min(1), rawId))
     const key = parse(z.string().trim().max(4000).nullable(), rawKey) || null
     if (!entry) throw new Error('目录里没有这个服务')
     const override = catalogOverrides().mcp[entry.id]
-    const connection: CatalogConnection = override && entry.connection.transport === 'http' ? { transport: 'http', url: override.url } : entry.connection
-    if (connection.transport === 'oauth') throw new Error(`${entry.name} 只支持浏览器登录，下一版支持`)
+    const connection: CatalogConnection = override && entry.connection.transport !== 'stdio' ? { ...entry.connection, url: override.url } : entry.connection
+    if (connection.transport === 'oauth') return installWithLogin(entry.id, entry.name, connection.url)
     if (connection.transport === 'stdio' && !prerequisiteState()[connection.requires as Prerequisite]) {
       throw new Error(`没检测到 ${PREREQUISITES[connection.requires].command} 命令，先装好 ${PREREQUISITES[connection.requires].label}`)
     }

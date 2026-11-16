@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CircleAlert, Ellipsis, ExternalLink, Loader2, Pencil, Plug, Trash2, TriangleAlert } from 'lucide-react'
 import type { McpServerStatus } from '@diffra/core/types'
 import { catalogEntryOf, PREREQUISITES, type PrerequisiteState } from '../../../../shared/extensions'
+import type { McpOAuthState } from '../../../../shared/mcp-oauth'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
 import { cn } from 'cn'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -15,6 +16,7 @@ import { openLink } from '@/features/extensions/CatalogMcpRow'
 import { brandIcon } from '@/features/extensions/brand-icons'
 import { ExtensionRow, initialOf, SectionTitle } from '@/features/extensions/parts'
 import { errorMessage } from '@/lib/errors'
+import { formatTime } from '@/lib/format'
 import { McpServerDialog } from './McpServerDialog'
 import type { useMcpStatus } from './useMcpStatus'
 
@@ -64,6 +66,7 @@ export function McpInstalled({
             key={server.id}
             server={server}
             status={status.statuses?.find((item) => item.name === server.name) ?? null}
+            oauth={view.mcpOAuth[server.id] ?? null}
             loading={status.loading}
             prerequisites={prerequisites}
             onChange={onChange}
@@ -75,6 +78,60 @@ export function McpInstalled({
       )}
       <McpServerDialog open={dialog.open} server={dialog.server} onOpenChange={(open) => setDialog((current) => ({ ...current, open }))} onSaved={onChange} />
     </section>
+  )
+}
+
+// 浏览器登录的服务器（v2）：登录状态和登录、退出登录。没登录时任务里不带它
+function OAuthLine({ server, state, onChange }: { server: McpServerConfig; state: McpOAuthState | null; onChange(view: SettingsView): void }) {
+  const [busy, setBusy] = useState<'login' | 'logout' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const act = async (kind: 'login' | 'logout') => {
+    setBusy(kind)
+    setError(null)
+    try {
+      onChange(await (kind === 'login' ? window.diffra.loginMcpServer(server.id) : window.diffra.logoutMcpServer(server.id)))
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const status = state?.status ?? 'signed-out'
+  const label =
+    status === 'signed-in'
+      ? `已用浏览器登录${state?.expiresAt ? `，令牌 ${formatTime(state.expiresAt)} 到期，快到期时自动续` : ''}`
+      : status === 'expired'
+        ? '登录过期了，任务里暂时用不了它，重新登录一下'
+        : '还没登录，任务里用不了它'
+  return (
+    <div className="space-y-1.5" data-testid="mcp-oauth">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className={cn(status === 'signed-in' ? 'text-muted-foreground' : 'text-warning')} data-testid="mcp-oauth-status" data-status={status}>
+          {label}
+        </span>
+        {busy === 'login' ? (
+          <>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Loader2 aria-hidden className="size-3 animate-spin" />
+              等你在浏览器里登录…
+            </span>
+            <Button size="xs" variant="ghost" onClick={() => void window.diffra.cancelMcpLogin(server.id)}>
+              取消登录
+            </Button>
+          </>
+        ) : (
+          <Button size="xs" variant="outline" disabled={busy !== null} onClick={() => void act('login')}>
+            {status === 'signed-out' ? '在浏览器里登录' : '重新登录'}
+          </Button>
+        )}
+        {status !== 'signed-out' && busy !== 'login' && (
+          <Button size="xs" variant="ghost" disabled={busy !== null} onClick={() => void act('logout')}>
+            退出登录
+          </Button>
+        )}
+      </div>
+      {error && <p className="text-xs break-words text-destructive">{error}</p>}
+    </div>
   )
 }
 
@@ -91,6 +148,7 @@ const CONNECTION_LABELS: Record<ConnectionState, string> = {
 interface McpServerRowProps {
   server: McpServerConfig
   status: McpServerStatus | null
+  oauth: McpOAuthState | null
   loading: boolean
   prerequisites: PrerequisiteState | null
   onChange(view: SettingsView): void
@@ -99,7 +157,7 @@ interface McpServerRowProps {
   onRecheck(): void
 }
 
-function McpServerRow({ server, status, loading, prerequisites, onChange, onEdit, onRetry, onRecheck }: McpServerRowProps) {
+function McpServerRow({ server, status, oauth, loading, prerequisites, onChange, onEdit, onRetry, onRecheck }: McpServerRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [showTools, setShowTools] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -125,6 +183,7 @@ function McpServerRow({ server, status, loading, prerequisites, onChange, onEdit
         url: server.url,
         env: server.envNames.map((name) => ({ name, value: null })),
         headers: server.headerNames.map((name) => ({ name, value: null })),
+        ...(server.auth ? { auth: server.auth } : {}),
       }),
     )
 
@@ -194,6 +253,7 @@ function McpServerRow({ server, status, loading, prerequisites, onChange, onEdit
             {stdio ? '环境变量' : '请求头'}：<span className="font-mono">{names.join('、')}</span>
           </div>
         )}
+        {server.auth === 'oauth' && <OAuthLine server={server} state={oauth} onChange={onChange} />}
         {state === 'connected' && status && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">

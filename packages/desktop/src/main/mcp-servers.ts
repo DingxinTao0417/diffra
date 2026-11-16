@@ -2,6 +2,7 @@ import type { McpServer } from '@diffra/core/types'
 import type { McpServerConfig } from '../shared/settings'
 import type { SecretStore } from './secret-store'
 import type { SettingsStore } from './settings-store'
+import { oauthHeader } from './mcp-oauth'
 
 // 环境变量和请求头的值存在密钥库里，按服务器 id 和名字分开
 export function mcpSecretKey(serverId: string, kind: 'env' | 'header', name: string): string {
@@ -27,15 +28,18 @@ export async function mcpServersFor(settings: SettingsStore, secrets: SecretStor
         return { name, value: value ?? '' }
       }),
     )
-  return Promise.all(
+  const servers = await Promise.all(
     settings
       .get()
       .mcpServers.filter((server) => server.enabled)
-      .map(
-        async (server): Promise<McpServer> =>
-          server.transport === 'http'
-            ? { type: 'http', name: server.name, url: server.url, headers: await values(server, 'header', server.headerNames) }
-            : { name: server.name, command: server.command, args: server.args, env: await values(server, 'env', server.envNames) },
-      ),
+      .map(async (server): Promise<McpServer | null> => {
+        if (server.transport !== 'http') return { name: server.name, command: server.command, args: server.args, env: await values(server, 'env', server.envNames) }
+        const headers = await values(server, 'header', server.headerNames)
+        if (server.auth !== 'oauth') return { type: 'http', name: server.name, url: server.url, headers }
+        // 浏览器登录的（v2）：带上访问令牌；没登录、令牌过期又刷新不了时不带进任务，扩展页上提示去登录
+        const authorization = await oauthHeader(secrets, server)
+        return authorization ? { type: 'http', name: server.name, url: server.url, headers: [...headers.filter((item) => item.name.toLowerCase() !== 'authorization'), authorization] } : null
+      }),
   )
+  return servers.filter((server) => server !== null)
 }

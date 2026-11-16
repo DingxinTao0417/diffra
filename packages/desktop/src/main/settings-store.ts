@@ -134,6 +134,8 @@ export const mcpServerConfigSchema = z.object({
   envNames: z.array(z.string().min(1)),
   url: z.string(),
   headerNames: z.array(z.string().min(1)),
+  // v2 加的：浏览器登录的远程服务器，旧设置没有
+  auth: z.literal('oauth').optional(),
 })
 
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/

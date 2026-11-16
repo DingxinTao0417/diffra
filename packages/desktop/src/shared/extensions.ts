@@ -1,7 +1,7 @@
 import type { McpServerConfig } from './settings'
 
 // 「扩展」页的内置目录（第 594 步）：随版本更新，不从网上拉。地址、请求头写法、插件仓库都按各家官方文档核对过（2026-11-13）。
-// 这一版只做「贴 Token 一键装」：只支持浏览器登录（OAuth）的服务标成下一版支持
+// 「贴 Token 一键装」和浏览器登录（OAuth，v2 起，Vercel 和 Railway 的远程版靠它）两种
 
 // 本机要先装好的命令；只检测、给安装说明，不替用户装
 export const PREREQUISITES = {
@@ -27,7 +27,7 @@ export interface CatalogKey {
 export type CatalogConnection =
   | { transport: 'http'; url: string }
   | { transport: 'stdio'; command: string; args: string[]; requires: Prerequisite }
-  // 只支持浏览器登录，这一版装不了
+  // 只支持浏览器登录（OAuth）：装的时候用系统浏览器登录，令牌加密存在本机
   | { transport: 'oauth'; url: string }
 
 export type McpGroup = 'code' | 'data' | 'docs'
@@ -191,7 +191,18 @@ export const CATALOG_MCP: CatalogMcp[] = [
     recommended: true,
     connection: { transport: 'oauth', url: 'https://mcp.vercel.com' },
     key: null,
-    note: '只支持浏览器登录',
+    note: '用浏览器登录 Vercel 账号。登录状态加密保存在本机，可以随时退出登录。',
+  },
+  {
+    id: 'railway-remote',
+    name: 'Railway（远程版）',
+    publisher: '官方',
+    group: 'data',
+    description: '不用装 CLI：部署服务、看日志、管环境变量',
+    recommended: false,
+    connection: { transport: 'oauth', url: 'https://mcp.railway.com' },
+    key: null,
+    note: '用浏览器登录 Railway 账号（Railway 标的是公开测试）。登录状态加密保存在本机，可以随时退出登录。',
   },
   {
     id: 'context7',

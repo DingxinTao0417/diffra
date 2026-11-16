@@ -10,6 +10,7 @@ import { MAX_MODEL_ID_LENGTH, MCP_TRANSPORTS, type McpServerConfig, type ModelRe
 import { coreConnection } from './core-process'
 import { parse } from './ipc-input'
 import { mcpSecretKey, mcpSecretKeys } from './mcp-servers'
+import { oauthFor, oauthStates } from './mcp-oauth'
 import { browserHost } from './browser'
 import type { SecretStore } from './secret-store'
 import {
@@ -44,6 +45,8 @@ const mcpInputSchema = z
     url: z.string().trim(),
     env: z.array(namedValue(/^[A-Za-z_][A-Za-z0-9_]*$/, '环境变量')).max(50),
     headers: z.array(namedValue(/^[A-Za-z0-9-]+$/, '请求头')).max(50),
+    // 浏览器登录（OAuth）的远程服务器，v2 加的
+    auth: z.literal('oauth').optional(),
   })
   .superRefine((input, context) => {
     if (input.transport === 'stdio' && !input.command) context.addIssue({ code: 'custom', message: '请填写启动命令' })
@@ -104,6 +107,7 @@ export async function settingsView(settings: SettingsStore, secrets: SecretStore
     archivedProjects,
     defaultWorkspace: workspaceRoot(settings),
     externalAgents,
+    mcpOAuth: await oauthStates(settings, secrets),
     loadError: settings.loadError ?? secrets.loadError,
   }
 }
@@ -135,6 +139,7 @@ export async function saveMcpServer(settings: SettingsStore, secrets: SecretStor
     envNames: kind === 'env' ? values.map((item) => item.name) : [],
     url: input.transport === 'http' ? input.url : '',
     headerNames: kind === 'header' ? values.map((item) => item.name) : [],
+    ...(input.transport === 'http' && input.auth === 'oauth' ? { auth: 'oauth' as const } : {}),
   }
   await settings.update((current) => ({
     ...current,
@@ -236,6 +241,12 @@ export function registerSettingsIpc(settings: SettingsStore, secrets: SecretStor
     if (!server) return view()
     await settings.update((current) => ({ ...current, mcpServers: current.mcpServers.filter((item) => item.id !== id) }))
     for (const key of mcpSecretKeys(server)) await secrets.delete(key)
+    // 浏览器登录的：同一个地址没有别的服务器在用了就退出登录（撤销令牌，删掉本机的）
+    if (server.auth === 'oauth' && !settings.get().mcpServers.some((item) => item.auth === 'oauth' && item.url === server.url)) {
+      await oauthFor(secrets, server.url)
+        .logout()
+        .catch((error: unknown) => console.error(`[mcp] 删除 ${server.name} 时退出登录失败`, error))
+    }
     return view()
   })
 

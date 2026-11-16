@@ -20,7 +20,7 @@ v1：
 v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域网，互联网远程、P2P 打洞、离线暂存、自建中转、远程撤销不做）：
 - 外接 agent：通过 ACP 驱动 Claude Code / Codex / Gemini CLI / Copilot CLI，官方账号登录在这条路上由它们自己完成。已做，见「外接智能体」。
 - 多候选方案（每个候选一个 git worktree）、Java 适配器。
-- 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。
+- 扩展（见「扩展页」）：MCP 的浏览器登录（OAuth，Vercel 和 Railway 远程版要靠它）、扩展目录联网更新、插件更新、LSP。进度见「扩展的 v2 部分」。
 
 ## 技术栈
 
@@ -563,7 +563,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
 
 - 侧栏「待办」下面加「扩展」，页面分「推荐 / MCP / 插件 / 已安装」，带搜索（按名称、说明、来源）。换分栏不新增后退记录。设置里的「MCP 服务器」「插件」两页删掉，管理都在「已安装」。不叫「插件」：MCP 连接和插件都在里面，插件只是其中一类。
 - 目录（`shared/extensions.ts`）随版本更新，不从网上拉，离线也能用、装的都是审过的。每项写清连接方式（远程地址、本地命令和要先装的命令，或只支持浏览器登录）、要填什么 Key、拼成什么请求头、去哪拿、要注意什么。地址和请求头写法按各家官方文档核对过（2026-11-13）。
-  - MCP：GitHub、Linear、Supabase、Neon、Railway、Sentry、Vercel、Context7、Tavily、Exa、Firecrawl、Chrome DevTools、Playwright。Sentry 的请求头是 `Sentry-Bearer`（`Bearer` 留给 OAuth）；Railway 是本机的 `railway mcp`，用 CLI 的登录状态；Context7、Exa、Firecrawl 不填 Key 也能用；Vercel 只支持浏览器登录，标「下一版支持」不能装。
+  - MCP：GitHub、Linear、Supabase、Neon、Railway、Sentry、Vercel、Context7、Tavily、Exa、Firecrawl、Chrome DevTools、Playwright。Sentry 的请求头是 `Sentry-Bearer`（`Bearer` 留给 OAuth）；Railway 是本机的 `railway mcp`，用 CLI 的登录状态；Context7、Exa、Firecrawl 不填 Key 也能用；Vercel 只支持浏览器登录，v1 标「下一版支持」不能装，v2 起用浏览器登录装（见「扩展的 v2 部分」），还加了 Railway 的远程版。
   - 插件：Superpowers、Anthropic 官方市场的 Feature Dev、PR Review Toolkit、Frontend Design、Commit Commands、Skill Creator（仓库子目录），Supabase、Tavily 的官方 Skill 插件。Railway、Vercel 的官方插件带着只支持浏览器登录的 MCP 服务器，装上每轮都会提示连不上，标「下一版支持」。
   - 装没装：MCP 按目录给的服务器名、同样的地址或同样的命令认（自己手动加的也算），插件按清单里的名字认。没改 `McpServerConfig` 的结构，所以不记「从目录装的」这件事。
 - MCP 一键装（第 596 步）：点「安装」在原地展开，只填一个 Key（有的可选），「安装并测试」。主进程只收目录 id 和 Key，地址、命令按目录来，界面不能借这个口子塞任意命令；先用 core 连一次，连上了才走和手动添加同一个保存（Key 加密进 `secrets.json`），连不上不保存，401/403 说成 Key 不对或权限不够。服务器名用目录 id，被手动加的占了就加数字。
@@ -579,8 +579,22 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
   - 同意：装的时候列出每个钩子在什么时候跑什么命令，勾了「允许」才跑；不勾也能装。允许时记下钩子的指纹（hooks.json 里支持的那些钩子的哈希），core 建会话时再算一遍，对不上就不跑，「已安装」里显示「钩子变了」要重新允许。指纹只管 hooks.json 里的命令，不管命令调用的脚本内容。「已安装」里能随时撤销。
   - 项目钩子（第 447 步）不变，两套各跑各的。
 - 验证（第 604 步）：core 单测覆盖插件子智能体和钩子的读取、指纹、五个时机；e2e `extensions.spec.ts` 用本机的假 MCP 服务、假的 railway 命令和本地 Git 仓库，走一键装（Key 不对不保存）、前置命令检测、子目录安装、钩子确认和取消、钩子在任务里运行和撤销、插件子智能体出现在 delegate 里；`mcp.spec.ts`、`plugins.spec.ts` 改成在扩展页操作。没有连真的服务、没有装真的插件：真的 Superpowers 钩子是 cmd/bash 双解释脚本，Git Bash 会把它交给 cmd.exe 去找 bash，没在真插件上跑过。
-- v2 再做：MCP 的浏览器登录（OAuth，Vercel、Railway 远程版）、目录联网更新、插件更新、LSP。
+- v2 再做：MCP 的浏览器登录（OAuth，Vercel、Railway 远程版）、目录联网更新、插件更新、LSP。见下一节。
 - 不做（以后再说）：钩子的 `prompt` 类型和其他时机（Notification、SubagentStop、PreCompact、SessionEnd）、PreToolUse 的 `allow` 跳过确认（Diffra 照常按权限模式问）。
+
+## 扩展的 v2 部分（v2 · M4）
+
+- MCP 的浏览器登录（OAuth 2.1 + PKCE，`core/src/mcp-oauth.ts` 的 `McpOAuth`，用 MCP SDK 的 `auth()`、`discoverOAuthServerInfo`、`refreshAuthorization`，不另加依赖）：
+  - 发现：先按 RFC 9728 找受保护资源的元数据，再按 RFC 8414 / OIDC 找授权服务器；找不到授权服务器的元数据就说「找不到这个服务器的登录方式」，不去猜地址。客户端用动态注册（RFC 7591）拿 client_id，`token_endpoint_auth_method: none`（公开客户端），授权码换令牌必须带 PKCE（S256）。
+  - 回调：每次登录在 `127.0.0.1` 上临时开一个随机端口，回调地址是 `http://127.0.0.1:<端口>/callback`（RFC 8252 的回环地址，注册时登记，所以每次登录都重新注册一次）；只认 state 对得上的那一次，浏览器里显示「登录完成，可以关掉这个页面回到 Diffra 了」。授权页用系统浏览器打开（`shell.openExternal`，只开 http(s)）。最多等 5 分钟，可以取消；超时、取消、授权服务器拒绝都说原因，回调端口关掉。每个请求 15 秒超时。
+  - 存放：注册信息和令牌在密钥库里（PKCE 校验码只在这次登录的内存里）（`secrets.json`，safeStorage 加密），键是 `mcp-oauth:<服务器地址规范化后 sha256 的前 16 位>`，同一地址的几个服务器配置共用一份登录；不进设置文件、日志和会话。设置里的 MCP 服务器只多一个可选的 `auth: 'oauth'`，旧版读到会忽略这一项（当成没请求头的远程服务器，连不上而已，不会崩、不清数据）。
+  - 用的时候：建会话、查连接状态时取访问令牌，离过期不到 1 分钟先用刷新令牌续（不打开浏览器）；续不了就标成「登录过期了」，这个服务器不带进任务（别的照常），扩展页提示重新登录。
+  - 退出登录：授权服务器给了撤销地址（RFC 7009）就把刷新令牌和访问令牌都撤销（失败不挡退出），然后删掉本机的。删除服务器时，没有别的服务器用同一地址就顺带退出登录。
+- 界面：
+  - 目录里只支持浏览器登录的服务写「用浏览器登录」，展开后按钮是「在浏览器里登录并安装」，等待时是「等你在浏览器里登录…」和「取消登录」。登录后带着令牌连一次，连上才保存；连不上就退出登录、不保存，说明「登录了，但连不上」。
+  - 「已安装」里这种服务器多一行登录状态：已登录（令牌几点到期、会自动续）、过期、没登录，按钮是登录 / 重新登录、退出登录。手动添加远程服务器时可以勾「用浏览器登录（OAuth）」，勾了不填请求头。
+  - 目录：Vercel 能装了，新加 Railway 远程版（`https://mcp.railway.com`，Railway 标的是公开测试；本机 CLI 版的 Railway 照旧）。Railway、Vercel 的官方插件里带的 MCP 服务器要浏览器登录，插件里的 MCP 还不支持这条路，这两个插件仍标「下一版支持」。
+- 验证：core `mcp-oauth.test.ts` 用 `test/fixtures/oauth-mcp-server.ts`（同一个端口上的假授权服务器加要令牌的 MCP 服务器，授权页直接跳回回调，校验 PKCE）测登录后能调工具、令牌快过期自动续、续不了标成过期、退出登录撤销、拒绝 / 超时 / 取消、没有元数据、地址规范化。e2e `mcp-oauth.spec.ts` 把目录里 Vercel 的地址换成假服务器、把系统浏览器换成直接请求授权页：取消登录不装，登录后装上并连上，设置文件里只有 `auth: oauth`、令牌明文不在设置和密钥文件里，退出登录后授权服务器收到撤销、状态变成没登录，重新登录又连上。没有连真的 Vercel、Railway（要真实账号）。
 
 ## 图片输入
 

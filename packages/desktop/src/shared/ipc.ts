@@ -167,6 +167,9 @@ export const IPC_CHANNELS = {
   skillsList: 'skills:list',
   mcpSave: 'mcp:save',
   mcpDelete: 'mcp:delete',
+  mcpOAuthLogin: 'mcp:oauth-login',
+  mcpOAuthCancel: 'mcp:oauth-cancel',
+  mcpOAuthLogout: 'mcp:oauth-logout',
   externalAgentDiscover: 'external-agent:discover',
   externalAgentSave: 'external-agent:save',
   externalAgentDelete: 'external-agent:delete',
@@ -612,6 +615,10 @@ export interface DiffraApi {
   listSkills(target: McpStatusTarget): Promise<SkillInfo[]>
   saveMcpServer(input: McpServerInput): Promise<SettingsView>
   deleteMcpServer(serverId: string): Promise<SettingsView>
+  // 浏览器登录的 MCP 服务器（v2）：用系统浏览器登录（等用户在浏览器里同意，最多 5 分钟）、取消等待、退出登录（撤销令牌）
+  loginMcpServer(serverId: string): Promise<SettingsView>
+  cancelMcpLogin(serverId: string): Promise<void>
+  logoutMcpServer(serverId: string): Promise<SettingsView>
   // 多候选方案（v2）：生成（像出计划一样记成一轮，等它跑完）、看某个候选的改动、应用一个（记成一轮 apply）、全部放弃
   generateCandidates(sessionId: string, turnId: string, params: { title: string; request: string; plan: string | null; candidates: CandidateSpec[] }): Promise<StopReason>
   candidateDiff(sessionId: string, runTurnId: string, candidateId: string): Promise<string>

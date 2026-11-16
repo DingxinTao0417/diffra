@@ -1,4 +1,5 @@
 import { BROWSER_BACKENDS, type BrowserBackend, type PermissionMode, type PluginInfo, type Protocol, type ReasoningEffort, type SessionChecks } from '@diffra/core/types'
+import type { McpOAuthState } from './mcp-oauth'
 import type { ExternalAgentConfig } from './external-agents'
 
 export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
@@ -158,6 +159,8 @@ export interface McpServerConfig {
   // http：地址和请求头
   url: string
   headerNames: string[]
+  // 浏览器登录（OAuth，v2）的远程服务器：令牌在密钥库里，建会话时带上；旧设置没有这一项（就是用请求头）
+  auth?: 'oauth'
 }
 
 // 保存时带上值；value 为 null 表示沿用已保存的值
@@ -171,6 +174,7 @@ export interface McpServerInput {
   url: string
   env: Array<{ name: string; value: string | null }>
   headers: Array<{ name: string; value: string | null }>
+  auth?: 'oauth'
 }
 
 // 装好的插件。从文件夹装的就地使用那个文件夹；从 Git 装的克隆到应用数据目录的 plugins/<id> 下，
@@ -242,6 +246,8 @@ export interface SettingsView {
   // 无项目任务的保存位置，已经按默认值解析好
   defaultWorkspace: { path: string; isDefault: boolean }
   externalAgents: ExternalAgentConfig[]
+  // 浏览器登录的 MCP 服务器的登录状态，按服务器 id
+  mcpOAuth: Record<string, McpOAuthState>
   // 设置文件或密钥文件解析失败时的说明；此时不允许保存，避免覆盖原文件
   loadError: string | null
 }

@@ -60,6 +60,7 @@ export { parseRulePack, RulePackError } from './rules/pack.js'
 export { isLocalHost, localUrlIn, normalizeUrl } from './urls.js'
 export { isProtectedFile } from './tools/protected.js'
 export { locateCommand } from './external/spawn.js'
+export { McpOAuth, McpOAuthError, type McpOAuthState, type McpOAuthStatus, oauthKey, type OAuthStorage } from './mcp-oauth.js'
 
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {

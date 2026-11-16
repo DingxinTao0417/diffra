@@ -13,6 +13,7 @@ import { parse } from './ipc-input'
 import { registerPluginsIpc } from './plugins-ipc'
 import { registerExtensionsIpc } from './extensions-ipc'
 import { registerExternalAgentsIpc, syncExternalAgents } from './external-agents-ipc'
+import { registerMcpOAuthIpc } from './mcp-oauth'
 import { SecretStore } from './secret-store'
 import { coreClientHandlers, registerSessionIpc } from './session-ipc'
 import { registerSettingsIpc } from './settings-ipc'
@@ -154,6 +155,7 @@ app
     registerPluginsIpc(settings, userDataDir)
     registerExtensionsIpc(settings, secrets)
     registerExternalAgentsIpc(settings, secrets)
+    registerMcpOAuthIpc(settings, secrets)
     // 外接智能体的清单交给 core；core 还没连上时等它，失败只记日志
     void syncExternalAgents(settings, secrets)
     registerBrowserIpc()

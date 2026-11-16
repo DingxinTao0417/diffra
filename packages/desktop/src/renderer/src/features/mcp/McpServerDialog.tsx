@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import type { McpServerConfig, SettingsView } from '../../../../shared/settings'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -65,6 +66,8 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
   const [url, setUrl] = useState(server?.url ?? '')
   const [env, setEnv] = useState<ValueRow[]>(rowsOf(server?.envNames ?? []))
   const [headers, setHeaders] = useState<ValueRow[]>(rowsOf(server?.headerNames ?? []))
+  // 浏览器登录（OAuth，v2）：保存后在「已安装」里点登录；令牌加密存在本机，不用填请求头
+  const [oauth, setOauth] = useState(server?.auth === 'oauth')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const stdio = transport === 'stdio'
@@ -94,7 +97,8 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
             .filter((line) => line !== ''),
           url: url.trim(),
           env: stdio ? values : [],
-          headers: stdio ? [] : values,
+          headers: stdio || oauth ? [] : values,
+          ...(!stdio && oauth ? { auth: 'oauth' as const } : {}),
         }),
       )
     } catch (caught) {
@@ -136,7 +140,14 @@ function McpServerForm({ server, onSaved, onCancel }: { server: McpServerConfig 
           <Field id="mcp-url" label="地址">
             <Input id="mcp-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/mcp" />
           </Field>
-          <ValueRows label="请求头" namePlaceholder="Authorization" rows={headers} onChange={setHeaders} />
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox checked={oauth} onCheckedChange={(checked) => setOauth(checked === true)} aria-label="用浏览器登录（OAuth）" className="mt-0.5" />
+            <span>
+              用浏览器登录（OAuth）
+              <span className="block text-xs text-muted-foreground">服务器要求在浏览器里登录账号时选这个。保存后在列表里点「在浏览器里登录」，令牌加密存在本机。</span>
+            </span>
+          </label>
+          {!oauth && <ValueRows label="请求头" namePlaceholder="Authorization" rows={headers} onChange={setHeaders} />}
         </>
       )}
       {error && (
