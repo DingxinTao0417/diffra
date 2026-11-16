@@ -36,6 +36,9 @@ export function launchApp(userDataDir: string, extraEnv: Record<string, string> 
     DIFFRA_CATALOG_URL: 'http://127.0.0.1:9/extensions/catalog.json',
     // 藏到托盘时不在用户桌面上冒真的气泡通知
     DIFFRA_TRAY_QUIET: '1',
+    // 本机装了 Semgrep、CodeQL 时完成前会顺带扫一遍：测试里默认当没装（指到不存在的程序），结果不随这台机器装了什么变；要测的用例自己指过去
+    DIFFRA_SEMGREP_PATH: join(desktopDir, 'no-such-semgrep'),
+    DIFFRA_CODEQL_PATH: join(desktopDir, 'no-such-codeql'),
     ...extraEnv,
   }
   const executable = packagedExecutable()
