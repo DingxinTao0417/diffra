@@ -181,6 +181,7 @@ const api: DiffraApi = {
   onBrowserActivity: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.browserActivity, listener),
   setDesignBounds: (sessionId, rect) => ipcRenderer.send(IPC_CHANNELS.designBounds, sessionId, rect),
   designOpenFile: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.designOpenFile, sessionId),
+  designThumbnail: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.designThumbnail, sessionId),
   designSaveFile: (sessionId, projectPath) => ipcRenderer.invoke(IPC_CHANNELS.designSaveFile, sessionId, projectPath),
   onDesignActivity: (listener) => subscribe<{ sessionId: string }>(IPC_CHANNELS.designActivity, listener),
   preparePlugin: (source) => ipcRenderer.invoke(IPC_CHANNELS.pluginPrepare, source),

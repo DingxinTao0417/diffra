@@ -395,6 +395,10 @@ test('设计任务：从设计首页建任务，面板自动打开、画布占�
     await expect.poll(() => designFiles(userDataDir).length, { timeout: 15_000 }).toBe(1)
     const saved = join(userDataDir, 'designs', designFiles(userDataDir)[0]!)
     await expect.poll(() => statSync(saved).size, { timeout: 15_000 }).toBeGreaterThan(0)
+    // 存盘时顺带画一张缩略图（PNG），放在设计稿旁边
+    const thumbnail = saved.replace(/\.fig$/, '.png')
+    await expect.poll(() => existsSync(thumbnail), { timeout: 15_000 }).toBe(true)
+    expect(readFileSync(thumbnail).subarray(1, 4).toString('latin1')).toBe('PNG')
     await window.waitForTimeout(2500)
     await app.close()
 
@@ -404,6 +408,9 @@ test('设计任务：从设计首页建任务，面板自动打开、画布占�
     await expect(window.getByTestId('sidebar-task').getByRole('img', { name: '设计任务', exact: true })).toBeVisible()
     await window.getByTestId('sidebar').getByRole('button', { name: '设计', exact: true }).click()
     await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
+    // 设计首页的任务行带缩略图
+    await expect(window.locator('main').getByTestId('design-thumbnail')).toHaveAttribute('src', /^data:image\/png;base64,/)
+    await window.screenshot({ path: 'test-results/design-home-thumbnail.png' })
     // 侧栏的任务行也是同名按钮，限定在主区里找
     await window.locator('main').getByRole('button', { name: /画一个登录卡片/ }).click()
     await expect(window.getByTestId('task-title')).toHaveText('画一个登录卡片')
@@ -419,6 +426,7 @@ test('设计任务：从设计首页建任务，面板自动打开、画布占�
     await expect(window.getByTestId('sidebar-task')).toHaveCount(0)
     await expect(window.getByRole('heading', { name: '要设计什么？' })).toBeVisible()
     await expect.poll(() => designFiles(userDataDir).length).toBe(0)
+    expect(existsSync(thumbnail)).toBe(false)
   } finally {
     await app.close()
     await model.close()

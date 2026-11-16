@@ -2,7 +2,7 @@ import { type Editor, executeAtomicTool } from '@open-pencil/core'
 import { FigmaAPI } from '@open-pencil/core/figma-api'
 import { JSX_REFERENCE } from '@open-pencil/design-jsx'
 import { exportFigFile, parseFigFile } from '@open-pencil/core/io/formats/fig'
-import { createCanvasKitRasterCodec, renderNodesToImage } from '@open-pencil/core/io/formats/raster'
+import { createCanvasKitRasterCodec, renderNodesToImage, renderThumbnail } from '@open-pencil/core/io/formats/raster'
 import { fontManager } from '@open-pencil/core/text'
 import { ALL_TOOLS, CORE_TOOLS, isAtomicTool, parseToolArgs, type ToolDef, toolFailure, toolsToAI } from '@open-pencil/core/tools'
 import { reactive } from 'vue'
@@ -30,7 +30,12 @@ export interface DesignBridge {
   run(name: string, args: unknown, agent?: AgentTag | null): Promise<DesignToolResult>
   openFig(base64: string): Promise<void>
   saveFig(): Promise<string>
+  // 设计首页的缩略图（v2）：当前页的 PNG（base64）；画布还没启动或页面是空的返回 null
+  thumbnail(): Promise<string | null>
 }
+
+const THUMB_WIDTH = 480
+const THUMB_HEIGHT = 300
 
 const MAX_RESULT_CHARS = 50_000
 
@@ -437,5 +442,11 @@ export function installBridge(editor: Editor): void {
       await preparePageFonts(editor)
     },
     saveFig: async () => toBase64(await exportFigFile(editor.graph)),
+    thumbnail: async () => {
+      const renderer = editor.renderer
+      if (!renderer) return null
+      const png = renderThumbnail(renderer.ck, renderer, editor.graph, editor.state.currentPageId, THUMB_WIDTH, THUMB_HEIGHT, 'letterbox')
+      return png ? toBase64(png) : null
+    },
   }
 }

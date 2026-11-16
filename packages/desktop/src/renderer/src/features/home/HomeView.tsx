@@ -367,12 +367,29 @@ function DesignStyleMenu({ value, onChange }: { value: string | null; onChange(i
 
 function TaskRow({ task }: { task: ListedTask }) {
   const running = useAppState((state) => state.live[task.sessionId]?.running ?? false)
+  // 设计稿存盘时画的缩略图（v2）；还没存过就是空白的框
+  const [thumbnail, setThumbnail] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.diffra
+      .designThumbnail(task.sessionId)
+      .then((image) => {
+        if (!cancelled) setThumbnail(image)
+      })
+      .catch((error: unknown) => console.error('[design] 读缩略图失败', error))
+    return () => {
+      cancelled = true
+    }
+  }, [task.sessionId, task.updatedAt])
   return (
     <button
       type="button"
-      className="flex h-9 w-full items-center gap-2 rounded-md px-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
       onClick={() => void openTask(task)}
     >
+      <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-sm border bg-muted">
+        {thumbnail && <img src={thumbnail} alt="" className="h-full w-full object-cover" data-testid="design-thumbnail" />}
+      </span>
       <span className="min-w-0 truncate">{task.title}</span>
       {running && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="运行中" />}
       <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground" title={task.noProject ? task.cwd : undefined}>

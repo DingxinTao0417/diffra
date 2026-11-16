@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configureSession } from '@diffra/core'
@@ -50,6 +50,13 @@ function designFile(sessionId: string): string {
   if (!SESSION_ID.test(sessionId)) throw new Error(`无效的会话 id：${sessionId}`)
   return join(app.getPath('userData'), 'designs', `${sessionId}.fig`)
 }
+
+// 设计首页的缩略图（v2）：和设计稿放在一起，存盘时跟着更新
+function thumbnailFile(sessionId: string): string {
+  return designFile(sessionId).replace(/\.fig$/, '.png')
+}
+
+const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024
 
 async function writeAtomic(path: string, data: Buffer): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
@@ -173,6 +180,12 @@ export class DesignHost {
     const writing = (async () => {
       const base64 = await this.call<string>(sessionId, 'saveFig')
       await writeAtomic(designFile(sessionId), Buffer.from(base64, 'base64'))
+      // 缩略图画不出来不影响存盘
+      const thumbnail = await this.call<string | null>(sessionId, 'thumbnail').catch((error: unknown) => {
+        logEvent('[design] 画缩略图失败', error)
+        return null
+      })
+      if (thumbnail) await writeAtomic(thumbnailFile(sessionId), Buffer.from(thumbnail, 'base64'))
     })()
     page.saving = writing
     try {
@@ -265,6 +278,16 @@ export class DesignHost {
       this.destroy(sessionId)
     }
     await rm(designFile(sessionId), { force: true })
+    await rm(thumbnailFile(sessionId), { force: true })
+  }
+
+  // 设计首页用：存过的缩略图（data: 地址，界面的 CSP 只许本地和 data 图片）；还没存过、太大、读不了是 null
+  async thumbnail(sessionId: string): Promise<string | null> {
+    const file = thumbnailFile(sessionId)
+    const info = await stat(file).catch(() => null)
+    if (!info || info.size > MAX_THUMBNAIL_BYTES) return null
+    const bytes = await readFile(file).catch(() => null)
+    return bytes ? `data:image/png;base64,${bytes.toString('base64')}` : null
   }
 
   private async call<T>(sessionId: string, method: string, ...args: unknown[]): Promise<T> {
@@ -310,6 +333,7 @@ export function registerDesignIpc(): void {
     }
   })
   ipcMain.handle(IPC_CHANNELS.designOpenFile, (_event, rawSessionId: unknown) => designHost.openFile(parse(z.string().min(1), rawSessionId)))
+  ipcMain.handle(IPC_CHANNELS.designThumbnail, (_event, rawSessionId: unknown) => designHost.thumbnail(parse(z.string().min(1), rawSessionId)))
   ipcMain.handle(IPC_CHANNELS.designSaveFile, (_event, rawSessionId: unknown, rawProjectPath: unknown) =>
     designHost.saveFile(parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawProjectPath)),
   )

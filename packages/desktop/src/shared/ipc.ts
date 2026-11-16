@@ -248,6 +248,7 @@ export const IPC_CHANNELS = {
   designActivity: 'design:activity',
   designChanged: 'design:changed',
   designOpenFile: 'design:open-file',
+  designThumbnail: 'design:thumbnail',
   designSaveFile: 'design:save-file',
   sessionCancel: 'session:cancel',
   sessionUpdate: 'session:update',
@@ -795,6 +796,8 @@ export interface DiffraApi {
   // 设计面板：位置（null 表示不显示，和浏览器共用矩形类型）、打开和保存 .fig；取消时返回 null，否则返回文件路径
   setDesignBounds(sessionId: string, rect: BrowserRect | null): void
   designOpenFile(sessionId: string): Promise<string | null>
+  // 设计稿的缩略图（v2，data: 地址）；还没存过是 null
+  designThumbnail(sessionId: string): Promise<string | null>
   // 另存为 .fig，默认放在项目文件夹里
   designSaveFile(sessionId: string, projectPath: string): Promise<string | null>
   // 智能体在用某个任务的设计面板，界面把面板打开
