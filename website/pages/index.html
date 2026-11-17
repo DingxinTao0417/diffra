@@ -2,7 +2,7 @@
   <div class="container">
     <p class="eyebrow"><b>公测</b>免费使用 · 模型用你自己的 API Key</p>
     <h1>描述任务，<br>Diffra 在你的项目里把它做完</h1>
-    <p class="lead">Windows 和 Mac 上的编程智能体。读代码、改代码、跑检查，做完把改动摆在你面前，每一轮都能撤销。</p>
+    <p class="lead">Windows 和 Mac 上的编程智能体。读代码、改代码、跑测试，做完把改动摆在你面前，每一轮都能撤销。</p>
     <div class="actions">
       <a class="button large" href="/download.html" data-download data-follow-platform>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
@@ -14,7 +14,7 @@
     <div class="shot">
       <picture>
         <source srcset="/assets/shots/hero-dark.webp" media="(prefers-color-scheme: dark)">
-        <img src="/assets/shots/hero-light.webp" width="{{shot:hero}}" alt="Diffra 的任务页：智能体给待办应用加上优先级，三个文件的改动、检查结果和「已完成 · 已验证」的结论">
+        <img src="/assets/shots/hero-light.webp" width="{{shot:hero}}" alt="Diffra 的任务页：智能体给待办应用加上优先级，三个文件的改动、它自己跑的测试和「已完成」的结论">
       </picture>
     </div>
   </div>
@@ -45,8 +45,8 @@
     </div>
     <ol class="steps">
       <li><h3>描述任务</h3><p>用平常的话说要做什么。可以拖进文件和截图，或者用 @ 引用代码。</p></li>
-      <li><h3>Diffra 动手</h3><p>读懂项目、改代码，每次改完自动跑你项目的检查；没通过就自己接着修。</p></li>
-      <li><h3>你来验收</h3><p>改了哪些文件、过了哪些检查一目了然。逐处审阅改动，不满意一键撤销。</p></li>
+      <li><h3>Diffra 动手</h3><p>读懂项目、改代码，改完自己跑你项目的测试和检查来验证。</p></li>
+      <li><h3>你来验收</h3><p>改了哪些文件、跑了哪些测试一目了然。逐处审阅改动，不满意一键撤销。</p></li>
     </ol>
   </div>
 </section>
@@ -56,23 +56,23 @@
     <div class="section-head">
       <p class="kicker">功能</p>
       <h2>不只是会写代码</h2>
-      <p>Diffra 把「改完以后」的事也做了：检查、审阅、在浏览器里看效果，交到你手上的是能验收的结果。</p>
+      <p>Diffra 把「改完以后」的事也做了：跑测试、审阅、在浏览器里看效果，交到你手上的是能验收的结果。</p>
     </div>
 
     <div class="feature">
       <div>
-        <h3>改完先过检查，没通过就接着修</h3>
-        <p>Diffra 不靠「看起来改好了」交差。每次改完都会跑你项目里的检查命令，没通过就读回错误继续修。</p>
+        <h3>改完自己跑测试，结果摆在你面前</h3>
+        <p>Diffra 知道你项目怎么检查，改完由智能体自己决定跑哪些测试和检查，跑了什么、过没过都写在对话里。</p>
         <ul>
-          <li>改动后自动跑快速检查，结束前再跑完整检查</li>
-          <li>静态检查、安全扫描和规范审查一起把关</li>
-          <li>「已验证」以实际跑过的结果为准，不听模型自己说</li>
+          <li>检查命令能从项目里自动检测，在项目设置里填一次，智能体跑它时不用你逐次确认</li>
+          <li>测试没过，智能体读回错误接着改</li>
+          <li>本轮报告列出改了哪些文件、跑了哪些命令和测试</li>
         </ul>
       </div>
       <div class="shot">
         <picture>
           <source srcset="/assets/shots/checks-dark.webp" media="(prefers-color-scheme: dark)">
-          <img src="/assets/shots/checks-light.webp" width="{{shot:checks}}" loading="lazy" alt="先写的测试没通过，智能体接着实现，再次检查通过">
+          <img src="/assets/shots/checks-light.webp" width="{{shot:checks}}" loading="lazy" alt="先写的测试没过，智能体接着实现，再跑一遍测试通过">
         </picture>
       </div>
     </div>

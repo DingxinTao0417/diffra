@@ -4,8 +4,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
-import { extname, join, resolve } from 'node:path'
+import { extname, join, parse, resolve } from 'node:path'
 import { _electron as electron, chromium, type ElectronApplication, expect, type Page, test } from '@playwright/test'
 import { chooseProject, startDesignTask, startTask, waitTaskDone } from '../../e2e/flows'
 import { APP_VERSION, desktopDir } from '../../e2e/launch'
@@ -202,7 +201,8 @@ async function capture(app: ElectronApplication, window: Page, name: string): Pr
 }
 
 async function launch(userDataDir: string): Promise<ElectronApplication> {
-  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
+  // Playwright 设的 FORCE_COLOR 传到智能体跑的命令里，node 会多打一行和 NO_COLOR 冲突的警告
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE' && entry[0] !== 'FORCE_COLOR'))
   const app = await electron.launch({
     args: ['.', '--force-device-scale-factor=2'],
     cwd: desktopDir,
@@ -239,7 +239,8 @@ for (const theme of ['light', 'dark'] as const) {
   test(`官网截图（${theme === 'light' ? '浅色' : '深色'}）`, async () => {
     test.setTimeout(300_000)
     mkdirSync(SHOTS, { recursive: true })
-    const root = mkdtempSync(join(tmpdir(), 'diffra-shots-'))
+    // 截图里有命令输出，会带出项目路径：放在盘符根目录下，路径里不带本机用户名
+    const root = mkdtempSync(join(parse(desktopDir).root, 'diffra-shots-'))
     const userDataDir = join(root, 'data')
     mkdirSync(userDataDir)
     const project = writeDemoProject(root)
@@ -252,6 +253,8 @@ for (const theme of ['light', 'dark'] as const) {
         roles: { coder: null, planner: null, reviewer: null, fallback: null },
         appearance: { theme, palette: 'forest', fontSize: 'md', contentWidth: 'standard' },
         lastSeenVersion: APP_VERSION,
+        // 脚本模型给不出像样的下一句建议，输入框里不放
+        suggestions: { nextPrompt: false },
       }),
     )
     const model = await startScriptedModel([
@@ -265,7 +268,9 @@ for (const theme of ['light', 'dark'] as const) {
         text: '计划：\n\n1. 先写测试，定下规则：**高 > 中 > 低**，同级保持原来的顺序\n2. 在 `todos.js` 里加 `priority` 字段和 `sortByPriority`\n3. 列表按优先级排序，每条前面显示优先级标签',
         toolCalls: [addFile('test/priority.test.js', PRIORITY_TEST)],
       },
+      { match: '给待办加上优先级', text: '先跑一下测试，确认新测试会失败。', toolCalls: [exec('node --test')] },
       { match: '给待办加上优先级', text: '测试没过：`sortByPriority` 还没写，符合预期。现在实现它。', toolCalls: [replaceLines('src/todos.js', CREATE_TODO.replace(/\n$/, ''), CREATE_TODO_WITH_PRIORITY.replace(/\n$/, ''))] },
+      { match: '给待办加上优先级', toolCalls: [exec('node --test')] },
       { match: '给待办加上优先级', text: '测试通过了。最后让列表按优先级显示。', toolCalls: [replaceLines('src/app.js', APP_JS.replace(/\n$/, ''), APP_JS_WITH_PRIORITY.replace(/\n$/, ''))] },
       {
         match: '给待办加上优先级',
@@ -292,18 +297,26 @@ for (const theme of ['light', 'dark'] as const) {
       await startTask(window, '解释一下 todos.js 的结构')
       await waitTaskDone(window, 60_000)
 
-      // 主场景：先写测试（检查不过）再实现
+      // 主场景：先写测试、自己跑一遍（没过）再实现，再跑一遍通过
       await newTask()
       await startTask(window, '给待办加上优先级，列表按优先级排序')
       await waitTaskDone(window, 90_000)
+      // 没通过的命令默认展开：首图停在最后的总结上，先把它收起来
+      const failedCommand = window.locator('[data-testid="tool-call"][data-succeeded="false"]').first().locator('button[aria-expanded]').first()
+      await failedCommand.click()
+      await window.evaluate(`(() => {
+        const scroller = document.querySelector('[data-testid="turn"]').parentElement.parentElement
+        scroller.scrollTop = scroller.scrollHeight
+      })()`)
       await capture(app, window, `hero-${theme}`)
 
       await window.getByRole('button', { name: '展开代码详情', exact: true }).first().click()
-      // 没通过的那次检查放在画面上方，接着的修复跟在下面（对话的滚动容器在每一轮外面两层）
+      await failedCommand.click()
+      // 没通过的那次测试命令放在画面上方，接着的修复跟在下面（对话的滚动容器在每一轮外面两层）
       await window.evaluate(`(() => {
         const scroller = document.querySelector('[data-testid="turn"]').parentElement.parentElement
-        const check = document.querySelector('[data-testid="tool-call"][data-kind="check"]')
-        scroller.scrollTop += check.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 140
+        const failed = document.querySelector('[data-testid="tool-call"][data-succeeded="false"]')
+        scroller.scrollTop += failed.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 140
       })()`)
       await capture(app, window, `checks-${theme}`)
 
