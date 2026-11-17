@@ -128,6 +128,7 @@ v2（2026-11-15 起按里程碑做，进度见各节；设备连接只做局域�
      - 不用 Actions 的产物存储：账号的存储配额按月累计，满了以后上传直接失败（2026-11 的一次构建就卡在这一步）。仓库私有，草稿 Release 只有有权限的人能下载。
   4. 本机运行 `pnpm --filter @diffra/desktop publish:release`（`scripts/publish-release.ts`，服务器连接方式写在不提交的 `publish.config.json`，样例 `publish.config.example.json`）：从 Release 下载三个文件，核对 `latest.yml` 的版本、文件名、sha512 和大小，先传安装包和 `.blockmap`、最后传 `latest.yml`，每个先传成 `.partial` 再改名；再把官网用的 `Diffra-Setup-latest.exe` 指向这个版本；传完从公网取回核对。
   - 不走 CI 的发法：本机 `pnpm --filter @diffra/desktop package` 打包，再运行 `publish:release --local`，直接用本机 `release/` 里的产物，核对和上传顺序和上面一样。这样没有 GitHub Release（草稿也没有），CI 做的 tag 和版本号核对、中文更新日志检查、类型检查和测试也都不跑。更新日志按 tag 生成，tag 照样要打。0.6.0 就是这样发的：推 tag 触发的 CI 被手动取消，没建 Release。
+    - 2026-11-17：用户要求 v0.6.6 不走 GitHub CI，但保留 tag 和 GitHub Release。本机完成类型检查、测试、中文更新日志检查、打包与打包版验收；发布提交正文带 `[skip ci]`，推送提交及同一提交的版本 tag 后，用 `gh release create --verify-tag` 上传本地产物并创建 Release，再走 `publish:release --local` 和 `publish:website`。本地发布脚本本身仍不会创建 GitHub Release。
   - 旧版本的 `.blockmap` 要留在更新源上，客户端靠它做差分下载；找不到时会退回整包下载（约 116MB）。
 - 更新时「Failed to uninstall old application files: 2」（第 380–381 步，2026-11-11 升 0.3.0 时装了 4 次才成功）：
   - 原因：浏览器扩展的本机宿主由 Chrome、Edge 经 `%APPDATA%\Diffra\browser-bridge\diffra-browser-host.cmd` 拉起，跑的是安装目录里的 `Diffra.exe`。它不是 Diffra 的子进程，Diffra 退出时不跟着退（Diffra 没开时每 2 秒重连一次）。安装程序会先结束安装目录里的进程，再最多 5 次、每次隔 1 秒运行旧版卸载程序；可宿主被结束后，扩展 3 秒就重新拉起它，新拉起的宿主又占着 `Diffra.exe`，5 次全撞上。updater.log 里旧版每次 10 毫秒内就退出了，说明卡住的不是主进程。
