@@ -1,7 +1,7 @@
 {
   "name": "@diffra/desktop",
   "productName": "Diffra",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Diffra 桌面端编程 agent",
   "author": "DingxinTao0417",
   "private": true,
