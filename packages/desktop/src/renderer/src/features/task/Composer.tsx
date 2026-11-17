@@ -689,6 +689,8 @@ export function Composer(props: ComposerProps) {
       className={cn(
         'relative flex flex-col border border-input bg-card focus-within:border-ring/60 dark:border-input/50 dark:focus-within:border-ring',
         large ? 'rounded-2xl shadow-composer' : 'rounded-2xl',
+        // 运行中的柔光是一层盒阴影（第 694 步），跟着当前配色的彗星色走
+        running && 'composer-halo',
         // primary-color-allow: 用户正在拖放文件
         dragging && 'border-primary/60 bg-primary/5 dark:border-primary/60',
       )}
@@ -712,6 +714,10 @@ export function Composer(props: ComposerProps) {
       }}
       onDrop={onDrop}
     >
+      {/* 运行中的彗星描边和外面的柔光（第 694 步）：不运行时这两层不存在，输入框还是普通的灰边 */}
+      {running && (
+        <span aria-hidden className="composer-beam" />
+      )}
       {/* primary-color-allow: 用户正在拖放文件 */}
       {dragging && <div className="pointer-events-none absolute inset-1 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-card/95 text-sm text-primary" data-testid="composer-drop-zone">松开以添加文件或文件夹</div>}
       {/* 处理附件的提示只给读屏，界面上由发送按钮转圈表示，不插新行，免得输入框跳高 */}

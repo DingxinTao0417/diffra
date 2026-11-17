@@ -10,7 +10,8 @@ import { snapshotHtml } from '../static-html'
 // 对话里过程卡片的统一外壳（第 656 步）：状态色、密度、图标、标题、副标题、操作区、页脚、展开收起、复制、导出 Markdown。
 // 新卡片只写内容。两档密度沿用以前 Conversation.tsx 的 CARD、CARD_COMPACT：标准给出错、定位结果、计划、深度扫描报告；
 // 紧凑给提醒、子智能体、规范审查打回、安全检查有发现（docs/decisions.md 的「界面视觉规范」）
-export const CARD = 'flex flex-col gap-2.5 rounded-xl border px-3.5 py-3'
+// 标准卡带一层很浅的卡片阴影（第 693 步），紧凑卡是行内提示，仍然只画边线
+export const CARD = 'flex flex-col gap-2.5 rounded-xl border bg-card px-3.5 py-3 shadow-card'
 export const CARD_COMPACT = 'flex flex-col gap-1.5 rounded-xl border px-3 py-2.5'
 
 // 带底色的提示卡描边统一 /30

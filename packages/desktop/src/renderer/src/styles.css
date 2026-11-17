@@ -66,12 +66,20 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 10px;
-  --radius-2xl: 14px;
-  /* 卡片不加阴影，只用 1px 边线；只有浮层和弹窗有阴影。例外只有首页输入框（composer）：它是首页唯一的焦点，轻微的托起是焦点的一部分 */
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  /* 阴影只管分几层：卡片一层很浅的托起（第 693 步加的，卡片从「只画边线」改成「边线加一层浅影」），
+   * 浮层和弹窗各一档。首页输入框（composer）仍是唯一的焦点，用自己那档 */
+  /* 三档（第 693 步）：卡片一层很浅的托起，浮层、弹窗照旧。以前卡片不加阴影 */
+  --shadow-card: var(--elevation-card);
   --shadow-overlay: var(--elevation-overlay);
   --shadow-modal: var(--elevation-modal);
   --shadow-composer: var(--elevation-composer);
+  /* 动效取自 Orra UI 的节奏：统一一条缓出曲线，出现 400ms、淡入 200ms。
+   * 名字带 diffra- 前缀：tw-animate-css 已经占了 in / fade-in 这些名字 */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-rise: diffra-rise 400ms var(--ease-out-soft) both;
+  --animate-soft-in: diffra-soft-in 200ms var(--ease-out-soft) both;
 }
 
 /*
@@ -128,10 +136,16 @@
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.08);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.18);
   --elevation-composer: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.04);
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 10px -3px rgb(0 0 0 / 0.06);
   --primary: #2e6b57;
   --primary-foreground: #ffffff;
   --soft: #e6efea;
   --ring: #2e6b57;
+  /* 运行中的输入框彗星（第 694 步）：尾巴的亮色、选定的强调色、邻近色相。
+   * 只有主色跟着亮暗变，彗星三种颜色是一套固定的，深浅界面共用 */
+  --comet-1: #7fd0b0;
+  --comet-2: #5fa88c;
+  --comet-3: #2f8fb0;
 }
 
 :root[data-palette="indigo"] {
@@ -139,6 +153,9 @@
   --soft: #e7e9f6;
   --ring: #3b4ba8;
   --sidebar: #f3f4f8;
+  --comet-1: #a7b0ee;
+  --comet-2: #3b4ba8;
+  --comet-3: #6a3fb0;
 }
 
 :root[data-palette="amber"] {
@@ -146,6 +163,9 @@
   --soft: #f4ebdd;
   --ring: #9a5b13;
   --sidebar: #f8f5ee;
+  --comet-1: #f2c98d;
+  --comet-2: #d49a52;
+  --comet-3: #d4694a;
 }
 
 :root[data-palette="graphite"] {
@@ -153,6 +173,50 @@
   --soft: #e9e9e9;
   --ring: #3a3a3a;
   --sidebar: #f3f3f3;
+  /* 石墨的彗星用银色（冷钢）：石墨本身在深色界面里太暗，做不了光 */
+  --comet-1: #e6e6e0;
+  --comet-2: #8a8a86;
+  --comet-3: #5a6a7a;
+}
+
+:root[data-palette="cinnabar"] {
+  --primary: #a3362b;
+  --soft: #f7e5e1;
+  --ring: #a3362b;
+  --sidebar: #f7f2f0;
+  --comet-1: #f7b3a8;
+  --comet-2: #ef8a7d;
+  --comet-3: #c96aa8;
+}
+
+:root[data-palette="violet"] {
+  --primary: #6b3fa0;
+  --soft: #efe8f7;
+  --ring: #6b3fa0;
+  --sidebar: #f5f1f9;
+  --comet-1: #d3bff2;
+  --comet-2: #6b3fa0;
+  --comet-3: #4a5cc8;
+}
+
+:root[data-palette="cyan"] {
+  --primary: #0f6b7f;
+  --soft: #e1eff3;
+  --ring: #0f6b7f;
+  --sidebar: #f0f5f6;
+  --comet-1: #9fe3f0;
+  --comet-2: #5fc3d8;
+  --comet-3: #4f8fd6;
+}
+
+:root[data-palette="rose"] {
+  --primary: #a63663;
+  --soft: #f8e6ee;
+  --ring: #a63663;
+  --sidebar: #f8f1f4;
+  --comet-1: #f7c3d6;
+  --comet-2: #ec93b3;
+  --comet-3: #d76a7a;
 }
 
 /* :root.dark 比 :root[data-palette] 晚出现、优先级相同，深色时盖掉配色里的浅色侧栏 */
@@ -199,6 +263,7 @@
   --chart-4: #8a8983;
   --elevation-overlay: 0 4px 16px rgb(0 0 0 / 0.4);
   --elevation-modal: 0 16px 48px rgb(0 0 0 / 0.55);
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 12px -3px rgb(0 0 0 / 0.4);
   --primary: #5fa88c;
   --primary-foreground: #10110f;
   --soft: #20332b;
@@ -221,6 +286,30 @@
   --primary: #d0d0d0;
   --soft: #2c2c2c;
   --ring: #d0d0d0;
+}
+
+.dark[data-palette="cinnabar"] {
+  --primary: #ef8a7d;
+  --soft: #3a1d1a;
+  --ring: #ef8a7d;
+}
+
+.dark[data-palette="violet"] {
+  --primary: #b79ae0;
+  --soft: #2b2340;
+  --ring: #b79ae0;
+}
+
+.dark[data-palette="cyan"] {
+  --primary: #5fc3d8;
+  --soft: #16303a;
+  --ring: #5fc3d8;
+}
+
+.dark[data-palette="rose"] {
+  --primary: #ec93b3;
+  --soft: #3a1f2a;
+  --ring: #ec93b3;
 }
 
 /* 仅更改对话正文和输入框，设置界面仍使用清晰的无衬线字体。 */
@@ -335,6 +424,124 @@ html[data-platform='darwin'] body[data-scroll-locked] :is(.mac-drag-strip, .app-
   .animate-spin {
     animation-duration: 1s !important;
     animation-iteration-count: infinite !important;
+  }
+}
+
+/* 新出现的一行从下方 6px 处淡入（对话里的思考行、工具步骤）。只用位移，不改尺寸：
+ * 端到端测试会量相邻两行的高度和箭头位置，缩放会让量到的值对不上 */
+@keyframes diffra-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 一行内容变化时的淡入（思考块的预览行跟着流式内容换） */
+@keyframes diffra-soft-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 正在跑的标签：文字用前景色扫过（Orra UI 的 text-shimmer）。
+ * 只用两级文字色，不引入第三级灰；减少动态效果时由组件换回普通的 muted 色 */
+@utility text-shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 42%,
+    var(--foreground) 52%,
+    var(--muted-foreground) 62%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: diffra-shimmer 1.8s linear infinite;
+}
+
+@keyframes diffra-shimmer {
+  from {
+    background-position: 160% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
+/* 勾上时勾号从中心弹一下（Orra UI 的勾选动画的轻量版）；减少动态效果时全局规则会把它压成瞬时 */
+@keyframes diffra-check-pop {
+  from {
+    opacity: 0.4;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+[data-slot='checkbox'][data-state='checked'] [data-slot='checkbox-indicator'] > svg {
+  animation: diffra-check-pop 160ms var(--ease-out-soft);
+}
+
+/*
+ * 运行中的输入框（第 694 步）：一道彗星沿着 1.5px 的边框转，外面一圈柔光。
+ * 两层都由 Composer 在 running 时渲染，不运行时输入框就是普通的灰边。
+ * 彗星是「尾部全透明」的锥形渐变，颜色来自当前配色的 --comet-1/2/3
+ */
+.composer-beam {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+/* 柔光用两层盒阴影：跟随圆角、靠颜色透明度自然衰减。
+ * 以前用「遮罩出一条带再模糊」的做法，不管带宽和模糊怎么配，外面总有一道看得出形状的边 */
+.composer-halo {
+  box-shadow:
+    0 0 18px -3px color-mix(in oklab, var(--comet-2) 45%, transparent),
+    0 0 52px 2px color-mix(in oklab, var(--comet-3) 18%, transparent);
+}
+.composer-beam {
+  inset: 0;
+  z-index: 10;
+  padding: 1.5px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.composer-beam::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 170%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    transparent 200deg,
+    color-mix(in oklab, var(--comet-1) 60%, transparent) 260deg,
+    var(--comet-2) 315deg,
+    var(--comet-3) 345deg,
+    transparent 360deg
+  );
+  animation: diffra-comet 3s linear infinite;
+}
+
+@keyframes diffra-comet {
+  to {
+    rotate: 360deg;
   }
 }
 
