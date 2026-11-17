@@ -325,9 +325,10 @@ function agentFieldsOf(update: SessionUpdate): { agentCard?: AgentCardMeta; pare
   const parentId = diffra[PARENT_TOOL_CALL_META_KEY]
   if (typeof parentId === 'string') return tag ? { parentId, agent: tag } : { parentId }
   const raw = diffra[AGENT_META_KEY] as Record<string, unknown> | undefined
-  if (!tag || !raw || typeof raw.task !== 'string' || !isStrings(raw.files) || !isStrings(raw.nodes)) return {}
+  if (!tag || !raw) return {}
+  if (typeof raw.task !== 'string' || !isStrings(raw.files) || !isStrings(raw.nodes)) return { agent: tag }
   const number = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
-  const extra = { startedAt: number(raw.startedAt), endedAt: number(raw.endedAt), tokens: number(raw.tokens), edited: isStrings(raw.edited) ? raw.edited : undefined }
+  const extra = { startedAt: number(raw.startedAt), endedAt: number(raw.endedAt), tokens: number(raw.tokens), edited: isStrings(raw.edited) ? raw.edited : undefined, workspace: typeof raw.workspace === 'string' ? raw.workspace : undefined }
   return { agentCard: { ...tag, task: raw.task, files: raw.files, nodes: raw.nodes, ...Object.fromEntries(Object.entries(extra).filter(([, value]) => value !== undefined)) } }
 }
 

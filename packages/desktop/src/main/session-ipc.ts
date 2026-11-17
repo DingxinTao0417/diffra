@@ -11,6 +11,9 @@ import {
   diagnose,
   enhancePrompt,
   retryStep,
+  getCollaboration,
+  resumeTaskMessages,
+  controlCollaboration,
   recordVisualSnapshot,
   useTurnVersion,
   sessionBlocks,
@@ -186,16 +189,21 @@ export const coreClientHandlers: CoreClientHandlers = {
     broadcast(IPC_CHANNELS.sessionUpdate, notification)
     emitSessionEvent({ type: 'update', notification })
   },
-  onPermissionRequest: (request) =>
+  onPermissionRequest: (request, signal) =>
     new Promise((resolve) => {
       const requestId = randomUUID()
+      const onAbort = () => settlePermission(requestId, null)
       pendingPermissions.set(requestId, {
         sessionId: request.sessionId,
         projectCommands: projectCommandsOf(request.toolCall._meta),
         // 提问的答案（第 673 步）放在回复的 _meta 里，core 逐个校验
-        resolve: (optionId, answers) =>
-          resolve({ outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' }, ...(optionId && answers ? { _meta: { diffra: { [ASK_ANSWERS_META_KEY]: answers } } } : {}) }),
+        resolve: (optionId, answers) => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve({ outcome: optionId ? { outcome: 'selected', optionId } : { outcome: 'cancelled' }, ...(optionId && answers ? { _meta: { diffra: { [ASK_ANSWERS_META_KEY]: answers } } } : {}) })
+        },
       })
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) { onAbort(); return }
       const event: PermissionRequestEvent = {
         requestId,
         sessionId: request.sessionId,
@@ -292,7 +300,7 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     }
   }
 
-  const resolveRole = async (role: 'coder' | 'reviewer' | 'planner' | 'fallback', label: string) => {
+  const resolveRole = async (role: 'coder' | 'reviewer' | 'planner' | 'fallback' | 'explorer' | 'implementer' | 'tester', label: string) => {
     const ref = settings.get().roles[role]
     return ref ? resolveModel(ref, `「${label}」角色的模型`) : null
   }
@@ -389,9 +397,14 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
     const fallback = await resolveRole('fallback', '备用')
+    const explorer = await resolveRole('explorer', '探索')
+    const implementer = await resolveRole('implementer', '实现')
+    const tester = await resolveRole('tester', '测试')
     return {
       config: {
         model: coder.model,
+        collaboration: { enabled: true, isolation: 'worktree', acceptance: 'required', maxParallel: 8 },
+        collaborationModels: { ...(explorer ? { explorer: explorer.model } : {}), ...(implementer ? { implementer: implementer.model } : {}), ...(reviewer ? { reviewer: reviewer.model } : {}), ...(tester ? { tester: tester.model } : {}) },
         reviewModel: reviewer ? { endpoint: reviewer.model.endpoint, modelId: reviewer.model.modelId, provider: reviewer.model.provider } : null,
         planModel: planner?.model ?? null,
         fallbackModel: fallback?.model ?? null,
@@ -551,6 +564,13 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
 
   ipcMain.handle(IPC_CHANNELS.sessionRetryStep, async (_event, rawSessionId: unknown, rawAgent: unknown) =>
     retryStep(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.string().min(1), rawAgent)),
+  )
+  ipcMain.handle(IPC_CHANNELS.collaborationGet, async (_event, rawSessionId: unknown) =>
+    getCollaboration(await coreConnection(), parse(z.string().min(1), rawSessionId)),
+  )
+  ipcMain.handle(IPC_CHANNELS.taskMessagesResume, async () => resumeTaskMessages(await coreConnection()))
+  ipcMain.handle(IPC_CHANNELS.collaborationControl, async (_event, rawSessionId: unknown, rawAction: unknown) =>
+    controlCollaboration(await coreConnection(), parse(z.string().min(1), rawSessionId), parse(z.object({ workerId: z.string().min(1).max(128), action: z.enum(['message', 'interrupt', 'retry', 'integrate']), message: z.string().trim().min(1).max(20_000).optional() }), rawAction)),
   )
   ipcMain.handle(IPC_CHANNELS.sessionApplyDiff, async (_event, rawSessionId: unknown, rawTurnId: unknown, rawPrompt: unknown, rawDiff: unknown) =>
     (

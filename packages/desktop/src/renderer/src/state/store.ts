@@ -48,6 +48,7 @@ export interface MessageOptions {
 
 // 打开过的任务在界面这边的状态；切走再切回来不用重新加载
 export interface LiveTask {
+  collaboration?: import('@diffra/core/types').CollaborationView
   progress?: TaskProgressView
   sessionId: string
   // 任务的目录；无项目任务是主进程替它建的文件夹

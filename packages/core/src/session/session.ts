@@ -11,7 +11,7 @@ import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
 import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
-import { type CheckpointChange, type ModelProvider, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
+import { type CheckpointChange, type ModelProvider, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, COLLABORATION_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
 import { newTaskState, type TaskState } from './task-state.js'
 import type { CandidateRun, Compaction, SessionRecord } from './store.js'
@@ -29,6 +29,9 @@ import { ExecSessions } from '../tools/exec.js'
 import { knownWorldState, type WorldStateEntry } from './world-state.js'
 import type { ModelCallUsage } from '../usage/log.js'
 import { MODEL_CALL_HEADERS } from '../models/operations.js'
+import { newCollaborationState, recoverCollaborationState } from './collaboration-board.js'
+import type { CollaborationState } from '../collaboration-types.js'
+import { COLLABORATION_TOOLS } from './collaboration.js'
 
 // 会话标题默认取第一条提问的开头
 const TITLE_CHARS = 40
@@ -81,6 +84,7 @@ export interface SessionEnvironment {
 }
 
 export interface SessionOptions {
+  worktreesRoot?: string
   cwd: string
   config: SessionConfig
   environment: SessionEnvironment
@@ -121,6 +125,8 @@ export interface SessionOptions {
 }
 
 export class Session {
+  collaboration: CollaborationState
+  readonly worktreesRoot: string | null
   readonly id: string
   readonly cwd: string
   readonly createdAt: string
@@ -211,6 +217,9 @@ export class Session {
 
   constructor(options: SessionOptions) {
     const record = options.record
+    this.collaboration = record?.collaboration ?? newCollaborationState()
+    recoverCollaborationState(this.collaboration)
+    this.worktreesRoot = options.worktreesRoot ?? null
     this.architecture = options.architecture ?? null
     this.id = record?.id ?? options.id ?? randomUUID()
     this.createdAt = record?.createdAt ?? new Date().toISOString()
@@ -372,6 +381,10 @@ export class Session {
       const previous = turn.updates.findIndex((item) => item.sessionUpdate === 'usage_update')
       if (previous >= 0) turn.updates.splice(previous, 1)
     }
+    if (update.sessionUpdate === 'session_info_update' && typeof update._meta?.diffra === 'object' && update._meta.diffra !== null && COLLABORATION_META_KEY in update._meta.diffra) {
+      const previous = turn.updates.findIndex((item) => item.sessionUpdate === 'session_info_update' && typeof item._meta?.diffra === 'object' && item._meta.diffra !== null && COLLABORATION_META_KEY in item._meta.diffra)
+      if (previous >= 0) turn.updates.splice(previous, 1)
+    }
     turn.updates.push(update)
   }
 
@@ -398,6 +411,7 @@ export class Session {
     if (touch) this.updatedAt = new Date().toISOString()
     return {
       version: 1,
+      collaboration: this.collaboration,
       taskState: this.taskState,
       id: this.id,
       cwd: this.cwd,
@@ -441,11 +455,11 @@ export class Session {
 
   // 发给编码模型的工具：内置的加上这一轮的 MCP 工具，配置了设计工具时再加上
   toolSet(): ToolSet {
-    return { ...TOOLS, ...(this.config.model.supportsImages ? VIEW_IMAGE_TOOL : {}), [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), [SHOW_VISUAL_TOOL]: showVisualTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...TODO_TOOLS, ...browserTools(this), ...computerTools(this), ...architectureTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
+    return { ...TOOLS, ...(this.config.model.supportsImages ? VIEW_IMAGE_TOOL : {}), [DELEGATE_TOOL]: delegateTool(Boolean(this.design), this.agentTypes), ...(this.config.collaboration?.enabled && !this.design ? COLLABORATION_TOOLS : {}), [SHOW_VISUAL_TOOL]: showVisualTool, ...INTERACT_TOOLS, ...TASK_TOOLS, ...TODO_TOOLS, ...browserTools(this), ...computerTools(this), ...architectureTools(this), ...designTools(this), ...(this.mcpTools?.tools ?? {}) }
   }
 
   toolChars(): number {
-    return TOOL_DEFINITION_CHARS + (this.config.model.supportsImages ? toolDefinitionChars(VIEW_IMAGE_TOOL) : 0) + VISUAL_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + TODO_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + toolDefinitionChars(computerTools(this)) + (Object.keys(architectureTools(this)).length ? ARCHITECTURE_TOOL_CHARS : 0) + designChars(this) + (this.mcpTools?.chars ?? 0)
+    return TOOL_DEFINITION_CHARS + (this.config.collaboration?.enabled && !this.design ? toolDefinitionChars(COLLABORATION_TOOLS) : 0) + (this.config.model.supportsImages ? toolDefinitionChars(VIEW_IMAGE_TOOL) : 0) + VISUAL_TOOL_CHARS + INTERACT_TOOL_CHARS + TASK_TOOL_CHARS + TODO_TOOL_CHARS + delegateChars(Boolean(this.design), this.agentTypes) + toolDefinitionChars(browserTools(this)) + toolDefinitionChars(computerTools(this)) + (Object.keys(architectureTools(this)).length ? ARCHITECTURE_TOOL_CHARS : 0) + designChars(this) + (this.mcpTools?.chars ?? 0)
   }
 
   // 估算上下文里各部分占多少：按字数比例分摊模型实际返回的输入 token 数

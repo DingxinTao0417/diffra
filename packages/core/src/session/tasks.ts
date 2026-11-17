@@ -12,6 +12,7 @@ export interface TaskBridge {
   list(): Promise<SessionIndexEntry[]>
   record(id: string): Promise<{ title: string; cwd: string; running: boolean; turns: StoredTurn[] } | null>
   act(params: TaskActionParams): Promise<TaskActionResult>
+  receipt?(id: string): Promise<{ id: string; targetSessionId: string; turnId: string; status: string; error?: string } | null>
 }
 
 // 一轮里最多发、建这么多次，免得任务之间互相触发停不下来
@@ -34,7 +35,11 @@ const createInput = z.object({
   title: z.string().max(80).optional(),
   design: z.boolean().optional().describe('Create a design task (canvas) instead of a coding task'),
 })
-const waitInput = z.object({ task_id: z.string().min(1), max_minutes: z.number().int().min(1).max(MAX_WAIT_MINUTES).optional() })
+const waitInput = z.object({
+  task_id: z.string().min(1),
+  message_id: z.string().min(1).max(64).optional().describe('The message id returned by task_send, task_create or task_reply; waits for that exact message and turn'),
+  max_minutes: z.number().int().min(1).max(MAX_WAIT_MINUTES).optional(),
+})
 const replyInput = z.object({ message: z.string().min(1).max(MAX_MESSAGE_CHARS) })
 
 export const TASK_TOOLS = {
@@ -57,7 +62,7 @@ export const TASK_TOOLS = {
     inputSchema: createInput,
   }),
   task_wait: tool({
-    description: 'Wait until another task finishes its current turn (no model calls while waiting), then return its latest turn like task_read.',
+    description: 'Wait for another task (no model calls while waiting). Pass the returned message_id to wait for that exact message and read its specific turn, not an unrelated newer turn. Without message_id, waits for its current turn and reads the latest one.',
     inputSchema: waitInput,
   }),
   task_reply: tool({
@@ -107,14 +112,17 @@ function describeTurn(turn: StoredTurn): string {
     .join('\n')
 }
 
-async function readTask(bridge: TaskBridge, id: string, turns: number): Promise<string> {
+async function readTask(bridge: TaskBridge, id: string, turns: number, turnId?: string): Promise<string> {
   const record = await bridge.record(id)
   if (!record) throw new Error(`No task with id ${id}. Use tasks_list to find it.`)
-  const recent = record.turns.filter((turn) => turn.kind === 'prompt' || turn.kind === 'goal').slice(-turns)
+  const recent = turnId ? record.turns.filter((turn) => turn.id === turnId) : record.turns.filter((turn) => turn.kind === 'prompt' || turn.kind === 'goal').slice(-turns)
+  if (turnId && recent.length === 0) throw new Error(`Turn ${turnId} for this message is not available in task ${id}; no other turn was read.`)
+  if (turnId && recent.some((turn) => !turn.endedAt)) throw new Error(`Turn ${turnId} is not recorded as finished yet; no other turn was read.`)
   return [`Task ${id}: "${record.title}" in ${record.cwd}${record.running ? ' (running now)' : ''}`, ...(recent.length > 0 ? recent.map(describeTurn) : ['(no turns yet)'])].join('\n')
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
   return new Promise((resolve) => {
     const timer = setTimeout(done, ms)
     function done() {
@@ -139,6 +147,37 @@ const TITLES: Record<keyof typeof TASK_TOOLS, string> = {
 const actionCounts = new WeakMap<Session, { turnId: string; count: number }>()
 // 回复过的轮次 id：一条消息只回复一次
 const repliedTurns = new WeakMap<Session, string>()
+// 同一任务可能并行等多个目标；按边计数，某个等待退出不能释放另一个等待的边。
+const waitingTasks = new Map<string, Map<string, number>>()
+
+function beginWait(source: string, target: string): () => void {
+  const pending = [target]
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const id = pending.pop()
+    if (id === undefined || visited.has(id)) continue
+    if (id === source) throw new Error('Waiting for this task would create a task_wait cycle. Finish your work instead of waiting on each other.')
+    visited.add(id)
+    pending.push(...(waitingTasks.get(id)?.keys() ?? []))
+  }
+  const targets = waitingTasks.get(source) ?? new Map<string, number>()
+  targets.set(target, (targets.get(target) ?? 0) + 1)
+  waitingTasks.set(source, targets)
+  return () => {
+    const count = targets.get(target) ?? 0
+    if (count <= 1) targets.delete(target)
+    else targets.set(target, count - 1)
+    if (targets.size === 0) waitingTasks.delete(source)
+  }
+}
+
+function receiptDescription(result: { sessionId: string; messageId?: string; turnId?: string }): string {
+  return [
+    result.messageId ? ` Message id: ${result.messageId}.` : '',
+    result.turnId ? ` Turn id: ${result.turnId}.` : '',
+    result.messageId ? ` Use task_wait with task_id="${result.sessionId}" and message_id="${result.messageId}" to get this exact message's result.` : '',
+  ].join('')
+}
 
 export async function runTaskTool(
   session: Session,
@@ -182,26 +221,44 @@ export async function runTaskTool(
       return done(await readTask(bridge, task_id, turns ?? 2), `读取任务 ${record?.title ?? task_id}`, { taskLink: { sessionId: task_id, title: record?.title ?? '' } })
     }
     if (name === 'task_wait') {
-      const { task_id, max_minutes } = waitInput.parse(call.input)
-      const first = await bridge.record(task_id)
-      if (!first) return fail(`No task with id ${task_id}.`)
-      const started = Date.now()
-      const deadline = started + (max_minutes ?? DEFAULT_WAIT_MINUTES) * 60_000
-      let seenRunning = first.running
-      await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, title: `等任务做完 ${first.title}`, _meta: { diffra: { taskLink: { sessionId: task_id, title: first.title } } } })
-      for (;;) {
-        const record = await bridge.record(task_id)
-        if (!record) return fail(`Task ${task_id} was deleted.`)
-        if (record.running) seenRunning = true
-        const finished = !record.running && (seenRunning || Date.now() - started > WAIT_START_GRACE_MS)
-        if (finished) return done(await readTask(bridge, task_id, 1), `等任务做完 ${record.title}`, { taskLink: { sessionId: task_id, title: record.title } })
-        if (signal.aborted) return fail('Cancelled by the user.')
-        if (Date.now() > deadline) return fail(`Task ${task_id} is still running after ${max_minutes ?? DEFAULT_WAIT_MINUTES} minutes. Check later with task_read.`)
-        await sleep(WAIT_POLL_MS, signal)
+      const { task_id, message_id, max_minutes } = waitInput.parse(call.input)
+      if (task_id === session.id) return fail('That is this task. You cannot wait for yourself.')
+      if (message_id && !bridge.receipt) return fail('Message receipts are not available here; cannot safely wait for this exact message.')
+      const release = beginWait(session.id, task_id)
+      try {
+        const first = await bridge.record(task_id)
+        if (!first) return fail(`No task with id ${task_id}.`)
+        const started = Date.now()
+        const deadline = started + (max_minutes ?? DEFAULT_WAIT_MINUTES) * 60_000
+        let seenRunning = first.running
+        let receiptTurnId: string | undefined
+        await io.update({ sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, title: `等任务做完 ${first.title}`, _meta: { diffra: { taskLink: { sessionId: task_id, title: first.title } } } })
+        for (;;) {
+          if (signal.aborted) return fail('Cancelled by the user.')
+          const record = await bridge.record(task_id)
+          if (!record) return fail(`Task ${task_id} was deleted.`)
+          if (message_id && bridge.receipt) {
+            const receipt = await bridge.receipt(message_id)
+            if (!receipt) return fail(`No receipt for message ${message_id}; no other turn was read.`)
+            if (receipt.id !== message_id || receipt.targetSessionId !== task_id || !receipt.turnId || (receiptTurnId !== undefined && receipt.turnId !== receiptTurnId)) return fail(`Receipt for message ${message_id} does not match this task and turn; no other turn was read.`)
+            receiptTurnId = receipt.turnId
+            if (receipt.status === 'completed') return done(await readTask(bridge, task_id, 1, receipt.turnId), `等任务做完 ${record.title}`, { taskLink: { sessionId: task_id, title: record.title } })
+            if (receipt.status !== 'pending' && receipt.status !== 'running') return fail(`Message ${message_id} (turn ${receipt.turnId}) ended with status ${receipt.status}${receipt.error ? `: ${receipt.error}` : '.'} No other turn was read.`)
+          } else {
+            if (record.running) seenRunning = true
+            const finished = !record.running && (seenRunning || Date.now() - started > WAIT_START_GRACE_MS)
+            if (finished) return done(await readTask(bridge, task_id, 1), `等任务做完 ${record.title}`, { taskLink: { sessionId: task_id, title: record.title } })
+          }
+          if (Date.now() > deadline) return fail(`Task ${task_id}${message_id ? ` message ${message_id}` : ''} has not finished after ${max_minutes ?? DEFAULT_WAIT_MINUTES} minutes. Check later${message_id ? ' with the same message_id' : ' with task_read'}.`)
+          await sleep(WAIT_POLL_MS, signal)
+        }
+      } finally {
+        release()
       }
     }
     // 往别的任务发东西前按权限模式确认；返回拒绝的原因，放行时是 null
     const confirmSend = async (question: string): Promise<string | null> => {
+      if (signal.aborted) return 'Cancelled by the user.'
       if (session.permissionMode === 'full') return null
       const choice = await io.requestPermission(
         { toolCallId: call.toolCallId, title: question, kind: 'other', status: 'pending', rawInput: call.input, _meta: LOCAL_ONLY_META },
@@ -234,7 +291,7 @@ export async function runTaskTool(
         return fail(result.error)
       }
       return done(
-        `Replied to task ${result.sessionId} ("${result.title}")${result.queued ? '; it is queued after that task’s current turn' : ''}.`,
+        `Replied to task ${result.sessionId} ("${result.title}")${result.queued ? '; it is queued after that task’s current turn' : ''}.${receiptDescription(result)}`,
         `回复任务 ${result.title}${result.queued ? '（排队中）' : ''}`,
         { taskLink: { sessionId: result.sessionId, title: result.title } },
       )
@@ -267,7 +324,7 @@ export async function runTaskTool(
     if (!result.ok) return fail(result.error)
     const verb = name === 'task_send' ? (result.queued ? 'Queued for' : 'Sent to') : 'Created'
     return done(
-      `${verb} task ${result.sessionId} ("${result.title}"). It runs on its own; use task_wait or task_read to get its result.`,
+      `${verb} task ${result.sessionId} ("${result.title}"). It runs on its own; use task_wait or task_read to get its result.${receiptDescription(result)}`,
       `${name === 'task_send' ? '发给任务' : '新建任务'} ${result.title}${result.queued ? '（排队中）' : ''}`,
       { taskLink: { sessionId: result.sessionId, title: result.title } },
     )

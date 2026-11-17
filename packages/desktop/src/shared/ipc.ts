@@ -207,6 +207,9 @@ export const IPC_CHANNELS = {
   externalAgentDelete: 'external-agent:delete',
   externalAgentDetect: 'external-agent:detect',
   candidatesGenerate: 'candidates:generate',
+  collaborationGet: 'collaboration:get',
+  taskMessagesResume: 'tasks:resume-pending',
+  collaborationControl: 'collaboration:control',
   candidateDiff: 'candidates:diff',
   candidateApply: 'candidates:apply',
   candidatesDiscard: 'candidates:discard',
@@ -751,6 +754,9 @@ export interface DiffraApi {
   diagnose(sessionId: string, turnId: string, text: string, target: { turnId: string; cardId: string | null }): Promise<StopReason>
   // 模型很久没有输出时让卡住的那一步重发；agent 是 main 或子智能体的 id
   retryStep(sessionId: string, agent: string): Promise<{ retried: boolean }>
+  getCollaboration(sessionId: string): Promise<import('@diffra/core/types').CollaborationView>
+  resumeTaskMessages(): Promise<{ accepted: boolean }>
+  controlCollaboration(sessionId: string, action: import('@diffra/core/types').CollaborationAction): Promise<import('@diffra/core/types').CollaborationView>
   // 智能体转到后台的命令：列表变化、停止、最近的输出（任务监控「运行中」）
   onSessionProcesses(listener: (event: SessionProcesses) => void): () => void
   stopProcess(sessionId: string, id: number): Promise<{ stopped: boolean }>

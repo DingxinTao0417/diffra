@@ -1,8 +1,8 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isProtectedFile, isUnderReadOnly } from './protected.js'
 import { ToolError, type ToolContext, type ToolOutput } from './types.js'
-import { resolveToolPath } from './workspace.js'
+import { realpathOfExisting, resolveToolPath } from './workspace.js'
 
 // 改文件只有这一个工具，补丁格式和 Codex 的 apply_patch 一样（第 507 步）：
 //   *** Begin Patch
@@ -211,61 +211,124 @@ function applyHunks(path: string, original: string, hunks: Hunk[]): string {
   return crlf ? text.replace(/\n/g, '\r\n') : text
 }
 
-type Planned = { display: string; absolute: string; oldText: string | null; newText: string | null }
+type PatchTarget = { display: string; absolute: string; key: string; fileKey: string | null }
+type Planned = PatchTarget & { oldText: string | null; newText: string | null }
+
+// 不同会话也共用；整批按真实路径排序取锁，避免交叉改名或多文件补丁互相等待
+const pathLocks = new Map<string, Promise<void>>()
+const pathKey = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
+
+async function physicalFileKey(path: string): Promise<string | null> {
+  try {
+    const info = await stat(path, { bigint: true })
+    return info.ino === 0n ? null : `inode:${info.dev}:${info.ino}`
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function lockPaths(keys: string[]): Promise<() => void> {
+  const releases: Array<() => void> = []
+  for (const key of [...new Set(keys)].sort()) {
+    const previous = pathLocks.get(key)
+    const locked = new Promise<void>((unlock) => {
+      releases.push(() => {
+        unlock()
+        if (pathLocks.get(key) === locked) pathLocks.delete(key)
+      })
+    })
+    pathLocks.set(key, locked)
+    await previous
+  }
+  return () => { for (const release of releases.reverse()) release() }
+}
 
 export async function applyPatchTool(context: ToolContext, input: { input: string }, workdir: string | null = null): Promise<ToolOutput> {
   const ops = parsePatch(input.input)
   const base = workdir ? { ...context, cwd: (await resolveToolPath(context, workdir, 'read')).absolute } : context
+  const realRoot = await realpathOfExisting(context.cwd)
   const planned: Planned[] = []
   const seen = new Set<string>()
-  const target = async (path: string) => {
+  const target = async (path: string): Promise<PatchTarget> => {
     const resolved = await resolveToolPath(base, path, 'write')
-    if (isProtectedFile(resolved.display)) {
+    const realPath = await realpathOfExisting(resolved.absolute)
+    if (isProtectedFile(resolved.display) || isProtectedFile(realPath)) {
       throw new ToolError(`${resolved.display} is protected because it may contain secrets. Diffra does not let you change it; ask the user if you need something there.`)
     }
-    if (isUnderReadOnly(context.cwd, resolved.absolute, context.readOnlyPaths)) {
+    if (isUnderReadOnly(context.cwd, resolved.absolute, context.readOnlyPaths) || isUnderReadOnly(realRoot, realPath, context.readOnlyPaths)) {
       throw new ToolError(`${resolved.display} is inside a directory the user marked as read-only (${context.readOnlyPaths.join(', ')}). Do not change anything there; ask the user if the task needs it.`)
     }
-    const key = process.platform === 'win32' ? resolved.absolute.toLowerCase() : resolved.absolute
-    if (seen.has(key)) throw new ToolError(`The patch changes ${resolved.display} more than once. Put all changes to a file in one Update File section.`)
+    const key = pathKey(realPath)
+    // realpath 统一符号链接，文件标识再覆盖硬链接指向同一个物理文件的情况
+    const fileKey = await physicalFileKey(realPath)
+    if (seen.has(key) || (fileKey !== null && seen.has(fileKey))) throw new ToolError(`The patch changes ${resolved.display} more than once. Put all changes to a file in one Update File section.`)
     seen.add(key)
-    context.beforeWrite?.(resolved)
-    return resolved
+    if (fileKey !== null) seen.add(fileKey)
+    context.beforeWrite?.({ absolute: realPath, display: resolved.display })
+    return { ...resolved, key, fileKey }
   }
   const current = (absolute: string) =>
     readFile(absolute, 'utf8').catch((error: unknown) => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
       throw error
     })
-  // 先全部算完：哪一处对不上都不写
+  const prepared: Array<{ op: FileOp; resolved: PatchTarget; moved: PatchTarget | null }> = []
   for (const op of ops) {
     const resolved = await target(op.path)
-    const existing = await current(resolved.absolute)
-    if (op.kind === 'add') {
-      if (existing !== null) throw new ToolError(`${resolved.display} already exists. Use "*** Update File:" to change it.`)
-      planned.push({ display: resolved.display, absolute: resolved.absolute, oldText: null, newText: op.content })
-    } else if (op.kind === 'delete') {
-      if (existing === null) throw new ToolError(`${resolved.display} does not exist, so it cannot be deleted.`)
-      planned.push({ display: resolved.display, absolute: resolved.absolute, oldText: existing, newText: null })
-    } else {
-      if (existing === null) throw new ToolError(`${resolved.display} does not exist. Use "*** Add File:" to create it.`)
-      const updated = applyHunks(resolved.display, existing, op.hunks)
-      if (op.moveTo) {
-        const moved = await target(op.moveTo)
-        if ((await current(moved.absolute)) !== null) throw new ToolError(`${moved.display} already exists; cannot move ${resolved.display} there.`)
-        planned.push({ display: moved.display, absolute: moved.absolute, oldText: null, newText: updated })
-        planned.push({ display: resolved.display, absolute: resolved.absolute, oldText: existing, newText: null })
-      } else {
-        planned.push({ display: resolved.display, absolute: resolved.absolute, oldText: existing, newText: updated })
-      }
+    const moved = op.kind === 'update' && op.moveTo ? await target(op.moveTo) : null
+    prepared.push({ op, resolved, moved })
+  }
+  const targets = prepared.flatMap(({ resolved, moved }) => moved ? [resolved, moved] : [resolved])
+  const verifyPath = async (item: PatchTarget) => {
+    if (pathKey(await realpathOfExisting(item.absolute)) !== item.key || (item.fileKey !== null && await physicalFileKey(item.absolute) !== item.fileKey)) {
+      throw new ToolError(`${item.display}: the path changed while preparing the patch. Check the current path and try again.`)
     }
   }
-  for (const item of planned) {
-    if (item.newText === null) await rm(item.absolute, { force: true })
-    else {
-      await mkdir(dirname(item.absolute), { recursive: true })
-      await writeFile(item.absolute, item.newText, 'utf8')
+  const verifyOriginal = async (item: Planned) => {
+    await verifyPath(item)
+    if (await current(item.absolute) !== item.oldText) {
+      throw new ToolError(`${item.display}: the file changed while preparing the patch. Read the current content and apply a new patch.`)
     }
+  }
+  const release = await lockPaths(targets.flatMap((item) => item.fileKey === null ? [item.key] : [item.key, item.fileKey]))
+  try {
+    for (const item of targets) await verifyPath(item)
+    // 锁内再读原文、匹配 hunk；另一会话先写完后不能再拿旧版本覆盖
+    for (const { op, resolved, moved } of prepared) {
+      const existing = await current(resolved.absolute)
+      if (op.kind === 'add') {
+        if (existing !== null) throw new ToolError(`${resolved.display} already exists. Use "*** Update File:" to change it.`)
+        planned.push({ ...resolved, oldText: null, newText: op.content })
+      } else if (op.kind === 'delete') {
+        if (existing === null) throw new ToolError(`${resolved.display} does not exist, so it cannot be deleted.`)
+        planned.push({ ...resolved, oldText: existing, newText: null })
+      } else {
+        if (existing === null) throw new ToolError(`${resolved.display} does not exist. Use "*** Add File:" to create it.`)
+        const updated = applyHunks(resolved.display, existing, op.hunks)
+        if (moved) {
+          if ((await current(moved.absolute)) !== null) throw new ToolError(`${moved.display} already exists; cannot move ${resolved.display} there.`)
+          planned.push({ ...moved, oldText: null, newText: updated })
+          planned.push({ ...resolved, oldText: existing, newText: null })
+        } else {
+          planned.push({ ...resolved, oldText: existing, newText: updated })
+        }
+      }
+    }
+    // 先整批复核，防止计划期间工具以外的写入被覆盖；落盘前也再检查一次
+    for (const item of planned) await verifyOriginal(item)
+    for (const item of planned) {
+      if (item.newText === null) {
+        await verifyOriginal(item)
+        await rm(item.absolute, { force: true })
+      } else {
+        await mkdir(dirname(item.absolute), { recursive: true })
+        await verifyOriginal(item)
+        await writeFile(item.absolute, item.newText, 'utf8')
+      }
+    }
+  } finally {
+    release()
   }
   const summary = planned.map((item) => `${item.oldText === null ? 'A' : item.newText === null ? 'D' : 'M'} ${item.display}`)
   return {

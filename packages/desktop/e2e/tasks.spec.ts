@@ -2,12 +2,57 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
+import { TaskMailbox } from '../../core/src/session/task-mailbox'
 import { chooseProject, startTask, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { lastToolResult, startScriptedModel } from './scripted-model'
 
 const createdId = (messages: Parameters<typeof lastToolResult>[0]) => /Created task (\S+)/.exec(lastToolResult(messages))?.[1] ?? 'missing'
+
+test('持久消息：关闭应用后未执行的消息重启投递一次，回执绑定确切轮次', async () => {
+  test.setTimeout(90_000)
+  const userDataDir = makeUserDataDir()
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-mailbox-recover-'))
+  const model = await startScriptedModel([{ text: '原始任务完成' }, { text: '重启后的消息已执行' }])
+  let app = await launchApp(userDataDir)
+  try {
+    let window = await app.firstWindow()
+    await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'test-key', modelId: 'scripted' })
+    await chooseProject(app, window, project)
+    await startTask(window, '原始任务')
+    await waitTaskDone(window)
+    const target = await window.evaluate(async () => (await (globalThis as typeof globalThis & { diffra: { listSessions(projectPath: string | null): Promise<Array<{ sessionId: string; title: string }>> } }).diffra.listSessions(null)).find((task) => task.title === '原始任务'))
+    if (!target) throw new Error('没有找到目标任务')
+    await app.close()
+    const mailbox = new TaskMailbox(join(userDataDir, 'sessions', 'task-mailbox'))
+    const message = await mailbox.enqueue({ sourceSessionId: 'source-task', targetSessionId: target.sessionId, text: '重启后处理这条消息', from: { sessionId: 'source-task', title: '发送任务' } })
+    app = await launchApp(userDataDir)
+    window = await app.firstWindow()
+    await expect.poll(async () => (await mailbox.get(message.id))?.status, { timeout: 40_000 }).toBe('completed')
+    await window.getByTestId('sidebar-task').first().click()
+    await expect(window.getByText('重启后的消息已执行', { exact: true })).toBeVisible()
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    await expect(window.getByTestId('turn').first()).toContainText('原始任务完成')
+    await expect(window.getByTestId('turn').first()).not.toContainText('重启后的消息已执行')
+    const receipt = await mailbox.get(message.id)
+    expect(receipt?.turnId).toBe(message.turnId)
+    expect(model.requests()).toBe(2)
+    expect(model.bodies().at(-1)).toContain('重启后处理这条消息')
+    await app.close()
+    app = await launchApp(userDataDir)
+    window = await app.firstWindow()
+    await window.getByTestId('sidebar-task').first().click()
+    await expect(window.getByText('重启后的消息已执行', { exact: true })).toBeVisible()
+    await expect(window.getByTestId('turn')).toHaveCount(2)
+    expect(model.requests()).toBe(2)
+  } finally {
+    await app.close()
+    await model.close()
+    rmSync(project, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
 
 test('任务互通：一个任务新建另一个任务、等它做完拿回结果；两边都能点过去', async () => {
   test.setTimeout(90_000)

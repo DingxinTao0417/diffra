@@ -524,9 +524,10 @@ export function isReadOnlyCommand(command: string): boolean {
 
 function isReadOnly(argv: string[]): boolean {
   const program = programName(argv[0] ?? '')
-  if (program === 'git') return READ_ONLY_GIT.has(argv[1] ?? '')
-  if (program === 'find') return !argv.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint'].includes(arg))
-  if (program === 'sort') return !argv.some((arg) => arg === '-o' || arg.startsWith('--output'))
+  if (program === 'git') return READ_ONLY_GIT.has(argv[1] ?? '') && !argv.slice(2).some((arg) => /^(?:--output(?:=|$)|--(?:ext-diff|textconv)|--(?:no-)?paginate|--open-files-in-pager)/.test(arg))
+  if (program === 'rg') return !argv.some((arg) => /^--(?:pre(?:-glob)?|hostname-bin)(?:=|$)/.test(arg))
+  if (program === 'find') return !argv.some((arg) => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'].includes(arg))
+  if (program === 'sort') return !argv.some((arg) => /^-o/.test(arg) || arg.startsWith('--output'))
   if (program === 'sed') return isSedPrint(argv)
   return READ_ONLY.has(program)
 }

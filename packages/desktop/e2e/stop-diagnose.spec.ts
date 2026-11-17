@@ -137,7 +137,8 @@ test('子智能体被停下：卡片上能定位它，定位请求带着它的�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-diagnose-worker-'))
   writeFileSync(join(project, 'a.txt'), 'alpha\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'delegate', input: { name: '慢', task: 'WORKER-SLOW：把 a.txt 改成大写', files: ['a.txt'] } }] },
+    { toolCalls: [{ name: 'delegate', input: { name: '慢', task: 'WORKER-SLOW：读取 a.txt，说明如何改成大写', files: ['a.txt'], role: 'explorer' } }] },
+    { toolCalls: [{ name: 'wait_agents', input: { agents: ['慢'] } }] },
     { match: 'WORKER-SLOW', toolCalls: [read('a.txt')] },
     { match: 'WORKER-SLOW', toolCalls: [{ name: 'report', input: { summary: '不会到这里' } }], delayMs: 20_000 },
     { toolCalls: [{ name: 'submit_diagnosis', input: { ...DIAGNOSIS, cause: '工人读完文件后被停下，还没改' } }] },
@@ -149,7 +150,8 @@ test('子智能体被停下：卡片上能定位它，定位请求带着它的�
     await chooseProject(app, window, project)
     await startTask(window, '分给工人改 a.txt')
     const card = window.locator('[data-testid="agent-card"][data-agent="慢"]')
-    await expect.poll(() => model.requests()).toBe(3)
+    await expect(card.getByTestId('agent-progress')).toContainText('第 1 步')
+    await expect.poll(() => model.bodies().filter((body) => body.includes('WORKER-SLOW') && body.includes('Current user request and constraints')).length).toBe(2)
     await window.getByRole('button', { name: '停止', exact: true }).click()
     await expect(card).toHaveAttribute('data-status', 'failed')
     await card.getByRole('button', { name: '定位问题' }).click()

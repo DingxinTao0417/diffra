@@ -30,7 +30,7 @@ export interface PromptContext {
 // 提示词用英文：弱模型对英文指令的遵循度更稳定；回复语言跟随用户
 export async function buildSystemPrompt(
   bashPath: string | null,
-  { checks, readOnlyPaths, rules, noProject }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules' | 'noProject'>,
+  { checks, readOnlyPaths, rules, noProject, collaboration }: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'rules' | 'noProject' | 'collaboration'>,
   rulePacks: RulePack[],
   context: PromptContext = { skills: [], frontend: null },
 ): Promise<string> {
@@ -42,6 +42,14 @@ export async function buildSystemPrompt(
     '# How you work',
     '',
     'Your tone is concise, direct and friendly. Keep the user informed about what you are doing without unnecessary detail, state your assumptions, and do not over-explain.',
+    ...(collaboration?.enabled && !worker ? [
+      '', '## Quality-first collaboration',
+      '- Use up to eight concurrent workers for independent work. Do not choose models or omit relevant context to reduce cost. Workers use the user-configured quality roles, or the current coding model.',
+      '- Delegation starts in the background; continue independent work and use wait_agents when results are required. Use stable worker ids to send follow-up messages. Workers can coordinate directly through messages and the shared team_task_* DAG; task readiness does not wake a worker.',
+      '- Writable code workers use isolated Git worktrees. Read their results, inspect the actual changes and call integrate_agent explicitly. Conflicts preserve work and must be resolved deliberately. A worktree is not an OS sandbox; linked dependencies and external side effects still require care and permission.',
+      '- Integrated collaboration changes require independent review and actual test verification before acceptance. A worker report is not proof of completion. Fix blocking findings, integrate the fixes and reverify the changed snapshot; do not repeatedly rerun an unchanged failing full test suite.',
+      '- Shared execution tasks are not the user personal todo list. Claim a ready task with its current revision, complete it only after the work is done, and communicate dependency changes explicitly.',
+    ] : []),
     '',
     '## AGENTS.md',
     '- Repositories can contain AGENTS.md files (some use CLAUDE.md) anywhere. They hold instructions for working in that part of the code: conventions, layout, how to build and test.',

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { BrowserAction, BrowserActionResult } from '../src/protocol.js'
 import { normalizeUrl } from '../src/urls.js'
 import { runTurn, streamModelStep, type TurnIO } from '../src/session/loop.js'
+import { DEFAULT_COLLABORATION } from '../src/collaboration-types.js'
 import { makeSession, project, recordingIO, scriptedModel, usageOf, useTempProject } from './loop-helpers.js'
 
 // 主循环的其余部分：内置浏览器、模型没有输出时的提示、可视化、任务之间互通。
@@ -14,6 +15,30 @@ import { makeSession, project, recordingIO, scriptedModel, usageOf, useTempProje
 type StreamPart = Awaited<ReturnType<MockLanguageModelV4['doStream']>>['stream'] extends ReadableStream<infer Part> ? Part : never
 
 useTempProject()
+
+describe('协作启动边界', () => {
+  test('开始前已取消时不调模型，未绑定的协作运行时可以安全收尾', async () => {
+    const model = scriptedModel([])
+    const session = await makeSession(model)
+    session.config = { ...session.config, collaboration: DEFAULT_COLLABORATION }
+    session.turnRequested()
+    session.cancel()
+    expect(await runTurn(session, { id: 'cancelled-before-collaboration', text: '不要执行' }, recordingIO())).toBe('cancelled')
+    expect(model.doStreamCalls).toHaveLength(0)
+    expect(session.running).toBe(false)
+    expect(session.taskState.status).toBe('cancelled')
+  })
+
+  test('设计画布保留节点协作，不暴露代码 worktree 的消息和整合工具', async () => {
+    const session = await makeSession(scriptedModel([]))
+    session.config = { ...session.config, collaboration: DEFAULT_COLLABORATION }
+    expect(Object.keys(session.toolSet())).toContain('integrate_agent')
+    session.design = { tools: [], instructions: '' }
+    expect(Object.keys(session.toolSet())).toContain('delegate')
+    expect(Object.keys(session.toolSet())).not.toContain('integrate_agent')
+    expect(Object.keys(session.toolSet())).not.toContain('send_message')
+  })
+})
 
 describe('内置浏览器工具', () => {
   // 假的浏览器：记下收到的操作，按顺序回话

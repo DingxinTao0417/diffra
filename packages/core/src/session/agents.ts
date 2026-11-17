@@ -36,12 +36,15 @@ import { isReadOnlyCommand } from '../permissions.js'
 import { READ_ONLY_TOOLS, readOnlyCommandProblem } from './read-only.js'
 import { freshWorldState } from './world-state.js'
 import { toolDefinitionChars, TOOLS } from './tools.js'
+import { COLLABORATION_PARALLELISM, type CollaborationRole } from '../collaboration-types.js'
+import { compactIfNeeded } from './compact.js'
+import { messagesChars } from './session.js'
 
 // 子智能体（工人）：主智能体用 delegate 把一块独立的活交出去，几个工人并行做，做完交回结果，主智能体再整合、检查、收尾。
 // 工人有自己的对话，只能改自己认领的文件（同一目录、按文件认领，不用 worktree）；交回结果就停，也不能再派工人。
 // 工人的工具调用照常发给界面，带上所属卡片（parentToolCallId）和自己的名字、颜色，界面收进那张卡片里
 export const DELEGATE_TOOL = 'delegate'
-export const MAX_PARALLEL_WORKERS = 4
+export const MAX_PARALLEL_WORKERS = COLLABORATION_PARALLELISM
 export const MAX_WORKERS_PER_TURN = 8
 export const WORKER_MAX_STEPS = 40
 const REPORT_TOOL = 'report'
@@ -76,11 +79,15 @@ const delegateInput = z.object({
     .optional()
     .describe('Design tasks only: IDs of the canvas nodes (frames, sections) this worker owns. It can change them and everything inside them, plus the new nodes it creates.'),
   agent: z.string().trim().min(1).max(32).optional().describe('Worker type, only when the project defines worker types and one of them fits this part (see the tool description)'),
+  background: z.boolean().optional().describe('Start in the background and continue your own work. Results arrive at step boundaries; use wait_agents when no independent work remains.'),
+  role: z.enum(['explorer', 'implementer', 'reviewer', 'tester']).optional().describe('Quality role, using only the model the user configured for that role; never select models by price.'),
+  context: z.enum(['fresh', 'fork']).optional().describe('Fresh receives the task and current user constraints; fork also receives the completed conversation history. The current user request is always provided.'),
 })
 
 const reportInput = z.object({
   summary: z.string().min(1).describe("What you did, in the user's language: the changes, decisions, and how you checked them"),
   issues: z.string().optional().describe('Anything left unresolved, needed from other parts, or that the coordinator should check'),
+  verdict: z.enum(['passed', 'changes_required', 'blocked']).optional().describe('Required for reviewer and tester: report whether the independently checked work passed, needs changes, or is blocked. Never claim tests passed without executing them.'),
 })
 
 const claimInput = z.object({ files: z.array(z.string().min(1)).min(1).max(50).describe('Files or directories, relative to the project') })
@@ -93,7 +100,7 @@ export function delegateTool(design = false, types: AgentType[] = []) {
   return tool({
     description: [
       'Hand a self-contained piece of work to a worker agent that runs in its own context and reports back.',
-      'A worker costs more than it looks: it starts knowing only what you write in task, has to find everything else again, and you get back only its report.',
+      'Choose workers and context for delivery quality, never to minimize cost. Give each worker the complete relevant requirements, interfaces and acceptance criteria.',
       ...(types.length > 0
         ? [
             `Worker types (pass one as agent when it fits; omit agent for a general worker that can change files): ${types.map((type) => `${type.name}${type.readOnly ? ' (read-only)' : ''} — ${type.description}`).join('; ')}.`,
@@ -108,7 +115,7 @@ export function delegateTool(design = false, types: AgentType[] = []) {
               '(2) a larger change splits into independent parts that touch different files: one worker per part, each owning a different set of files (workers can read everything but only change what they own).',
             'Do not use it when: a few tool calls would do; you have not looked at the project yourself yet (list the files first: a small project does not need a worker); you already know which file or symbol to look at (read or search it yourself); the task is small or a single-file change; the parts depend on each other or touch the same files. When unsure, do the work yourself.',
           ]),
-      'Call delegate several times in one step to run up to 4 workers in parallel (at most 8 per turn); the step waits until all of them report back.',
+      'Up to 8 workers run in parallel. With collaboration enabled, delegates start in the background by default; there is no eight-workers-per-turn cap. Message existing workers for follow-up work, wait for results when needed, and explicitly integrate isolated changes before independent review and testing.',
       'In task, write: the goal and what it is for, what you already know or have ruled out, where to start (files, functions), what must not change, and what to report back.',
       'Workers only report back: after they report, read their results, check the claims you are going to rely on, make the parts fit together, and verify before you end your turn.',
     ].join(' '),
@@ -177,7 +184,7 @@ function release(team: Team, agentId: string): void {
   for (const [path, owner] of team.claims) if (owner.id === agentId) team.claims.delete(path)
 }
 
-interface Worker {
+export interface Worker {
   tag: AgentTag
   task: string
   // 设计任务里负责的节点（设计页按它加锁）
@@ -199,8 +206,8 @@ interface Worker {
   tokens: number
 }
 
-type WorkerOutcome =
-  | { kind: 'reported'; summary: string; issues: string | null }
+export type WorkerOutcome =
+  | { kind: 'reported'; summary: string; issues: string | null; verdict?: 'passed' | 'changes_required' | 'blocked' }
   | { kind: 'max-steps' }
   | { kind: 'stuck'; call: string }
   | { kind: 'cancelled' }
@@ -229,7 +236,7 @@ function withAgentMeta<T extends { _meta?: { [key: string]: unknown } | null }>(
 // 模型没有输出的提示（工人只发这一种 session_info_update）同样带上工人，界面按工人分开记。
 // 几个工人同时要确认权限时排队，一个一个问；用量记成子智能体
 function workerIO(io: TurnIO, worker: Worker, permissions: { chain: Promise<unknown> }): TurnIO {
-  const uiId = (id: string) => `${worker.tag.id}/${id}`
+  const uiId = (id: string) => `${worker.tag.id}/${worker.cardId}/${id}`
   return {
     update: async (update: SessionUpdate) => {
       if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk' || update.sessionUpdate === 'usage_update') return
@@ -259,16 +266,16 @@ function workerIO(io: TurnIO, worker: Worker, permissions: { chain: Promise<unkn
 }
 
 // 接在工人的系统提示词（prompt.ts 的 worker 那一份）后面
-function workerRules(worker: Worker, owned: string[]): string {
+function workerRules(worker: Worker, owned: string[], persistent = false): string {
   return [
-    `You are "${worker.tag.name}", a worker agent. A coordinating agent gave you one part of a larger task; other workers may be handling other parts at the same time. You do not see the coordinator's conversation or the user's messages: the task below is everything you were told.`,
-    `- When your part is done, call ${REPORT_TOOL} exactly once. The report is the only thing the coordinator receives, so put everything it needs in it.`,
+    `You are "${worker.tag.name}", a worker agent. A coordinating agent gave you one part of a larger task; other workers may be handling other parts at the same time. ${persistent ? 'Your saved context includes the user requirements and any inherited completed history. Follow the latest user constraints and messages; ask the coordinator when requirements are unclear.' : "You do not see the coordinator's conversation or the user's messages: the task below is everything you were told."}`,
+    `- When your part is done, call ${REPORT_TOOL} exactly once${persistent ? ' per activation. The coordinator receives your report and messages; include the evidence needed to verify your conclusions. Later messages may continue this same worker.' : '. The report is the only thing the coordinator receives, so put everything it needs in it.'}`,
     ...(worker.type?.readOnly
       ? ['- You are read-only: you can only run read-only commands with exec_command (rg, rg --files, sed -n, cat, ls, git log, git diff) and cannot change files. Investigate and report.']
       : [
-          `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`,
+          `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. ${persistent ? 'Your assigned write scope is enforced independently of file claims. Ask the coordinator before needing any different scope; do not bypass it with commands or absolute paths.' : `To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`}`,
           '- Do not start long-running commands (dev servers, watchers); run only quick, targeted commands when they help. Say in your report what you ran and whether it passed.',
-          '- Other workers may change other files while you work. If you need something from their part, do not build it yourself: describe it in your report.',
+          persistent ? '- Other workers have separate worktrees. Coordinate dependencies with send_message; only the coordinator integrates changes. Do not recreate their work or edit original-project and linked-dependency paths.' : '- Other workers may change other files while you work. If you need something from their part, do not build it yourself: describe it in your report.',
         ]),
     ...(worker.nodes.length > 0
       ? [`- On the design canvas you own these nodes: ${worker.nodes.join(', ')}. Build inside them; changing nodes other workers own is refused. You cannot use eval.`]
@@ -276,11 +283,23 @@ function workerRules(worker: Worker, owned: string[]): string {
   ].join('\n')
 }
 
-async function runWorker(session: Session, team: Team, worker: Worker, active: ActiveModel, signal: AbortSignal, io: TurnIO): Promise<WorkerOutcome> {
+export interface WorkerRuntime {
+  tools: ToolSet
+  role: CollaborationRole
+  messages: ModelMessage[]
+  receive(): Promise<void>
+  save(): Promise<void>
+  execute(call: StepToolCall, io: TurnIO): Promise<ToolResultPart>
+  beforeWrite?(target: { absolute: string; display: string }): void
+}
+
+export async function runWorker(session: Session, team: Team, worker: Worker, active: ActiveModel, signal: AbortSignal, io: TurnIO, runtime?: WorkerRuntime): Promise<WorkerOutcome> {
   const owned = claimsOf(team, worker.tag.id)
   const wio = workerIO(io, worker, team.permissions)
   const scope: AgentScope = {
+    processOwner: worker.tag.id,
     beforeWrite: (target) => {
+      runtime?.beforeWrite?.(target)
       const path = projectPath(session, target.absolute)
       // 项目外的写入照常走外部路径的授权，不在认领范围里
       if (!path) return
@@ -296,7 +315,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
   }
   // 类型的说明接在工人规则后面；只读类型工具也只给读和搜索的
   const typeNote = worker.type ? `\n\nYou are a "${worker.type.name}" worker.\n${worker.type.instructions}` : ''
-  const system = `${session.workerPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned)}${typeNote}`
+  const system = `${session.workerPrompt}${designInstructions(session)}\n\n${workerRules(worker, owned, runtime !== undefined)}${typeNote}${runtime ? `\nYour quality role is ${runtime.role}. Use send_message for coordination, team_task_* for shared work, and report when your activation is complete. Reviewers and testers must include a verdict. Prioritize correctness and complete verification, not cost.` : ''}`
   const ownedLine = [
     worker.type?.readOnly ? '' : owned.length > 0 ? `Files you own: ${owned.join(', ')}` : `You do not own any files yet; call ${CLAIM_TOOL} before changing a file.`,
     worker.nodes.length > 0 ? `Nodes you own: ${worker.nodes.join(', ')}` : '',
@@ -307,25 +326,38 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
   const designSet = Object.fromEntries(Object.entries(designTools(session)).filter(([name]) => name !== DESIGN_EVAL_TOOL))
   // 只读类型的工人：exec_command 只许跑只读命令，没有 apply_patch 和认领。用到时再拼：read-only.ts 和这里互相引用，模块加载时它可能还没准备好
   const baseTools: ToolSet = worker.type?.readOnly ? { ...READ_ONLY_TOOLS, [REPORT_TOOL]: WORKER_TOOLS[REPORT_TOOL]! } : WORKER_TOOLS
-  const tools: ToolSet = { ...baseTools, ...(worker.type?.readOnly ? {} : designSet) }
+  const tools: ToolSet = { ...baseTools, ...(worker.type?.readOnly ? {} : designSet), ...(runtime?.tools ?? {}) }
   // 工人自己从头开对话：环境和项目说明文件全量给一份
-  const messages: ModelMessage[] = [await freshWorldState(session), { role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
+  const messages: ModelMessage[] = runtime?.messages ?? [await freshWorldState(session), { role: 'user', content: `${worker.task}\n\n${ownedLine}` }]
+  if (runtime) session.messages.push(...messages)
   const window = active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let nearLimit = false
   // 和主循环一样的防打转（第 452 步）：同一个调用、同样的结果连着 3 次先提醒，提醒后还犯就停下这个工人；另有只提醒不停的几种（spin.ts）
   const repeats = new Map<string, number>()
   let warnedStuck = false
   const spin = newSpinTracker()
-  for (let step = 0; step < WORKER_MAX_STEPS; step++) {
+  const maxSteps = runtime ? (session.config.limits.maxSteps ?? Number.POSITIVE_INFINITY) : WORKER_MAX_STEPS
+  const compaction = { cooldownUntil: 0 }
+  for (let step = 0; step < maxSteps; step++) {
+    if (runtime) {
+      await runtime.receive()
+      session.messages.splice(0, session.messages.length, ...messages)
+      session.systemPrompt = system
+      const compacted = await compactIfNeeded(session, { window, step, state: compaction, model: active }, signal, wio)
+      if (compacted.kind === 'cancelled') return { kind: 'cancelled' }
+      if (compacted.kind === 'failed' || compacted.kind === 'too-large') return { kind: 'failed', message: compacted.kind === 'failed' ? compacted.message : 'Context cannot fit after compaction; work retained.' }
+    }
     // 最后一步或上下文快满时要求直接交结果
-    const toolChoice: ToolChoice<ToolSet> = step === WORKER_MAX_STEPS - 1 || nearLimit ? { type: 'tool', toolName: REPORT_TOOL } : 'auto'
+    const toolChoice: ToolChoice<ToolSet> = step === maxSteps - 1 || (!runtime && nearLimit) ? { type: 'tool', toolName: REPORT_TOOL } : 'auto'
     const { toolCalls, inputTokens, answered, responseMessages, truncated, interrupted } = await streamModelStep(
-      { model: active.language, system, messages, tools, toolChoice, usage: { role: 'subagent', provider: active.config.provider, modelId: active.config.modelId } },
+      { model: active.language, system, messages: runtime && session.compaction ? session.contextMessages() : messages, tools, toolChoice, usage: { role: 'subagent', provider: active.config.provider, modelId: active.config.modelId } },
       signal,
       wio,
       { key: worker.tag.id, handles: session.stepRetries },
     )
     messages.push(...responseMessages)
+    if (runtime && inputTokens > 0) session.lastContext = { inputTokens, chars: system.length + toolDefinitionChars(tools) + messagesChars(messages), cacheRead: null, cacheWrite: null }
+    await runtime?.save()
     nearLimit = inputTokens > window * CONTEXT_STOP_RATIO
     // 工人说的话不进主对话，留最近几段：没交结果就停下时带回给主智能体（第 451 步）
     const said = assistantText(responseMessages).trim()
@@ -354,12 +386,24 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
       }
       if (call.toolName === REPORT_TOOL && !call.invalid) {
         const report = reportInput.safeParse(call.input)
-        if (report.success) return { kind: 'reported', summary: report.data.summary, issues: report.data.issues?.trim() || null }
+        if (report.success) {
+          if (runtime && (runtime.role === 'reviewer' || runtime.role === 'tester') && !report.data.verdict) {
+            results.push(errorResult(call, 'Reviewer/tester reports must include a verdict: passed, changes_required, or blocked.'))
+            continue
+          }
+          messages.push({ role: 'tool', content: [...results, textResult(call, 'Report recorded.'), ...toolCalls.slice(index + 1).filter((remaining) => !answered.has(remaining.toolCallId)).map((remaining) => errorResult(remaining, 'Not executed: this activation ended with report.'))] })
+          await runtime?.save()
+          return { kind: 'reported', summary: report.data.summary, issues: report.data.issues?.trim() || null, ...(report.data.verdict ? { verdict: report.data.verdict } : {}) }
+        }
         results.push(errorResult(call, report.error.issues.map((issue) => issue.message).join('; ')))
         continue
       }
       if (call.toolName === CLAIM_TOOL && !call.invalid && Object.hasOwn(tools, CLAIM_TOOL)) {
         results.push(await claimFiles(session, team, worker, call, wio, io))
+        continue
+      }
+      if (runtime && Object.hasOwn(runtime.tools, call.toolName)) {
+        results.push(await runtime.execute(call, wio))
         continue
       }
       // 按这个工人实际拿到的工具判断：只读类型没有 apply_patch，命令也只能是只读的，模型硬调也不执行
@@ -396,6 +440,7 @@ async function runWorker(session: Session, team: Team, worker: Worker, active: A
       }
     }
     if (results.length > 0) messages.push({ role: 'tool', content: results })
+    await runtime?.save()
     if (images.length > 0) messages.push(screenshotMessage(images))
     if (truncated && toolCalls.some((call) => answered.has(call.toolCallId))) messages.push({ role: 'user', content: TRUNCATION_NOTE })
     if (repeated && warnedStuck) return { kind: 'stuck', call: describeCall(repeated) }
@@ -477,7 +522,7 @@ function lastNotes(worker: Worker, max: number): string {
   return text.length > max ? `…${text.slice(-max)}` : text
 }
 
-function describeOutcome(worker: Worker, outcome: WorkerOutcome): { text: string; ui: string; ok: boolean } {
+export function describeOutcome(worker: Worker, outcome: WorkerOutcome): { text: string; ui: string; ok: boolean } {
   const changed = [...worker.edited]
   const files = changed.length > 0 ? `Changed files: ${changed.join(', ')}.` : 'Changed no files.'
   const boundary = worker.boundary.length > 0 ? ` Its commands also changed files owned by other workers: ${worker.boundary.join(', ')}; check them.` : ''
@@ -610,6 +655,8 @@ export async function runDelegates(
       } catch (error) {
         outcome = signal.aborted ? { kind: 'cancelled' } : { kind: 'failed', message: toModelError(error, active.config.endpoint.apiKey, 0).message }
         if (!signal.aborted) console.error(`[agents] 子智能体 ${worker.tag.name} 出错`, error)
+      } finally {
+        await session.execSessions.killOwner(worker.tag.id)
       }
       const described = describeOutcome(worker, outcome)
       worker.endedAt = Date.now()

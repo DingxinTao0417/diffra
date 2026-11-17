@@ -100,6 +100,9 @@ import { CORE_VERSION } from './version.js'
 import { ExternalAgentError, ExternalAgentProcess } from './external/connection.js'
 import { ExternalSession } from './external/session.js'
 import { applyCandidate, type CandidateHost, candidateDiff, candidateRunOf, cleanupRun, discardCandidates, recoverRuns, runCandidates, runCardUpdate } from './session/candidates.js'
+import { collaborationRuntime, collaborationView } from './session/collaboration.js'
+import { TaskMailbox } from './session/task-mailbox.js'
+import { disposeWorkerWorktree, restoreWorkerWorktree } from './session/collaboration-worktrees.js'
 
 export const AGENT_NAME = 'diffra-core'
 
@@ -226,13 +229,13 @@ function withSeq(update: acp.SessionUpdate, seq: number): acp.SessionUpdate {
 }
 
 // 确认请求：选中的 optionId，提问还带回答案（_meta.diffra.askAnswers）；取消、出错是 null
-async function askClient(session: Pick<Session, 'id' | 'activeTurn'>, client: acp.AgentContext, toolCall: acp.ToolCallUpdate, options: acp.PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null> {
+async function askClient(session: Pick<Session, 'id' | 'activeTurn'>, client: acp.AgentContext, toolCall: acp.ToolCallUpdate, options: acp.PermissionOption[], signal?: AbortSignal): Promise<{ optionId: string; answers?: unknown } | null> {
   try {
     const response = await client.request(
       acp.methods.client.session.requestPermission,
       { sessionId: session.id, toolCall, options },
       // 用户点「停止」时不再等确认结果
-      session.activeTurn ? { cancellationSignal: session.activeTurn.signal, stopWaitingOnCancel: true } : undefined,
+      signal || session.activeTurn ? { cancellationSignal: AbortSignal.any([...(signal ? [signal] : []), ...(session.activeTurn ? [session.activeTurn.signal] : [])]), stopWaitingOnCancel: true } : undefined,
     )
     if (response.outcome.outcome !== 'selected') return null
     const diffra = response._meta?.diffra
@@ -277,6 +280,11 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
   // 设置里的外接智能体清单（SESSION_EXT_METHODS.externalAgents），按 id
   const externalAgents = new Map<string, ExternalAgentSpec>()
   const store = options.sessionsDir ? new SessionStore(options.sessionsDir) : null
+  const mailbox = options.sessionsDir ? new TaskMailbox(join(options.sessionsDir, 'task-mailbox')) : null
+  const mailboxReady = mailbox?.recover()
+  void mailboxReady?.catch((error: unknown) => console.error('[tasks] 持久消息恢复失败，投递将保持关闭', error))
+  const taskClients = new Map<string, acp.AgentContext>()
+  const mailboxRunning = new Set<string>()
   const usageLog = options.usageDir ? new UsageLog(options.usageDir) : null
   const mcpPool = options.mcpPool ?? new McpPool()
   const lspPool = options.lspPool ?? new LspPool()
@@ -468,6 +476,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
           }
         : undefined
     const session = new Session({
+      worktreesRoot: options.worktreesDir ?? join(tmpdir(), 'diffra-worktrees'),
       id,
       cwd,
       config,
@@ -538,6 +547,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     remote?: RemoteSource,
     fromPlan?: string,
   ): Promise<acp.StopReason> => {
+    taskClients.set(session.id, client)
+    let permissionTail: Promise<unknown> = Promise.resolve()
     const notify = notifier(client, session.id)
     // 后台命令在一轮结束后还会退出：用这一轮的客户端推，不进会话记录（重开应用时进程已经不在了）
     session.execSessions.onChange = () =>
@@ -547,12 +558,22 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     let stopReason: acp.StopReason = 'end_turn'
     try {
       stopReason = await run({
+        persist: async () => {
+          if (store) await store.save(session.toRecord())
+        },
         update: async (update) => {
           session.recordUpdate(update)
           await notify(update)
           if (update.sessionUpdate === 'session_info_update' && update._meta && 'diffra' in update._meta) await persist(session, notify)
         },
-        requestPermission: async (toolCall, options) => (await askClient(session, client, toolCall, options))?.optionId ?? null,
+        requestPermission: (toolCall, options, signal) => {
+          const asked = permissionTail.then(async () => {
+            if (signal?.aborted || session.activeTurn?.signal.aborted) return null
+            return (await askClient(session, client, toolCall, options, signal))?.optionId ?? null
+          })
+          permissionTail = asked.catch(() => null)
+          return asked
+        },
         requestAnswers: (toolCall, options) => askClient(session, client, toolCall, options),
         browser: (action, signal) =>
           client
@@ -585,9 +606,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
             return stored ? { title: stored.title, cwd: stored.cwd, running: false, turns: stored.turns } : null
           },
           act: (params) =>
-            client
-              .request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, params, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
-              .catch((error: unknown): TaskActionResult => ({ ok: false, error: clientErrorMessage(error) })),
+            dispatchTask(params, client),
+          ...(mailbox ? { receipt: (id: string) => mailbox.get(id) } : {}),
         },
         todos: {
           act: (params) =>
@@ -634,6 +654,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     } finally {
       session.endTurn(stopReason)
       await persist(session, notify)
+      if (mailbox) void drainMailbox(session.id).catch((error: unknown) => console.error(`[tasks] 会话 ${session.id} 排队投递失败`, error))
     }
     // 自动记忆：一轮正常结束后在后台挑出以后用得上的事记下来，不挡下一轮；出错只记日志
     const finished = session.turns.at(-1)
@@ -643,6 +664,69 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       }).catch((error: unknown) => console.error(`[memory] 会话 ${session.id} 的自动记忆失败`, error))
     }
     return stopReason
+  }
+
+  const drainMailbox = async (targetId: string): Promise<void> => {
+    if (!mailbox) return
+    await mailboxReady
+    if (mailboxRunning.has(targetId)) return
+    const target = sessions.get(targetId)
+    const client = taskClients.get(targetId)
+    if (!target || !client || target.running) return
+    mailboxRunning.add(targetId)
+    try {
+      for (;;) {
+        if (target.running) break
+        const pending = (await mailbox.pending(targetId))[0]
+        if (!pending) break
+        const claimed = await mailbox.claim(pending.id)
+        if (!claimed) continue
+        try {
+          const text = `来自任务「${claimed.from.title}」的${claimed.from.reply ? '回复' : '消息'}：\n\n${claimed.text}`
+          target.turnRequested()
+          await notifier(client, target.id)({ sessionUpdate: 'session_info_update', _meta: { diffra: { taskDelivery: { turnId: claimed.turnId, text, from: { ...claimed.from, messageId: claimed.id }, state: 'running' } } } })
+          const result = await runRecordedTurn(target, client, claimed.turnId, text, 'prompt', [], [], (io) => runTurn(target, { id: claimed.turnId, text }, io), { ...claimed.from, messageId: claimed.id })
+          if (store) await store.save(target.toRecord())
+          await mailbox.finish(claimed.id, { status: result === 'cancelled' ? 'cancelled' : target.taskState.status === 'completed' ? 'completed' : 'failed', ...(target.taskState.reason ? { error: target.taskState.reason.slice(0, 4000) } : {}) })
+          await notifier(client, target.id)({ sessionUpdate: 'session_info_update', _meta: { diffra: { taskDelivery: { turnId: claimed.turnId, text, from: { ...claimed.from, messageId: claimed.id }, state: 'ended', stopReason: result } } } })
+        } catch (error) {
+          await mailbox.finish(claimed.id, { status: 'failed', error: clientErrorMessage(error).slice(0, 4000) })
+          console.error(`[tasks] 消息 ${claimed.id} 执行失败`, error)
+        }
+      }
+    } finally {
+      mailboxRunning.delete(targetId)
+    }
+  }
+
+  const dispatchTask = async (params: TaskActionParams, client: acp.AgentContext): Promise<TaskActionResult> => {
+    try {
+      if (!mailbox) return await client.request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, params, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+      await mailboxReady
+      const prepared = await client.request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, { ...params, prepareOnly: true }, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+      if (!prepared.ok) return prepared
+      const target = sessions.get(prepared.sessionId)
+      if (!target) return await client.request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, { ...params, ...(params.action === 'send' ? { target: prepared.sessionId } : {}), prepareOnly: false }, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+      taskClients.set(target.id, client)
+      if (store) await store.save(target.toRecord(false))
+      const message = await mailbox.enqueue({ sourceSessionId: params.sessionId, targetSessionId: target.id, text: params.message, from: params.from })
+      void drainMailbox(target.id).catch((error: unknown) => console.error(`[tasks] 消息 ${message.id} 调度失败`, error))
+      return { ok: true, sessionId: target.id, title: target.title, queued: target.running, messageId: message.id, turnId: message.turnId }
+    } catch (error) {
+      return { ok: false, error: clientErrorMessage(error) }
+    }
+  }
+
+  const resumePendingTasks = async (client: acp.AgentContext): Promise<void> => {
+    if (!mailbox || !store) return
+    await mailboxReady
+    const targets = new Set((await mailbox.pending()).map((message) => message.targetSessionId))
+    for (const target of targets) {
+      const record = sessions.has(target) ? null : await store.load(target)
+      await client.request<TaskActionResult, TaskActionParams>(CLIENT_EXT_METHODS.taskAction, { sessionId: target, action: 'send', target, message: '恢复此前已确认的待投递消息', from: { sessionId: target, title: record?.title ?? sessions.get(target)?.title ?? '' }, prepareOnly: true }, { cancellationSignal: AbortSignal.timeout(60_000), stopWaitingOnCancel: true })
+      taskClients.set(target, client)
+      await drainMailbox(target)
+    }
   }
 
   // 外接智能体的一轮：提问原样（选了 Skill 就放在前面）转给它，过程记进这一轮并推给界面，确认请求转给客户端
@@ -715,7 +799,8 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     })
     // Diffra 的界面一次拿到整段历史，所以历史放在响应的 _meta 里，不逐条回放 session/update。
     // 旧记录的改动卡片带整份文件，发出去之前压缩（compactTurns），记录本身不动
-    .onRequest(acp.methods.agent.session.load, async ({ params }) => {
+    .onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
+      taskClients.set(params.sessionId, client)
       const liveExternal = externals.get(params.sessionId)
       const externalRecord = liveExternal ? liveExternal.toRecord(false) : sessions.has(params.sessionId) ? null : await requireStore().load(params.sessionId)
       if (externalRecord?.agent) {
@@ -766,6 +851,15 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       // 还留着的候选方案 worktree 一起清掉（不在内存里的从记录里读）
       const runs = sessions.get(params.sessionId)?.candidateRuns ?? (store ? ((await store.load(params.sessionId).catch(() => null))?.candidateRuns ?? []) : [])
       for (const run of runs) if (run.worktrees.length > 0) await cleanupRun(run)
+      const collaborationOwner = sessions.get(params.sessionId)
+      if (collaborationOwner) await collaborationRuntime(collaborationOwner).dispose()
+      else if (store) {
+        const record = await store.load(params.sessionId)
+        for (const worker of record.collaboration?.workers ?? []) if (worker.worktree) {
+          await restoreWorkerWorktree(worker.worktree, record.cwd, options.worktreesDir ?? join(tmpdir(), 'diffra-worktrees'))
+          await disposeWorkerWorktree(worker.worktree)
+        }
+      }
       sessions.get(params.sessionId)?.execSessions.killAll()
       sessions.delete(params.sessionId)
       infos.delete(params.sessionId)
@@ -919,6 +1013,26 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       const retry = sessionOf(params.sessionId).stepRetries.get(params.agent)
       retry?.()
       return { retried: retry !== undefined }
+    })
+    .onRequest(SESSION_EXT_METHODS.collaboration, z.object({ sessionId: z.string().min(1) }), ({ params }) => collaborationView(sessionOf(params.sessionId)))
+    .onRequest(SESSION_EXT_METHODS.taskMessagesResume, z.object({}), async ({ client }) => {
+      void resumePendingTasks(client).catch((error: unknown) => console.error('[tasks] 恢复排队消息失败', error))
+      return { accepted: true }
+    })
+    .onRequest(SESSION_EXT_METHODS.collaborationControl, z.object({ sessionId: z.string().min(1), workerId: z.string().min(1).max(128), action: z.enum(['message', 'interrupt', 'retry', 'integrate']), message: z.string().trim().min(1).max(20_000).optional() }), async ({ params, client }) => {
+      const session = sessionOf(params.sessionId)
+      if (session.running || params.action === 'interrupt') await collaborationRuntime(session).control(params)
+      else {
+        const turnId = randomUUID()
+        const text = params.action === 'integrate' ? '整合指定队友的改动，并完成独立审查与测试验收。' : `继续与队友协作：${params.message ?? '恢复中断的工作，检查已有结果，避免重复副作用。'}`
+        taskClients.set(session.id, client)
+        session.turnRequested()
+        await notifier(client, session.id)({ sessionUpdate: 'session_info_update', _meta: { diffra: { taskDelivery: { turnId, text, state: 'running' } } } })
+        void runRecordedTurn(session, client, turnId, text, 'prompt', [], [], (io) => runTurn(session, { id: turnId, text }, io, { collaborationAction: params })).then(async (stopReason) => {
+          await notifier(client, session.id)({ sessionUpdate: 'session_info_update', _meta: { diffra: { taskDelivery: { turnId, text, state: 'ended', stopReason } } } })
+        }).catch((error: unknown) => console.error(`[collaboration] 会话 ${session.id} 继续协作失败`, error))
+      }
+      return collaborationView(session)
     })
     .onRequest(SESSION_EXT_METHODS.visualSnapshot, visualSnapshotParams, async ({ params, client }) => {
       const session = sessionOf(params.sessionId)

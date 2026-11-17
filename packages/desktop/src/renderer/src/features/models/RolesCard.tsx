@@ -9,7 +9,10 @@ import { SettingsGroup, SettingsRow } from '../settings/SettingsLayout'
 export const ROLE_INFO: Record<Role, { label: string; description: string; required: boolean; none: string }> = {
   coder: { label: '编码', description: '读代码、改代码、跑命令的主力模型。', required: true, none: '未选择' },
   planner: { label: '规划', description: '用 /计划 先出计划时由它拆解任务。', required: false, none: '沿用编码模型' },
-  reviewer: { label: '评审', description: '深度扫描时用新的上下文审查改动。', required: false, none: '沿用编码模型' },
+  explorer: { label: '探索', description: '协作时阅读代码、定位问题，整理实现需要的上下文。', required: false, none: '沿用编码模型' },
+  implementer: { label: '实现', description: '协作时按分工修改代码，完成实现。', required: false, none: '沿用编码模型' },
+  reviewer: { label: '评审', description: '用独立上下文审查协作改动，也用于深度扫描。', required: false, none: '沿用编码模型' },
+  tester: { label: '测试', description: '用独立上下文运行测试、验证改动，向协调者报告结果。', required: false, none: '沿用编码模型' },
   fallback: { label: '备用', description: '编码模型卡住或连续失败时换它接手。', required: false, none: '不使用' },
 }
 
@@ -55,6 +58,7 @@ export function RolesCard({ view, onChange }: RolesCardProps) {
 
   return (
     <SettingsGroup title="角色分配">
+      <p className="px-4 py-3 text-sm text-muted-foreground">协作以质量优先。探索、实现、独立审查和测试未单独配置时沿用编码模型，不会按价格降级。子任务只使用这里配置的角色模型或编码模型，不能自行选择其他模型。</p>
       {options.length === 0 && <p className="px-4 py-3 text-sm text-muted-foreground">先启用至少一个模型，再来分配。</p>}
       {ROLES.map((role) => {
         const info = ROLE_INFO[role]

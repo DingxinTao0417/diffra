@@ -185,7 +185,10 @@ const settingsSchema = z.object({
   roles: z.object({
     coder: modelRefSchema.nullable(),
     planner: modelRefSchema.nullable(),
+    explorer: modelRefSchema.nullable().default(null),
+    implementer: modelRefSchema.nullable().default(null),
     reviewer: modelRefSchema.nullable(),
+    tester: modelRefSchema.nullable().default(null),
     fallback: modelRefSchema.nullable(),
   }),
   projects: z.record(z.string(), projectSettingsSchema).default({}),
@@ -243,7 +246,7 @@ const settingsSchema = z.object({
 const EMPTY_SETTINGS: Settings = {
   version: 1,
   providers: [],
-  roles: { coder: null, planner: null, reviewer: null, fallback: null },
+  roles: { coder: null, planner: null, explorer: null, implementer: null, reviewer: null, tester: null, fallback: null },
   projects: {},
   lastProject: null,
   archivedProjects: [],
@@ -265,9 +268,12 @@ const EMPTY_SETTINGS: Settings = {
 export class SettingsStore {
   private current: Settings = EMPTY_SETTINGS
   private readonly queue = new WriteQueue()
+  private readonly file: string
   loadError: string | null = null
 
-  private constructor(private readonly file: string) {}
+  private constructor(file: string) {
+    this.file = file
+  }
 
   static async open(userDataDir: string): Promise<SettingsStore> {
     const store = new SettingsStore(join(userDataDir, 'settings.json'))

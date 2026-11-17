@@ -195,6 +195,7 @@ export async function initialize(): Promise<void> {
     navigate({ name: 'home', project: last.path })
   }
   await refreshTasks()
+  await window.diffra.resumeTaskMessages().catch((error: unknown) => showToast(`恢复待投递消息失败：${errorMessage(error)}`))
 }
 
 // 会话更新和权限请求只注册一次，按会话 id 分给对应的任务
@@ -203,6 +204,19 @@ export function wireCoreEvents(): () => void {
     const usage = usageOf(update)
     const silence = modelSilenceOf(update)
     updateLiveBatched(sessionId, (task) => {
+      const metadata = update.sessionUpdate === 'session_info_update' ? update._meta?.diffra : null
+      const delivery = typeof metadata === 'object' && metadata !== null && 'taskDelivery' in metadata ? metadata.taskDelivery : null
+      if (typeof delivery === 'object' && delivery !== null && 'turnId' in delivery && typeof delivery.turnId === 'string' && 'state' in delivery) {
+        if (delivery.state === 'running' && 'text' in delivery && typeof delivery.text === 'string') {
+          const from = 'from' in delivery ? delivery.from as TaskSource : undefined
+          return { ...task, running: true, turns: task.turns.some((turn) => turn.id === delivery.turnId) ? task.turns : [...task.turns, newTurn(delivery.turnId, delivery.text, 'prompt', [], [], from)] }
+        }
+        if (delivery.state === 'ended') return { ...task, running: false, turns: task.turns.map((turn) => turn.id === delivery.turnId ? { ...turn, endedAt: Date.now(), stopReason: 'end_turn' } : turn) }
+      }
+      const collaboration = update.sessionUpdate === 'session_info_update' ? update._meta?.diffra : null
+      if (typeof collaboration === 'object' && collaboration !== null && 'collaboration' in collaboration) {
+        return { ...task, collaboration: collaboration.collaboration as import('@diffra/core/types').CollaborationView }
+      }
       if (usage) return { ...task, usage }
       if (visualSnapshotOf(update).visualSnapshot) return { ...task, turns: withVisualSnapshot(task.turns, update) }
       // 候选方案卡片在生成它的那一轮，应用、放弃后的更新补到那一轮
@@ -398,6 +412,7 @@ async function loadLive(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): 
   const loaded = await window.diffra.loadSession(task.sessionId, task.cwd)
   const live: LiveTask = {
     ...liveFrom(loaded, loaded.title),
+    collaboration: await window.diffra.getCollaboration(task.sessionId).catch((error: unknown) => { console.error('[collaboration] 读取协作状态失败', error); return undefined }),
     progress: loaded.taskState ?? loaded.turns.flatMap((turn) => turn.updates).map(taskProgressOf).filter((item) => item !== null).at(-1),
     turns: loaded.turns.map(turnFromStored),
     usage: lastUsage(loaded.turns),
@@ -409,6 +424,18 @@ async function loadLive(task: Pick<StoredSessionSummary, 'sessionId' | 'cwd'>): 
 // 任务互通：另一个任务的智能体要给某个任务发消息，或新建任务。在后台载入、起一轮，不把用户从正在看的任务切走
 async function handleTaskAction(params: TaskActionParams): Promise<TaskActionResult> {
   const text = `来自任务「${params.from.title}」的${params.from.reply ? '回复' : '消息'}：\n\n${params.message}`
+  if (params.prepareOnly) {
+    if (params.action === 'send') {
+      const summary = store.get().tasks.find((task) => task.sessionId === params.target)
+      const target = store.get().live[params.target] ?? (summary ? await loadLive(summary) : null)
+      return target ? { ok: true, sessionId: target.sessionId, title: target.title, queued: target.running } : { ok: false, error: '目标任务不存在' }
+    }
+    const title = params.title?.trim() ?? titleOf(params.message)
+    const handle = await window.diffra.createSession(params.project, { title, design: params.design })
+    await window.diffra.updateSession(handle.sessionId, { title })
+    store.set((state) => ({ ...state, live: { ...state.live, [handle.sessionId]: liveFrom(handle, title) } }))
+    return { ok: true, sessionId: handle.sessionId, title, queued: false }
+  }
   if (params.action === 'send') {
     const sent = await sendInBackground(params.target, text, { from: params.from })
     if (!sent) return { ok: false, error: `没有找到任务 ${params.target}` }

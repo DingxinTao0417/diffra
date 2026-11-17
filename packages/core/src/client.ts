@@ -73,7 +73,7 @@ export { McpOAuth, McpOAuthError, type McpOAuthState, type McpOAuthStatus, oauth
 // 客户端（桌面端）接收 core 推来的会话更新和权限请求
 export interface CoreClientHandlers {
   onSessionUpdate(notification: acp.SessionNotification): void
-  onPermissionRequest(request: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse>
+  onPermissionRequest(request: acp.RequestPermissionRequest, signal?: AbortSignal): Promise<acp.RequestPermissionResponse>
   // 智能体操作内置浏览器、起开发服务器；不提供时会话里不要开 browser
   onBrowserAction?(params: BrowserActionParams): Promise<BrowserActionResult>
   // 电脑操控（v2）：截屏、鼠标、键盘；不提供时会话里不要开 computer
@@ -108,7 +108,7 @@ export function connectToCore(coreStdin: Writable, coreStdout: Readable, handler
   if (handlers) {
     app
       .onNotification(acp.methods.client.session.update, ({ params }) => handlers.onSessionUpdate(params))
-      .onRequest(acp.methods.client.session.requestPermission, ({ params }) => handlers.onPermissionRequest(params))
+      .onRequest(acp.methods.client.session.requestPermission, ({ params, signal }) => handlers.onPermissionRequest(params, signal))
     const onBrowserAction = handlers.onBrowserAction
     if (onBrowserAction) app.onRequest(CLIENT_EXT_METHODS.browserAction, browserActionParamsSchema, ({ params }) => onBrowserAction(params))
     const onComputerAction = handlers.onComputerAction
@@ -226,6 +226,18 @@ export function enhancePrompt(
 // 模型很久没有输出时，让卡住的那一步重发；agent 是 main 或子智能体的 id
 export function retryStep(connection: acp.ClientConnection, sessionId: string, agent: string): Promise<{ retried: boolean }> {
   return requestOf(connection)<{ retried: boolean }, { sessionId: string; agent: string }>(SESSION_EXT_METHODS.retryStep, { sessionId, agent }, extRequestOptions())
+}
+
+export function getCollaboration(connection: acp.ClientConnection, sessionId: string): Promise<import('./collaboration-types.js').CollaborationView> {
+  return requestOf(connection)(SESSION_EXT_METHODS.collaboration, { sessionId }, extRequestOptions())
+}
+
+export function resumeTaskMessages(connection: acp.ClientConnection): Promise<{ accepted: boolean }> {
+  return requestOf(connection)(SESSION_EXT_METHODS.taskMessagesResume, {}, extRequestOptions())
+}
+
+export function controlCollaboration(connection: acp.ClientConnection, sessionId: string, action: import('./collaboration-types.js').CollaborationAction): Promise<import('./collaboration-types.js').CollaborationView> {
+  return requestOf(connection)(SESSION_EXT_METHODS.collaborationControl, { sessionId, ...action }, extRequestOptions())
 }
 
 // 直接应用回答里的 diff（第 686 步），记成一轮 apply；prompt 是这一轮显示的说明

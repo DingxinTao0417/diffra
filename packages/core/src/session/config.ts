@@ -67,6 +67,8 @@ export const modelConfigSchema = z.object({
 
 export const sessionConfigSchema = z.object({
   model: modelConfigSchema,
+  collaboration: z.object({ enabled: z.boolean(), isolation: z.literal('worktree'), acceptance: z.literal('required'), maxParallel: z.literal(8) }).optional(),
+  collaborationModels: z.object({ explorer: modelConfigSchema.optional(), implementer: modelConfigSchema.optional(), reviewer: modelConfigSchema.optional(), tester: modelConfigSchema.optional() }).optional(),
   reviewModel: z.object({ endpoint: endpointSchema, modelId: z.string().min(1), provider: providerSchema }).nullable(),
   planModel: modelConfigSchema.nullable(),
   fallbackModel: modelConfigSchema.nullable(),
@@ -209,7 +211,7 @@ export const mcpServerSchema = z.union([
 ])
 
 // skills：用户给这一轮选的 Skill 名称；goal：目标模式，自主推进多轮
-export const taskSourceSchema = z.object({ sessionId: z.string().min(1), title: z.string(), reply: z.literal(true).optional() })
+export const taskSourceSchema = z.object({ sessionId: z.string().min(1), title: z.string(), reply: z.literal(true).optional(), messageId: z.string().min(1).max(64).optional() })
 export const remoteSourceSchema = z.object({ deviceId: z.string().regex(/^[0-9a-f]{32}$/), name: z.string().min(1).max(60) })
 
 export const promptMetaSchema = z.object({
@@ -225,10 +227,11 @@ export const promptMetaSchema = z.object({
 })
 
 export const taskActionParamsSchema = z.discriminatedUnion('action', [
-  z.object({ sessionId: z.string().min(1), action: z.literal('send'), target: z.string().min(1), message: z.string().min(1), from: taskSourceSchema }),
+  z.object({ sessionId: z.string().min(1), action: z.literal('send'), target: z.string().min(1), message: z.string().min(1), from: taskSourceSchema, prepareOnly: z.boolean().optional() }),
   z.object({
     sessionId: z.string().min(1),
     action: z.literal('create'),
+    prepareOnly: z.boolean().optional(),
     project: z.string().min(1).nullable(),
     title: z.string().nullable(),
     design: z.boolean(),

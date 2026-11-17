@@ -3,7 +3,7 @@ import { BROWSER_BACKENDS, type BrowserBackend, type PermissionMode, type Plugin
 import type { McpOAuthState } from './mcp-oauth'
 import type { ExternalAgentConfig } from './external-agents'
 
-export const ROLES = ['coder', 'planner', 'reviewer', 'fallback'] as const
+export const ROLES = ['coder', 'planner', 'explorer', 'implementer', 'reviewer', 'tester', 'fallback'] as const
 export type Role = (typeof ROLES)[number]
 
 export interface ModelRef {

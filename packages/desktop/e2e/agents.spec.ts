@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -13,13 +14,23 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-agents-'))
   writeFileSync(join(project, 'a.txt'), 'alpha\n')
   writeFileSync(join(project, 'b.txt'), 'beta\n')
+  writeFileSync(join(project, 'uppercase.test.cjs'), "const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');test('uppercase',()=>{assert.equal(fs.readFileSync('a.txt','utf8').trim(),'ALPHA');assert.equal(fs.readFileSync('b.txt','utf8').trim(),'BETA')});\n")
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: project, timeout: 15_000, env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.invalid' } })
+  git('init', '-q')
+  git('config', 'core.autocrlf', 'false')
+  git('add', '.')
+  git('commit', '-qm', 'init')
   const model = await startScriptedModel([
     {
       toolCalls: [
         { name: 'delegate', input: { name: '甲', task: 'WORKER-A：把 a.txt 改成大写', files: ['a.txt'] } },
-        { name: 'delegate', input: { name: '乙', task: 'WORKER-B：把 b.txt 改成大写', files: ['b.txt'] } },
+        { name: 'delegate', input: { name: '乙', task: 'WORKER-B：把 b.txt 改成大写', files: ['b.txt', 'b-note.txt'] } },
       ],
     },
+    { toolCalls: [{ name: 'wait_agents', input: { agents: ['甲', '乙'] } }] },
+    { toolCalls: [{ name: 'integrate_agent', input: { agent: '甲' } }, { name: 'integrate_agent', input: { agent: '乙' } }] },
+    { text: '两个文件已整合，等待独立验收' },
+    { text: '等待集成测试' },
     { text: '两个文件都改好了' },
     // 甲第一步慢一点：乙的确认弹出来时甲还在跑
     { match: 'WORKER-A', toolCalls: [read('a.txt')], delayMs: 2500 },
@@ -31,6 +42,10 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
     { match: 'WORKER-B', toolCalls: [read('b.txt')] },
     { match: 'WORKER-B', toolCalls: [replaceLines('b.txt', 'beta', 'BETA')] },
     { match: 'WORKER-B', toolCalls: [{ name: 'report', input: { summary: 'b.txt 改成大写了', issues: 'a.txt 归甲，没动' } }] },
+    { match: 'Independently review', toolCalls: [read('a.txt'), read('b.txt')] },
+    { match: 'Independently review', toolCalls: [{ name: 'report', input: { summary: '独立审查通过', verdict: 'passed' } }] },
+    { match: 'Independently verify', toolCalls: [exec('node --test')] },
+    { match: 'Independently verify', toolCalls: [{ name: 'report', input: { summary: '测试通过', verdict: 'passed' } }] },
   ])
   let app = await launchApp(userDataDir)
   try {
@@ -49,6 +64,8 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
     await expect(card('甲').getByTestId('agent-progress')).toContainText('第 1 步')
     await expect(window.getByTestId('monitor-agent')).toHaveCount(2)
     await permission.getByRole('button', { name: '允许一次', exact: true }).click()
+    await expect(permission).toContainText('node --test', { timeout: 60_000 })
+    await permission.getByRole('button', { name: '允许一次', exact: true }).click()
     await waitTaskDone(window)
 
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('ALPHA\n')
@@ -65,28 +82,28 @@ test('子智能体：两个工人并行改各自认领的文件，改别人的�
     const refused = bSteps.locator('[data-testid="tool-call"][data-status="failed"]')
     await expect(refused).toHaveCount(1)
     await refused.getByRole('button').click()
-    await expect(bSteps).toContainText('a.txt is owned by worker "甲"')
+    await expect(bSteps).toContainText('outside this worker\'s assigned files')
     await expect(bSteps.getByRole('button', { name: '查看改动 b.txt' })).toBeVisible()
     // 第 660 步：两个一起派出时卡片上面有组织图；结束后写着用时和步数，乙改了的文件列出来
-    await expect(window.getByTestId('agent-team').getByTestId('agent-team-member')).toHaveCount(2)
+    await expect(window.getByTestId('agent-team').first().getByTestId('agent-team-member')).toHaveCount(2)
     await expect(b.getByTestId('agent-stats')).toContainText('用时')
     await expect(b.getByTestId('agent-edited')).toContainText('b.txt')
     // 工人的步骤不出现在主对话里
-    await expect(window.getByTestId('turn').locator(':scope > [data-testid="tool-call"][data-kind="edit"]')).toHaveCount(0)
+    await expect(window.getByTestId('collaboration-panel').getByText('验收通过', { exact: true })).toBeVisible()
     // 任务监控：工人都交回了，改动文件标出是谁改的
     await expect(window.getByTestId('monitor-agent').filter({ hasText: '甲' })).toHaveAttribute('data-status', 'completed')
     await expect(window.getByTestId('monitor-file').filter({ hasText: 'a.txt' }).getByTestId('monitor-file-agent')).toHaveText('甲')
     await expect(window.getByTestId('monitor-file').filter({ hasText: /^b\.txt/ }).getByTestId('monitor-file-agent')).toHaveText('乙')
     // 主智能体和两个工人的请求都发给了模型；工人的请求从它的任务开始，带认领说明
     const workerBodies = model.bodies().filter((body) => body.includes('WORKER-B'))
-    expect(workerBodies.some((body) => body.includes('Files you own: b.txt'))).toBe(true)
+    expect(workerBodies.some((body) => body.includes('WORKER-B') && body.includes('isolated Git worktree'))).toBe(true)
 
     // 重启后：卡片、结果和步骤都还在
     await app.close()
     app = await launchApp(userDataDir)
     window = await app.firstWindow()
     await window.getByTestId('sidebar-task').first().click()
-    await expect(window.getByTestId('agent-card')).toHaveCount(2)
+    await expect(window.getByTestId('agent-card')).toHaveCount(4)
     await expect(window.locator('[data-testid="agent-card"][data-agent="甲"]')).toHaveAttribute('data-status', 'completed')
     await window.locator('[data-testid="agent-card"][data-agent="甲"]').getByRole('button', { name: '展开子智能体 甲 的步骤' }).click()
     await expect(window.locator('[data-testid="agent-card"][data-agent="甲"]').getByTestId('agent-steps')).toContainText('a.txt')
@@ -104,7 +121,7 @@ test('子智能体：停止时工人一起停，卡片标成未完成', async ()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-agents-stop-'))
   writeFileSync(join(project, 'a.txt'), 'alpha\n')
   const model = await startScriptedModel([
-    { toolCalls: [{ name: 'delegate', input: { name: '慢', task: 'WORKER-SLOW：慢慢看', files: ['a.txt'] } }] },
+    { toolCalls: [{ name: 'delegate', input: { name: '慢', task: 'WORKER-SLOW：慢慢看', role: 'explorer', files: ['a.txt'] } }] },
     { match: 'WORKER-SLOW', toolCalls: [{ name: 'report', input: { summary: '不会到这里' } }], delayMs: 20_000 },
   ])
   const app = await launchApp(userDataDir)
@@ -117,7 +134,7 @@ test('子智能体：停止时工人一起停，卡片标成未完成', async ()
     await expect(card).toHaveAttribute('data-status', 'in_progress')
     await window.getByRole('button', { name: '停止', exact: true }).click()
     await expect(card).toHaveAttribute('data-status', 'failed')
-    await expect(card).toContainText('已停止')
+    await expect(window.getByTestId('collaboration-worker')).toHaveAttribute('data-status', 'interrupted')
     await waitTaskStatus(window, 'stopped')
   } finally {
     await app.close()

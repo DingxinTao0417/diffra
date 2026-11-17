@@ -38,6 +38,7 @@ const URL_OVERLAP_CHARS = 200
 
 interface ExecProcess {
   id: number
+  owner: string | null
   command: string
   cwd: string
   child: ChildProcess
@@ -85,14 +86,14 @@ export class ExecSessions {
     return this.processes.size
   }
 
-  ids(): number[] {
-    return [...this.processes.keys()]
+  ids(owner?: string): number[] {
+    return [...this.processes.values()].filter((entry) => owner === undefined || entry.owner === owner).map((entry) => entry.id)
   }
 
   // keepStdin：输入开着，之后能用 write_stdin 往里写
-  start(command: string, cwd: string, bashPath: string, rgPath?: string, keepStdin = false): ExecProcess {
+  start(command: string, cwd: string, bashPath: string, rgPath?: string, keepStdin = false, owner?: string): ExecProcess {
     hookExit(this)
-    this.evict()
+    this.evict(owner)
     let id = randomInt(1000, 100_000)
     while (this.processes.has(id)) id = randomInt(1000, 100_000)
     const child = spawn(bashPath, ['-c', command], {
@@ -105,6 +106,7 @@ export class ExecSessions {
     const now = Date.now()
     const entry: ExecProcess = {
       id,
+      owner: owner ?? null,
       command,
       cwd,
       child,
@@ -151,8 +153,9 @@ export class ExecSessions {
     return entry
   }
 
-  get(id: number): ExecProcess | undefined {
+  get(id: number, owner?: string): ExecProcess | undefined {
     const entry = this.processes.get(id)
+    if (owner !== undefined && entry?.owner !== owner) return undefined
     if (entry) entry.lastUsed = Date.now()
     return entry
   }
@@ -186,6 +189,16 @@ export class ExecSessions {
     return entry ? { text: entry.recent, running: !entry.exited } : null
   }
 
+  async killOwner(owner: string): Promise<void> {
+    const entries = [...this.processes.values()].filter((entry) => entry.owner === owner)
+    for (const entry of entries) this.kill(entry.id)
+    const signal = new AbortController().signal
+    await Promise.all(entries.map((entry) => waitFor(entry, STOP_WAIT_MS, signal)))
+    for (const entry of entries) if (entry.exited) this.remove(entry.id)
+    // 没退出的仍留在进程表里，之后 killAll 还能清理，不能悄悄丢掉句柄
+    if (entries.some((entry) => !entry.exited)) throw new ToolError('Timed out waiting for this worker\'s processes to stop.')
+  }
+
   // sync：内核退出前调，等进程真的结束再返回
   killAll(sync = false): void {
     for (const entry of this.processes.values()) if (!entry.exited) (sync ? killTreeSync : killTree)(entry.child.pid)
@@ -193,13 +206,13 @@ export class ExecSessions {
     live.delete(this)
   }
 
-  private evict(): void {
+  private evict(owner?: string): void {
     if (this.processes.size < MAX_SESSIONS) return
-    const byAge = [...this.processes.values()].sort((a, b) => a.lastUsed - b.lastUsed)
+    const byAge = [...this.processes.values()].filter((entry) => owner === undefined || entry.owner === owner).sort((a, b) => a.lastUsed - b.lastUsed)
     const recent = new Set(byAge.slice(-PROTECTED_RECENT).map((entry) => entry.id))
     // 先清已经结束的，再清最久没用的
     const victim = byAge.find((entry) => entry.exited) ?? byAge.find((entry) => !recent.has(entry.id))
-    if (!victim) return
+    if (!victim) throw new ToolError('Too many process sessions. Stop one of your running processes before starting another.')
     if (!victim.exited) killTree(victim.child.pid)
     this.processes.delete(victim.id)
   }
@@ -283,7 +296,7 @@ export async function execCommandTool(context: ToolContext, input: ExecCommandIn
   const permission = await context.requestCommandPermission(input.cmd, input.justification, cwd)
   if (!permission.allowed) throw new ToolError(permission.reason)
   const started = Date.now()
-  const entry = context.execSessions.start(input.cmd, cwd, context.bashPath, context.rgPath, input.stdin === true)
+  const entry = context.execSessions.start(input.cmd, cwd, context.bashPath, context.rgPath, input.stdin === true, context.processOwner)
   await waitFor(entry, clamp(input.yield_time_ms ?? DEFAULT_EXEC_YIELD_MS, MIN_EXEC_YIELD_MS, MAX_EXEC_YIELD_MS), context.signal)
   return finishReport(context, entry, started, input.max_output_tokens, `执行 ${input.cmd}`)
 }
@@ -296,9 +309,9 @@ export interface WriteStdinInput {
 }
 
 export async function writeStdinTool(context: ToolContext, input: WriteStdinInput): Promise<ToolOutput> {
-  const entry = context.execSessions?.get(input.session_id)
+  const entry = context.execSessions?.get(input.session_id, context.processOwner)
   if (!entry) {
-    throw new ToolError(`No running process with session ID ${input.session_id}. Running sessions: ${context.execSessions?.ids().join(', ') || 'none'}.`)
+    throw new ToolError(`No running process with session ID ${input.session_id}. Running sessions: ${context.execSessions?.ids(context.processOwner).join(', ') || 'none'}.`)
   }
   const raw = input.chars ?? ''
   const chars = CONTROL_SPELLINGS[raw] ?? raw
@@ -351,6 +364,8 @@ async function finishReport(context: ToolContext, entry: ExecProcess, started: n
   return {
     text: text + saved + hint,
     title,
+    executedCommand: entry.command,
+    commandWorkdir: entry.cwd,
     terminalOutput: `${header}\n${output.text.trim() || '(no output)'}`,
     durationMs: Date.now() - started,
     // 我们结束的进程退出码不算命令失败（第 524 步：停服务不该在界面上变成「有 1 条命令失败」）

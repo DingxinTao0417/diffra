@@ -5,6 +5,8 @@ import type { ModelMessage } from 'ai'
 import { z } from 'zod'
 import { type CandidateRunView, PROMPT_IMAGE_TYPES, type SessionAgentRef, type SessionSearchResult, type StoredTurn } from '../protocol.js'
 import { taskStateSchema, type TaskState } from './task-state.js'
+import type { CollaborationState } from '../collaboration-types.js'
+import { collaborationStateSchema } from './collaboration-board.js'
 
 // 会话 id 拼进文件名，只接受 UUID 这类字符，防止路径穿越
 const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/
@@ -32,6 +34,7 @@ export interface Compaction {
 // 以前（version 1）所有更新都在一个文件里，长会话一次保存要序列化几十 MB；第一次保存时转成新格式，原文件留成 <id>.json.v1-backup。
 // 不存模型接入点和密钥，加载时用当时的设置
 export interface SessionRecord {
+  collaboration?: CollaborationState
   taskState?: TaskState
   version: 1
   id: string
@@ -121,6 +124,7 @@ const indexEntrySchema = z.object({
 const indexSchema = z.object({ version: z.literal(1), sessions: z.array(indexEntrySchema) })
 // 消息和更新是 AI SDK / ACP 的结构，这里只检查外层，内容原样还给它们
 const recordSchema = z.object({
+  collaboration: collaborationStateSchema.optional(),
   taskState: taskStateSchema.optional(),
   version: z.literal(1),
   id: z.string(),
@@ -159,7 +163,7 @@ const recordSchema = z.object({
   images: z.array(z.object({ mimeType: z.enum(PROMPT_IMAGE_TYPES), data: z.string() })).default([]),
       // 第 72 步加的，旧记录没有
       restoredAt: z.string().optional(),
-      from: z.object({ sessionId: z.string(), title: z.string(), reply: z.literal(true).optional() }).optional(),
+      from: z.object({ sessionId: z.string(), title: z.string(), reply: z.literal(true).optional(), messageId: z.string().optional() }).optional(),
       // 第 360 步加的，旧记录没有
       remote: z.object({ deviceId: z.string(), name: z.string() }).optional(),
       // v2 按计划执行加的，旧记录没有

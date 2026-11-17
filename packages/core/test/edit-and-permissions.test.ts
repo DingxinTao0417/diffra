@@ -27,6 +27,11 @@ describe('classifyCommand', () => {
     expect(isReadOnlyCommand('sed -n 1,20p')).toBe(false)
     expect(isReadOnlyCommand("nl -ba a.ts | sed -n '5,9p' a.ts")).toBe(true)
     expect(isReadOnlyCommand('npm test')).toBe(false)
+    expect(isReadOnlyCommand('git diff --output=report.txt')).toBe(false)
+    expect(isReadOnlyCommand('git diff --ext-diff')).toBe(false)
+    expect(isReadOnlyCommand('rg --pre helper pattern .')).toBe(false)
+    expect(isReadOnlyCommand('sort -oreport.txt input.txt')).toBe(false)
+    expect(isReadOnlyCommand('find . -fprint0 report.txt')).toBe(false)
     expect(isReadOnlyCommand('')).toBe(false)
   })
 

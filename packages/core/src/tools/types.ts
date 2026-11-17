@@ -14,6 +14,8 @@ export interface ToolContext {
   requestCommandPermission(command: string, justification?: string, workdir?: string): Promise<{ allowed: true } | { allowed: false; reason: string }>
   // 这个会话的后台进程（exec_command 到点没结束的）；没有时不能跑命令
   execSessions?: ExecSessions
+  // 工人只能操作自己启动的进程；主智能体不传，仍可操作整个会话
+  processOwner?: string
   // 用户为项目配置的检查命令，自动放行
   trustedCommands: string[]
   // 禁写目录（相对项目根目录）
@@ -38,6 +40,8 @@ export interface ToolOutput {
   // 命令的完整输出（已截断），界面上可展开查看
   terminalOutput?: string
   commandSucceeded?: boolean
+  executedCommand?: string
+  commandWorkdir?: string
   // 命令这次调用的用时（毫秒），界面写在输出顶上（第 659 步）
   durationMs?: number
   // 要给模型看的图片（view_image），由主循环跟在工具结果后面发

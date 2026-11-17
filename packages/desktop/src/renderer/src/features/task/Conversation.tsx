@@ -28,6 +28,7 @@ import { StaticProjectContext, useStatic } from './static-context'
 import { SelectionAsk } from './SelectionAsk'
 import { TurnVersions, VersionCompare, versionOrder } from './TurnVersions'
 import { ConversationSearch } from './ConversationSearch'
+import { CollaborationPanel } from './CollaborationPanel'
 import { ExportMenu, exportTurns } from './export'
 import { SpeakButton } from './SpeakButton'
 import { TurnMap } from './TurnMap'
@@ -481,6 +482,15 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
               />
             )
           })}
+          {task.collaboration && (task.collaboration.workers.length > 0 || task.collaboration.tasks.length > 0) && (
+            <CollaborationPanel view={task.collaboration} readOnly={readOnly} onAction={async (action) => {
+              const view = await window.diffra.controlCollaboration(task.sessionId, action)
+              store.set((state) => {
+                const current = state.live[task.sessionId]
+                return current ? { ...state, live: { ...state.live, [task.sessionId]: { ...current, collaboration: view } } } : state
+              })
+            }} />
+          )}
           {!readOnly && <TodoAcceptanceCard task={task} />}
         </div>
       </div>
@@ -1288,7 +1298,7 @@ function AgentCard({ item, steps, projectPath, onDiagnose }: { item: ToolItem; s
       {open && (
         <div className="ml-5.5 flex flex-col gap-1 border-l pl-3" data-testid="agent-steps">
           {steps.length === 0 && <p className="text-xs text-muted-foreground">还没有动作</p>}
-          {steps.map((step) => (toolBlockType(step) === 'edit' ? <EditBlock key={step.id} item={step} projectPath={projectPath} /> : <ToolStep key={step.id} item={step} />))}
+          {steps.map((step) => (toolBlockType(step) === 'edit' ? <EditBlock key={step.id} item={step} projectPath={card.workspace ?? projectPath} /> : <ToolStep key={step.id} item={step} />))}
         </div>
       )}
     </div>

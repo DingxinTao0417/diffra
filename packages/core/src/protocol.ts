@@ -156,6 +156,7 @@ export interface TaskSource {
   title: string
   // v2：这是对方用 task_reply 发回来的回复（回复叫起来的一轮不能再回复，免得来回触发）；旧记录没有
   reply?: true
+  messageId?: string
 }
 // 设备连接：这一轮是哪台远程设备发来的（docs/decisions.md「设备连接」）。name 是本机给它记的名称
 export interface RemoteSource {
@@ -163,10 +164,10 @@ export interface RemoteSource {
   name: string
 }
 export type TaskActionParams =
-  | { sessionId: string; action: 'send'; target: string; message: string; from: TaskSource }
-  | { sessionId: string; action: 'create'; project: string | null; title: string | null; design: boolean; message: string; from: TaskSource }
+  | { sessionId: string; action: 'send'; target: string; message: string; from: TaskSource; prepareOnly?: boolean }
+  | { sessionId: string; action: 'create'; project: string | null; title: string | null; design: boolean; message: string; from: TaskSource; prepareOnly?: boolean }
 // queued：对方正在跑，消息排在它这一轮后面
-export type TaskActionResult = { ok: true; sessionId: string; title: string; queued: boolean } | { ok: false; error: string }
+export type TaskActionResult = { ok: true; sessionId: string; title: string; queued: boolean; messageId?: string; turnId?: string } | { ok: false; error: string }
 
 // 待办 CRUD（v2 工具层）：core 通过客户端读写用户待办，和界面里的待办是同一份数据
 export type TodoPriorityView = 0 | 1 | 2 | 3
@@ -287,6 +288,9 @@ export interface SessionModel {
 }
 
 // 提问里带的图片，base64
+export * from './collaboration-types.js'
+import type { CollaborationRole, CollaborationSettings, CollaborationView } from './collaboration-types.js'
+
 export const PROMPT_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
 export interface PromptImage {
   mimeType: (typeof PROMPT_IMAGE_TYPES)[number]
@@ -296,6 +300,8 @@ export interface PromptImage {
 // session/new 的 _meta.diffra
 export interface SessionConfig {
   model: SessionModel
+  collaboration?: CollaborationSettings
+  collaborationModels?: Partial<Record<CollaborationRole, SessionModel>>
   // 「评审」角色的模型；null 时审查用编码模型
   reviewModel: { endpoint: ModelEndpoint; modelId: string; provider: ModelProvider | null } | null
   // 「规划」角色的模型；null 时出计划用编码模型
@@ -1015,6 +1021,11 @@ export interface AgentCardMeta extends AgentTag {
   endedAt?: number
   tokens?: number
   edited?: string[]
+  workerId?: string
+  role?: CollaborationRole
+  isolated?: boolean
+  activation?: number
+  workspace?: string
 }
 
 // 用量记录的一行：一次模型调用。时间是调用结束时的 UTC 时刻；供应商没返回的数记成 null
@@ -1089,6 +1100,9 @@ export interface UsageSummary {
 export const ACP_MAX_MESSAGE_BYTES = 256 * 1024 * 1024
 
 export const SESSION_EXT_METHODS = {
+  taskMessagesResume: '_diffra/tasks/resume-pending',
+  collaboration: '_diffra/session/collaboration',
+  collaborationControl: '_diffra/session/collaboration-control',
   compact: '_diffra/session/compact',
   checkpointPreview: '_diffra/checkpoint/preview',
   checkpointRestore: '_diffra/checkpoint/restore',

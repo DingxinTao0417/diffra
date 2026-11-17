@@ -61,6 +61,7 @@ import {
 import { designInstructions, isDesignTool, runDesignToolCall } from './design.js'
 import { PLACE_IMAGE_TOOL, runPlaceImage } from './design-image.js'
 import { DELEGATE_TOOL, endDesignAgent, newTeam, runDelegates } from './agents.js'
+import { COLLABORATION_TOOLS, collaborationRuntime } from './collaboration.js'
 import { gitBroughtPaths, projectHead } from './git-moves.js'
 import { runHook } from './hooks.js'
 import { type PluginHookContext, postToolHooks, preToolHooks, promptSubmitHooks, stopHooks } from './plugin-hooks.js'
@@ -113,9 +114,10 @@ export const CHECK_TIMEOUT_SECONDS = 300
 
 // 主循环和外界（ACP 客户端）打交道的两个口子，测试时可以替换
 export interface TurnIO {
+  persist?(): Promise<void>
   update(update: SessionUpdate): Promise<void>
   // 返回用户选中的 optionId；取消或出错返回 null
-  requestPermission(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<string | null>
+  requestPermission(toolCall: ToolCallUpdate, options: PermissionOption[], signal?: AbortSignal): Promise<string | null>
   // 提问（ask_user）用：除了 optionId 还带回答案（回复的 _meta.diffra.askAnswers）；没有时只能点选项
   requestAnswers?(toolCall: ToolCallUpdate, options: PermissionOption[]): Promise<{ optionId: string; answers?: unknown } | null>
   // 每次模型调用结束后记一次用量；记录失败由实现方处理，不影响任务
@@ -175,6 +177,7 @@ export function modelLabel(model: SessionModel): string {
 // goalMaxRounds：目标模式，模型停下时目标还没标完成就自动接着做下一轮，最多这么多轮（见 goal.ts）
 export interface TurnOptions {
   goalMaxRounds?: number
+  collaborationAction?: import('../collaboration-types.js').CollaborationAction
 }
 
 // 插件的 Stop 钩子最多让智能体接着做这么多次，免得钩子写得不好时停不下来
@@ -233,6 +236,7 @@ export async function runTurn(
   // 插件的 Stop 钩子让智能体接着做的次数
   let stopContinues = 0
   let errorKind: TurnOutcome['errorKind']
+  const collaboration = session.config.collaboration?.enabled && !session.design ? collaborationRuntime(session) : null
 
   try {
     await takeCheckpoint(session, turn.id, io)
@@ -267,8 +271,11 @@ export async function runTurn(
     let truncations = 0
     // 这一轮派出的子智能体和它们的文件认领
     const team = newTeam()
+    if (collaboration) await collaboration.bind(active, signal, io)
+    if (collaboration && options.collaborationAction) await collaboration.control(options.collaborationAction)
 
     for (let step = 0; step < maxSteps; step++) {
+      if (collaboration) await collaboration.collect()
       const compacted = await compactIfNeeded(session, { window: contextWindow(), step, state: compaction, model: active }, signal, io)
       if (compacted.kind === 'cancelled') return 'cancelled'
       if (compacted.kind === 'too-large') {
@@ -315,6 +322,16 @@ export async function runTurn(
           continue
         }
         if (signal.aborted) return 'cancelled'
+        if (collaboration) {
+          const acceptance = await collaboration.accept()
+          if (acceptance === 'continue') continue
+          if (acceptance === 'blocked') {
+            session.taskState = { ...session.taskState, status: 'blocked', reason: session.collaboration.acceptance.reason ?? '协作验收未通过。' }
+            await notice(io, 'warning', '协作尚未验收完成', session.taskState.reason ?? '')
+            stop = 'paused'
+            return 'end_turn'
+          }
+        }
         // 目标模式里模型标了受阻：照原样停下
         if (goal === 'blocked') {
           session.taskState = { ...session.taskState, status: 'blocked', reason: goalReason ?? '目标模式遇到阻塞，需要你处理后再继续。' }
@@ -388,6 +405,10 @@ export async function runTurn(
           continue
         }
         if (call.toolName === DELEGATE_TOOL && !call.invalid) {
+          if (collaboration) {
+            results.push(await collaboration.delegate(call))
+            continue
+          }
           // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样
           const batch = [call]
           while (index + batch.length < toolCalls.length) {
@@ -400,6 +421,10 @@ export async function runTurn(
             results.push(outcome.result)
             if (outcome.edited) repeats.clear()
           }
+          continue
+        }
+        if (collaboration && Object.hasOwn(COLLABORATION_TOOLS, call.toolName) && !call.invalid) {
+          results.push(await collaboration.tool(call))
           continue
         }
         if (await deepScanFirst(session, call, io)) {
@@ -420,6 +445,7 @@ export async function runTurn(
         results.push(outcome.result)
         images.push(...(outcome.images ?? []))
         if (outcome.edited) {
+          if (collaboration && session.collaboration.workers.length > 0) session.collaboration.requiresAcceptance = true
           repeats.clear()
           noteEdit(spin)
         } else {
@@ -484,6 +510,7 @@ export async function runTurn(
     errorKind = detail.kind
     return 'end_turn'
   } finally {
+    if (collaboration) await collaboration.close()
     // 返回 cancelled 的地方都在 signal 中止之后，stop 统一在这里记
     if (signal.aborted) {
       stop = 'cancelled'
@@ -876,6 +903,7 @@ export async function reportInvalidCall(call: StepToolCall, io: TurnIO): Promise
 
 // 子智能体执行工具时的差别：写文件前按认领检查，改了哪些文件记下来
 export interface AgentScope {
+  processOwner?: string
   beforeWrite(target: { absolute: string; display: string }): void
   onEdited(absolutePath: string): void
 }
@@ -888,6 +916,7 @@ export function toolContext(session: Session, call: StepToolCall, signal: AbortS
     bashPath: session.environment.bashPath,
     signal,
     execSessions: session.execSessions,
+    ...(scope?.processOwner ? { processOwner: scope.processOwner } : {}),
     ...(scope ? { beforeWrite: (target) => scope.beforeWrite(target) } : {}),
     trustedCommands: session.trustedCommands,
     readOnlyPaths: session.config.readOnlyPaths,
@@ -995,7 +1024,7 @@ export async function runToolCall(
       // status 只表示工具调用本身跑完了；命令退出码非 0、超时或被取消时界面靠这个字段显示失败
       ...(output.commandSucceeded === undefined && output.durationMs === undefined
         ? {}
-        : { _meta: { diffra: { ...(output.commandSucceeded === undefined ? {} : { commandSucceeded: output.commandSucceeded }), ...(output.durationMs === undefined ? {} : { [COMMAND_DURATION_META_KEY]: output.durationMs }) } } }),
+        : { _meta: { diffra: { ...(output.commandSucceeded === undefined ? {} : { commandSucceeded: output.commandSucceeded }), ...(!scope?.processOwner || output.executedCommand === undefined ? {} : { executedCommand: output.executedCommand, commandWorkdir: output.commandWorkdir }), ...(output.durationMs === undefined ? {} : { [COMMAND_DURATION_META_KEY]: output.durationMs }) } } }),
     })
     // 项目外的文件（用户授权的临时脚本之类）不算本轮改动
     const edited = (output.edited ?? false) && (!output.diffs || output.diffs.some((diff) => insideProject(session, diff.path)))
