@@ -280,14 +280,16 @@ export function Conversation({ task, locate, onLocate, onRestore, onRegenerate, 
   // 回答里的链接和文件引用（第 534、535 步）：远程任务的文件在对方电脑上、也没有内置浏览器，不给
   const remote = useRemoteTask()
   const turns = task.turns
+  // 流式输出时每条更新 turns 都换新。这两个 context 只在内容真变了时才换对象：读它们的组件（每一轮里的文件引用、代码块、可视化卡片）
+  // 不受轮次的 memo 挡，换一次就整段对话都重画，长任务里一条更新要画几百毫秒，更新越积越多，界面卡住
+  const changedKey = useMemo(() => [...new Set(turns.flatMap((turn) => turn.items.flatMap((item) => (item.kind === 'tool' ? item.content.flatMap((content) => (content.type === 'diff' ? [relativePath(content.path, project)] : [])) : []))))].join('\0'), [turns, project])
   const answerTarget = useMemo<AnswerTarget | null>(() => {
     if (remote || readOnly) return null
-    const changed = new Set(turns.flatMap((turn) => turn.items.flatMap((item) => (item.kind === 'tool' ? item.content.flatMap((content) => (content.type === 'diff' ? [relativePath(content.path, project)] : [])) : []))))
-    return { sessionId, project, changed }
-  }, [remote, readOnly, turns, sessionId, project])
+    return { sessionId, project, changed: new Set(changedKey ? changedKey.split('\0') : []) }
+  }, [remote, readOnly, changedKey, sessionId, project])
 
   // 同名的可视化按出现顺序排成几版（第 668 步）：每张卡片能切到别的版本、和上一版对比
-  const visualHistory = useMemo(() => visualHistoryOf(turns), [turns])
+  const visualHistory = useVisualHistory(turns)
   // 开着的插件注册的富块（第 682 步）；远程任务没有
   const pluginBlocks = useSessionPluginBlocks(sessionId, !remote && !readOnly)
 
@@ -510,6 +512,27 @@ function visualHistoryOf(turns: Turn[]): Map<string, VisualVersion[]> {
   const history = new Map<string, VisualVersion[]>()
   for (const turn of turns) for (const item of turn.items) if (item.kind === 'tool' && item.visual) history.set(item.visual.title, [...(history.get(item.visual.title) ?? []), { id: item.id, code: item.visual.code, snapshot: item.visualSnapshot }])
   return history
+}
+
+// 各版本都没变（同一项、同一段代码、同一张快照）时沿用上一份，理由见 Conversation 里的 changedKey
+function useVisualHistory(turns: Turn[]): ReadonlyMap<string, VisualVersion[]> {
+  const previous = useRef<ReadonlyMap<string, VisualVersion[]> | null>(null)
+  return useMemo(() => {
+    const next = visualHistoryOf(turns)
+    if (previous.current && sameVisualHistory(previous.current, next)) return previous.current
+    previous.current = next
+    return next
+  }, [turns])
+}
+
+function sameVisualHistory(a: ReadonlyMap<string, VisualVersion[]>, b: ReadonlyMap<string, VisualVersion[]>): boolean {
+  if (a.size !== b.size) return false
+  for (const [title, versions] of b) {
+    const other = a.get(title)
+    if (!other || other.length !== versions.length) return false
+    if (versions.some((version, index) => version.id !== other[index]!.id || version.code !== other[index]!.code || version.snapshot !== other[index]!.snapshot)) return false
+  }
+  return true
 }
 
 const noop = () => undefined

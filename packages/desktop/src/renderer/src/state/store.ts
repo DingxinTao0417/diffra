@@ -192,6 +192,15 @@ type Listener = () => void
 class Store {
   private state = initialState
   private readonly listeners = new Set<Listener>()
+  private notifyQueued = false
+  private readonly notifyChannel = new MessageChannel()
+
+  constructor() {
+    this.notifyChannel.port1.onmessage = () => {
+      this.notifyQueued = false
+      for (const listener of this.listeners) listener()
+    }
+  }
 
   get = (): AppState => this.state
 
@@ -200,6 +209,18 @@ class Store {
     if (next === this.state) return
     this.state = next
     for (const listener of this.listeners) listener()
+  }
+
+  // 状态马上改（同步读到的都是最新的），订阅者等已经排着的消息处理完再一起通知一次。给会话的流式更新用：
+  // 每次通知都让组件同步重画一次，一条消息一通知时重画跟不上消息，越积越多，界面卡住，React 连着提交超过 50 次还会报 #185。
+  // 用 MessageChannel 排：窗口藏到托盘时不像定时器那样被节流
+  setBatched(change: (state: AppState) => AppState): void {
+    const next = change(this.state)
+    if (next === this.state) return
+    this.state = next
+    if (this.notifyQueued) return
+    this.notifyQueued = true
+    this.notifyChannel.port2.postMessage(null)
   }
 
   subscribe = (listener: Listener): (() => void) => {
@@ -225,11 +246,18 @@ export function isSidebarShown(state: AppState): boolean {
   return state.sidebarOpen && (!state.sidebarNarrow || state.sidebarKeepOpen || hasWidePanel(state))
 }
 
+function withLive(state: AppState, sessionId: string, change: (task: LiveTask) => LiveTask): AppState {
+  const task = state.live[sessionId]
+  return task ? { ...state, live: { ...state.live, [sessionId]: change(task) } } : state
+}
+
 export function updateLive(sessionId: string, change: (task: LiveTask) => LiveTask): void {
-  store.set((state) => {
-    const task = state.live[sessionId]
-    return task ? { ...state, live: { ...state.live, [sessionId]: change(task) } } : state
-  })
+  store.set((state) => withLive(state, sessionId, change))
+}
+
+// 会话的流式更新：通知攒成一批，见 Store.setBatched
+export function updateLiveBatched(sessionId: string, change: (task: LiveTask) => LiveTask): void {
+  store.setBatched((state) => withLive(state, sessionId, change))
 }
 
 export function showToast(text: string): void {

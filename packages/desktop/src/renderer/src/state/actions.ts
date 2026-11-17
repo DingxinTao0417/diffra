@@ -11,7 +11,7 @@ import { shrinkImage } from '../lib/images'
 import { errorMessage } from '../lib/errors'
 import { folderName } from '../lib/format'
 import { sameProjectPath } from '../lib/projects'
-import { hasWidePanel, isSidebarShown, type ExtensionsTab, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive } from './store'
+import { hasWidePanel, isSidebarShown, type ExtensionsTab, type LiveTask, type MessageOptions, type Route, type SettingsSection, showToast, store, updateLive, updateLiveBatched } from './store'
 import { checkUsageBudget } from './usage-budget'
 
 const TITLE_CHARS = 40
@@ -202,7 +202,7 @@ export function wireCoreEvents(): () => void {
   const offUpdate = window.diffra.onSessionUpdate(({ sessionId, update }) => {
     const usage = usageOf(update)
     const silence = modelSilenceOf(update)
-    updateLive(sessionId, (task) => {
+    updateLiveBatched(sessionId, (task) => {
       if (usage) return { ...task, usage }
       if (visualSnapshotOf(update).visualSnapshot) return { ...task, turns: withVisualSnapshot(task.turns, update) }
       // 候选方案卡片在生成它的那一轮，应用、放弃后的更新补到那一轮
