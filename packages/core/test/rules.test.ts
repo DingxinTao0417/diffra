@@ -6,8 +6,8 @@ import { findRipgrep } from '../src/environment.js'
 import type { RulePack } from '../src/protocol.js'
 import { detectLanguages, languageOf } from '../src/rules/languages.js'
 import { parseRulePack, RulePackError } from '../src/rules/pack.js'
-import { annotateDiff, buildReviewRequest, parseReviewOutput } from '../src/rules/review.js'
-import { packsForPaths, renderRules, selectRulePacks } from '../src/rules/select.js'
+import { annotateDiff } from '../src/rules/review.js'
+import { renderRules, selectRulePacks } from '../src/rules/select.js'
 
 const SAMPLE = `---
 id: sample
@@ -137,10 +137,6 @@ describe('选包和渲染', () => {
     expect(selectRulePacks([java, web, universal], new Map([['python', 9]])).map((item) => item.id)).toEqual(['universal'])
   })
 
-  test('审查只取和改动文件相关的包', () => {
-    expect(packsForPaths([universal, java, web], ['src/a.ts', 'README.md']).map((item) => item.id)).toEqual(['universal', 'web'])
-  })
-
   test('按包分组输出，推荐级带标记', () => {
     const mixed = pack('mixed', ['*'], [
       ['M-1', 'required', '甲'],
@@ -162,7 +158,7 @@ describe('选包和渲染', () => {
   })
 })
 
-describe('审查用的 diff 和审查意见', () => {
+describe('给评审模型看的 diff（深度扫描用）', () => {
   const diff = [
     'diff --git a/src/app.ts b/src/app.ts',
     'index 1111111..2222222 100644',
@@ -204,48 +200,5 @@ describe('审查用的 diff 和审查意见', () => {
     )
     expect([...annotated.addedLines]).toEqual([['src/app.ts', new Set([11, 12])]])
     expect(annotated.truncated).toBe(false)
-  })
-
-  test('只接受规则编号存在、并且指向新增行的意见', () => {
-    const { addedLines } = annotateDiff(diff)
-    const output = [
-      '* `GEN-ERR-1 | b/src/app.ts:11 | 说明一`',
-      'GEN-ERR-1 | src/app.ts:13 | 上下文行不算',
-      'XX-1 | src/app.ts:12 | 没有这条规则',
-      'GEN-ERR-1 | docs/guide.md:1 | 不是代码文件',
-      'NO_VIOLATIONS',
-    ].join('\n')
-    expect(parseReviewOutput(output, new Set(['GEN-ERR-1']), addedLines)).toEqual([
-      { ruleId: 'GEN-ERR-1', path: 'src/app.ts', line: 11, message: '说明一' },
-    ])
-  })
-})
-
-describe('规范审查：Java（v2 的 Java 适配器）', () => {
-  test('Java 文件的改动进审查，按 Java 规则包审；内置 Java 包能解析、规则编号对得上', () => {
-    const packsDir = join(import.meta.dirname, '..', 'rules', 'packs')
-    const packs = readdirSync(packsDir).map((name) => parseRulePack(readFileSync(join(packsDir, name), 'utf8')))
-    const java = packs.find((pack) => pack.languages.includes('java'))!
-    expect(java.rules.filter((rule) => rule.level === 'required').length).toBeGreaterThan(10)
-    const diff = annotateDiff(['--- a/src/main/java/demo/App.java', '+++ b/src/main/java/demo/App.java', '@@ -0,0 +1,2 @@', '+public class App {', '+}'].join('\n'))
-    expect([...diff.addedLines]).toEqual([['src/main/java/demo/App.java', new Set([1, 2])]])
-    const selected = packsForPaths(packs, [...diff.addedLines.keys()])
-    expect(selected.map((pack) => pack.id)).toContain(java.id)
-    expect(selected.some((pack) => pack.languages.includes('typescript'))).toBe(false)
-    const { system } = buildReviewRequest(selected, diff, '')
-    expect(system).toContain(java.rules.find((rule) => rule.level === 'required')!.id)
-  })
-})
-
-describe('审查请求', () => {
-  test('写明只报告改动本身负责的事；超时规则不套用到调用方传入的接口', () => {
-    const universal = parseRulePack(readFileSync(join(import.meta.dirname, '..', 'rules', 'packs', 'universal.md'), 'utf8'))
-    const timeoutRule = universal.rules.find((rule) => rule.id === 'GEN-IO-1')
-    expect(timeoutRule?.text).toContain('只是调用别人传进来的接口时不算')
-    const diff = annotateDiff(['--- a/src/repo.js', '+++ b/src/repo.js', '@@ -0,0 +1 @@', '+await db.query(sql, params)'].join('\n'))
-    const { system, prompt } = buildReviewRequest([universal], diff, '')
-    expect(system).toContain('Only report a violation when the changed code itself is responsible for what the rule asks')
-    expect(system).toContain(`GEN-IO-1: ${timeoutRule?.text}`)
-    expect(prompt).toContain('    1 + await db.query(sql, params)')
   })
 })

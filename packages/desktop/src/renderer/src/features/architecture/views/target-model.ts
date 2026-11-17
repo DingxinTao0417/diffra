@@ -12,12 +12,11 @@ export function targetFromDiagram(diagram: BlockDiagram): TargetArchitecture {
       { id: newId('rule'), kind: 'layers', strict: false },
       { id: newId('rule'), kind: 'no-cycles' },
     ],
-    enforceInTasks: true,
   }
 }
 
 export function emptyTarget(): TargetArchitecture {
-  return { version: 1, updatedAt: new Date().toISOString(), diagram: emptyDiagram('application'), rules: [{ id: newId('rule'), kind: 'layers', strict: false }], enforceInTasks: true }
+  return { version: 1, updatedAt: new Date().toISOString(), diagram: emptyDiagram('application'), rules: [{ id: newId('rule'), kind: 'layers', strict: false }] }
 }
 
 export const blockNamer = (diagram: BlockDiagram) => {
@@ -82,7 +81,7 @@ export interface ProposalChange {
   detail: string
 }
 
-const EMPTY: TargetArchitecture = { version: 1, updatedAt: '', diagram: { kind: 'application', source: 'model', generatedAt: '', model: null, fingerprint: '', layers: [], sides: [], connectors: [], dropped: 0 }, rules: [], enforceInTasks: true }
+const EMPTY: TargetArchitecture = { version: 1, updatedAt: '', diagram: { kind: 'application', source: 'model', generatedAt: '', model: null, fingerprint: '', layers: [], sides: [], connectors: [], dropped: 0 }, rules: [] }
 
 // 提案和现在的目标架构逐条对比：层和方块按名字对，规则按含义对
 export function diffTargets(current: TargetArchitecture | null, proposal: TargetArchitecture): ProposalChange[] {
@@ -224,7 +223,7 @@ export function applyChanges(current: TargetArchitecture | null, proposal: Targe
     const mapped = remap(rule, proposalName)
     if (mapped) rules.push(mapped)
   }
-  return { version: 1, updatedAt: new Date().toISOString(), diagram: result, rules, enforceInTasks: base === EMPTY ? proposal.enforceInTasks : base.enforceInTasks }
+  return { version: 1, updatedAt: new Date().toISOString(), diagram: result, rules }
 }
 
 // 一处违规生成的重构任务说明

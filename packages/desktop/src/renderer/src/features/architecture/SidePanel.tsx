@@ -165,7 +165,6 @@ function TargetSummary() {
     <>
       <div className="space-y-1">
         <h2 className="text-base font-bold">目标架构</h2>
-        <div className="text-xs text-muted-foreground">{target.enforceInTasks ? '任务改完时检查新增的依赖' : '不在任务里检查'}</div>
       </div>
       <section className="space-y-1">
         <h3 className="text-sm text-muted-foreground">差距</h3>

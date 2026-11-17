@@ -68,7 +68,6 @@ export function sessionConfig(
   model: EvalModel,
   reviewer: EvalModel | null,
   options: Pick<SessionConfig, 'checks' | 'readOnlyPaths' | 'security'> & {
-    review: boolean
     checkpointDir: string
     permissionMode?: SessionConfig['permissionMode']
     // 题目要逼出上下文压缩时改小窗口
@@ -89,7 +88,7 @@ export function sessionConfig(
     fallbackModel: null,
     checks: options.checks,
     readOnlyPaths: options.readOnlyPaths,
-    rules: { packs: builtinRulePacks(), review: options.review },
+    rules: { packs: builtinRulePacks() },
     // 评测里没人点确认：默认普通命令自动执行，剩下要确认的按题目的权限策略答
     permissionMode: options.permissionMode ?? 'auto',
     security: options.security,

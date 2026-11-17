@@ -105,7 +105,7 @@ describe('插件', () => {
       { plugin: 'ops', kind: 'deploy-status', title: '部署状态', description: '一个服务的部署状态', renders: 'keyvalue' },
       { plugin: 'ops', kind: 'build-report', title: '构建报告', description: '', renders: 'template', template: '<div id="b"></div>' },
     ])
-    const prompt = await buildSystemPrompt(null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: { packs: [], review: false } }, [], { skills: [], frontend: null, blocks })
+    const prompt = await buildSystemPrompt(null, { checks: { afterEdit: null, beforeFinish: null }, readOnlyPaths: [], rules: { packs: [] } }, [], { skills: [], frontend: null, blocks })
     expect(prompt).toContain("Blocks added by the user's plugins")
     expect(prompt).toContain('deploy-status: 部署状态 — 一个服务的部署状态 (same JSON as keyvalue)')
     expect(prompt).toContain('build-report: 构建报告 (JSON shaped as the description says)')

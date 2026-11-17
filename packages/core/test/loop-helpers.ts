@@ -124,21 +124,21 @@ export function useTempProject(): void {
   })
 }
 
-export const NO_RULES = { packs: [], review: false }
+export const NO_RULES = { packs: [] }
 
 export async function makeSession(
   model: MockLanguageModelV4,
   checks: SessionChecks = { afterEdit: null, beforeFinish: null },
   readOnlyPaths: string[] = [],
   review?: { packs: RulePack[]; model: MockLanguageModelV4 },
-  security: SessionSecurity = { staticCheck: false, lightScan: false },
+  security: SessionSecurity = {},
   limits: SessionLimits = { compactAtPercent: 70, maxSteps: 100, goalMaxRounds: 5 },
   // 规划、兜底角色的模拟模型；不给就是没配
   roles: { plan?: MockLanguageModelV4; fallback?: MockLanguageModelV4 } = {},
   extra: Partial<SessionOptions> = {},
 ) {
   const bashPath = await findBash()
-  const rules = review ? { packs: review.packs, review: true } : NO_RULES
+  const rules = review ? { packs: review.packs } : NO_RULES
   const roleModel = (modelId: string, name: string) => ({
     endpoint: { protocol: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:1', apiKey: 'k' },
     modelId,
@@ -175,19 +175,6 @@ export async function makeSession(
 
 export function toolUpdates(io: { updates: SessionUpdate[] }, status: 'completed' | 'failed') {
   return io.updates.filter((update) => update.sessionUpdate === 'tool_call_update' && update.status === status)
-}
-
-export const diffraMeta = (update: SessionUpdate) => (update._meta?.diffra ?? {}) as { result?: string; verification?: string }
-
-// 标题以 title 开头的检查卡片，每次结束时记的 result，按出现顺序
-export function checkResults(io: { updates: SessionUpdate[] }, title: string) {
-  const ids = new Set(io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title.startsWith(title) ? [update.toolCallId] : [])))
-  return io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call_update' && ids.has(update.toolCallId) ? [diffraMeta(update).result] : []))
-}
-
-// 完成卡（结束门禁的结论）的 verification，按出现顺序
-export function verifications(io: { updates: SessionUpdate[] }, title = '完成') {
-  return io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' && update.title === title ? [diffraMeta(update).verification] : []))
 }
 
 export const infoMeta = (update: SessionUpdate) =>

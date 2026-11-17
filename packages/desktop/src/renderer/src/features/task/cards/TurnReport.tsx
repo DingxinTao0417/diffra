@@ -14,16 +14,9 @@ export interface TurnReportData {
   checks: Array<{ name: string; state: 'passed' | 'failed' | 'attention' }>
   tests: Array<{ command: string; passed: number; failed: number; skipped: number }>
   commands: { total: number; failed: string[] }
-  verification: 'verified' | 'unverified' | 'no-edits' | null
   risks: string[]
   next: string[]
   durationMs: number | null
-}
-
-const VERIFICATION: Record<NonNullable<TurnReportData['verification']>, string> = {
-  verified: '完成检查通过',
-  unverified: '没有经过自动验证',
-  'no-edits': '没有改文件',
 }
 
 const CHECK_STATE: Record<TurnReportData['checks'][number]['state'], string> = { passed: '通过', failed: '没通过', attention: '需要留意' }
@@ -31,7 +24,6 @@ const CHECK_STATE: Record<TurnReportData['checks'][number]['state'], string> = {
 export function reportMarkdown(data: TurnReportData): string {
   const lines = ['# 本轮报告', '', '## 要求', '', data.request.trim(), '', '## 改了什么', '']
   lines.push(...(data.files.length > 0 ? data.files.map((file) => `- \`${file.path}\` +${file.added} −${file.removed}`) : ['没有改文件']), '', '## 验证了什么', '')
-  if (data.verification) lines.push(`- 结论：${VERIFICATION[data.verification]}`)
   lines.push(...data.checks.map((check) => `- ${check.name}：${CHECK_STATE[check.state]}`))
   lines.push(...data.tests.map((test) => `- 测试 \`${test.command}\`：通过 ${test.passed}，失败 ${test.failed}${test.skipped ? `，跳过 ${test.skipped}` : ''}`))
   lines.push(`- 跑了 ${data.commands.total} 条命令${data.commands.failed.length > 0 ? `，${data.commands.failed.length} 条失败` : ''}`, '')
@@ -69,7 +61,6 @@ export function TurnReport({ data }: { data: TurnReportData }) {
       </Section>
       <Section title="验证了什么">
         <ul className="flex flex-col gap-0.5" data-testid="turn-report-checks">
-          {data.verification && <li>结论：{VERIFICATION[data.verification]}</li>}
           {data.checks.map((check, index) => (
             <li key={index}>
               {check.name}：<span className={cn(check.state === 'failed' && 'text-destructive', check.state === 'attention' && 'text-warning')}>{CHECK_STATE[check.state]}</span>

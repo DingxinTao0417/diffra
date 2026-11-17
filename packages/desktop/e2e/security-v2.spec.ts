@@ -3,12 +3,12 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
-import { cards, chooseProject, startTask, taskInput, waitTaskDone } from './flows'
+import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
-import { addFile, replaceLines, startScriptedModel } from './scripted-model'
+import { addFile, exec, startScriptedModel } from './scripted-model'
 
-// 安全的 v2 部分（M10）：污点分析、依赖许可证、按项目的开关、更多安全检查（许可证、外部扫描器、动态测试）
+// 安全的 v2 部分（M10）：按项目的开关、更多安全检查（许可证、外部扫描器、动态测试）
 // 装好了 left-pad（MIT）和 gpl-lib（GPL）；dependencies 是 package.json 里声明了的
 function projectWithGplDependency(prefix: string, dependencies: Record<string, string>): string {
   const project = mkdtempSync(join(tmpdir(), prefix))
@@ -25,53 +25,45 @@ async function slash(window: Page, query: string, option: string): Promise<void>
   await window.getByRole('listbox', { name: '命令和 Skill' }).getByRole('option').filter({ hasText: option }).click()
 }
 
-const SERVER = ["const fs = require('fs')", "const path = require('path')", '', 'exports.download = (req, res) => {', '  const name = req.query.name', '  res.send(fs.readFileSync(name))', '}', ''].join('\n')
-
-test('完成前：污点分析打回请求参数直接当文件路径；新加的 GPL 依赖提醒；项目里关掉的轻量扫描和规范审查不跑，改了立即生效', async () => {
+test('项目设置的安全检查只剩深度扫描；这个项目关掉后，已经打开的任务提交前也不再问', async () => {
   test.setTimeout(120_000)
   const userDataDir = makeUserDataDir()
-  const project = projectWithGplDependency('diffra-e2e-security-v2-', { 'left-pad': '^1.0.0' })
+  const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-security-v2-'))
   const model = await startScriptedModel([
-    { text: '看过了' },
-    { toolCalls: [addFile('server.js', SERVER), replaceLines('package.json', '    "left-pad": "^1.0.0"', '    "left-pad": "^1.0.0",\n    "gpl-lib": "^1.0.0"')] },
-    { text: '加了下载接口' },
-    { toolCalls: [replaceLines('server.js', '  const name = req.query.name', '  const name = path.basename(String(req.query.name))')] },
-    { text: '文件名只取最后一段' },
+    { toolCalls: [addFile('calc.ts', 'export const calc = (input: string) => eval(input)\n')] },
+    { text: '加了计算' },
+    { toolCalls: [exec('git commit -m 加计算')] },
+    { text: '提交被拒了' },
   ])
   const app = await launchApp(userDataDir)
   try {
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    await startTask(window, '先看看')
+    await startTask(window, '加一个计算函数')
     await waitTaskDone(window)
 
-    // 项目设置：这个项目关掉轻量扫描和规范审查，其余跟设置
+    // 项目设置：安全检查只有深度扫描一项，设置里开着；这个项目关掉
     await window.locator('header').getByRole('button', { name: '任务菜单' }).click()
     await window.getByRole('menuitem', { name: '项目设置' }).click()
     const section = window.getByTestId('project-security')
+    await expect(section.getByRole('radiogroup')).toHaveCount(1)
     await expect(section).toContainText('设置里开着')
-    await section.getByRole('radiogroup', { name: '轻量扫描（这个项目）' }).getByRole('radio', { name: '关' }).click()
-    await section.getByRole('radiogroup', { name: '规范审查（这个项目）' }).getByRole('radio', { name: '关' }).click()
+    await section.getByRole('radiogroup', { name: '深度扫描（这个项目）' }).getByRole('radio', { name: '关' }).click()
     await window.screenshot({ path: 'test-results/security-v2-project.png' })
     await window.getByRole('button', { name: '保存项目设置' }).click()
-    await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).projects[project]?.security).toEqual({ lightScan: false, review: false })
+    await expect.poll(() => JSON.parse(readFileSync(join(userDataDir, 'settings.json'), 'utf8')).projects[project]?.security).toEqual({ deepScan: false })
 
-    // 同一个任务接着做：完成前静态检查里污点分析打回，许可证提醒；改好后通过
-    await taskInput(window).fill('加一个下载文件的接口')
+    // 同一个任务接着提交：不再问要不要先深度扫描，按普通命令确认
+    await taskInput(window).fill('提交一下')
     await window.getByRole('button', { name: '发送', exact: true }).click()
-    await waitTaskDone(window, 60_000)
-    const security = cards(window, 'security')
-    await expect(security.first()).toHaveAttribute('data-status', 'failed')
-    await expect(security.first()).toContainText('SEC-INJ-4')
-    await expect(security.first()).toContainText('污点分析')
-    await expect(security.first()).toContainText('req.query')
-    await expect(security.first()).toContainText('LICENSE-COPYLEFT')
-    await expect(security.last()).not.toHaveAttribute('data-status', 'failed')
-    // 这个项目关掉了轻量扫描：一次都没调评审模型
-    expect(model.securityReviews()).toBe(0)
-    expect(readFileSync(join(project, 'server.js'), 'utf8')).toContain('path.basename')
-    await window.screenshot({ path: 'test-results/security-v2-gate.png' })
+    const permission = window.getByTestId('permission-card')
+    await expect(permission).toContainText('git commit -m 加计算')
+    await expect(permission).not.toContainText('深度扫描')
+    await permission.getByRole('button', { name: '拒绝', exact: true }).click()
+    await expect(window.getByText('提交被拒了')).toBeVisible({ timeout: 15_000 })
+    await waitTaskDone(window)
+    expect(model.requests()).toBe(4)
   } finally {
     await app.close()
     await model.close()

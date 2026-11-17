@@ -83,7 +83,7 @@ export async function runTodoWrite(session: Session, call: StepToolCall, io: Tur
   return { result: textResult(call, `Plan updated: ${done} of ${steps.length} done.`), edited: false }
 }
 
-// 这一轮完成（过了结束门禁）时替模型收尾（第 466 步）：进行中的那一步标成做完，没开始的照旧，免得它为了打勾单独再调一次。
+// 这一轮完成时替模型收尾（第 466 步）：进行中的那一步标成做完，没开始的照旧，免得它为了打勾单独再调一次。
 // 只认这一轮的清单
 export async function settleSteps(session: Session, io: TurnIO): Promise<void> {
   const list = session.stepList

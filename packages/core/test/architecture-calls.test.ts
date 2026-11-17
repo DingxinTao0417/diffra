@@ -186,7 +186,6 @@ describe('智能体查架构', () => {
     const target: TargetArchitecture = {
       version: 1,
       updatedAt: '2026-11-15T00:00:00.000Z',
-      enforceInTasks: true,
       diagram: {
         kind: 'application',
         layers: [

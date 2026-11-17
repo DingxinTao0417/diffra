@@ -796,5 +796,5 @@ export async function proposeTarget(
     const only = item.only.flatMap((name) => byName.get(name) ?? [])
     if (only.length > 0) rules.push({ id: newRuleId(), kind: 'external', package: item.package, only, note: item.note })
   }
-  return { value: { target: { version: ARCHITECTURE_VERSION, updatedAt: new Date().toISOString(), diagram, rules, enforceInTasks: current?.enforceInTasks ?? true }, rationale: value.rationale }, usage }
+  return { value: { target: { version: ARCHITECTURE_VERSION, updatedAt: new Date().toISOString(), diagram, rules }, rationale: value.rationale }, usage }
 }

@@ -1,7 +1,7 @@
 import { type ReactNode, type Ref, useState } from 'react'
 import type { CheckpointChange } from '@diffra/core/types'
 import type { ProjectState } from '../../../../shared/ipc'
-import { Archive, Check, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LayoutDashboard, LoaderCircle, PanelRight, PenTool, ScanSearch, ShieldCheck, SquareTerminal } from 'lucide-react'
+import { Archive, CircleAlert, CirclePause, Ellipsis, FileDiff, GitBranch, Globe, LayoutDashboard, LoaderCircle, PanelRight, PenTool, ScanSearch, ShieldCheck, SquareTerminal } from 'lucide-react'
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -352,12 +352,10 @@ function StatusLabel({ status }: { status: Verdict }) {
   )
 }
 
-// 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，受阻暂停，未验证带感叹号，只有出错和验证未通过是实心点
+// 浅色下 warning 和 destructive 色相接近，和侧栏一样靠形状区分：等待确认空心圈，受阻暂停，未完成带感叹号，只有出错和验证未通过（旧记录）是实心点
 function StatusIndicator({ tone }: { tone: VerdictTone }) {
   if (tone === 'running') return <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
-  // success-color-allow: 全应用唯一表示状态的绿色，只在本轮被接受的 finish 经检查命令验证过时出现
-  if (tone === 'verified') return <Check className="size-3 text-success" />
-  if (tone === 'unverified' || tone === 'unfinished') return <CircleAlert className="size-3 text-warning" />
+  if (tone === 'unfinished') return <CircleAlert className="size-3 text-warning" />
   if (tone === 'blocked') return <CirclePause className="size-3 text-warning" />
   const dot = {
     confirm: 'size-2 border-2 border-foreground',
@@ -365,7 +363,6 @@ function StatusIndicator({ tone }: { tone: VerdictTone }) {
     failed: 'size-2 bg-destructive',
     waiting: 'size-2 border-2 border-muted-foreground/60',
     stopped: 'size-1.5 bg-muted-foreground/60',
-    nochange: null,
     done: null,
     idle: null,
   }[tone]

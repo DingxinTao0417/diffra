@@ -1,6 +1,9 @@
 import { AGENT_META_KEY, type AgentCardMeta, type AgentTag, BROWSER_SHOT_META_KEY, COMMAND_DURATION_META_KEY, COMPACTION_META_KEY, type CompactionStats, type Diagnosis, DIAGNOSIS_META_KEY, type ExternalAgentErrorKind, CANDIDATES_META_KEY, type CandidateRunView, MODEL_SILENCE_META_KEY, type ModelErrorKind, PARENT_TOOL_CALL_META_KEY, TASK_PROGRESS_META_KEY, type TaskProgressView, TURN_OUTCOME_META_KEY, type TaskSource, type TurnOutcome, type TurnStop, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY, VISUAL_SNAPSHOT_TYPES, MCP_UI_META_KEY, type McpUiMeta, STOCK_PHOTOS_META_KEY } from '@diffra/core/types'
 import type { PhotoView } from '../task/cards/PhotosCard'
-import type { CheckResult, FinishVerification, PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
+import type { PromptImage, RemoteSource, SessionUpdate, StopReason, StoredTurn, ToolCallContent, ToolCallStatus, ToolKind, TurnKind, UsageBreakdown } from '@diffra/core/types'
+
+// 旧记录里检查卡片（检查命令、静态检查、轻量扫描、规范审查、架构检查）的结论；结束门禁已经移除，新的轮次不再有这些卡片
+type CheckResult = 'passed' | 'warned' | 'partial' | 'error' | 'failed'
 
 export type TranscriptItem =
   | { kind: 'user'; id: string; text: string }
@@ -15,12 +18,8 @@ export type TranscriptItem =
       content: ToolCallContent[]
       // 只有命令带：退出码为 0 且没超时、没取消。旧记录没有这个字段
       succeeded?: boolean
-      // 只有完成卡带：没配检查命令，改动未经自动验证。旧记录没有这个字段，那句话还在总结正文里
-      unverified?: boolean
-      // 检查命令、静态检查、轻量扫描、规范审查卡带：检查结论。旧记录没有
+      // 旧记录里的检查卡片带：检查结论；更早的记录没有
       result?: CheckResult
-      // 完成卡和 verify_changes 卡带：这次完成的验证方式。旧记录没有
-      verification?: FinishVerification
       // 收到开始的时刻，运行中的行据此显示已用时间。重放历史记录时不带，免得没跑完的旧调用从打开时开始计时
       startedAt?: number
       // 命令这次调用的用时（第 659 步）；旧记录没有
@@ -160,17 +159,13 @@ export function taskProgressOf(update: SessionUpdate): TaskProgressView | null {
     if (typeof item !== 'object' || item === null || typeof item.id !== 'string' || typeof item.title !== 'string' || (item.receiptId !== null && typeof item.receiptId !== 'string')) return null
     validated.push({ id: item.id, title: item.title, receiptId: item.receiptId })
   }
-  const needsVerification = 'needsVerification' in progress ? progress.needsVerification : undefined
-  if (needsVerification !== undefined && typeof needsVerification !== 'boolean') return null
-  return { status, reason, requirements: validated, needsVerification }
+  return { status, reason, requirements: validated }
 }
 
-const FINISH_OUTCOMES = ['verified', 'unverified', 'no-edits'] as const satisfies readonly NonNullable<TurnOutcome['finish']>[]
 const TURN_STOPS = ['paused', 'cancelled', 'no-finish', 'gate-exhausted', 'check-exhausted', 'stuck', 'model-error', 'step-limit', 'context-limit', 'goal-exhausted', 'deep-scan', 'agent-error'] as const satisfies readonly TurnStop[]
 const AGENT_ERROR_KINDS = ['not-installed', 'version', 'start-failed', 'timeout', 'auth', 'exited', 'unsupported'] as const satisfies readonly ExternalAgentErrorKind[]
 const MODEL_ERROR_KINDS = ['auth', 'not-found', 'unsupported', 'rate-limit', 'server', 'timeout', 'network', 'unknown'] as const satisfies readonly ModelErrorKind[]
 const CHECK_RESULTS = ['passed', 'warned', 'partial', 'error', 'failed'] as const satisfies readonly CheckResult[]
-const FINISH_VERIFICATIONS = ['verified', 'reused', 'unverified', 'no-edits', 'failed'] as const satisfies readonly FinishVerification[]
 
 function oneOf<T extends string>(values: readonly T[], value: unknown): value is T {
   return (values as readonly unknown[]).includes(value)
@@ -182,15 +177,15 @@ export function turnOutcomeOf(update: SessionUpdate): TurnOutcome | null {
   const diffra = meta.diffra
   if (typeof diffra !== 'object' || diffra === null || !(TURN_OUTCOME_META_KEY in diffra)) return null
   const outcome = diffra[TURN_OUTCOME_META_KEY]
-  if (typeof outcome !== 'object' || outcome === null || !('finish' in outcome) || !('stop' in outcome)) return null
-  const { finish, stop } = outcome
-  if (finish !== null && !oneOf(FINISH_OUTCOMES, finish)) return null
+  if (typeof outcome !== 'object' || outcome === null || !('stop' in outcome)) return null
+  // finish 是以前结束门禁的结论，旧记录和旧版本的对端还会带，不再用
+  const { stop } = outcome
   if (stop !== null && !oneOf(TURN_STOPS, stop)) return null
   const errorKind = 'errorKind' in outcome && oneOf(MODEL_ERROR_KINDS, outcome.errorKind) ? outcome.errorKind : undefined
   const failure = 'agentError' in outcome && typeof outcome.agentError === 'object' && outcome.agentError !== null ? outcome.agentError : null
   const agentError =
     failure && 'kind' in failure && oneOf(AGENT_ERROR_KINDS, failure.kind) && 'message' in failure && typeof failure.message === 'string' ? { kind: failure.kind, message: failure.message } : undefined
-  return { finish, stop, ...(errorKind ? { errorKind } : {}), ...(agentError ? { agentError } : {}) }
+  return { finish: null, stop, ...(errorKind ? { errorKind } : {}), ...(agentError ? { agentError } : {}) }
 }
 
 // 模型没有输出的提示：key 是子智能体 id，主智能体是 main；since 为 null 是又有输出了
@@ -205,7 +200,7 @@ export function modelSilenceOf(update: SessionUpdate): { key: string; agent: str
   return { key: agent?.id ?? 'main', agent: agent?.name ?? null, since }
 }
 
-function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverified'): boolean | undefined {
+function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded'): boolean | undefined {
   const meta: unknown = update._meta
   if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return undefined
   const diffra = meta.diffra
@@ -214,7 +209,7 @@ function diffraFlagOf(update: SessionUpdate, key: 'commandSucceeded' | 'unverifi
   return typeof value === 'boolean' ? value : undefined
 }
 
-function diffraChoiceOf<T extends string>(update: SessionUpdate, key: 'result' | 'verification', values: readonly T[]): T | undefined {
+function diffraChoiceOf<T extends string>(update: SessionUpdate, key: 'result', values: readonly T[]): T | undefined {
   const meta: unknown = update._meta
   if (typeof meta !== 'object' || meta === null || !('diffra' in meta)) return undefined
   const diffra = meta.diffra
@@ -411,9 +406,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         status: update.status ?? 'pending',
         content: update.content ?? [],
         succeeded: diffraFlagOf(update, 'commandSucceeded'),
-        unverified: diffraFlagOf(update, 'unverified'),
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS),
-        verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS),
         ...agentFieldsOf(update),
         ...diagnosisOf(update),
         ...visualOf(update),
@@ -431,9 +424,7 @@ export function applyUpdate(items: TranscriptItem[], update: SessionUpdate): Tra
         status: update.status ?? existing?.status ?? 'pending',
         content: update.content ?? existing?.content ?? [],
         succeeded: diffraFlagOf(update, 'commandSucceeded') ?? existing?.succeeded,
-        unverified: diffraFlagOf(update, 'unverified') ?? existing?.unverified,
         result: diffraChoiceOf(update, 'result', CHECK_RESULTS) ?? existing?.result,
-        verification: diffraChoiceOf(update, 'verification', FINISH_VERIFICATIONS) ?? existing?.verification,
         startedAt: existing?.startedAt ?? Date.now(),
         ...(existing?.durationMs === undefined ? {} : { durationMs: existing.durationMs }),
         ...(existing?.compaction ? { compaction: existing.compaction } : {}),

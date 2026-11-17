@@ -286,7 +286,6 @@ describe('架构的模型解读', () => {
           dropped: 0,
         },
         rules: [],
-        enforceInTasks: false,
       }
       const { value } = await proposeTarget(analysis, current, '数据层不能依赖业务', modelAt(server.baseUrl))
       expect(server.bodies[0]).toContain('数据层不能依赖业务')
@@ -301,7 +300,6 @@ describe('架构的模型解读', () => {
       ])
       expect(blocks[0]!.id).toBe('C1')
       expect(target.rules.map((rule) => rule.kind)).toEqual(['layers', 'no-cycles', 'forbid', 'external'])
-      expect(target.enforceInTasks).toBe(false)
       expect(value.rationale).toBe('分两层。')
     } finally {
       await server.close()

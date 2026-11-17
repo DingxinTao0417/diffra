@@ -42,7 +42,7 @@ import {
 } from './remote-tasks'
 
 // 对方是 0.3.x、或者配置还没取到时：没有检查点（不显示文件改动）、规范包这些
-const REMOTE_INFO: SessionInfo = { bashPath: null, checkpoints: false, rulePacks: [], security: { staticCheck: false, lightScan: false }, checks: null }
+const REMOTE_INFO: SessionInfo = { bashPath: null, checkpoints: false, rulePacks: [], security: {}, checks: null }
 // 订阅失败后自动重试：隔 2、4、8 秒各一次
 const AUTO_RETRIES = 3
 

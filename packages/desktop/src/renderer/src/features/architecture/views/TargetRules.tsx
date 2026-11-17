@@ -23,10 +23,6 @@ export function TargetRules() {
   return (
     <div className="h-full overflow-y-auto" data-testid="target-rules">
       <div className="mx-auto max-w-3xl space-y-6 p-6 text-sm">
-        <label className="flex items-center gap-2">
-          <Checkbox checked={current.enforceInTasks} onCheckedChange={(checked) => save({ enforceInTasks: checked === true })} />
-          任务改完时检查新增的 import，违反规则就打回重改（代码里写「diffra-allow architecture: 理由」可以放行一处）
-        </label>
         <section className="space-y-2">
           <h3 className="text-sm font-bold">分层</h3>
           <label className="flex items-center gap-2">

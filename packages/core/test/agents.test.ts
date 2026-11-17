@@ -115,7 +115,7 @@ afterEach(() => {
 
 async function makeSession(model: MockLanguageModelV4, agentTypes: AgentType[] = []) {
   const bashPath = await findBash()
-  const rules = { packs: [], review: false }
+  const rules = { packs: [] }
   const checks = { afterEdit: null, beforeFinish: null }
   return new Session({
     cwd: project,
@@ -128,7 +128,7 @@ async function makeSession(model: MockLanguageModelV4, agentTypes: AgentType[] =
       readOnlyPaths: [],
       rules,
       permissionMode: 'ask',
-      security: { staticCheck: false, lightScan: false },
+      security: {},
       limits: { compactAtPercent: 70, maxSteps: 30, goalMaxRounds: 5 },
       plugins: [],
       checkpointDir,

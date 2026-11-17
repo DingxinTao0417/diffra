@@ -5,13 +5,10 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { discoverRoutes, localUrl, runDynamicTests } from '../src/security/dynamic.js'
 import { runCodeql, runSemgrep, sarifFindings, scannerVersions } from '../src/security/external.js'
-import { gateLicenses, gateSemgrep } from '../src/security/gate.js'
 import { classifyLicense, scanLicenses } from '../src/security/licenses.js'
-import { staticScan } from '../src/security/static.js'
 import { runSecurityTool } from '../src/security/tools.js'
-import type { AddedLines } from '../src/security/types.js'
 
-// 安全的 v2 部分（M10）：污点分析、依赖许可证、外部扫描器（用假的 Semgrep、CodeQL）、动态测试
+// 安全的 v2 部分（M10）：依赖许可证、外部扫描器（用假的 Semgrep、CodeQL）、动态测试
 const dirs: string[] = []
 const temp = (prefix: string) => {
   const dir = mkdtempSync(join(tmpdir(), prefix))
@@ -20,67 +17,6 @@ const temp = (prefix: string) => {
 }
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
-})
-
-const allAdded = (files: Record<string, string>): AddedLines => new Map(Object.entries(files).map(([path, text]) => [path, new Map(text.split('\n').map((line, index) => [index + 1, line]))]))
-
-describe('污点分析', () => {
-  test('JS：请求参数经过变量流进 SQL、命令、文件、跳转、服务端请求、HTML；校验过、重新赋值过的不算；没开就不查', async () => {
-    const cwd = temp('diffra-taint-')
-    const code = [
-      "const { exec } = require('child_process')",
-      "app.get('/a', (req, res) => {",
-      '  const id = req.query.id',
-      '  const sql = `select * from t where id = ${id}`',
-      '  db.query(sql)',
-      '  const { cmd } = req.body',
-      '  exec(cmd)',
-      '  fs.readFileSync(req.params.file)',
-      '  res.redirect(req.query.next)',
-      '  const target = req.query.url',
-      '  fetch(target)',
-      '  res.send(`<p>${id}</p>`)',
-      '  const safe = path.basename(req.query.file)',
-      '  fs.readFileSync(safe)',
-      '  let name = req.query.name',
-      "  name = 'fixed'",
-      '  fs.readFileSync(name)',
-      '  res.send(id)',
-      '})',
-      "function other() { const id = 'x'; db.query(id) }",
-    ].join('\n')
-    writeFileSync(join(cwd, 'server.js'), code)
-    const { findings } = await staticScan(cwd, allAdded({ 'server.js': code }), undefined, { taint: true })
-    const taint = findings.filter((item) => item.message.includes('污点分析')).map((item) => `${item.line} ${item.ruleId}`)
-    expect(taint).toEqual(['5 SEC-INJ-1', '7 SEC-INJ-2', '8 SEC-INJ-4', '9 SEC-REQ-2', '11 SEC-REQ-2', '12 SEC-OUT-1'])
-    expect(findings.find((item) => item.line === 5 && item.message.includes('污点分析'))?.message).toContain('req.query')
-    const off = await staticScan(cwd, allAdded({ 'server.js': code }), undefined, { taint: false })
-    expect(off.findings.some((item) => item.message.includes('污点分析'))).toBe(false)
-  })
-
-  test('Python：Flask 的请求参数进 cursor.execute、shell=True、open、redirect、requests；列表参数的 subprocess 不算；只看新增的行；规则已经报了的不重复报', async () => {
-    const cwd = temp('diffra-taint-py-')
-    const code = [
-      'from flask import request, redirect',
-      'import subprocess, requests',
-      '',
-      '@app.route("/a")',
-      'def a():',
-      '    q = request.args.get("q")',
-      '    cursor.execute("select * from t where q = \'%s\'" % q)',
-      '    subprocess.run(q, shell=True)',
-      '    subprocess.run(["ls", q])',
-      '    open(request.args["f"])',
-      '    requests.get(q)',
-      '    return redirect(q)',
-    ].join('\n')
-    writeFileSync(join(cwd, 'app.py'), code)
-    const added: AddedLines = new Map([['app.py', new Map(code.split('\n').map((line, index) => [index + 1, line] as const).filter(([line]) => line !== 11))]])
-    const { findings } = await staticScan(cwd, added, undefined, { taint: true })
-    // 第 7 行按写法匹配的规则已经报了高危，污点分析不再重复报；第 8 行规则只是提醒，换成污点分析的高危
-    expect(findings.filter((item) => item.message.includes('污点分析')).map((item) => `${item.line} ${item.ruleId}`)).toEqual(['8 SEC-INJ-2', '10 SEC-INJ-4', '12 SEC-REQ-2'])
-    expect(findings.filter((item) => item.severity === 'high').map((item) => `${item.line} ${item.ruleId}`)).toEqual(['7 SEC-INJ-1', '8 SEC-INJ-2', '10 SEC-INJ-4', '12 SEC-REQ-2'])
-  })
 })
 
 describe('依赖许可证', () => {
@@ -93,7 +29,7 @@ describe('依赖许可证', () => {
     expect(classifyLicense('Proprietary')).toBe('unknown')
   })
 
-  test('读 node_modules 和 LICENSE 文件；没装的说明；完成前只提醒本轮新加的强传染依赖', async () => {
+  test('读 node_modules 和 LICENSE 文件；没装的说明', async () => {
     const cwd = temp('diffra-licenses-')
     const pkg = { name: 'app', license: 'MIT', dependencies: { lodash: '^4', 'gpl-lib': '^1', mystery: '^1', 'not-installed': '^1' } }
     writeFileSync(join(cwd, 'package.json'), JSON.stringify(pkg, null, 2))
@@ -111,13 +47,6 @@ describe('依赖许可证', () => {
     expect(report.notes.join('\n')).toContain('1 个 npm 依赖还没装')
     const tool = await runSecurityTool({ cwd, tool: 'licenses', rgPath: '' }, new AbortController().signal)
     expect(tool.findings.map((item) => `${item.ruleId} ${item.severity}`)).toEqual(['LICENSE-COPYLEFT medium', 'LICENSE-UNKNOWN low'])
-
-    // 完成前：package.json 里新加了 gpl-lib 那一行
-    const lines = JSON.stringify(pkg, null, 2).split('\n')
-    const at = lines.findIndex((line) => line.includes('gpl-lib')) + 1
-    const gate = await gateLicenses(cwd, new Map([['package.json', new Map([[at, lines[at - 1]!]])]]))
-    expect(gate.findings).toHaveLength(1)
-    expect(gate.findings[0]).toMatchObject({ ruleId: 'LICENSE-COPYLEFT', severity: 'medium', path: 'package.json', line: at })
   })
 
   test('Python 虚拟环境：dist-info 的 License 或分类', async () => {
@@ -141,7 +70,7 @@ describe('外部扫描器（假的 Semgrep、CodeQL）', () => {
     process.env = { ...env }
   })
 
-  test('Semgrep：没装时说明；装了时整理结果，完成前只留新增行上的', async () => {
+  test('Semgrep：没装时说明；装了时整理结果', async () => {
     process.env.DIFFRA_SEMGREP_PATH = join(tmpdir(), 'diffra-no-such-semgrep.mjs')
     expect((await scannerVersions(true)).semgrep).toBeNull()
     const cwd = temp('diffra-semgrep-')
@@ -159,8 +88,6 @@ console.log(JSON.stringify({ results: [
     const full = await runSemgrep(cwd, null, 30_000)
     expect(full.findings.map((item) => `${item.ruleId} ${item.severity} ${item.path}:${item.line}`)).toEqual(['direct-response-write high a.js:2', 'other medium a.js:9'])
     expect(full.notes[0]).toContain('p/default')
-    const gate = await gateSemgrep(cwd, new Map([['a.js', new Map([[2, 'x']])]]), new AbortController().signal)
-    expect(gate.findings.map((item) => `${item.ruleId} ${item.line}`)).toEqual(['Semgrep:direct-response-write 2'])
   })
 
   test('CodeQL：要确认许可；建库、分析、读 SARIF', async () => {

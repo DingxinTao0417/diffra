@@ -37,9 +37,8 @@ test('连续编辑折叠分组，重复修改按首次到最终内容统计；�
     await expect(window.getByTestId('diff-view')).toHaveCount(2)
     await window.getByRole('button', { name: '收起代码详情', exact: true }).click()
     await expect(window.getByTestId('diff-view')).toHaveCount(0)
-    // 临时项目没有检查命令：结论就是「已完成」；这一轮的净改动写在底部（改了两次只算一次），点开审阅（第 526 步起没有完成卡）
+    // 结论就是「已完成」；这一轮的净改动写在底部（改了两次只算一次），点开审阅
     await expect(window.getByTestId('task-status')).toContainText('已完成')
-    await expect(cards(window, 'finish')).toHaveCount(0)
     const files = window.getByTestId('turn-files')
     await expect(files).toHaveText('1 个文件 +1 −1')
     await files.click()

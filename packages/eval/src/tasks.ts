@@ -60,12 +60,11 @@ const taskSchema = z.object({
   cancelAfterSeconds: z.number().positive().optional(),
   // 后面几轮：上一轮结束后接着说
   followUps: z.array(turnSchema).default([]),
-  // 给智能体的检查命令（在 Git Bash 里跑），和项目设置里填的一样
+  // 给智能体的检查命令，和项目设置里填的一样：写进系统提示，智能体自己决定跑不跑
   checks: z.object({ afterEdit: z.string().nullable(), beforeFinish: z.string().nullable() }),
   readOnlyPaths: z.array(z.string()).default([]),
-  // 开不开完成前的规范审查；规则包总是按应用的默认值带上（内置包、只放强制级）
-  review: z.boolean().default(false),
-  security: z.object({ staticCheck: z.boolean(), lightScan: z.boolean() }).default({ staticCheck: true, lightScan: true }),
+  // 规则包总是按应用的默认值带上（内置包、只放强制级）。旧题目里的 review 和 security.staticCheck/lightScan（结束时的检查，已移除）读的时候丢掉
+  security: z.object({ deepScan: z.boolean().optional() }).default({}),
   // 命令权限档，和设置里的一样；评测默认 auto
   permissionMode: z.enum(['ask', 'auto', 'full']).default('auto'),
   // 还要确认的命令怎么答：允许一次，或者拒绝

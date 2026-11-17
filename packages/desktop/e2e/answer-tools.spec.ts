@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { chooseProject, startTask, taskInput, waitTaskDone } from './flows'
+import { chooseProject, startTask, taskInput, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { addFile, exec, read, startScriptedModel } from './scripted-model'
@@ -245,8 +245,9 @@ test('应用回答里的 diff：记成一轮「应用回答里的改动」，改
 
     await diffs.nth(0).getByRole('button', { name: '应用这个改动' }).click()
     await expect(window.getByTestId('turn')).toHaveCount(2)
-    // 应用了还没跑检查：未完成 · 未验证
-    await expect(window.getByTestId('task-status')).toContainText('未验证', { timeout: 20_000 })
+    // 应用了还没跑检查：未完成，原因由 core 写
+    await waitTaskStatus(window, 'unfinished')
+    await expect(window.getByTestId('task-status')).toHaveAttribute('title', '应用了回答里的补丁，还没跑检查。')
     const applied = window.getByTestId('turn').last()
     await expect(applied.getByTestId('user-message')).toHaveText('应用回答里的改动：a.txt')
     await expect.poll(() => readFileSync(join(project, 'a.txt'), 'utf8')).toBe('hi\n')
@@ -442,9 +443,9 @@ test('对话地图：列出步骤（失败的标出来）、文件、图表和�
     await window.getByTestId('turn-actions').getByRole('button', { name: '这一轮的地图' }).click()
     const map = window.getByTestId('turn-map')
     await expect(map).toBeVisible()
-    // 两次读、一次新建，加上 Diffra 自己的静态检查和完成卡
-    await expect(map.getByTestId('turn-map-steps').getByTestId('turn-map-entry')).toHaveCount(5)
-    await expect(map.getByTestId('turn-map-steps')).toContainText('检查 2')
+    // 两次读、一次新建；Diffra 结束时不再自己跑检查，没有检查这一组
+    await expect(map.getByTestId('turn-map-steps').getByTestId('turn-map-entry')).toHaveCount(3)
+    await expect(map.getByTestId('turn-map-steps')).not.toContainText('检查')
     await expect(map.getByTestId('turn-map-steps')).toContainText('（失败）')
     await expect(map.getByTestId('turn-map-files').getByTestId('turn-map-entry')).toHaveText(['b.txt +1 −0'])
     await expect(map.getByTestId('turn-map-charts').getByTestId('turn-map-entry')).toHaveText(['耗时'])

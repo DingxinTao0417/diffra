@@ -383,9 +383,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
     const coder = options.model ? await resolveModel(options.model, '所选模型') : remembered ? await resolveModel(remembered, '「编码」角色的模型') : null
     if (!coder) throw new ModelConfigError('model-missing', '还没有给「编码」角色分配模型，请先到「设置 → 模型与角色」里选择')
     const project = projectState(path)
-    // 安全检查和规范审查按设置开关，项目单独设过的以项目的为准（v2）
+    // 深度扫描按设置开关，项目单独设过的以项目的为准（v2）
     const security = effectiveSecurity(settings.get().security, project.security)
-    // 规范审查按设置开关；没分配评审角色时 core 用编码模型审查
+    // 评审角色给深度扫描用；没分配时 core 用编码模型
     const reviewer = await resolveRole('reviewer', '评审')
     const planner = await resolveRole('planner', '规划')
     const fallback = await resolveRole('fallback', '备用')
@@ -399,9 +399,9 @@ export function registerSessionIpc(settings: SettingsStore, secrets: SecretStore
         readOnlyPaths: project.readOnlyPaths,
         allowedCommands: project.allowedCommands,
         hooks: project.hooks,
-        rules: { ...SESSION_RULES, review: security.review },
+        rules: SESSION_RULES,
         permissionMode: options.permissionMode ?? settings.get().defaultPermissionMode,
-        security: { staticCheck: security.staticCheck, lightScan: security.lightScan, deepScan: security.deepScan, taint: security.taint, licenses: security.licenses, semgrep: security.semgrep },
+        security,
         limits: {
           compactAtPercent: settings.get().execution.compactAtPercent,
           maxSteps: settings.get().execution.maxSteps,

@@ -91,7 +91,6 @@ const candidateRunSchema = z.object({
       name: z.string(),
       approach: z.string(),
       status: z.enum(['running', 'done', 'failed', 'cancelled']),
-      verification: z.enum(['verified', 'unverified', 'no-edits', 'failed']).nullable(),
       summary: z.string().nullable(),
       error: z.string().nullable(),
       stats: z.object({ files: z.number(), added: z.number(), removed: z.number() }).nullable(),

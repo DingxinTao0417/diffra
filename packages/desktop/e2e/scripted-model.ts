@@ -43,40 +43,21 @@ function firstUserText(messages: ScriptMessages): string {
   return textOf(messages.find((message) => message.role === 'user' && !textOf(message.content).startsWith(CONTEXT_MARKER))?.content)
 }
 
-// 对话里最后一条用户消息（不算环境上下文）：结束门禁打回时追加的是用户消息，不是工具结果
-export function lastUserText(messages: ScriptMessages): string {
-  return textOf(messages.findLast((message) => message.role === 'user' && !textOf(message.content).startsWith(CONTEXT_MARKER))?.content)
-}
-
 export interface ScriptedModel {
   baseUrl: string
-  // 已经收到的对话请求数（不含轻量安全扫描）
+  // 已经收到的对话请求数
   requests(): number
   // 每次对话请求的原始请求体，按收到的顺序
   bodies(): string[]
   // 每次对话请求收到的时间（毫秒时间戳），和 bodies 一一对应
   times(): number[]
-  // 收到的轻量安全扫描请求数
-  securityReviews(): number
-  // 收到的完成前规范审查请求数
-  ruleReviews(): number
   close(): Promise<void>
 }
 
-// 轻量安全扫描和完成前规范审查的请求按系统提示词认出来，分别按 securityReplies、reviewReplies 回复，
-// 不占剧本的步骤；用完后回「没有问题」。规范审查默认开着，改了文件的任务都会多一次审查请求
-const SECURITY_REVIEW_MARKER = 'You are a security reviewer'
-const RULE_REVIEW_MARKER = 'You review a code change against coding rules.'
-
 // OpenAI 兼容的流式接口：每收到一次 chat/completions 请求，按顺序返回剧本里的下一步
-export async function startScriptedModel(
-  steps: ScriptStep[],
-  options: { securityReplies?: string[]; reviewReplies?: string[] } = {},
-): Promise<ScriptedModel> {
+export async function startScriptedModel(steps: ScriptStep[]): Promise<ScriptedModel> {
   let served = 0
   const used = new Set<number>()
-  let reviews = 0
-  let ruleReviews = 0
   const bodies: string[] = []
   const times: number[] = []
   const server = createServer((req, res) => {
@@ -95,28 +76,18 @@ export async function startScriptedModel(
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ id: 'probe', object: 'chat.completion', created: 1, model: 'scripted', choices: [{ index: 0, message, finish_reason: toolsRequested ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }))
         return
       }
-      let step: ScriptStep
-      let index: number
-      if (body.includes(SECURITY_REVIEW_MARKER)) {
-        step = { text: options.securityReplies?.[reviews] ?? 'NO_FINDINGS' }
-        index = 1000 + reviews++
-      } else if (body.includes(RULE_REVIEW_MARKER)) {
-        step = { text: options.reviewReplies?.[ruleReviews] ?? 'NO_VIOLATIONS' }
-        index = 2000 + ruleReviews++
-      } else {
-        const messages = (JSON.parse(body) as { messages: ScriptMessages }).messages
-        const first = firstUserText(messages)
-        const matches = (item: ScriptStep) => item.match !== undefined && first.includes(item.match)
-        // 第一条用户消息对得上某个 match 的请求只从这些步骤里取；其余请求取没写 match 的步骤
-        const own = steps.some(matches)
-        const at = steps.findIndex((item, position) => !used.has(position) && (own ? matches(item) : item.match === undefined))
-        if (at >= 0) used.add(at)
-        step = at >= 0 ? steps[at]! : { text: '（剧本已结束）' }
-        if ('toolCalls' in step) step = { ...step, toolCalls: step.toolCalls.map((call) => ({ ...call, input: typeof call.input === 'function' ? call.input(messages) : call.input })) }
-        bodies.push(body)
-        times.push(Date.now())
-        index = served++
-      }
+      const messages = (JSON.parse(body) as { messages: ScriptMessages }).messages
+      const first = firstUserText(messages)
+      const matches = (item: ScriptStep) => item.match !== undefined && first.includes(item.match)
+      // 第一条用户消息对得上某个 match 的请求只从这些步骤里取；其余请求取没写 match 的步骤
+      const own = steps.some(matches)
+      const at = steps.findIndex((item, position) => !used.has(position) && (own ? matches(item) : item.match === undefined))
+      if (at >= 0) used.add(at)
+      let step: ScriptStep = at >= 0 ? steps[at]! : { text: '（剧本已结束）' }
+      if ('toolCalls' in step) step = { ...step, toolCalls: step.toolCalls.map((call) => ({ ...call, input: typeof call.input === 'function' ? call.input(messages) : call.input })) }
+      bodies.push(body)
+      times.push(Date.now())
+      const index = served++
       setTimeout(() => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
         const chunks = chunksFor(step, index)
@@ -138,8 +109,6 @@ export async function startScriptedModel(
     requests: () => served,
     bodies: () => [...bodies],
     times: () => [...times],
-    securityReviews: () => reviews,
-    ruleReviews: () => ruleReviews,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()

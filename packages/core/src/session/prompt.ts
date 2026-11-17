@@ -21,7 +21,7 @@ export interface PromptContext {
   frontend: { browser: boolean; screenshots: boolean } | null
   // 项目记忆里的条目（见 memory.ts），没开或还没有时不传
   memory?: string
-  // 给子智能体用的那一份（第 453 步）：没有结束门禁、计划、提问、派工这些它用不了的东西，由 agents.ts 再接上工人规则
+  // 给子智能体用的那一份（第 453 步）：没有计划、提问、派工这些它用不了的东西，由 agents.ts 再接上工人规则
   worker?: boolean
   // 开着的插件注册的富块（第 682 步），接在回答格式指南后面
   blocks?: PluginBlock[]
@@ -132,7 +132,7 @@ export async function buildSystemPrompt(
     ...skills.lines,
   ]
   if (context.memory) lines.push('', MEMORY_HEADING, context.memory)
-  lines.push(...codingRuleLines(rulePacks, rules.review && !worker))
+  lines.push(...codingRuleLines(rulePacks))
   return lines.join('\n')
 }
 
@@ -171,25 +171,24 @@ function pluginBlockLines(blocks: PluginBlock[]): string[] {
 }
 
 // 编码规范排在最后，并写明优先级低于用户和 AGENTS.md；只约束这次写或改的代码，免得模型顺手大改旧代码
-function codingRuleLines(rulePacks: RulePack[], review: boolean): string[] {
+function codingRuleLines(rulePacks: RulePack[]): string[] {
   const { text, omitted } = renderRules(rulePacks)
   if (!text) return []
   return [
     '',
     `${CODING_RULES_HEADING} They rank below the user's instructions and AGENTS.md: when they conflict, follow those. ` +
       'Apply them to the code you write or change; do not rewrite unrelated existing code just to satisfy them.',
-    ...(review ? ['When you end your turn after changing code, a reviewer checks your changes against these rules and reports violations by rule ID.'] : []),
     text,
     ...(omitted > 0 ? [`(${omitted} more rules were left out to save space.)`] : []),
   ]
 }
 
-// 结束门禁会自动跑哪些检查：告诉模型，免得它自己再跑一遍、还多弹一次权限确认
+// 项目设置里配的检查命令只告诉模型，Diffra 不自动跑；跑不跑、跑哪部分由模型自己决定
 function checkLines(checks: SessionChecks): string[] {
   const command = checks.beforeFinish ?? checks.afterEdit
   if (command) {
     return [
-      `- When you end your turn after changing source, types, dependencies, build scripts or tests, Diffra runs \`${command}\` automatically. Turns that only answer, read, or change documentation do not run it. If it fails, you get the errors and continue: fix them and end your turn again. Do not run that command yourself while you are still changing code; finish the whole change first.`,
+      `- The user set \`${command}\` as this project's check command. Diffra does not run it for you. After changing code, decide yourself whether to run it, or only the part that covers your change, before you end your turn, and say in your final message what you ran and whether it passed.`,
     ]
   }
   return ['- No project checks are configured: after changing code, verify it yourself, for example by running the relevant tests.']

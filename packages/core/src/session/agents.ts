@@ -38,7 +38,7 @@ import { freshWorldState } from './world-state.js'
 import { toolDefinitionChars, TOOLS } from './tools.js'
 
 // 子智能体（工人）：主智能体用 delegate 把一块独立的活交出去，几个工人并行做，做完交回结果，主智能体再整合、检查、收尾。
-// 工人有自己的对话，只能改自己认领的文件（同一目录、按文件认领，不用 worktree）；交回结果就停，不过结束门禁，也不能再派工人。
+// 工人有自己的对话，只能改自己认领的文件（同一目录、按文件认领，不用 worktree）；交回结果就停，也不能再派工人。
 // 工人的工具调用照常发给界面，带上所属卡片（parentToolCallId）和自己的名字、颜色，界面收进那张卡片里
 export const DELEGATE_TOOL = 'delegate'
 export const MAX_PARALLEL_WORKERS = 4
@@ -267,7 +267,7 @@ function workerRules(worker: Worker, owned: string[]): string {
       ? ['- You are read-only: you can only run read-only commands with exec_command (rg, rg --files, sed -n, cat, ls, git log, git diff) and cannot change files. Investigate and report.']
       : [
           `- Change only files you own${owned.length > 0 ? ` (${owned.join(', ')})` : ''}. Reading any file is fine. To change another file, call ${CLAIM_TOOL} first; if another worker owns it, leave it alone and mention it in your report.`,
-          '- Do not start long-running commands (dev servers, watchers). Diffra runs the project checks after all workers finish; run only quick, targeted commands when they help.',
+          '- Do not start long-running commands (dev servers, watchers); run only quick, targeted commands when they help. Say in your report what you ran and whether it passed.',
           '- Other workers may change other files while you work. If you need something from their part, do not build it yourself: describe it in your report.',
         ]),
     ...(worker.nodes.length > 0

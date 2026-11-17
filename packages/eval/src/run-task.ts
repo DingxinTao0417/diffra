@@ -35,8 +35,6 @@ export interface TaskResult {
   delegations: number
   // 题目标的该不该派子智能体；没标的是 null
   delegate: EvalTask['delegate'] | null
-  gateRejections: number
-  checkFailures: number
   permissionRequests: number
   // 智能体用 ask_user 提问的次数，不算在 permissionRequests 里
   questions: number
@@ -115,7 +113,6 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
         checks: task.checks,
         readOnlyPaths: task.readOnlyPaths,
         security: task.security,
-        review: task.review,
         checkpointDir: join(dataDir, 'checkpoints'),
         permissionMode: task.permissionMode,
         contextWindow: task.contextWindow,
@@ -185,8 +182,6 @@ export async function runTask(task: EvalTask, model: EvalModel, reviewer: EvalMo
       workerToolCalls: metrics.workerToolCalls,
       delegations: metrics.delegations,
       delegate: task.delegate ?? null,
-      gateRejections: metrics.gateRejections,
-      checkFailures: metrics.checkFailures,
       permissionRequests: conversation.permissionRequests,
       questions: conversation.questions,
       findings: metrics.findings,

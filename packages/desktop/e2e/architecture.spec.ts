@@ -84,7 +84,7 @@ const node = (window: Page, id: string) => window.getByTestId(`rf__node-${id}`)
 const block = (window: Page, name: string) => window.getByTestId('diagram-block').filter({ has: window.getByText(name, { exact: true }) })
 const tab = (window: Page, name: string) => window.getByRole('radio', { name, exact: true })
 
-test('架构：添加项目自动出三张分层方块图；模型画图并核对路径；方块下钻到依赖图、文件、代码；手改的方块重画时保留；目标架构用方块图，任务里新增违规的依赖被打回', async () => {
+test('架构：添加项目自动出三张分层方块图；模型画图并核对路径；方块下钻到依赖图、文件、代码；手改的方块重画时保留；目标架构用方块图，任务里能查架构图', async () => {
   test.setTimeout(180_000)
   const userDataDir = makeUserDataDir()
   const project = mkdtempSync(join(tmpdir(), 'diffra-e2e-arch-'))
@@ -98,13 +98,11 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     { toolCalls: [{ name: 'submit_flowchart', input: FLOWCHART }] },
     // 用户把「应用界面」改名后重画：模型还是叫它「应用界面」，认领的代码一样，让位给改了名的
     { toolCalls: [{ name: 'submit_diagram', input: APPLICATION }] },
-    // 任务：先查架构图看谁调了 listOrders（v2）；数据层反过来依赖业务层，违反分层，被打回后改掉
+    // 任务：先查架构图看谁调了 listOrders（v2）；数据层反过来依赖业务层，违反目标架构的分层，结束时不再做架构检查
     { toolCalls: [{ name: 'architecture', input: { action: 'callers', path: 'src/services/orders.ts', symbol: 'listOrders' } }] },
     { toolCalls: [read('src/db/client.ts')] },
     { toolCalls: [patch('*** Update File: src/db/client.ts', " import express from 'express'", "+import { listOrders } from '../services/orders'")] },
     { text: '数据层用上了订单列表' },
-    { toolCalls: [patch('*** Update File: src/db/client.ts', "-import { listOrders } from '../services/orders'")] },
-    { text: '去掉了反向依赖' },
     // 模型提目标架构：数据层加一个计划中的「缓存」，去掉右边的「日志」和 MySQL，加一条禁止的依赖
     {
       toolCalls: [
@@ -305,16 +303,15 @@ test('架构：添加项目自动出三张分层方块图；模型画图并核�
     await expect(window.getByTestId('target-compare').getByTestId('diagram-block')).toHaveCount(6)
     await expect(window.getByTestId('target-compare').getByText('计划中')).toHaveCount(2)
 
-    // 任务里给数据层加了依赖业务层的 import：架构检查打回，改掉后完成
+    // 任务里给数据层加了依赖业务层的 import：模型说完就结束，Diffra 不再按目标架构检查、打回
     await window.getByRole('button', { name: '更多操作', exact: true }).click()
     await window.getByRole('menuitem', { name: '在这个项目开任务' }).click()
     await startTask(window, '让数据层用订单列表')
     await waitTaskDone(window, 60_000)
     await expect(window.getByTestId('tool-call').filter({ hasText: /查架构：被谁调用\s*src\/services\/orders\.ts listOrders/ })).toHaveCount(1)
     expect(model.bodies().some((body) => body.includes('src/ui/App.ts App (call at src/ui/App.ts:3)'))).toBe(true)
-    const checks = window.locator('[data-testid="tool-call"][data-kind="architecture"]')
-    await expect(checks.first()).toContainText('架构检查 · 1 处问题，已打回', { timeout: 10_000 })
-    await expect(checks.first()).toContainText('src/db/client.ts:2')
+    await expect(window.locator('[data-testid="tool-call"][data-kind="architecture"]')).toHaveCount(0)
+    expect(readFileSync(join(project, 'src/db/client.ts'), 'utf8')).toContain("import { listOrders } from '../services/orders'")
 
     // 差距：计划中的方块能生成重构任务，说明填进首页输入框
     await window.getByTestId('sidebar').getByRole('button', { name: '架构', exact: true }).click()

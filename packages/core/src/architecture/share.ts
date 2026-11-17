@@ -48,7 +48,7 @@ function canonical(value: unknown): string {
 // 只比内容：生成时间、核对用的指纹这些每次分析都会变，不算不同
 function comparable(diagrams: ArchitectureDiagrams, target: TargetArchitecture | null): string {
   const strip = (diagram: BlockDiagram | undefined) => (diagram ? { layers: diagram.layers, sides: diagram.sides, connectors: diagram.connectors } : null)
-  return canonical({ diagrams: DIAGRAM_KINDS.map((kind) => strip(diagrams[kind])), target: target ? { diagram: strip(target.diagram), rules: target.rules, enforceInTasks: target.enforceInTasks } : null })
+  return canonical({ diagrams: DIAGRAM_KINDS.map((kind) => strip(diagrams[kind])), target: target ? { diagram: strip(target.diagram), rules: target.rules } : null })
 }
 
 export function sameDefinition(shared: Pick<SharedArchitecture, 'diagrams' | 'target'>, diagrams: ArchitectureDiagrams, target: TargetArchitecture | null): boolean {
@@ -102,7 +102,7 @@ export function sharedMarkdown(shared: SharedArchitecture): string {
       else if (rule.kind === 'allow') out.push(`- 例外：「${name(rule.from)}」可以依赖「${name(rule.to)}」${rule.note ? `：${rule.note}` : ''}`)
       else out.push(`- 外部包 \`${rule.package}\` 只许 ${rule.only.map((id) => `「${name(id)}」`).join('、') || '（没有组件）'} 使用${rule.note ? `：${rule.note}` : ''}`)
     }
-    out.push('', `任务里检查：${shared.target.enforceInTasks ? '开（新增的依赖违反规则会被打回，确实需要时在那一行写 `diffra-allow architecture: 理由`）' : '关'}`, '')
+    out.push('')
   }
   return `${out.join('\n').trimEnd()}\n`
 }

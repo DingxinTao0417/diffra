@@ -1,5 +1,4 @@
 import type { Rule, RulePack } from '../protocol.js'
-import { languageOf } from './languages.js'
 
 // 写进系统提示词的规则总量上限；每一步都会重发，太长既费 token，弱模型也记不住
 export const MAX_RULES_PROMPT_CHARS = 4000
@@ -13,12 +12,6 @@ export function selectRulePacks(packs: RulePack[], languages: ReadonlyMap<string
     .filter((pack) => !isUniversal(pack) && pack.rules.length > 0 && fileCount(pack) > 0)
     .sort((a, b) => fileCount(b) - fileCount(a))
   return [...packs.filter((pack) => isUniversal(pack) && pack.rules.length > 0), ...specific]
-}
-
-// 审查只看和改动文件相关的包
-export function packsForPaths(packs: RulePack[], paths: string[]): RulePack[] {
-  const languages = new Set(paths.map(languageOf).filter((language): language is string => language !== null))
-  return packs.filter((pack) => isUniversal(pack) || pack.languages.some((language) => languages.has(language)))
 }
 
 export function ruleLine(rule: Rule): string {

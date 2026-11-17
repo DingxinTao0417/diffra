@@ -94,7 +94,7 @@ test('外接智能体：设置里检测出没装、版本不对和可用，添�
     await send(window, '你好')
     await expect(window.getByTestId('task-title')).toBeVisible()
     await expect(window.getByText('收到：你好')).toBeVisible({ timeout: 20_000 })
-    await waitTaskStatus(window, 'nochange')
+    await waitTaskStatus(window, 'done')
     // 任务中途不能换成别的模型；斜杠菜单里没有目标、计划和压缩
     await expect(window.getByTestId('model-menu')).toBeDisabled()
     await taskInput(window).fill('/')
@@ -109,7 +109,7 @@ test('外接智能体：设置里检测出没装、版本不对和可用，添�
     await permission.getByRole('button', { name: '允许', exact: true }).click()
     await expect(window.getByText('允许了')).toBeVisible({ timeout: 20_000 })
 
-    // 它改文件：改动卡片照常显示，结论是没经过自动验证
+    // 它改文件：改动卡片照常显示，结论是已完成
     await send(window, '写文件 hello.txt 来自外接智能体')
     await expect(cards(window, 'edit')).toHaveCount(1, { timeout: 20_000 })
     await waitTaskStatus(window, 'done')

@@ -13,6 +13,6 @@ function order(id: string): number {
   return index < 0 ? BUILTIN_ORDER.length : index
 }
 
-// 内置规则包全部生效：强制级和推荐级都写进提示词（按项目语言挑包，篇幅预算由 core 控制），完成前按强制级规则审查改动。
+// 内置规则包全部生效：强制级和推荐级都写进提示词（按项目语言挑包，篇幅预算由 core 控制）。
 // 不能按项目关闭，也不能导入自己的规则包
-export const SESSION_RULES: SessionRules = { packs: BUILTIN_RULE_PACKS, review: true }
+export const SESSION_RULES: SessionRules = { packs: BUILTIN_RULE_PACKS }

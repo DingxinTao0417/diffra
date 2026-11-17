@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
@@ -7,8 +7,6 @@ import { analyzeProject, type ParseCache } from '../src/architecture/engine.js'
 import { type ArchitectureAnalysis, javaLayout } from '../src/architecture/model.js'
 import { findRipgrep } from '../src/environment.js'
 import { detectChecks } from '../src/project/detect.js'
-import { staticScan } from '../src/security/static.js'
-import type { AddedLines } from '../src/security/types.js'
 
 // v2 的 Java 适配器：Spring 风格的 Maven 小项目（test/fixtures/java-shop），repository 故意反过来依赖 service
 const FIXTURE = join(import.meta.dirname, 'fixtures', 'java-shop')
@@ -107,7 +105,7 @@ describe('架构分析：Java 项目', () => {
     expect((await analyze(result.cache)).analysis.stats.reparsed).toBe(0)
   })
 
-  test('同一个项目：识别出 Maven 的检查命令；整个项目当成新代码过一遍静态检查，普通的 Spring 写法不误报', async () => {
+  test('同一个项目：识别出 Maven 的检查命令', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'diffra-arch-java-bin-'))
     try {
       const env = { PATH: bin, PATHEXT: '.CMD;.EXE', HOME: bin, USERPROFILE: bin, APPDATA: bin, LOCALAPPDATA: bin, ProgramFiles: bin, JAVA_HOME: bin }
@@ -117,12 +115,6 @@ describe('架构分析：Java 项目', () => {
     } finally {
       rmSync(bin, { recursive: true, force: true })
     }
-    const added: AddedLines = new Map()
-    for (const file of analysis.files.filter((item) => item.language === 'java')) {
-      const lines = readFileSync(join(root, file.path), 'utf8').split('\n')
-      added.set(file.path, new Map(lines.map((text, index) => [index + 1, text])))
-    }
-    expect((await staticScan(root, added)).findings).toEqual([])
   })
 
   test('不是 Java 为主的项目没有 Java 分层，应用架构图照旧按目录画', () => {

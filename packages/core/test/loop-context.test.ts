@@ -118,15 +118,16 @@ describe('系统提示词', () => {
     expect(noBash).toContain('exec_command is unavailable because bash was not found.')
   })
 
-  test('配了检查命令时说明结束这一轮时 Diffra 自动跑（beforeFinish 优先）、没过就接着修，改的过程中不要自己跑', async () => {
+  test('配了检查命令时告诉模型这条命令（beforeFinish 优先），Diffra 不自动跑，跑不跑由它决定；没配时让它自己验证', async () => {
     const prompt = await buildSystemPrompt(null, { ...options, checks: { afterEdit: 'pnpm typecheck', beforeFinish: 'pnpm test' } }, [])
-    expect(prompt).toContain('When you end your turn after changing source, types, dependencies, build scripts or tests, Diffra runs `pnpm test` automatically.')
-    expect(prompt).toContain('Turns that only answer, read, or change documentation do not run it.')
-    expect(prompt).toContain('If it fails, you get the errors and continue: fix them and end your turn again.')
-    expect(prompt).toContain('Do not run that command yourself while you are still changing code')
+    expect(prompt).toContain("The user set `pnpm test` as this project's check command. Diffra does not run it for you.")
+    expect(prompt).toContain('decide yourself whether to run it, or only the part that covers your change, before you end your turn')
     expect(prompt).not.toContain('pnpm typecheck')
+    expect(prompt).not.toContain('automatically')
     const afterEditOnly = await buildSystemPrompt(null, { ...options, checks: { afterEdit: 'pnpm typecheck', beforeFinish: null } }, [])
-    expect(afterEditOnly).toContain('Diffra runs `pnpm typecheck` automatically.')
+    expect(afterEditOnly).toContain("The user set `pnpm typecheck` as this project's check command.")
+    const none = await buildSystemPrompt(null, options, [])
+    expect(none).toContain('No project checks are configured: after changing code, verify it yourself')
   })
 
   test('牵动多个文件的改动用一个 apply_patch 一起改；改文件只能用 apply_patch', async () => {
@@ -255,8 +256,8 @@ describe('系统提示词里的编码规范', () => {
   }
   const checks = { afterEdit: null, beforeFinish: null }
 
-  test('排在提示词最后，写明优先级低于用户和 AGENTS.md、只约束写或改的代码；没开审查时不提审查', async () => {
-    const prompt = await buildSystemPrompt('/usr/bin/bash', { checks, readOnlyPaths: [], rules: { packs: [pack], review: false } }, [pack], {
+  test('排在提示词最后，写明优先级低于用户和 AGENTS.md、只约束写或改的代码；不提结束后的审查', async () => {
+    const prompt = await buildSystemPrompt('/usr/bin/bash', { checks, readOnlyPaths: [], rules: { packs: [pack] } }, [pack], {
       skills: [{ name: 'mine', description: '说明', source: 'project', dir: '/skills/mine' }],
       frontend: null,
       memory: '- 用 pnpm',
@@ -272,13 +273,10 @@ describe('系统提示词里的编码规范', () => {
     expect(prompt).not.toContain('a reviewer checks your changes')
   })
 
-  test('开了审查时告诉模型结束这一轮后会按规则审查；子智能体那一份不提审查；没有选中的包就不写这一段', async () => {
-    const reviewed = await buildSystemPrompt(null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: true } }, [pack])
-    expect(reviewed).toContain('When you end your turn after changing code, a reviewer checks your changes against these rules and reports violations by rule ID.')
-    const worker = await buildSystemPrompt(null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: true } }, [pack], { skills: [], frontend: null, worker: true })
+  test('子智能体那一份照样带规范；没有选中的包就不写这一段', async () => {
+    const worker = await buildSystemPrompt(null, { checks, readOnlyPaths: [], rules: { packs: [pack] } }, [pack], { skills: [], frontend: null, worker: true })
     expect(worker).toContain('- GEN-ERR-1: 不吞异常。')
-    expect(worker).not.toContain('a reviewer checks your changes')
-    const none = await buildSystemPrompt(null, { checks, readOnlyPaths: [], rules: { packs: [pack], review: true } }, [])
+    const none = await buildSystemPrompt(null, { checks, readOnlyPaths: [], rules: { packs: [pack] } }, [])
     expect(none).not.toContain('Coding rules')
   })
 })

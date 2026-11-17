@@ -57,7 +57,7 @@ export async function runApplyDiff(session: Session, diff: string, io: TurnIO): 
       role: 'user',
       content: `[Note from Diffra] The user applied a patch from your earlier answer directly to the project files. ${failed ? `It failed: ${String(output.value)}` : 'It applied cleanly; read the files again before editing them further.'}\n\n${patch}`,
     })
-    if (outcome.edited) session.taskState = { ...session.taskState, status: 'blocked', needsVerification: true, reason: '应用了回答里的补丁，还没跑检查。' }
+    if (outcome.edited) session.taskState = { ...session.taskState, status: 'blocked', reason: '应用了回答里的补丁，还没跑检查。' }
     await publishTaskState(session, io)
     return 'end_turn'
   } finally {

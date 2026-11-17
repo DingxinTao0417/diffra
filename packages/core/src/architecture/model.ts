@@ -422,8 +422,6 @@ export interface TargetArchitecture {
   updatedAt: string
   diagram: BlockDiagram
   rules: TargetRule[]
-  // 任务改完时检查新增的依赖，违反规则就打回
-  enforceInTasks: boolean
 }
 
 export interface TargetLayer {

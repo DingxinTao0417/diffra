@@ -183,17 +183,17 @@ describe('外接智能体的任务', () => {
     expect(info.checkpoints).toBe(true)
     expect(await sendPrompt(core, sessionId, 't1', '你好')).toEqual({ stopReason: 'end_turn' })
     expect(replyText(sessionId)).toBe('收到：你好')
-    expect(outcomes(sessionId).at(-1)).toEqual({ finish: 'no-edits', stop: null })
+    expect(outcomes(sessionId).at(-1)).toEqual({ finish: null, stop: null })
     const [entry] = await listSessions(core)
     expect(entry).toMatchObject({ sessionId, title: '你好', turnCount: 1, agent: { id: 'fake', name: '假智能体' } })
   })
 
-  test('改了文件：结论是没经过自动验证；能看改动、撤销，撤销后下一条消息告诉它文件变了', async () => {
+  test('改了文件：能看改动、撤销，撤销后下一条消息告诉它文件变了', async () => {
     const core = await startCore()
     const { sessionId } = await createExternalSession(core, project, config())
     await sendPrompt(core, sessionId, 't1', '写文件 a.txt 内容一')
     expect(readFileSync(join(project, 'a.txt'), 'utf8')).toBe('内容一')
-    expect(outcomes(sessionId).at(-1)).toEqual({ finish: 'unverified', stop: null })
+    expect(outcomes(sessionId).at(-1)).toEqual({ finish: null, stop: null })
     const edit = updatesOf(sessionId).find((update) => update.sessionUpdate === 'tool_call_update' && update.content?.some((content) => content.type === 'diff'))
     expect(edit).toBeDefined()
     expect(await previewCheckpoint(core, sessionId, 't1')).toEqual([{ path: 'a.txt', change: 'added' }])

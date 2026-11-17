@@ -118,16 +118,9 @@ export const browserSettingsSchema = z.object({
 
 export const permissionModeSchema = z.enum(['ask', 'auto', 'full'])
 
-// review 是第 426 步加的，旧设置文件里没有
+// 旧设置文件里还有结束时检查的开关（staticCheck、lightScan、review、taint、licenses、semgrep），读的时候丢掉，下次保存就没了
 export const securitySchema = z.object({
-  staticCheck: z.boolean(),
-  lightScan: z.boolean(),
   deepScan: z.boolean(),
-  review: z.boolean().default(true),
-  // v2 · M10 加的，旧设置没有
-  taint: z.boolean().optional(),
-  licenses: z.boolean().optional(),
-  semgrep: z.boolean().optional(),
 })
 
 // 用量的单价和预算（v2 · M11）：金额是小数字符串（最多 6 位小数），按整数算
@@ -147,7 +140,7 @@ export const usageSettingsSchema = z.object({
 })
 
 // 按项目单独设的安全开关（v2 · M10）：每项都可以不写
-export const projectSecuritySchema = z.object({ staticCheck: z.boolean(), lightScan: z.boolean(), deepScan: z.boolean(), review: z.boolean(), taint: z.boolean(), licenses: z.boolean(), semgrep: z.boolean() }).partial()
+export const projectSecuritySchema = z.object({ deepScan: z.boolean() }).partial()
 
 // goalMaxRounds 是第 17 步加的，旧设置文件里没有
 export const executionSchema = z.object({

@@ -162,25 +162,17 @@ export interface ComputerAuditEntry {
   ms: number
 }
 
-// 三层安全检查和完成前的规范审查，所有项目共用，改了对已经打开的任务立即生效。
-// 静态检查、轻量扫描、规范审查在完成前；深度扫描在智能体提交或推送前问要不要先扫，任务页也能手动发起
+// 深度扫描：智能体提交或推送前问要不要先扫，任务页也能手动发起；所有项目共用，改了对已经打开的任务立即生效。
+// 结束时的静态检查、轻量扫描、规范审查已经移除，旧设置文件里的这几项读的时候丢掉
 export interface SecuritySettings {
-  staticCheck: boolean
-  lightScan: boolean
   deepScan: boolean
-  review: boolean
-  // v2 · M10，旧设置没有（当开）：污点分析、新依赖的许可证、装了 Semgrep 时用它扫，都跟着静态检查在完成前跑
-  taint?: boolean
-  licenses?: boolean
-  semgrep?: boolean
 }
 
-export const DEFAULT_SECURITY: SecuritySettings = { staticCheck: true, lightScan: true, deepScan: true, review: true, taint: true, licenses: true, semgrep: true }
+export const DEFAULT_SECURITY: SecuritySettings = { deepScan: true }
 
 // 一个项目实际用的开关：全局的，加上这个项目单独设的
-export function effectiveSecurity(global: SecuritySettings, project: ProjectSecurity | undefined): Required<SecuritySettings> {
-  const merged = { ...DEFAULT_SECURITY, ...global, ...project }
-  return { staticCheck: merged.staticCheck, lightScan: merged.lightScan, deepScan: merged.deepScan, review: merged.review, taint: merged.taint !== false, licenses: merged.licenses !== false, semgrep: merged.semgrep !== false }
+export function effectiveSecurity(global: SecuritySettings, project: ProjectSecurity | undefined): SecuritySettings {
+  return { deepScan: project?.deepScan ?? global.deepScan }
 }
 
 export const COMPACT_AT_PERCENTS = [50, 60, 70, 80, 90] as const

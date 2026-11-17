@@ -666,10 +666,7 @@ function readSessionInfo(meta: unknown): SessionInfo {
     bashPath,
     checkpoints,
     rulePacks: packs.filter((name): name is string => typeof name === 'string'),
-    security: {
-      staticCheck: 'staticCheck' in security && security.staticCheck === true,
-      lightScan: 'lightScan' in security && security.lightScan === true,
-    },
+    security: { deepScan: 'deepScan' in security && security.deepScan === true },
     checks: checks && {
       afterEdit: 'afterEdit' in checks && typeof checks.afterEdit === 'string' ? checks.afterEdit : null,
       beforeFinish: 'beforeFinish' in checks && typeof checks.beforeFinish === 'string' ? checks.beforeFinish : null,

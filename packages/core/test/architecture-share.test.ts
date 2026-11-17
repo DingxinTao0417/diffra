@@ -35,7 +35,6 @@ const layer = (id: string, name: string, blocks: ReturnType<typeof block>[]) => 
 const TARGET: TargetArchitecture = {
   version: 1,
   updatedAt: '2026-11-15T00:00:00.000Z',
-  enforceInTasks: true,
   diagram: {
     kind: 'application',
     source: 'static',

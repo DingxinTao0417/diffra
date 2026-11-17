@@ -6,7 +6,6 @@ import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 
 import type { ArchitectureService } from '../architecture/service.js'
 import type { Checkpoints } from '../checkpoint.js'
 import type { LspServerSpec } from '../lsp/config.js'
-import type { ParsedCheck } from './check-progress.js'
 import type { LspPool } from '../lsp/pool.js'
 import type { McpPool, McpTurnTools } from '../mcp.js'
 import type { LoadedPluginHook } from '../plugins.js'
@@ -14,7 +13,7 @@ import { createLanguageModel } from '../models/operations.js'
 import { canRememberCommand } from '../permissions.js'
 import { type CheckpointChange, type ModelProvider, type PermissionMode, type PluginBlock, type PromptImage, type RemoteSource, restoreNotice, type RulePack, type SessionConfig, type SessionDesign, type StepItem, type StoredTurn, type TaskSource, type TurnKind, type TurnVersion, type UsageBreakdown, VISUAL_META_KEY, VISUAL_SNAPSHOT_META_KEY } from '../protocol.js'
 import { promptSections } from './prompt.js'
-import { newTaskState, recordedTaskState, type TaskState } from './task-state.js'
+import { newTaskState, type TaskState } from './task-state.js'
 import type { CandidateRun, Compaction, SessionRecord } from './store.js'
 import { delegateChars, DELEGATE_TOOL, delegateTool } from './agents.js'
 import { SHOW_VISUAL_TOOL, showVisualTool, VISUAL_TOOL_CHARS } from './visual.js'
@@ -79,16 +78,6 @@ export function messagesChars(messages: ModelMessage[]): number {
 export interface SessionEnvironment {
   bashPath: string | null
   rgPath: string
-}
-
-export interface UnresolvedCheck {
-  command: string
-  lines: string[]
-}
-
-export interface KnownCheckFailure {
-  command: string
-  parsed: ParsedCheck
 }
 
 export interface SessionOptions {
@@ -204,15 +193,8 @@ export class Session {
   // 提交前问深度扫描：上次深度扫描跑完时的工作区指纹（代码没再变就不问），和用户选了「这个任务不再问」。只在内存里，重新打开任务后会再问
   deepScannedFingerprint: string | null = null
   deepScanDeclined = false
-  // 这一轮最新的步骤清单（卡片 id 带轮次），过了结束门禁时用来收尾；只在内存里
+  // 这一轮最新的步骤清单（卡片 id 带轮次），这一轮完成时用来收尾；只在内存里
   stepList: { id: string; steps: StepItem[] } | null = null
-  // 最近一次因检查卡住停下时还没修好的错误，下一个执行轮开始时交给模型一次；只在内存里，撤销后作废
-  unresolvedCheck: UnresolvedCheck | null = null
-  // turnId → 这一轮开始时交给模型的剩余错误；重新生成这一轮时放回去，重发的那一轮照样收到
-  readonly consumedChecks = new Map<string, UnresolvedCheck>()
-  // 最近一轮结束时完成检查还没过的错误：之后的轮次失败的都在里面、没有新增时，不再交回模型反复修（见 runEndGate）。
-  // 检查通过、撤销、重新生成后清掉；只在内存里，重新打开任务后从头算
-  knownCheckFailure: KnownCheckFailure | null = null
   // 重新生成（第 676 步）：撤掉的那一轮留成版本，等同样提问的下一轮开始时挂上去
   private regenerated: { prompt: string; versions: TurnVersion[] } | null = null
   taskState: TaskState = newTaskState()
@@ -484,7 +466,7 @@ export class Session {
   }
 
   // 算「智能体从某一轮开始改了什么」的基线：这一轮开始前的快照，再把这一轮及之后 Git 命令带进来的文件（拉取、切分支）换成带进来时的内容。
-  // 看改动、撤销、重新生成、完成门禁都以它为准，拉下来的代码不算智能体的改动，撤销也只退回它改的。没有 Git 挪过 HEAD 时就是这一轮的快照
+  // 看改动、撤销、重新生成都以它为准，拉下来的代码不算智能体的改动，撤销也只退回它改的。没有 Git 挪过 HEAD 时就是这一轮的快照
   async changeBase(turnId: string): Promise<string | undefined> {
     const commit = this.turnCheckpoints.get(turnId)
     if (!this.checkpoints || !commit) return undefined
@@ -539,21 +521,15 @@ export class Session {
       const version: TurnVersion = { startedAt: turn.startedAt, endedAt: turn.endedAt, stopReason: turn.stopReason, updates: turn.updates, edited, messages: this.messages.slice(start, end) }
       this.regenerated = { prompt: turn.prompt, versions: [...(turn.versions ?? []), version] }
     }
-    // 文件回到这一轮开始时，待验证也取那时的值，和撤销一样；没有检查点、文件没回滚时工作区没变，保留现在的值
-    const before = taskStateBefore(this.turns, index)
-    const needsVerification = filesRestored ? before.needsVerification : this.taskState.needsVerification
     this.messages.splice(start)
     // 压缩点在截掉的部分里，摘要也就作废了；下次超限时再压
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
-    this.unresolvedCheck = this.consumedChecks.get(turnId) ?? null
-    this.knownCheckFailure = null
     for (const turn of this.turns.splice(index)) {
       this.turnCheckpoints.delete(turn.id)
       this.turnGitBases.delete(turn.id)
       this.messageStarts.delete(turn.id)
-      this.consumedChecks.delete(turn.id)
     }
-    this.taskState = { ...newTaskState(), needsVerification }
+    this.taskState = newTaskState()
     return { filesRestored, edited }
   }
 
@@ -577,10 +553,7 @@ export class Session {
     if (this.compaction && this.compaction.upTo > start) this.compaction = null
     const versions = [...turn.versions!.filter((_, position) => position !== index), current].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     this.turns[position] = { ...turn, startedAt: version.startedAt, endedAt: version.endedAt, stopReason: version.stopReason, updates: version.updates, versions }
-    // 文件回到这一轮开始时（那一次没改文件），待验证取那时的值，和重新生成一样
-    this.taskState = { ...newTaskState(), needsVerification: taskStateBefore(this.turns, position).needsVerification }
-    this.unresolvedCheck = null
-    this.knownCheckFailure = null
+    this.taskState = newTaskState()
     return { filesRestored: Boolean(changes && changes.length > 0) }
   }
 
@@ -597,14 +570,10 @@ export class Session {
     if (!this.checkpoints || !base) throw new Error('这一轮没有检查点，无法撤销')
     const changes = await this.checkpoints.changesSince(base)
     await this.checkpoints.restore(base, changes)
-    // 文件已经变了，之前的检查结论作废，并告诉模型
-    this.unresolvedCheck = null
-    this.knownCheckFailure = null
+    // 文件已经变了，原来的结论作废，并告诉模型
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
-    const needsVerification = target ? needsVerificationBefore(this.turns, index) : false
-    const reason = needsVerification ? '文件已撤销，之前轮次的改动还没验证。' : '文件已撤销，原来的结论不再算数。'
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification, reason }
+    this.taskState = { ...this.taskState, status: 'blocked', reason: '文件已撤销，原来的结论不再算数。' }
     this.messages.push({
       role: 'user',
       content:
@@ -633,23 +602,3 @@ export function restoredTaskState(record: SessionRecord): TaskState {
   return state
 }
 
-// 撤销、重新生成到某一轮之前，工作区回到这一轮开始时的快照，待验证也回到那时的值：主循环、出计划、深度扫描开始时都把任务状态记进这一轮，取第一份。
-// 以前的记录里计划和深度扫描轮没有，就取更早轮次最后记下的。撤销的文件是用户自己退回的，不能一律当成智能体没验证的改动
-function taskStateBefore(turns: StoredTurn[], index: number): { needsVerification: boolean } {
-  for (const update of turns[index]!.updates) {
-    const recorded = recordedTaskState(update._meta)
-    if (recorded) return recorded
-  }
-  for (let i = index - 1; i >= 0; i--) {
-    const updates = turns[i]!.updates
-    for (let j = updates.length - 1; j >= 0; j--) {
-      const recorded = recordedTaskState(updates[j]!._meta)
-      if (recorded) return recorded
-    }
-  }
-  return { needsVerification: false }
-}
-
-function needsVerificationBefore(turns: StoredTurn[], index: number): boolean {
-  return taskStateBefore(turns, index).needsVerification
-}

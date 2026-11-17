@@ -45,5 +45,4 @@ export const targetSchema = z.object({
       ]),
     )
     .max(300),
-  enforceInTasks: z.boolean(),
 }) satisfies z.ZodType<TargetArchitecture>

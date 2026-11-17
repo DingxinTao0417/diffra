@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -13,13 +13,11 @@ import { type CommandPolicy, commandKeys, commandRisk, classifyCommand, gitSubco
 import { truncateForModel } from '../process.js'
 import type { McpToolRef } from '../mcp.js'
 import { detectDevCommand } from '../project/detect.js'
-import { shouldRunFinishCheck } from './check-scope.js'
 import {
   type BrowserAction,
   type BrowserActionResult,
   type ComputerAction,
   type ComputerActionResult,
-  type CheckResult,
   type AgentTag,
   type DesignActionResult,
   type StockPhotoParams,
@@ -28,7 +26,6 @@ import {
   type DevServerResult,
   DEEP_SCAN_ASK_SCOPE,
   EXTERNAL_ACCESS_SCOPE,
-  type FinishVerification,
   LOCAL_ONLY_META,
   MODEL_SILENCE_META_KEY,
   TERMINAL_DEFAULT_LINES,
@@ -78,52 +75,15 @@ import { historySecretValues, projectSecretValues, redactSecretValues, secretVal
 import { detectUserLanguage, injectWorldState } from './world-state.js'
 import { isTaskTool, runTaskTool, type TaskBridge } from './tasks.js'
 import { isTodoTool, runTodoToolCall } from './todos.js'
-import {
-  annotateDiff,
-  buildReviewRequest,
-  callReviewer,
-  parseReviewOutput,
-  type ReviewFinding,
-  reviewRulePacks,
-} from '../rules/review.js'
-import { runShell } from '../tools/command.js'
+import { annotateDiff } from '../rules/review.js'
 import { fromMsysPath, realpathOfExisting, resolveToolPath } from '../tools/workspace.js'
 import { ToolError, type ToolContext, type ToolOutput } from '../tools/types.js'
-import { staticScan } from '../security/static.js'
-import { gateLicenses, gateSemgrep } from '../security/gate.js'
-import { type ArchitectureFinding, checkArchitecture } from '../architecture/check.js'
-import type { ArchitectureAnalysis, TargetArchitecture } from '../architecture/model.js'
-import { auditDependencies, dependenciesChanged } from '../security/deps.js'
-import { buildLightScanRequest, parseLightScanOutput } from '../security/light.js'
-import { type AddedLines, addedLinesOf, blocking, formatFindings, type SecurityFinding } from '../security/types.js'
 import type { ModelCallUsage } from '../usage/log.js'
 import { type CompactionState, compactIfNeeded, contextChars } from './compact.js'
 import { compactEdit } from './edit-diff.js'
 import type { Session } from './session.js'
 import { executeTool, isToolName, startTitle, TOOL_KINDS } from './tools.js'
-import {
-  type CheckExhaustion,
-  checkExhaustion,
-  type CheckTracker,
-  MAX_CHECK_FAILURES_PER_TURN,
-  MAX_CHECKS_WITHOUT_PROGRESS,
-  newCheckTracker,
-  onlyKnownErrors,
-  parseCheckErrors,
-  progressSummary,
-  recordCheckFailure,
-  recordCheckPass,
-  remainingLines,
-} from './check-progress.js'
 
-// 结束门禁因检查命令以外的原因（安全检查、规范审查、架构检查）连续打回，超过次数就停下交给用户；
-// 检查命令不过按错误有没有进展计数，见 check-progress.ts
-const MAX_GATE_ATTEMPTS = 3
-// 检查卡住停下时，提示里列几条剩余错误；下一轮交给模型几条
-const STOP_ERROR_LINES = 5
-const RESUME_ERROR_LINES = 20
-const SAME_CHANGE_HINT =
-  'If the remaining errors are in files that belong to the same change, fix them together: one apply_patch can change several files.'
 // 同一个调用（参数和结果都一样）在两次成功的编辑之间出现这么多次，算原地打转：第一次提醒，提醒后再出现就停下
 export const STUCK_REPEATS = 3
 // 回复被输出上限截断：只回了半截文字，或最后一个工具调用的参数被截断没执行，就提醒模型接着做、把改动拆小。
@@ -150,8 +110,6 @@ export const TRUNCATION_NOTE =
 export const CONTEXT_STOP_RATIO = 0.8
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const CHECK_TIMEOUT_SECONDS = 300
-// 结束门禁里检查命令的输出交给模型时的上限（token）
-const CHECK_OUTPUT_TOKENS = 3_000
 
 // 主循环和外界（ACP 客户端）打交道的两个口子，测试时可以替换
 export interface TurnIO {
@@ -232,8 +190,8 @@ function userContent(text: string, images: PromptImage[]): ModelMessage['content
   return [{ type: 'text', text }, ...images.map((image) => ({ type: 'image' as const, image: image.data, mediaType: image.mimeType }))]
 }
 
-// 一轮的主循环（第 504 步起参照 Codex）：模型不再调工具就是想停下。停下前过结束门禁：这一轮改了文件就跑检查，
-// 没过把问题交回去让它接着改，过了这一轮才算完成。没有 finish 这类「我做完了」的工具
+// 一轮的主循环（第 504 步起参照 Codex）：模型不再调工具就是想停下，这一轮就结束。没有 finish 这类「我做完了」的工具。
+// 结束时不再强制跑检查、安全检查、规范审查和架构检查，改完要不要验证由模型自己决定（见 decisions.md「结束门禁（已移除）」）
 export async function runTurn(
   session: Session,
   turn: { id: string; text: string; images?: PromptImage[] },
@@ -257,20 +215,11 @@ export async function runTurn(
   let active: ActiveModel = { language: session.model, config: session.config.model }
   const contextWindow = () => active.config.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   let escalated = false
-  // 结束门禁的检查命令按进展计数，这一轮的失败总数有上限
-  let endChecks = newCheckTracker()
-  let checkFailures = 0
-  // 结束门禁因检查命令以外的原因（安全检查、规范审查、架构检查）连续打回的次数
-  let gateAttempts = 0
   // 卡住或连续失败时，配了兜底模型就换它做这一轮剩下的部分；每轮最多换一次。换成了返回 true
   const escalate = async (reason: string, note: string): Promise<boolean> => {
     const fallback = session.config.fallbackModel
     if (escalated || !fallback || !session.fallbackModel) return false
     escalated = true
-    // 不管因为哪一项换的人，各项计数都重新开始，否则另一项马上到头、备用模型一步没做就停了；上次失败的输出留着，备用模型的失败照样和它比
-    endChecks.stalled = 0
-    checkFailures = 0
-    gateAttempts = 0
     active = { language: session.fallbackModel, config: fallback }
     await notice(io, 'info', `已换用备用模型 ${modelLabel(fallback)}`, `${reason}。这一轮剩下的部分由它来做，下一轮回到编码模型。`)
     session.messages.push({
@@ -279,47 +228,15 @@ export async function runTurn(
     })
     return true
   }
-  // 本轮结束门禁合并后的结论，和停下的原因；在 finally 里随任务状态一起发出
-  let turnFinish: TurnOutcome['finish'] = null
+  // 停下的原因；在 finally 里随任务状态一起发出
   let stop: TurnStop | null = null
   // 插件的 Stop 钩子让智能体接着做的次数
   let stopContinues = 0
   let errorKind: TurnOutcome['errorKind']
-  // 结束门禁的检查卡住了：配了兜底模型就换它接手、计数重新开始；没配就停下，说清卡在哪，剩余错误留给下一轮。停下返回 true
-  const checkStuck = async (command: string, tracker: CheckTracker, exhaustion: CheckExhaustion): Promise<boolean> => {
-    const stalled = exhaustion === 'stalled'
-    const escalatedNow = await escalate(
-      stalled ? `完成检查连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展` : `完成检查这一轮已经失败 ${MAX_CHECK_FAILURES_PER_TURN} 次`,
-      stalled
-        ? `The check \`${command}\` failed ${MAX_CHECKS_WITHOUT_PROGRESS} times in a row without fixing any of the previous errors.`
-        : `The check failed ${MAX_CHECK_FAILURES_PER_TURN} times in this turn.`,
-    )
-    if (escalatedNow) return false
-    const parsed = tracker.last!
-    const count = parsed.errors?.length ?? null
-    const clip = (line: string) => (line.length > 200 ? `${line.slice(0, 200)}…` : line)
-    const shown = remainingLines(parsed, STOP_ERROR_LINES).map((line) => `- ${clip(line)}`)
-    const list = count === null
-      ? `检查输出的最后几行：\n${shown.join('\n')}`
-      : `还剩 ${count} 个错误：\n${shown.join('\n')}${count > shown.length ? `\n- 另外还有 ${count - shown.length} 个` : ''}`
-    await notice(
-      io,
-      'warning',
-      stalled ? `完成检查连续 ${MAX_CHECKS_WITHOUT_PROGRESS} 次没有进展，已停止` : '完成检查失败次数到上限，已停止',
-      `${stalled ? '' : `这一轮完成检查一共失败了 ${MAX_CHECK_FAILURES_PER_TURN} 次。`}${list}\n发「继续」可以接着修，或者先手动处理这几处。`,
-    )
-    const resume = remainingLines(parsed, RESUME_ERROR_LINES).map(clip)
-    if (count !== null && count > resume.length) resume.push(`(${count - resume.length} more)`)
-    session.unresolvedCheck = { command, lines: resume }
-    stop = 'gate-exhausted'
-    return true
-  }
 
   try {
     await takeCheckpoint(session, turn.id, io)
     await prepareMcpTools(session, io)
-    // MCP 服务器启动时可能写文件，指纹在它之后取
-    let turnStartFingerprint = await workspaceFingerprint(session)
     // 插件的 UserPromptSubmit 钩子：拦下就不发给模型，告诉用户为什么
     const submitted = session.pluginHooks.length > 0 ? await promptSubmitHooks(session.pluginHooks, turn.text, hookContext(session, signal)) : null
     if (signal.aborted) return 'cancelled'
@@ -338,21 +255,8 @@ export async function runTurn(
     } as ModelMessage)
     if (submitted?.context) session.messages.push({ role: 'user', content: `[Diffra] Context from plugin hooks for this message:\n${submitted.context}` })
     await publishTaskState(session, io)
-    if (session.unresolvedCheck) {
-      session.messages.push({
-        role: 'user',
-        content:
-          `[Diffra] When the most recent turn stopped because a check was stuck, these errors from the check \`${session.unresolvedCheck.command}\` were still unresolved:\n` +
-          `${session.unresolvedCheck.lines.join('\n')}\nIf the user wants you to continue, start by fixing them.`,
-      })
-      session.consumedChecks.set(turn.id, session.unresolvedCheck)
-      session.unresolvedCheck = null
-    }
     let round = 1
 
-    // 这一轮有没有改文件只看本轮：之前留下的待验证不在纯回答/只读的轮次里重复过门禁
-    let editedThisTurn = false
-    let commandedThisTurn = false
     const compaction: CompactionState = { cooldownUntil: 0 }
     // 调用签名 → 自上次成功编辑以来出现的次数
     const repeats = new Map<string, number>()
@@ -411,46 +315,14 @@ export async function runTurn(
           continue
         }
         if (signal.aborted) return 'cancelled'
-        // 目标模式里模型标了受阻：照原样停下，改动留着待验证（和以前的 pause_task 一样不跑门禁）
+        // 目标模式里模型标了受阻：照原样停下
         if (goal === 'blocked') {
           session.taskState = { ...session.taskState, status: 'blocked', reason: goalReason ?? '目标模式遇到阻塞，需要你处理后再继续。' }
           stop = 'paused'
           return 'end_turn'
         }
-        // 结束门禁（参照 Codex 的 Stop 钩子）：命令、MCP 工具改的文件靠工作区指纹看出来
-        const changes = editedThisTurn ? 'edited' : await changesOutsideEdits(session, turnStartFingerprint, commandedThisTurn)
-        if (changes === 'edited') {
-          editedThisTurn = true
-          session.taskState.needsVerification = true
-        }
-        const gate = await runEndGate(session, turn.id, changes, said, endChecks, signal, io)
-        if (signal.aborted) return 'cancelled'
-        if (!gate.passed) {
-          // 检查没过，目标也就还没完成
-          if (goal === 'complete') goal = 'active'
-          session.messages.push({ role: 'user', content: gate.feedback })
-          if (gate.failedCheck) {
-            checkFailures++
-            const exhaustion = checkExhaustion(endChecks, checkFailures)
-            if (exhaustion && (await checkStuck(gate.failedCheck, endChecks, exhaustion))) return 'end_turn'
-            continue
-          }
-          gateAttempts++
-          if (gateAttempts >= MAX_GATE_ATTEMPTS) {
-            const escalatedNow = await escalate(`结束前的检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过`, `The checks before ending the turn failed ${MAX_GATE_ATTEMPTS} times in a row.`)
-            if (!escalatedNow) {
-              await notice(io, 'warning', `完成检查连续 ${MAX_GATE_ATTEMPTS} 次没有通过，已停止`, '改动保留在工作区，可以查看后继续或撤销。')
-              stop = 'gate-exhausted'
-              return 'end_turn'
-            }
-          }
-          continue
-        }
-        if (gate.verification) turnFinish = mergeFinish(turnFinish, gate.verification)
-        // 这一轮没改文件（只是回答/只读）时不跑门禁，也不把之前留下的待验证清掉；检查因为之前就有的错误没过时改动也还没验证
-        if (changes !== 'none' && gate.verification !== 'failed') session.taskState.needsVerification = false
         if (goal === null || goal === 'complete') {
-          // 插件的 Stop 钩子拦下：把理由交回去接着做，结束门禁下次停下时再过
+          // 插件的 Stop 钩子拦下：把理由交回去接着做
           const held = session.pluginHooks.length > 0 && stopContinues < MAX_STOP_HOOK_CONTINUES ? await stopHooks(session.pluginHooks, stopContinues > 0, hookContext(session, signal)) : null
           if (signal.aborted) return 'cancelled'
           if (held) {
@@ -468,14 +340,8 @@ export async function runTurn(
           stop = 'goal-exhausted'
           return 'end_turn'
         }
-        // 目标还没完成：自动开始下一轮（参照 Codex 的 goal 续跑），各项计数从这一轮重新开始
+        // 目标还没完成：自动开始下一轮（参照 Codex 的 goal 续跑），打转计数从这一轮重新开始
         round++
-        gateAttempts = 0
-        checkFailures = 0
-        endChecks = newCheckTracker()
-        editedThisTurn = false
-        commandedThisTurn = false
-        turnStartFingerprint = await workspaceFingerprint(session)
         warnedStuck = false
         repeats.clear()
         await notice(io, 'info', `目标模式第 ${round} 轮`)
@@ -485,7 +351,6 @@ export async function runTurn(
 
       const results: ToolResultPart[] = []
       const images: PromptImage[] = []
-      let editedThisStep = false
       let repeated: StepToolCall | null = null
       // 同一步里连续的只读调用一起开跑，结果照原来的顺序处理（第 509 步，参照 Codex 的读写锁）；轮到这一串的第一个时才开跑，排在它前面的改动已经做完
       const prefetched: PrefetchedReads = new Map()
@@ -518,12 +383,12 @@ export async function runTurn(
             ...(goalReason ? { content: [{ type: 'content', content: { type: 'text', text: goalReason } }] } : {}),
           })
           results.push(textResult(call, goal === 'complete'
-            ? 'Goal marked complete. End your turn with a short summary for the user; Diffra runs the project checks before the turn ends.'
+            ? 'Goal marked complete. End your turn with a short summary for the user.'
             : 'Goal marked blocked. End your turn and tell the user what you need from them.'))
           continue
         }
         if (call.toolName === DELEGATE_TOOL && !call.invalid) {
-          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样，停下时照常过结束门禁
+          // 同一步里连续的 delegate 一起跑，等它们都交回结果；工人改了文件就和这一步自己改了一样
           const batch = [call]
           while (index + batch.length < toolCalls.length) {
             const next = toolCalls[index + batch.length]!
@@ -531,19 +396,12 @@ export async function runTurn(
             batch.push(next)
           }
           index += batch.length - 1
-          commandedThisTurn = true
           for (const outcome of await runDelegates(session, team, batch, active, signal, io)) {
             results.push(outcome.result)
-            if (!outcome.edited) continue
-            editedThisStep = true
-            editedThisTurn = true
-            session.taskState.needsVerification = true
-            repeats.clear()
+            if (outcome.edited) repeats.clear()
           }
           continue
         }
-        const command = execCommandOf(call)
-        if ((command !== null && !isReadOnlyCommand(command)) || call.toolName === 'write_stdin' || call.toolName === 'dev_server_start' || call.toolName.startsWith('mcp__')) commandedThisTurn = true
         if (await deepScanFirst(session, call, io)) {
           // 用户选了先做深度扫描：这条命令和这一步后面的调用都不执行，这一轮停下，客户端接着发起本任务改动的深度扫描
           results.push(errorResult(call, DEEP_SCAN_FIRST_NOTE))
@@ -558,13 +416,10 @@ export async function runTurn(
         const headBefore = await headBeforeGit(session, call)
         prefetchReads(session, toolCalls, index, answered, prefetched, signal, io)
         const outcome = await (prefetched.get(call.toolCallId) ?? runToolCall(session, call, signal, io))
-        if (headBefore) turnStartFingerprint = await shiftBaselineAfterGit(session, turn.id, headBefore, turnStartFingerprint)
+        if (headBefore) await shiftBaselineAfterGit(session, turn.id, headBefore)
         results.push(outcome.result)
         images.push(...(outcome.images ?? []))
         if (outcome.edited) {
-          editedThisStep = true
-          editedThisTurn = true
-          session.taskState.needsVerification = true
           repeats.clear()
           noteEdit(spin)
         } else {
@@ -579,7 +434,6 @@ export async function runTurn(
         }
       }
       if (results.length > 0) session.messages.push({ role: 'tool', content: results })
-      if (editedThisStep) await publishTaskState(session, io)
       if (images.length > 0) session.messages.push(screenshotMessage(images))
       // 截断的工具调用参数不完整，AI SDK 已经回了参数错误；再说清是被截断了，免得模型原样重发同样长的调用
       if (resumeTruncated && toolCalls.some((call) => answered.has(call.toolCallId))) {
@@ -637,15 +491,12 @@ export async function runTurn(
       session.messages.push({ role: 'user', content: TURN_ABORTED_NOTE })
     } else if (session.taskState.status === 'running') session.taskState = { ...session.taskState, status: 'blocked', reason: '这一轮没有走完就停了，任务还没完成；可以接着执行剩余步骤。' }
     session.activeTurn = null
-    // 这一轮最后一次完成检查没过（卡住停下、用户停止、或者失败的都是之前就有的）：记下来，之后的轮次同样的错误不再交回模型反复修
-    const checkCommand = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
-    if (endChecks.last && checkCommand) session.knownCheckFailure = { command: checkCommand, parsed: endChecks.last }
     // 设计页收起主智能体的光标
     if (session.design) await endDesignAgent(io)
-    await publishTaskState(session, io, { finish: turnFinish, stop, ...(errorKind ? { errorKind } : {}) })
+    await publishTaskState(session, io, { finish: null, stop, ...(errorKind ? { errorKind } : {}) })
     // 项目的 turnEnd 钩子（比如发个通知）：不等它，失败只记日志
     if (session.config.hooks?.turnEnd) {
-      void runHook(session, 'turnEnd', { DIFFRA_STOP: stop ?? 'done', DIFFRA_FINISH: turnFinish ?? '' }).then((result) => {
+      void runHook(session, 'turnEnd', { DIFFRA_STOP: stop ?? 'done' }).then((result) => {
         if (!result.ok) console.error(`[hooks] turnEnd 钩子失败：${result.output}`)
       })
     }
@@ -715,28 +566,6 @@ export async function takeCheckpoint(session: Session, turnId: string, io: TurnI
     console.error('[session] 检查点创建失败', error)
     await notice(io, 'warning', '检查点创建失败，这一轮的改动无法撤销', error instanceof Error ? error.message : String(error))
   }
-}
-
-async function workspaceFingerprint(session: Session): Promise<string | null> {
-  if (!session.checkpoints) return null
-  try {
-    return await session.checkpoints.fingerprint()
-  } catch (error) {
-    console.error('[session] 读取工作区指纹失败', error)
-    return null
-  }
-}
-
-type TurnChanges = 'edited' | 'none' | 'unknown'
-
-// 没用 apply_patch 改文件时，工作区指纹变了也算有改动（命令、MCP 工具改的）；取不到指纹又跑过命令或 MCP 工具，就不知道有没有改
-async function changesOutsideEdits(session: Session, startFingerprint: string | null, commanded: boolean): Promise<TurnChanges> {
-  if (startFingerprint !== null) {
-    const current = await workspaceFingerprint(session)
-    if (current === startFingerprint) return 'none'
-    if (current !== null) return 'edited'
-  }
-  return commanded ? 'unknown' : 'none'
 }
 
 async function streamStep(session: Session, active: ActiveModel, signal: AbortSignal, io: TurnIO, extraTools?: ToolSet) {
@@ -1168,7 +997,7 @@ export async function runToolCall(
         ? {}
         : { _meta: { diffra: { ...(output.commandSucceeded === undefined ? {} : { commandSucceeded: output.commandSucceeded }), ...(output.durationMs === undefined ? {} : { [COMMAND_DURATION_META_KEY]: output.durationMs }) } } }),
     })
-    // 项目外的文件（用户授权的临时脚本之类）不算本轮改动：不进结束门禁
+    // 项目外的文件（用户授权的临时脚本之类）不算本轮改动
     const edited = (output.edited ?? false) && (!output.diffs || output.diffs.some((diff) => insideProject(session, diff.path)))
     return { result: textResult(call, output.text), edited, ...(output.image ? { images: [output.image] } : {}) }
   } catch (error) {
@@ -1497,248 +1326,6 @@ async function askCommandPermission(
   return { allowed: false, reason: 'The user rejected this command. Do not retry it; try another approach or ask the user.' }
 }
 
-// 结束门禁（第 504 步）：模型停下时，这一轮改了文件就同时跑检查命令、安全检查、规范审查和架构检查，问题一次全部交回去。
-// summary 是模型最后说的话，审查拿它做参考。没改文件直接通过，不出卡片
-async function runEndGate(
-  session: Session,
-  turnId: string,
-  changes: TurnChanges,
-  summary: string,
-  checks: CheckTracker,
-  signal: AbortSignal,
-  io: TurnIO,
-): Promise<{ passed: true; verification: FinishVerification | null } | { passed: false; feedback: string; failedCheck?: string }> {
-  if (changes === 'none') return { passed: true, verification: null }
-  const cardId = `finish-${randomUUID()}`
-  const configured = session.config.checks.beforeFinish ?? session.config.checks.afterEdit
-  const changedPaths = changes === 'edited' ? await turnChangedPaths(session, turnId) : null
-  const docsOnly = changes === 'edited' && !shouldRunFinishCheck(changes, changedPaths)
-  const command = docsOnly ? null : configured
-  // 没有检查点、判断不了改没改文件：没配检查就直接完成；配了就照常跑（第 526 步：配了检查就是要多一轮检查，判断不了不是跳过的理由）
-  if (changes === 'unknown' && !command) {
-    await showFinishCard(io, cardId, 'unverified', '')
-    return { passed: true, verification: 'unverified' }
-  }
-  // 检查命令、安全检查、规范审查和架构检查同时跑，问题一次全部打回。
-  // 代价是检查命令不过时审查照样调模型，可能对还要改的代码提意见。本轮改动在检查命令开跑前取，审查看不到检查命令自己生成的文件
-  const architecture = docsOnly ? null : await session.architecture?.enforcedTarget(session.cwd).catch((error: unknown) => {
-    console.error('[session] 读取目标架构失败，这一轮不做架构检查', error)
-    return null
-  })
-  const diff = docsOnly ? null : await turnDiff(session, turnId, io, architecture ? ['架构检查'] : [])
-  // 检查命令可能改写文件（eslint --fix、prettier --write、jest -u）。静态扫描和轻量扫描要按 diff 的行号
-  // 看文件内容，必须在命令开跑之前把内容读下来，否则行号对不上、漏报或报错行
-  const sources = diff === null ? new Map<string, string>() : await snapshotSources(session.cwd, addedLinesOf(diff))
-  // 这几项各自都吞掉自己的异常；意外抛出时各算各的：检查命令没跑完不能算通过（不然会把没过的测试记成已验证），
-  // 安全检查、规范审查、架构检查和它们自己出错时一样，提示一下、这一次不拦截
-  const [checkResult, securityResult, reviewResult, architectureResult] = await Promise.allSettled([
-    command ? runCheck(session, command, '完成检查', signal, io) : null,
-    diff === null ? [] : runSecurityChecks(session, diff, summary, signal, io, sources),
-    diff === null ? [] : runReview(session, diff, summary, signal, io),
-    architecture && diff !== null ? runArchitectureCheck(session, architecture, diff, io) : [],
-  ])
-  const failedParts: string[] = []
-  const settled = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
-    if (result.status === 'fulfilled') return result.value
-    console.error(`[session] 结束门禁的${label}出错`, result.reason)
-    failedParts.push(label)
-    return fallback
-  }
-  const check = settled(checkResult, '完成检查', null)
-  const security = settled(securityResult, '安全检查', [])
-  const findings = settled(reviewResult, '规范审查', [])
-  const violations = settled(architectureResult, '架构检查', [])
-  if (signal.aborted) return { passed: false, feedback: 'Cancelled by the user.' }
-  const skipped = failedParts.filter((label) => label !== '完成检查')
-  if (skipped.length > 0) await notice(io, 'warning', `${skipped.join('、')}出错，这一次跳过`)
-  // 每类问题一张卡片上的说明和一段给模型的说明
-  const rejected: Array<{ card: string; text: string }> = []
-  let failedCheck: string | null = null
-  let onlyKnown = false
-  if (command && checkResult.status === 'rejected') {
-    const reason = checkResult.reason instanceof Error ? checkResult.reason.message : String(checkResult.reason)
-    rejected.push({
-      card: `完成检查没有跑完：${command}`,
-      text: `The check \`${command}\` did not complete (${reason}). Fix what stopped it if you can; it runs again when you end your turn.`,
-    })
-  } else if (command && check && !check.passed) {
-    const parsed = parseCheckErrors(check.full, session.cwd)
-    const progress = progressSummary(parsed, recordCheckFailure(checks, parsed))
-    const known = session.knownCheckFailure
-    // 失败的都是之前的轮次停下时就没过的（比如和这次改动无关、用户说先不改的测试），没有新增：不交回模型反复修
-    if (known && known.command === command && onlyKnownErrors(known.parsed, parsed)) onlyKnown = true
-    else {
-      failedCheck = command
-      rejected.push({
-        card: `完成检查没有通过：${command}`,
-        text: `The check \`${command}\` failed.${progress ? ` ${progress}` : ''}\n${check.output}\n${SAME_CHANGE_HINT}`,
-      })
-    }
-  } else if (check) {
-    recordCheckPass(checks)
-    session.knownCheckFailure = null
-  }
-  const blockers = blocking(security)
-  if (blockers.length > 0) {
-    const list = blockers.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
-    rejected.push({
-      card: `安全检查发现 ${blockers.length} 处高危问题`,
-      text:
-        `Security checks found high-risk problems in the code you changed:\n${list}\n` +
-        'Fix them. If you are sure a finding is a false positive: for a static-check finding, keep the code and put ' +
-        'a comment on that line or the line above in the form "diffra-allow <RULE-ID>: <reason>" (the user sees every such comment); ' +
-        'for any other finding, explain in your final message why it is safe. ' +
-        // 第 632 步：评测里用户写明了 soft_delete(conn, note_id, now_ms)，轻量扫描说少了 owner_id，智能体照着改了签名，用户的调用方全坏了
-        'If the fix would change something the user explicitly asked for (a function signature, an interface, a behavior they specified), ' +
-        'do not change it on your own: keep what they asked for, and in your final message name the risk and the change you suggest, so they can decide.',
-    })
-  }
-  if (findings.length > 0) {
-    const list = findings.map((item) => `- ${item.ruleId} at ${item.path}:${item.line}: ${item.message}`).join('\n')
-    rejected.push({
-      card: `规范审查发现 ${findings.length} 处问题`,
-      text:
-        `The rule review found violations in the code you changed:\n${list}\n` +
-        'Fix them. If you are sure a finding is wrong, keep the code and explain why in your final message.',
-    })
-  }
-  if (violations.length > 0) {
-    const list = violations.map((item) => `- ${item.path}:${item.line} \`${item.specifier}\`: ${item.message}`).join('\n')
-    rejected.push({
-      card: `架构检查发现 ${violations.length} 处新增的依赖违反目标架构`,
-      text:
-        `The imports you added break the project's target architecture (set by the user in Diffra's 架构 page):\n${list}\n` +
-        'Restructure so the dependency follows the rules (move shared code to a lower component, invert the dependency with an interface or callback, or reach the package through the component that is allowed to use it). ' +
-        'If the dependency is really needed, keep it, put a comment on that line or the line above in the form "diffra-allow architecture: <reason>" (the user sees it), and say so in your final message; the user can change the target architecture.',
-    })
-  }
-  if (rejected.length > 0) {
-    await showFinishCard(io, cardId, 'failed', rejected.map((item) => item.card).join('；'))
-    return {
-      passed: false,
-      feedback:
-        '[Diffra] Before ending the turn Diffra ran the project checks on your changes, and the task is not finished yet. ' +
-        `Fix the problems below and continue; the checks run again the next time you end your turn.\n\n${rejected.map((item) => item.text).join('\n\n')}`,
-      ...(failedCheck ? { failedCheck } : {}),
-    }
-  }
-  if (onlyKnown) {
-    await notice(io, 'info', '完成检查没通过，失败的都是之前就有的', '这一轮没有新增的错误，不再交给智能体修；要修的话发消息让它处理。')
-    await showFinishCard(io, cardId, 'failed', `完成检查没有通过：${command}；失败的都是之前就有的，没有新增`)
-    return { passed: true, verification: 'failed' }
-  }
-  if (docsOnly) {
-    await notice(io, 'info', '这一轮只改了文档，跳过完成检查')
-    await showFinishCard(io, cardId, 'unverified', '只改了文档，跳过完成检查')
-    return { passed: true, verification: 'unverified' }
-  }
-  if (!command) {
-    await showFinishCard(io, cardId, 'unverified', '')
-    return { passed: true, verification: 'unverified' }
-  }
-  await showFinishCard(io, cardId, 'verified', `检查通过：${command}`)
-  return { passed: true, verification: 'verified' }
-}
-
-// 结束门禁的结论卡片，标题照旧是「完成」（界面按它和 verification 画结论；没配检查、判断不了改动的提醒由界面写，text 留空）
-function showFinishCard(io: TurnIO, toolCallId: string, verification: FinishVerification, text: string, noChecks = verification === 'unverified') {
-  return io.update({
-    sessionUpdate: 'tool_call',
-    toolCallId,
-    title: '完成',
-    kind: 'other',
-    status: verification === 'failed' ? 'failed' : 'completed',
-    content: text ? [{ type: 'content', content: { type: 'text', text } }] : [],
-    // unverified 是旧的完成卡字段，表示没配检查命令
-    _meta: { diffra: { verification, ...(noChecks ? { unverified: true } : {}) } },
-  })
-}
-
-// 检查命令开跑之前把改动文件的内容读下来，静态扫描和轻量扫描用它，避免命令改文件后行号对不上。
-// 单个文件读不到就跳过，让扫描退回自己读（或按缺失处理），不影响其它文件
-async function snapshotSources(cwd: string, added: AddedLines): Promise<Map<string, string>> {
-  const sources = new Map<string, string>()
-  await Promise.all(
-    [...added.keys()].map(async (path) => {
-      const text = await readFile(join(cwd, path), 'utf8').catch(() => null)
-      if (text !== null) sources.set(path, text)
-    }),
-  )
-  return sources
-}
-
-// 本轮智能体对文件的改动（Git 带进来的不算，见 Session.changeBase），安全检查和规范审查共用。都没开时不读；没有检查点或读取失败时提示跳过，返回 null
-async function turnChangedPaths(session: Session, turnId: string): Promise<string[] | null> {
-  if (!session.checkpoints || !session.turnCheckpoints.has(turnId)) return null
-  try {
-    const base = await session.changeBase(turnId)
-    if (!base) return null
-    return (await session.checkpoints.changesSince(base)).map((change) => change.path)
-  } catch (error) {
-    console.error('[session] 读取本轮改动文件失败', error)
-    return null
-  }
-}
-
-async function turnDiff(session: Session, turnId: string, io: TurnIO, extra: string[] = []): Promise<string | null> {
-  const wanted = [
-    session.config.security.staticCheck || session.config.security.lightScan ? '安全检查' : null,
-    session.config.rules.review && session.rulePacks.length > 0 ? '规范审查' : null,
-    ...extra,
-  ].filter((item): item is string => item !== null)
-  if (wanted.length === 0) return null
-  if (!session.checkpoints || !session.turnCheckpoints.has(turnId)) {
-    await notice(io, 'warning', `${wanted.join('和')}需要检查点（Git），这一轮跳过了`)
-    return null
-  }
-  try {
-    const base = await session.changeBase(turnId)
-    return base ? await session.checkpoints.diffSince(base) : null
-  } catch (error) {
-    console.error('[session] 读取本轮改动失败', error)
-    await notice(io, 'warning', `读取本轮改动失败，${wanted.join('和')}这一轮跳过了`, error instanceof Error ? error.message : String(error))
-    return null
-  }
-}
-
-// 完成前的安全检查：静态检查按规则匹配本轮新增的代码；轻量扫描用评审模型审查改动。
-// 检查本身出错时不拦截完成，只在卡片上说明，免得工具出问题时任务永远完不成。
-// sources 是检查命令开跑前读到的文件内容，静态扫描和轻量扫描都用它，避免命令改文件后行号对不上
-async function runSecurityChecks(session: Session, diff: string, summary: string, signal: AbortSignal, io: TurnIO, sources: Map<string, string>): Promise<SecurityFinding[]> {
-  const added = addedLinesOf(diff)
-  if (added.size === 0) return []
-  const findings: SecurityFinding[] = []
-  if (session.config.security.staticCheck) findings.push(...(await runStaticCheck(session, added, signal, io, sources)))
-  // 静态检查已经要打回时先不花模型调用，改好之后再扫
-  if (session.config.security.lightScan && blocking(findings).length === 0 && !signal.aborted) {
-    findings.push(...(await runLightScan(session, diff, added, summary, signal, io, sources)))
-  }
-  return findings
-}
-
-// 架构检查：这一轮新增的 import 对照用户定的目标架构。检查本身出错时不拦截，只在卡片上说明
-async function runArchitectureCheck(session: Session, architecture: { analysis: ArchitectureAnalysis; target: TargetArchitecture }, diff: string, io: TurnIO): Promise<ArchitectureFinding[]> {
-  const added = addedLinesOf(diff)
-  if (added.size === 0) return []
-  const toolCallId = `architecture-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '架构检查', kind: 'other', status: 'in_progress' })
-  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
-  try {
-    const findings = await checkArchitecture(session.cwd, architecture.analysis, architecture.target, added)
-    await finishCard(
-      findings.length > 0 ? 'failed' : 'completed',
-      findings.length > 0 ? 'failed' : 'passed',
-      findings.length > 0 ? findings.map((item) => `${item.specifier}  ${item.path}:${item.line}  ${item.message}`).join('\n') : '新增的依赖都符合目标架构',
-    )
-    return findings
-  } catch (error) {
-    console.error('[session] 架构检查失败', error)
-    await finishCard('failed', 'error', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
-    return []
-  }
-}
-
 // exec_command 要跑的命令；别的工具、参数不对时是 null
 function execCommandOf(call: StepToolCall): string | null {
   if (call.toolName !== 'exec_command' || call.invalid) return null
@@ -1754,22 +1341,19 @@ async function headBeforeGit(session: Session, call: StepToolCall): Promise<stri
 }
 
 // 命令挪了项目的 HEAD（拉取、合并、切分支、reset、rebase）：跑完后和新 HEAD 一样的文件是 Git 带进来的，不是智能体改的，
-// 从这一轮的基线里扣掉（见 Session.changeBase）。完成时只检查、审查智能体自己的改动，撤销也只退回它改的。
-// 返回调整后的本轮开始指纹；读不到时原样返回，这一轮照旧按整个工作区算
-async function shiftBaselineAfterGit(session: Session, turnId: string, headBefore: string, startFingerprint: string | null): Promise<string | null> {
+// 从这一轮的基线里扣掉（见 Session.changeBase）。撤销只退回智能体自己改的，读不到时这一轮照旧按整个工作区算
+async function shiftBaselineAfterGit(session: Session, turnId: string, headBefore: string): Promise<void> {
   const start = session.turnCheckpoints.get(turnId)
-  if (!session.checkpoints || !start) return startFingerprint
+  if (!session.checkpoints || !start) return
   try {
     const headAfter = await projectHead(session.cwd)
-    if (!headAfter || headAfter === headBefore) return startFingerprint
+    if (!headAfter || headAfter === headBefore) return
     const brought = await gitBroughtPaths(session.cwd, headBefore, headAfter)
-    if (brought.length === 0) return startFingerprint
+    if (brought.length === 0) return
     const current = await session.checkpoints.fingerprint()
     session.turnGitBases.set(turnId, (await session.checkpoints.overlay(session.turnGitBases.get(turnId) ?? start, current, brought)).commit)
-    return startFingerprint === null ? null : (await session.checkpoints.overlay(startFingerprint, current, brought)).tree
   } catch (error) {
     console.error('[session] 按 Git 命令调整本轮基线失败，这一轮照旧按整个工作区算', error)
-    return startFingerprint
   }
 }
 
@@ -1816,185 +1400,6 @@ async function deepScanFirst(session: Session, call: StepToolCall, io: TurnIO): 
   return true
 }
 
-async function runStaticCheck(session: Session, added: AddedLines, signal: AbortSignal, io: TurnIO, sources: Map<string, string>): Promise<SecurityFinding[]> {
-  const toolCallId = `security-static-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '静态检查', kind: 'other', status: 'in_progress' })
-  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
-  try {
-    const security = session.config.security
-    // v2：污点分析跟着静态检查；新依赖的许可证、装了 Semgrep 时它的结果只提醒（没写开关的旧配置当开）
-    const [scan, licenses, semgrep] = await Promise.all([
-      staticScan(session.cwd, added, sources, { taint: security.taint !== false }),
-      security.licenses !== false ? gateLicenses(session.cwd, added).catch((error: unknown) => ({ findings: [], notes: [`许可证没查成：${error instanceof Error ? error.message : String(error)}`] })) : null,
-      security.semgrep !== false ? gateSemgrep(session.cwd, added, signal) : null,
-    ])
-    const findings = [...scan.findings, ...(licenses?.findings ?? []), ...(semgrep?.findings ?? [])]
-    const notes = scan.notes
-    if (signal.aborted) return []
-    const extraNotes = [...(licenses?.notes ?? []), ...(semgrep?.notes ?? [])].map((note) => `\n${note}`).join('')
-    const skipped = `${notes.skipped.length > 0 ? `\n有 ${notes.skipped.length} 个文件太大没有查：${notes.skipped.slice(0, 5).join('、')}` : ''}${extraNotes}`
-    const dropped = notes.dropped > 0 ? `\n问题太多，还有 ${notes.dropped} 处没有列出` : ''
-    const result: CheckResult = blocking(findings).length > 0 ? 'failed' : notes.skipped.length > 0 ? 'partial' : findings.length > 0 || notes.dropped > 0 ? 'warned' : 'passed'
-    await finishCard(result === 'failed' ? 'failed' : 'completed', result, findings.length > 0 ? `${formatFindings(findings)}${skipped}${dropped}` : `没有发现常见的高危写法${skipped}`)
-    return findings
-  } catch (error) {
-    console.error('[session] 静态安全检查失败', error)
-    await finishCard('failed', 'error', `检查没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
-    return []
-  }
-}
-
-// 轻量扫描：评审模型看本轮改动和所在文件，找注入、越权、SSRF 这类问题；依赖文件变了时顺带审计依赖。
-// 模型调用或审计失败只在卡片上说明，不拦截
-async function runLightScan(
-  session: Session,
-  rawDiff: string,
-  added: AddedLines,
-  summary: string,
-  signal: AbortSignal,
-  io: TurnIO,
-  sources: Map<string, string>,
-): Promise<SecurityFinding[]> {
-  const diff = annotateDiff(rawDiff)
-  const depsChanged = dependenciesChanged(added)
-  if (diff.addedLines.size === 0 && !depsChanged) return []
-  const toolCallId = `security-scan-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '轻量扫描', kind: 'other', status: 'in_progress' })
-  const findings: SecurityFinding[] = []
-  const notes: string[] = []
-  let modelFailed = false
-  let partial = false
-  let existing = 0
-  if (diff.addedLines.size > 0) {
-    const reviewer = session.config.reviewModel ?? session.config.model
-    try {
-      const { text, usage } = await callReviewer(session.reviewModel, await buildLightScanRequest(session.cwd, diff, summary, sources), signal)
-      if (usage) await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
-      findings.push(...parseLightScanOutput(text, diff.addedLines))
-      if (diff.truncated) {
-        partial = true
-        notes.push('改动太多，模型只看了前面一部分')
-      }
-    } catch (error) {
-      if (signal.aborted) return []
-      console.error('[session] 安全扫描的模型调用失败', error)
-      modelFailed = true
-      notes.push(`模型扫描没有完成，这次不拦截：${toModelError(error, reviewer.endpoint.apiKey, 0).message}`)
-    }
-  }
-  // 依赖审计要联网查漏洞库，失败或超时只在卡片上说明，不拦截；这里绝不能把异常抛出去，
-  // 否则会掀翻整个完成门禁（Promise.all 无 catch，异常会被记成「模型调用失败」，还会把会话写坏）
-  if (depsChanged && !signal.aborted) {
-    try {
-      const audit = await auditDependencies(session.cwd, added, session.environment.bashPath, signal)
-      findings.push(...audit.findings)
-      notes.push(...audit.notes)
-      if (!audit.complete) partial = true
-      existing = audit.existing
-    } catch (error) {
-      if (signal.aborted) return []
-      console.error('[session] 依赖审计出错，这一次跳过', error)
-      partial = true
-      notes.push(`依赖审计没有完成，这次不拦截：${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-  if (signal.aborted) return []
-  const text = [findings.length > 0 ? formatFindings(findings) : '没有发现安全问题', ...notes].join('\n')
-  // 「没有发现已知漏洞」这类附注不算提醒，项目原有的漏洞算
-  const result: CheckResult = blocking(findings).length > 0
-    ? 'failed'
-    : modelFailed ? 'error'
-    : partial ? 'partial'
-    : findings.length > 0 || existing > 0 ? 'warned' : 'passed'
-  await io.update({
-    sessionUpdate: 'tool_call_update',
-    toolCallId,
-    status: result === 'failed' ? 'failed' : 'completed',
-    content: [{ type: 'content', content: { type: 'text', text } }],
-    _meta: { diffra: { result } },
-  })
-  return findings
-}
-
-// 完成前的规范审查。没开审查、没有选中的规则包、这一轮没改代码文件时跳过；
-// 审查调用本身失败不拦截完成，只在卡片上说明，避免评审模型出问题时任务永远完不成
-async function runReview(session: Session, rawDiff: string, summary: string, signal: AbortSignal, io: TurnIO): Promise<ReviewFinding[]> {
-  if (!session.config.rules.review || session.rulePacks.length === 0) return []
-  const toolCallId = `review-${randomUUID()}`
-  let cardShown = false
-  const showCard = async () => {
-    if (cardShown) return
-    cardShown = true
-    await io.update({ sessionUpdate: 'tool_call', toolCallId, title: '规范审查', kind: 'other', status: 'in_progress' })
-  }
-  const finishCard = (status: 'completed' | 'failed', result: CheckResult, text: string) =>
-    io.update({ sessionUpdate: 'tool_call_update', toolCallId, status, content: [{ type: 'content', content: { type: 'text', text } }], _meta: { diffra: { result } } })
-  try {
-    const diff = annotateDiff(rawDiff)
-    const packs = reviewRulePacks(session.rulePacks, [...diff.addedLines.keys()])
-    if (diff.addedLines.size === 0 || packs.length === 0) return []
-    await showCard()
-    const { text: output, usage } = await callReviewer(session.reviewModel, buildReviewRequest(packs, diff, summary), signal)
-    if (usage) {
-      const reviewer = session.config.reviewModel ?? session.config.model
-      await io.recordUsage({ role: 'reviewer', provider: reviewer.provider, modelId: reviewer.modelId, usage })
-    }
-    const ruleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => rule.id)))
-    const findings = parseReviewOutput(output, ruleIds, diff.addedLines)
-    const partial = diff.truncated ? '\n（改动太多，只审查了前面一部分）' : ''
-    await finishCard(
-      findings.length > 0 ? 'failed' : 'completed',
-      findings.length > 0 ? 'failed' : diff.truncated ? 'partial' : 'passed',
-      findings.length > 0
-        ? `${findings.map((item) => `${item.ruleId}  ${item.path}:${item.line}  ${item.message}`).join('\n')}${partial}`
-        : `没有发现违反规范的地方${partial}`,
-    )
-    return findings
-  } catch (error) {
-    if (signal.aborted) return []
-    const apiKey = (session.config.reviewModel ?? session.config.model).endpoint.apiKey
-    console.error('[session] 规范审查失败', error)
-    await showCard()
-    await finishCard('failed', 'error', `审查没有完成，这次不拦截：${toModelError(error, apiKey, 0).message}`)
-    return []
-  }
-}
-
-async function runCheck(
-  session: Session,
-  command: string,
-  label: string,
-  signal: AbortSignal,
-  io: TurnIO,
-): Promise<{ passed: boolean; output: string; full: string }> {
-  const toolCallId = `check-${randomUUID()}`
-  await io.update({ sessionUpdate: 'tool_call', toolCallId, title: `${label}：${command}`, kind: 'execute', status: 'in_progress' })
-  try {
-    const result = await runShell({ cwd: session.cwd, bashPath: session.environment.bashPath, signal }, command, CHECK_TIMEOUT_SECONDS)
-    const passed = result.exitCode === 0 && !result.timedOut && !result.aborted
-    await io.update({
-      sessionUpdate: 'tool_call_update',
-      toolCallId,
-      status: passed ? 'completed' : 'failed',
-      content: [{ type: 'content', content: { type: 'text', text: result.summary } }],
-      _meta: { diffra: { result: (passed ? 'passed' : 'failed') satisfies CheckResult } },
-    })
-    // 交给模型的输出截短；比较错误用截短前的，免得中间被省略的错误算成修好了
-    return { passed, output: truncateForModel(result.summary, CHECK_OUTPUT_TOKENS).text, full: result.fullSummary }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    await io.update({
-      sessionUpdate: 'tool_call_update',
-      toolCallId,
-      status: 'failed',
-      content: [{ type: 'content', content: { type: 'text', text: message } }],
-      _meta: { diffra: { result: 'failed' satisfies CheckResult } },
-    })
-    return { passed: false, output: message, full: message }
-  }
-}
-
 function toolContent(session: Session, output: ToolOutput): ToolCallContent[] {
   if (output.diffs && output.diffs.length > 0) return output.diffs.map((diff) => compactEdit(session.editedTexts, diff))
   return [{ type: 'content', content: { type: 'text', text: output.terminalOutput ?? output.text } }]
@@ -2010,8 +1415,8 @@ export function errorResult(call: StepToolCall, text: string): ToolResultPart {
 
 // requirements 是以前发版契约的完成条件，第 504 步起没有了，留空给旧界面
 export function taskStateView(session: Pick<Session, 'taskState'>): TaskProgressView {
-  const { status, reason, needsVerification } = session.taskState
-  return { status, reason, requirements: [], needsVerification }
+  const { status, reason } = session.taskState
+  return { status, reason, requirements: [] }
 }
 
 // outcome 只在一轮结束时带
@@ -2024,15 +1429,6 @@ export function taskStateUpdate(session: Session, outcome?: TurnOutcome): Sessio
 
 export async function publishTaskState(session: Session, io: TurnIO, outcome?: TurnOutcome): Promise<void> {
   await io.update(taskStateUpdate(session, outcome))
-}
-
-const FINISH_RANK = ['no-edits', 'verified', 'unverified'] as const
-
-// 目标模式一次任务里会多次通过结束门禁，前面未经验证的改动不能被后面「没有改动」的结论盖掉
-function mergeFinish(current: TurnOutcome['finish'], verification: FinishVerification): TurnOutcome['finish'] {
-  const next = verification === 'reused' ? 'verified' : verification === 'failed' ? null : verification
-  const rank = (value: TurnOutcome['finish']) => (value === null ? -1 : FINISH_RANK.indexOf(value))
-  return rank(next) > rank(current) ? next : current
 }
 
 export function notice(io: TurnIO, severity: 'info' | 'warning' | 'error', title: string, description?: string): Promise<void> {

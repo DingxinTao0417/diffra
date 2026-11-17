@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { checkArchitecture } from '../src/architecture/check.js'
 import { analyzeProject, AnalysisCancelled, digestOf, type ParseCache } from '../src/architecture/engine.js'
 import { parseManifest, tomlSections } from '../src/architecture/manifests.js'
 import { block, IdMaker, keepPinned, staticDiagram, thumbnailOf, verifyDiagram } from '../src/architecture/diagrams.js'
@@ -290,7 +289,6 @@ describe('目标架构的对比', () => {
       { id: 'r3', kind: 'no-cycles' },
       { id: 'r4', kind: 'external', package: 'zod', only: ['app'], note: '' },
     ],
-    enforceInTasks: true,
   }
 
   test('路径匹配：目录前缀和通配符，取最具体的组件', () => {
@@ -313,26 +311,6 @@ describe('目标架构的对比', () => {
     expect(evaluation.violations.find((item) => item.kind === 'forbid')?.edges.length).toBe(2)
     expect(evaluation.planned).toEqual(['search'])
     expect(evaluation.unassigned.map((index) => analysis.files[index]!.path)).toContain('goapp/main.go')
-  })
-
-  test('任务里的架构检查：只看新增行里的 import；diffra-allow 放行；外部包规则；新建的文件也算', async () => {
-    const path = 'packages/core/src/extra.ts'
-    const lines = [
-      "import { View } from '../../app/src/ui/View'",
-      '// diffra-allow architecture: 临时兼容旧界面',
-      "import { helper } from '../../app/src/util'",
-      "import { z } from 'zod'",
-      "import { load } from './index.js'",
-      'export const x = [View, helper, z, load]',
-    ]
-    await writeFile(join(root, path), `${lines.join('\n')}\n`)
-    const added = new Map([[path, new Map(lines.map((text, at) => [at + 1, text]))]])
-    const findings = await checkArchitecture(root, analysis, target, added)
-    expect(findings.map((item) => `${item.line} ${item.specifier}`)).toEqual(['1 ../../app/src/ui/View', '4 zod'])
-    expect(findings[0]!.message).toContain('反向依赖')
-    // 已有的行不算在这一轮头上
-    const old = await checkArchitecture(root, analysis, target, new Map([['packages/core/src/index.ts', new Map([[99, '']])]]))
-    expect(old).toEqual([])
   })
 
   test('强连通分量：环和自环', () => {

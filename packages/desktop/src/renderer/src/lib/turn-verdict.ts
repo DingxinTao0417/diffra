@@ -1,8 +1,7 @@
 import type { StopReason, TurnStop } from '@diffra/core/types'
-import type { TranscriptItem } from '@/features/session/transcript'
 import type { LiveTask } from '@/state/store'
 
-export type VerdictTone = 'confirm' | 'running' | 'error' | 'waiting' | 'blocked' | 'failed' | 'stopped' | 'unfinished' | 'unverified' | 'verified' | 'nochange' | 'done' | 'idle'
+export type VerdictTone = 'confirm' | 'running' | 'error' | 'waiting' | 'blocked' | 'failed' | 'stopped' | 'unfinished' | 'done' | 'idle'
 
 export interface Verdict {
   label: string
@@ -19,10 +18,7 @@ const LABELS: Record<VerdictTone, string> = {
   blocked: '受阻（未完成）',
   failed: '未完成 · 验证未通过',
   stopped: '已停止',
-  unfinished: '未完成 · 未验证',
-  unverified: '已完成 · 未经自动验证',
-  verified: '已完成 · 已验证',
-  nochange: '已完成 · 没有改动',
+  unfinished: '未完成',
   done: '已完成',
   idle: '未开始',
 }
@@ -73,28 +69,14 @@ export function turnVerdict(task: Pick<LiveTask, 'permission' | 'running' | 'tur
   if (stop === 'model-error' || stop === 'agent-error') return verdict('error', outcome?.agentError?.message ?? null)
   if (progress?.status === 'waiting') return verdict('waiting')
   if (progress?.status === 'blocked' && (stop === 'paused' || progress.requirements.some((item) => !item.receiptId))) return verdict('blocked', progress.reason)
+  // 以前结束门禁的检查卡住停下，只有旧记录里有
   if (stop === 'gate-exhausted' || stop === 'check-exhausted') return verdict('failed')
   if (last.stopReason === 'cancelled' || progress?.status === 'cancelled') return verdict('stopped', STOPPED.cancelled)
   if (isStoppedBy(stop)) return verdict('stopped', STOPPED[stop])
   const legacy = subject !== undefined && outcome === undefined
   const legacyStop = legacy && subject.stopReason ? LEGACY_STOPPED[subject.stopReason] : undefined
   if (legacyStop) return verdict('stopped', legacyStop)
-  // 改了文件没调 finish；或撤销之后 core 把状态改回 blocked，要求重新验证
-  if (stop === 'no-finish' || (progress?.status === 'blocked' && progress.needsVerification)) return verdict('unfinished', progress?.reason ?? null)
-  // 没配检查（unverified）就是正常完成，靠模型自己验证，不额外提醒（第 526 步）；配了检查、跑过了才写「已验证」
-  if (outcome?.finish === 'verified') return verdict('verified')
-  if (outcome?.finish === 'no-edits') return verdict('nochange')
+  // 旧记录里改了文件没调 finish；或者这一轮停在 blocked（比如应用了候选方案、回答里的补丁），原因由 core 写
+  if (stop === 'no-finish' || progress?.status === 'blocked') return verdict('unfinished', progress?.reason ?? null)
   return verdict('done')
-}
-
-type ToolItem = Extract<TranscriptItem, { kind: 'tool' }>
-
-// 每张完成卡按自己的 verification 出词；没有这个字段的旧卡按 unverified 标记和状态推
-export function finishVerdict(item: Pick<ToolItem, 'status' | 'verification' | 'unverified'>): Pick<Verdict, 'label' | 'tone'> {
-  const verification = item.verification ?? (item.status === 'failed' ? 'failed' : item.unverified ? 'unverified' : null)
-  if (verification === 'verified' || verification === 'reused') return { label: LABELS.verified, tone: 'verified' }
-  if (verification === 'unverified') return { label: LABELS.unverified, tone: 'unverified' }
-  if (verification === 'no-edits') return { label: LABELS.nochange, tone: 'nochange' }
-  if (verification === 'failed') return { label: '还没完成', tone: 'failed' }
-  return { label: LABELS.done, tone: 'done' }
 }

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { cards, chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
+import { chooseProject, startTask, waitTaskDone, waitTaskStatus } from './flows'
 import { launchApp, makeUserDataDir } from './launch'
 import { configureCoderModel } from './model-setup'
 import { exec, read, replaceLines, startScriptedModel } from './scripted-model'
@@ -54,10 +54,9 @@ test('agent 读 .env 要确认（拒绝后读不到）、改不了禁写目录�
     await permission.getByRole('button', { name: '允许一次' }).click()
 
     await waitTaskDone(window)
-    // 没配检查：结论就是「已完成」，对话里没有完成卡、也不提醒没配检查（第 526 步）；这一轮改的文件写在底部
+    // 没配检查：结论就是「已完成」，不提醒没配检查；这一轮改的文件写在底部
     await expect(window.getByTestId('task-status')).toContainText('已完成')
     await expect(window.getByTestId('task-status')).not.toContainText('验证')
-    await expect(cards(window, 'finish')).toHaveCount(0)
     await expect(window.getByTestId('turn-files')).toHaveText('1 个文件 +1 −1')
     expect(readFileSync(join(project, 'hello.txt'), 'utf8')).toBe('hello diffra\n')
     expect(readFileSync(join(project, 'done.txt'), 'utf8').trim()).toBe('done')

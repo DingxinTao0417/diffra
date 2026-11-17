@@ -26,7 +26,7 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
       toolCalls: [replaceLines('hello.txt', 'hello world', 'hello diffra')],
     },
     { toolCalls: [addFile('greet.js', 'export const greet = () => "hi"\n')] },
-    // 只回文字就是想结束这一轮：结束门禁跑完成检查，出完成卡
+    // 只回文字，这一轮就结束
     { text: '改好了，新增 **greet**。' },
     // 第二轮慢一点，期间发的消息排队
     { text: '第二轮的回答', delayMs: 2500 },
@@ -38,13 +38,13 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     const window = await app.firstWindow()
     await configureCoderModel(window, { name: '脚本模型', baseUrl: model.baseUrl, apiKey: 'e2e-key-123456', modelId: 'scripted' })
     await chooseProject(app, window, project)
-    // 首页不再有检查入口；这里只关心任务页，直接按项目设置弹窗保存时走的接口配好完成检查
+    // 首页不再有检查入口；这里只关心任务页，直接按项目设置弹窗保存时走的接口配好检查命令
     await window.evaluate(`window.diffra.saveProject(${JSON.stringify(project)}, { checks: { afterEdit: null, beforeFinish: 'echo check-ok' }, readOnlyPaths: [] })`)
 
     await startTask(window, '改问候语')
     await waitTaskDone(window)
 
-    // 对话流：读文件收成一组，Markdown 渲染；改的过程中不跑检查，两次改动连着收成一个改动组，完成时跑一次检查；监控开着时完成卡片点开计数列出改动的文件
+    // 对话流：读文件收成一组，Markdown 渲染；两次改动连着收成一个改动组；配了检查命令 Diffra 也不自动跑，只写进系统提示
     // 回复前后各一个过程组，都收着：前一个是列文件和读文件，后一个是两次改动
     await expect(window.getByRole('button', { name: '执行工具 2 次', exact: true })).toHaveAttribute('aria-expanded', 'false')
     await expect(window.getByTestId('agent-message').first().locator('strong')).toHaveText('hello world')
@@ -57,10 +57,9 @@ test('任务页：工具分组、检查、监控和审阅面板、上下文明�
     await window.getByRole('button', { name: '展开代码详情', exact: true }).first().click()
     await expect(cards(window, 'edit')).toHaveCount(2)
     await expect(window.getByTestId('diff-view')).toHaveCount(2)
-    await expect(cards(window, 'check')).toHaveCount(1)
-    await expect(cards(window, 'check').first()).toContainText('完成检查')
-    await expect(cards(window, 'check').first()).toContainText('通过')
-    // 这一轮改了哪些文件写在这一轮底部（第 526 步起没有完成卡）
+    await expect(cards(window, 'check')).toHaveCount(0)
+    expect(model.bodies()[0]).toContain('echo check-ok')
+    // 这一轮改了哪些文件写在这一轮底部
     await expect(window.getByTestId('turn-files').first()).toContainText('2 个文件')
 
     // 任务监控和审阅面板列出两个改动文件

@@ -28,9 +28,6 @@ export interface TurnMetrics {
   workerToolCalls: number
   // 派出了几个子智能体（没派成的不算）
   delegations: number
-  // 「完成」被门禁打回的次数，含完成条件未满足和证据不合格的打回；和语义层第 57 步之前的结果比，数字会偏高
-  gateRejections: number
-  checkFailures: number
   findings: Finding[]
   notices: string[]
   // 因模型接口出错停下的轮次的错误类型（core 照样回 end_turn）：不是智能体说做完了，是半路断了
@@ -49,10 +46,9 @@ export function parseFindings(card: string, text: string): Finding[] {
   })
 }
 
-// 从这一轮收到的会话更新里数出步数、打回次数、安全卡片报的问题
+// 从这一轮收到的会话更新里数出步数、安全卡片报的问题
 export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
   const titles = new Map<string, string>()
-  const finalStatus = new Map<string, string>()
   const finalText = new Map<string, string>()
   const notices: string[] = []
   const byWorker = new Set<string>()
@@ -68,7 +64,6 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
       if (typeof diffra === 'object' && diffra !== null && 'parentToolCallId' in diffra) byWorker.add(update.toolCallId)
     }
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-      if (update.status) finalStatus.set(update.toolCallId, update.status)
       const text = textOf(update)
       if (text) finalText.set(update.toolCallId, text)
     }
@@ -77,14 +72,9 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
   let toolCalls = 0
   let workerToolCalls = 0
   let delegations = 0
-  let gateRejections = 0
-  let checkFailures = 0
   const findings: Finding[] = []
   for (const [id, title] of titles) {
-    const status = finalStatus.get(id)
     const isCheck = CHECK_PREFIXES.some((prefix) => title.startsWith(prefix))
-    if (title === '完成' && status === 'failed') gateRejections++
-    else if (isCheck && status === 'failed') checkFailures++
     if (SECURITY_CARDS.has(title)) findings.push(...parseFindings(title, finalText.get(id) ?? ''))
     if (title.startsWith(WORKER_CARD_PREFIX)) {
       if (title.length > WORKER_CARD_PREFIX.length) delegations++
@@ -94,7 +84,7 @@ export function turnMetrics(updates: SessionUpdate[]): TurnMetrics {
     toolCalls++
     if (byWorker.has(id)) workerToolCalls++
   }
-  return { toolCalls, workerToolCalls, delegations, gateRejections, checkFailures, findings, notices, modelErrors }
+  return { toolCalls, workerToolCalls, delegations, findings, notices, modelErrors }
 }
 
 export interface UsageTotals {

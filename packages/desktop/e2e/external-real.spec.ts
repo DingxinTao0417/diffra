@@ -53,8 +53,8 @@ for (const preset of ['Claude Code', 'Codex']) {
       await taskInput(window).fill('只回复两个字：好的。不要读写任何文件，不要运行任何命令。')
       await window.getByRole('button', { name: '发送', exact: true }).click()
       await expect(window.getByTestId('task-title')).toBeVisible()
-      // 没改文件：结论是「没有改动」
-      await waitTaskStatus(window, 'nochange', 300_000)
+      // 没改文件：结论是「已完成」
+      await waitTaskStatus(window, 'done', 300_000)
       const reply = window.getByTestId('turn').last().getByText(/好的/).last()
       await expect(reply).toBeVisible()
       console.log(`${preset} 回复：${(await reply.textContent())?.trim()}`)

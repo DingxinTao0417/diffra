@@ -26,7 +26,6 @@ import {
   toolUpdates,
   turnOutcomes,
   useTempProject,
-  verifications,
   withoutContext,
 } from './loop-helpers.js'
 import { testMcpServer } from './mcp-fixture.js'
@@ -97,7 +96,7 @@ describe('项目钩子', () => {
     expect(existsSync(join(project, 'deployed.txt'))).toBe(false)
     expect(resultText(results[2])).toMatch(/Process exited with code 0\nOutput:\nfine$/)
     expect(io.permissionRequests).toBe(0)
-    expect(turnOutcomes(io)).toEqual([{ finish: 'unverified', stop: null }])
+    expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
   }, 30_000)
 })
 
@@ -320,7 +319,7 @@ describe('同一步里的只读调用', () => {
     expect(toolEvents(outsideIO).slice(0, 4)).toEqual(['开始 call-0-0', '结束 call-0-0', '开始 call-0-1', '结束 call-0-1'])
   }, 30_000)
 
-  test('改项目外的文件（授权写的临时脚本）不算本轮改动：不跑完成检查，只回文字就结束', async () => {
+  test('改项目外的文件（授权写的临时脚本）：照常写，只回文字就结束', async () => {
     const outside = join(project, '..', `diffra-outside-${basename(project)}.py`)
     const model = scriptedModel([{ toolCalls: [addFile(outside, 'print(1)')] }, { text: '统计完了' }])
     const session = await makeSession(model, { afterEdit: null, beforeFinish: 'false' })
@@ -332,7 +331,6 @@ describe('同一步里的只读调用', () => {
       expect(model.doStreamCalls).toHaveLength(2)
       expect(io.updates.some((update) => update.sessionUpdate === 'tool_call' && update.title.startsWith('完成检查'))).toBe(false)
       expect(turnOutcomes(io)).toEqual([{ finish: null, stop: null }])
-      expect(session.taskState.needsVerification).toBe(false)
     } finally {
       rmSync(outside, { force: true })
     }
@@ -601,7 +599,7 @@ describe('MCP 工具', () => {
     makeSession(model, undefined, [], undefined, undefined, undefined, {}, { mcpPool: pool, mcpServers: servers })
   const toolCallTitles = (io: { updates: SessionUpdate[] }) => io.updates.flatMap((update) => (update.sessionUpdate === 'tool_call' ? [update.title] : []))
 
-  test('MCP 工具和内置工具一起发给模型；声明只读的直接调，其他的先问，选了始终允许后本会话不再问；MCP 改了文件时结束门禁照常出完成卡', async () => {
+  test('MCP 工具和内置工具一起发给模型；声明只读的直接调，其他的先问，选了始终允许后本会话不再问', async () => {
     const model = scriptedModel([
       { toolCalls: [{ name: 'mcp__demo__echo', input: { text: 'hi' } }] },
       { toolCalls: [{ name: 'mcp__demo__write_note', input: { text: 'first' } }] },
@@ -618,9 +616,7 @@ describe('MCP 工具', () => {
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('echo: hi')
     expect(io.permissionRequests).toBe(1)
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('first\n')
-    expect(toolCallTitles(io)).toEqual(['MCP demo · echo', 'MCP demo · write_note', '完成'])
-    // write_note 改了项目文件，指纹变了，不算没有改动
-    expect(verifications(io)).toEqual(['unverified'])
+    expect(toolCallTitles(io)).toEqual(['MCP demo · echo', 'MCP demo · write_note'])
     expect(model.doStreamCalls).toHaveLength(3)
 
     await runTurn(session, { id: 'turn-2', text: '再记一下' }, io)
@@ -628,8 +624,7 @@ describe('MCP 工具', () => {
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('second\n')
     // 只回了文字就结束：不再多调一次模型
     expect(model.doStreamCalls).toHaveLength(5)
-    expect(verifications(io)).toEqual(['unverified', 'unverified'])
-    expect(turnOutcomes(io).at(-1)).toEqual({ finish: 'unverified', stop: null })
+    expect(turnOutcomes(io).at(-1)).toEqual({ finish: null, stop: null })
     expect(session.usageBreakdown(1000).tools).toBeGreaterThan(0)
   }, 30_000)
 
@@ -654,7 +649,7 @@ describe('MCP 工具', () => {
     expect(readFileSync(join(project, 'note.txt'), 'utf8')).toBe('y\n')
     expect(toolResults(session).at(-1)?.output).toEqual({ type: 'error-text', value: 'something broke' })
     expect(full.doStreamCalls).toHaveLength(3)
-    expect(turnOutcomes(fullIO)).toEqual([{ finish: 'unverified', stop: null }])
+    expect(turnOutcomes(fullIO)).toEqual([{ finish: null, stop: null }])
     expect(toolUpdates(fullIO, 'failed')).toHaveLength(1)
   }, 30_000)
 

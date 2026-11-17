@@ -156,7 +156,7 @@ function lastMessage(events: EvalEvent[]): string {
   return text
 }
 
-// 结束门禁、检查、扫描这些卡片在回答之后才出，不把回答截断
+// 旧版本的结束门禁、检查、扫描这些卡片在回答之后才出，不把回答截断
 const CARD_TITLES = new Set(['完成', '规范审查', '静态检查', '轻量扫描', '安全检查', '安全扫描'])
 
 // 最后几行里有问句，就当是在等用户回答

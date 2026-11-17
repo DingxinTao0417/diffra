@@ -27,7 +27,7 @@ export interface SessionHooks {
 export interface SessionChecks {
   // 旧的「快速检查」：第 431 步起不再每步跑，只在 beforeFinish 没填时当完成检查用；界面不再单独编辑它
   afterEdit: string | null
-  // 结束门禁跑的检查（模型改过文件、停下时），比如 pnpm typecheck && pnpm test；改的过程中不跑
+  // 项目的检查命令，比如 pnpm typecheck && pnpm test：写进系统提示，模型自己决定跑不跑，Diffra 不自动跑
   beforeFinish: string | null
 }
 
@@ -57,10 +57,8 @@ export interface RulePack {
 }
 
 export interface SessionRules {
-  // 已经按项目设置过滤好的规则包；core 再按项目里出现的语言挑选
+  // 已经按项目设置过滤好的规则包；core 再按项目里出现的语言挑选，写进系统提示
   packs: RulePack[]
-  // 完成前用评审模型按规则审查这一轮的改动
-  review: boolean
 }
 
 // 模型所在的供应商，只用来记用量；没有时（比如测试）记成 null
@@ -69,24 +67,16 @@ export interface ModelProvider {
   name: string
 }
 
-// 三层安全检查：静态检查完成前按规则匹配本轮新增的代码，轻量扫描完成前用评审模型审查本轮改动，
-// 深度扫描在智能体提交或推送前问用户要不要先扫；没传 deepScan 时不问
+// 深度扫描在智能体提交或推送前问用户要不要先扫；没传 deepScan 时不问。
+// 结束时的静态检查、轻量扫描（staticCheck、lightScan、taint、licenses、semgrep）已经移除，旧客户端还会传，core 不再读
 export interface SessionSecurity {
-  staticCheck: boolean
-  lightScan: boolean
   deepScan?: boolean
-  // v2 · M10，旧客户端不传：污点分析、新依赖的许可证、装了 Semgrep 时用它扫（都跟着静态检查在完成前跑，没写当开）
-  taint?: boolean
-  licenses?: boolean
-  semgrep?: boolean
 }
 
-// 设置里改了检查开关，所有已经打开的会话下一次检查就按新值（SESSION_EXT_METHODS.securityConfigure）
+// 设置里改了检查开关，所有已经打开的会话下一次就按新值（SESSION_EXT_METHODS.securityConfigure）
 export interface CheckSwitches extends SessionSecurity {
-  // 完成前的规范审查，对应 SessionRules.review
-  review: boolean
   // 按项目单独设的开关（v2 · M10）：项目目录 → 覆盖哪几项；没列的项目用上面的
-  projects?: Record<string, Partial<SessionSecurity & { review: boolean }>>
+  projects?: Record<string, Partial<SessionSecurity>>
 }
 
 // 单次任务的上限：上下文用到窗口的百分之多少时压缩；最多跑多少步，null 不限（靠卡死检测兜底）
@@ -102,24 +92,17 @@ export interface TaskProgressView {
   status: 'running' | 'waiting' | 'blocked' | 'cancelled' | 'completed'
   reason: string | null
   requirements: Array<{ id: string; title: string; receiptId: string | null }>
-  // 有改动还没经过完成门禁（撤销之后、或带着未验证的改动停下）
-  needsVerification?: boolean
 }
 
-// 检查命令、静态检查、轻量扫描、规范审查卡片结束时的 tool_call_update._meta.diffra.result。ACP 的 status 照旧：
-// warned 只有提醒或附注；partial 只看了一部分（改动被截断、依赖审计没跑完）；error 工具或评审模型出错，这次不拦截
-export type CheckResult = 'passed' | 'warned' | 'partial' | 'error' | 'failed'
-// 完成卡（结束门禁的结论）的 _meta.diffra.verification；reused 是复用了这份工作区已经通过的验证
-export type FinishVerification = 'verified' | 'reused' | 'unverified' | 'no-edits' | 'failed'
 // 一轮结束时的 session_info_update._meta.diffra.turnOutcome，和 taskState 在同一条更新里，每轮只发一次。
-// finish 是本轮所有通过的结束门禁合并后的值（unverified > verified > no-edits，reused 算 verified），没改文件、没过门禁时为 null；
-// stop 是没过结束门禁就停下的原因，正常结束为 null。no-finish 只有旧记录里有（以前改了文件没调 finish）
+// finish 以前是结束门禁的结论，门禁移除后总是 null：旧版本的桌面端和远程设备按这个形状校验，少了字段整条结论就不认了。
+// stop 是这一轮没正常结束就停下的原因，正常结束为 null
 export const TURN_OUTCOME_META_KEY = 'turnOutcome'
-// check-exhausted 只有旧记录里有：快速检查不再每步跑，不会再因它停下。deep-scan 是用户在提交前选了先做深度扫描，客户端接着发起一轮深度扫描
+// no-finish、gate-exhausted、check-exhausted 只有旧记录里有（以前的完成工具、结束门禁、快速检查）。deep-scan 是用户在提交前选了先做深度扫描，客户端接着发起一轮深度扫描
 // agent-error 是外接智能体（ExternalAgentSpec）的进程没起来、中途退出或没有应答，这一轮停在这里
 export type TurnStop = 'paused' | 'cancelled' | 'no-finish' | 'gate-exhausted' | 'check-exhausted' | 'stuck' | 'model-error' | 'step-limit' | 'context-limit' | 'goal-exhausted' | 'deep-scan' | 'agent-error'
 export interface TurnOutcome {
-  finish: 'verified' | 'unverified' | 'no-edits' | null
+  finish: null
   stop: TurnStop | null
   // stop 是 model-error 时模型接口出错的类型，界面按它说明原因、给出下一步
   errorKind?: ModelErrorKind
@@ -917,8 +900,6 @@ export type CandidateStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export interface CandidateView extends CandidateSpec {
   id: string
   status: CandidateStatus
-  // 它在自己的 worktree 里过完成门禁的结论；没跑完、出错是 null
-  verification: 'verified' | 'unverified' | 'no-edits' | 'failed' | null
   // 它最后说的话（截短）
   summary: string | null
   error: string | null

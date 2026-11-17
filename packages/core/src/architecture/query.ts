@@ -165,7 +165,7 @@ function overview(analysis: ArchitectureAnalysis, target: TargetArchitecture | n
   if (analysis.calls) out.add(`Function call graph: ${analysis.calls.length} resolved call links. Use action calls/callers with path and symbol.`)
   if (target) {
     const evaluation = evaluateTarget(analysis, target)
-    out.add(`Target architecture: ${target.rules.length} rules, ${evaluation.violations.length} violated, enforced in tasks: ${target.enforceInTasks ? 'yes' : 'no'}. Use action violations for details.`)
+    out.add(`Target architecture: ${target.rules.length} rules, ${evaluation.violations.length} violated. Use action violations for details.`)
   } else out.add('No target architecture.')
 }
 
@@ -280,7 +280,7 @@ function dependencyPath(analysis: ArchitectureAnalysis, from: number[], goal: nu
 
 function violations(analysis: ArchitectureAnalysis, target: TargetArchitecture, out: Output): void {
   const evaluation = evaluateTarget(analysis, target)
-  out.add(`Target architecture rules: ${target.rules.length}; enforced in tasks: ${target.enforceInTasks ? 'yes (new imports that break a rule are rejected at the end of a task unless the line has "diffra-allow architecture: reason")' : 'no'}.`)
+  out.add(`Target architecture rules: ${target.rules.length}.`)
   if (evaluation.violations.length === 0) out.add('No violations in the analyzed code.')
   for (const violation of evaluation.violations.slice(0, LIST)) {
     out.add(`- ${violation.message} (${violation.edges.length} imports)`)

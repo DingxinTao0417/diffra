@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { readLspServers } from '../src/lsp/config.js'
 import { LspPool } from '../src/lsp/pool.js'
 import { runCodeql, runSemgrep, scannerVersions } from '../src/security/external.js'
-import { gateSemgrep } from '../src/security/gate.js'
 
 // 用本机真装的工具跑（v2 · M4、M10）：Semgrep、CodeQL、TypeScript 7 自带的语言服务器（tsc --lsp）、typescript-language-server、gopls。
 // 默认跳过，DIFFRA_REAL_TOOLS=1 才跑；CodeQL 不在 PATH 上时用 DIFFRA_CODEQL_PATH 指定。
@@ -38,7 +37,7 @@ const write = (path: string, text: string) => {
 const VULNERABLE_JS = ["const express = require('express')", "const fs = require('fs')", 'const app = express()', "app.get('/file', (req, res) => {", "  res.send(fs.readFileSync(req.query.name, 'utf8'))", '})', "app.get('/run', (req, res) => {", '  eval(req.query.code)', "  res.send('ok')", '})', 'app.listen(3000)', ''].join('\n')
 
 describe.runIf(REAL)('真的外部扫描器', () => {
-  test('Semgrep：探到版本；按项目里的 .semgrep.yml 扫出 eval 请求参数；完成前只留新增行上的', async () => {
+  test('Semgrep：探到版本；按项目里的 .semgrep.yml 扫出 eval 请求参数', async () => {
     const versions = await scannerVersions(true)
     expect(versions.semgrep).toMatch(/^\d+\.\d+/)
     const cwd = join(root, 'semgrep')
@@ -50,11 +49,6 @@ describe.runIf(REAL)('真的外部扫描器', () => {
     const full = await runSemgrep(cwd, null, 180_000)
     expect(full.notes[0]).toContain('.semgrep.yml')
     expect(full.findings).toEqual([expect.objectContaining({ tool: 'semgrep', ruleId: 'eval-request', severity: 'high', path: 'app.js', line: 8 })])
-    // 完成前：只看这一轮新增的行（第 8 行是新加的才报）
-    const kept = await gateSemgrep(cwd, new Map([['app.js', new Map([[8, '  eval(req.query.code)']])]]), new AbortController().signal)
-    expect(kept.findings.map((item) => `${item.ruleId} ${item.line}`)).toEqual(['Semgrep:eval-request 8'])
-    const skipped = await gateSemgrep(cwd, new Map([['app.js', new Map([[5, 'x']])]]), new AbortController().signal)
-    expect(skipped.findings).toEqual([])
   }, 300_000)
 
   test('CodeQL：探到版本；对 JS 项目建库、跑 security-extended，读出路径注入和代码注入', async () => {

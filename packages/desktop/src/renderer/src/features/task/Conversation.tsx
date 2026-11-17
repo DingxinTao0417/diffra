@@ -16,7 +16,6 @@ import { TodoAcceptanceCard } from '@/features/todos/TodoAcceptanceCard'
 import { errorMessage } from '@/lib/errors'
 import { formatDuration, formatTokens } from '@/lib/format'
 import { imageUrl } from '@/lib/images'
-import { finishVerdict } from '@/lib/turn-verdict'
 import { compactTask, diagnose, fillComposer, generateCandidates, openSettings, openTask, sendMessage, setTaskModel, switchTurnVersion } from '@/state/actions'
 import { type LiveTask, showToast, store, useAppState } from '@/state/store'
 import { ModelMenu } from './Composer'
@@ -188,7 +187,7 @@ function toBlocks(items: TranscriptItem[]): Block[] {
     }
     if (item.parentId) continue
     const type = toolBlockType(item)
-    // 结束门禁的结论卡（标题「完成」）不画（第 526 步）：结论看顶栏，检查的结果在检查卡上，改了哪些文件写在这一轮底部。
+    // 旧记录里结束门禁的结论卡（标题「完成」）不画（第 526 步）：检查的结果在检查卡上，改了哪些文件写在这一轮底部。
     // 步骤清单也不画，在输入框上方的步骤条里看（第 542 步）
     if (type === 'finish' || type === 'steps') continue
     if (type === 'check' || type === 'review' || type === 'architecture' || type === 'security') {
@@ -733,8 +732,8 @@ const TurnView = memo(function TurnView({ turn, task, active, last, deferred = f
           case 'candidates':
             return block.item.candidates ? <CandidatesCard key={block.item.id} run={block.item.candidates} sessionId={task.sessionId} running={task.running} /> : null
           case 'verify':
-            // 中途验证不改变本轮结论，通过也不画绿色；没配检查命令时提醒并默认展开，之后撤销过就不再提醒
-            return <ToolStep key={block.item.id} item={block.item} unverified={!turn.restoredAt && finishVerdict(block.item).tone === 'unverified'} />
+            // 旧记录里的中途验证：不改变本轮结论，通过也不画绿色
+            return <ToolStep key={block.item.id} item={block.item} />
           case 'agent': {
             // 连着派出的几个子智能体：第一张卡片上面画一行组织图
             const team = blocks[index - 1]?.type === 'agent' ? [] : agentRun(blocks, index)
@@ -1072,11 +1071,11 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
   )
 }
 
-function ToolStep({ item, unverified = false, defaultOpen = false, showTaskLink = true }: { item: ToolItem; unverified?: boolean; defaultOpen?: boolean; showTaskLink?: boolean }) {
+function ToolStep({ item, defaultOpen = false, showTaskLink = true }: { item: ToolItem; defaultOpen?: boolean; showTaskLink?: boolean }) {
   // 命令失败的结果是跑完之后才到的，所以默认展开要跟着 item 算，不能只在挂载时定
   const [open, setOpen] = useState<boolean | null>(null)
   const commandFailed = item.succeeded === false
-  const expanded = open ?? (commandFailed || unverified || defaultOpen)
+  const expanded = open ?? (commandFailed || defaultOpen)
   const { action, target } = splitTitle(item.title)
   const output = textOf(item)
   const full = useFullOutput(item, expanded)
@@ -1084,7 +1083,7 @@ function ToolStep({ item, unverified = false, defaultOpen = false, showTaskLink 
   return (
     <div className="text-sm" data-testid="tool-call" data-kind="tool" data-status={item.status} data-succeeded={item.succeeded === undefined ? undefined : String(item.succeeded)} data-item-id={item.id} tabIndex={commandFailed && !output ? -1 : undefined}>
       <DisclosureRow open={expanded} onToggle={output ? () => setOpen(!expanded) : undefined} className="text-foreground">
-        {unverified ? <CircleAlert className="size-3.5 shrink-0 text-warning" /> : <StatusIcon status={item.status} />}
+        <StatusIcon status={item.status} />
         <span className="shrink-0 text-muted-foreground">{action}</span>
         {target && <span className="min-w-0 truncate rounded-sm bg-muted px-1.5 py-px font-mono text-xs">{target}</span>}
         {elapsed !== null && <span className="shrink-0 text-xs text-muted-foreground tabular-nums" data-testid="tool-elapsed">{formatDuration(elapsed)}</span>}
@@ -1942,17 +1941,14 @@ function turnReport(turn: Turn, files: ChangedFile[], project: string): TurnRepo
     const summary = parseTestSummary(splitCommandOutput(textOf(item)).body)
     return summary ? [{ command: splitTitle(item.title).target, passed: summary.passed, failed: summary.failed, skipped: summary.skipped }] : []
   })
-  const verification = turn.outcome?.finish ?? null
   const risks: string[] = []
   const stop = stopSummary(turn)
   if (stop) risks.push(stop.text)
-  if (verification === 'unverified' && files.length > 0) risks.push('改动没有经过自动验证')
   for (const check of checks) if (check.state !== 'passed') risks.push(`${check.name}${check.state === 'failed' ? '没通过' : '有需要留意的地方'}`)
   for (const test of tests) if (test.failed > 0) risks.push(`测试 ${test.command} 有 ${test.failed} 个失败`)
   if (failed.length > 0) risks.push(`${failed.length} 条命令失败：${failed.slice(0, 3).join('；')}${failed.length > 3 ? ' …' : ''}`)
   const next: string[] = []
   if (checks.some((check) => check.state === 'failed') || tests.some((test) => test.failed > 0)) next.push('修好没通过的检查和测试')
-  if (verification === 'unverified' && files.length > 0) next.push('运行项目的测试或检查命令，确认改动没问题')
   if (checks.some((check) => check.state === 'attention')) next.push('看一下检查里需要留意的地方')
   if (files.length > 0) next.push('在审阅面板里看一遍改动')
   return {
@@ -1961,7 +1957,6 @@ function turnReport(turn: Turn, files: ChangedFile[], project: string): TurnRepo
     checks,
     tests,
     commands: { total: commands.length, failed },
-    verification,
     risks,
     next,
     durationMs: turn.startedAt && turn.endedAt ? turn.endedAt - turn.startedAt : null,
@@ -1994,8 +1989,6 @@ function turnSummary(turn: Turn): string {
   const removed = files.reduce((total, file) => total + file.removed, 0)
   const parts = [files.length > 0 ? `${files.length} 个文件 +${added} −${removed}` : '没有改文件']
   if (turn.restoredAt) parts.push('已撤销')
-  else if (turn.outcome?.finish === 'verified') parts.push('已验证')
-  else if (turn.outcome?.finish === 'unverified' && files.length > 0) parts.push('未验证')
   if (turn.error) parts.push('出错')
   const summary = parts.join(' · ')
   turnSummaries.set(turn, summary)

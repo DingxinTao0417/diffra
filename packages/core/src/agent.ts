@@ -389,7 +389,7 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
     bashPath: null,
     checkpoints: session.checkpoints !== null,
     rulePacks: [],
-    security: { staticCheck: false, lightScan: false },
+    security: {},
     checks: { afterEdit: null, beforeFinish: null },
   })
 
@@ -1008,16 +1008,13 @@ export function createAgent(options: AgentOptions = {}): acp.AgentApp {
       setBrowserSites(params)
       return {}
     })
-    // 已经打开的会话都换成新开关；正在跑的一轮从下一次检查起按新值。之后新建、载入的会话由客户端按设置传
+    // 已经打开的会话都换成新开关；正在跑的一轮从下一次提交起按新值。之后新建、载入的会话由客户端按设置传
     .onRequest(SESSION_EXT_METHODS.securityConfigure, checkSwitchesSchema, ({ params }) => {
       const { projects, ...global } = params
       // 按项目单独设的开关（v2）：会话所在目录在列表里就用它覆盖的那几项
       const key = (path: string) => (process.platform === 'win32' ? path.replace(/[\\/]+$/, '').toLowerCase() : path.replace(/\/+$/, ''))
       const overrides = new Map(Object.entries(projects ?? {}).map(([path, value]) => [key(path), value]))
-      for (const session of sessions.values()) {
-        const { review, ...security } = { ...global, ...overrides.get(key(session.cwd)) }
-        session.config = { ...session.config, security, rules: { ...session.config.rules, review } }
-      }
+      for (const session of sessions.values()) session.config = { ...session.config, security: { ...global, ...overrides.get(key(session.cwd)) } }
       return {}
     })
     .onRequest(SESSION_EXT_METHODS.securityTools, z.object({ cwd: z.string().min(1).max(4096) }), async ({ params }) => securityToolsInfo(params.cwd, await findRipgrep()))

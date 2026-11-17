@@ -213,7 +213,6 @@ async function buildFacts(session: Session, turn: StoredTurn, cardId: string | n
     const result = step.result.trim() ? ` → ${clip(step.result.trim().replace(/\s+/g, ' '), MAX_STEP_RESULT)}` : ''
     lines.push(`s${index + 1} [${step.status}] ${step.title}${who}${result}`)
   })
-  if (!card && session.unresolvedCheck) lines.push('', `Errors still failing in \`${session.unresolvedCheck.command}\`:`, ...session.unresolvedCheck.lines.slice(0, 20))
   const diff = await session.checkpointDiff(turn.id).catch(() => '')
   if (diff.trim()) lines.push('', 'Changes in the workspace since that turn started (unified diff):', clip(diff, MAX_DIFF))
   const last = [...steps].reverse().find((step) => step.status !== 'pending')

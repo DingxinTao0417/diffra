@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react'
-import type { CandidateRunView, CandidateSpec, CandidateView } from '@diffra/core/types'
+import type { CandidateRunView, CandidateSpec } from '@diffra/core/types'
 import { Columns2, GitFork, LoaderCircle } from 'lucide-react'
 import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
@@ -27,13 +27,6 @@ const RUN_LABELS: Record<CandidateRunView['status'], string> = {
   discarded: '已放弃',
   cancelled: '已停止',
   failed: '没有能用的',
-}
-
-const VERIFICATION_LABELS: Record<NonNullable<CandidateView['verification']>, string> = {
-  verified: '检查通过',
-  unverified: '没配检查',
-  'no-edits': '没有改动',
-  failed: '检查没通过',
 }
 
 // 候选的改动：按需取（diff 可能很大），取一次留着
@@ -120,7 +113,6 @@ export function CandidatesCard({ run, sessionId, running }: { run: CandidateRunV
               )}
               {candidate.status === 'failed' && <Badge variant="destructive">没做完</Badge>}
               {candidate.status === 'cancelled' && <Badge variant="outline">已停止</Badge>}
-              {candidate.verification && candidate.status === 'done' && <Badge variant={candidate.verification === 'failed' ? 'warning' : 'outline'}>{VERIFICATION_LABELS[candidate.verification]}</Badge>}
               {candidate.stats && (
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   {candidate.stats.files} 个文件

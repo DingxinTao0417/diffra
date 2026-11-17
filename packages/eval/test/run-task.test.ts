@@ -49,7 +49,7 @@ const replaceIn = (id: string, path: string, from: string, to: string) => {
 
 const scriptedModel = (baseUrl: string): EvalModel => ({ name: 'scripted', protocol: 'openai-compatible', baseUrl, modelId: 'scripted', contextWindow: null, apiKeyEnv: KEY_ENV })
 
-// 用按剧本回复的模型跑一道题，走和真实评测完全一样的流程：起 core、跑门禁、放隐藏测试判分
+// 用按剧本回复的模型跑一道题，走和真实评测完全一样的流程：起 core、跑完一轮、放隐藏测试判分
 async function runScripted(task: EvalTask, steps: ScriptStep[]) {
   const model = await startScriptedModel(steps)
   try {
@@ -71,7 +71,6 @@ withTasks('照参考答案改：隐藏测试通过，统计到工具调用和模
   expect(result.hiddenPassed).toBe(true)
   expect(result.passed).toBe(true)
   expect(result.toolCalls).toBe(2)
-  expect(result.gateRejections).toBe(0)
   expect(result.usage.coderCalls).toBeGreaterThanOrEqual(3)
   expect(result.usage.inputTokens).toBeGreaterThan(0)
 })
@@ -196,8 +195,7 @@ const miniTask = (overrides: Partial<EvalTask>): EvalTask => ({
   followUps: [],
   checks: { afterEdit: null, beforeFinish: null },
   readOnlyPaths: [],
-  review: false,
-  security: { staticCheck: false, lightScan: false },
+  security: {},
   permissionMode: 'auto',
   permission: 'allow',
   answers: [],

@@ -73,8 +73,7 @@ export async function runDeepScanSample(sample: DeepScanSample, model: EvalModel
       sessionConfig(model, reviewer, {
         checks: { afterEdit: null, beforeFinish: null },
         readOnlyPaths: [],
-        security: { staticCheck: false, lightScan: false },
-        review: false,
+        security: {},
         checkpointDir: join(dataDir, 'checkpoints'),
       }),
     )

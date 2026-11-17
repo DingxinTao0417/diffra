@@ -367,20 +367,13 @@ export class ExternalSession {
       this.sink = null
     }
     if (stopReason === 'cancelled') outcome.stop = 'cancelled'
-    if (!outcome.stop) {
-      const changes = base && this.checkpoints ? await this.checkpoints.changesSince(base).catch(() => null) : null
-      const edited = changes ? changes.length > 0 : this.turns.at(-1)!.updates.some((update) => (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.content?.some((content) => content.type === 'diff'))
-      // Diffra 不管外接智能体怎么收尾，改过文件就算「没经过 Diffra 的自动验证」
-      outcome.finish = edited ? 'unverified' : 'no-edits'
-    }
     this.taskState = {
       status: outcome.stop === 'cancelled' ? 'cancelled' : outcome.stop ? 'blocked' : 'completed',
-      needsVerification: false,
       reason: outcome.agentError?.message ?? null,
     }
     record({
       sessionUpdate: 'session_info_update',
-      _meta: { diffra: { [TASK_STATE_META_KEY]: { status: this.taskState.status, reason: this.taskState.reason, requirements: [], needsVerification: false }, [TURN_OUTCOME_META_KEY]: outcome } },
+      _meta: { diffra: { [TASK_STATE_META_KEY]: { status: this.taskState.status, reason: this.taskState.reason, requirements: [] }, [TURN_OUTCOME_META_KEY]: outcome } },
     })
     const turn = this.turns.at(-1)
     if (turn && !turn.endedAt) {
@@ -439,7 +432,7 @@ export class ExternalSession {
     const changes = await this.checkpointChanges(turnId)
     await this.checkpoints!.restore(this.turnCheckpoints.get(turnId)!, changes)
     this.reverted = true
-    this.taskState = { ...this.taskState, status: 'blocked', needsVerification: false, reason: '文件已撤销，原来的结论不再算数。' }
+    this.taskState = { ...this.taskState, status: 'blocked', reason: '文件已撤销，原来的结论不再算数。' }
     const index = this.turns.findIndex((turn) => turn.id === turnId)
     const target = this.turns[index]
     if (target) {

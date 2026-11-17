@@ -9,7 +9,7 @@ import { SettingsGroup, SettingsRow } from '../settings/SettingsLayout'
 export const ROLE_INFO: Record<Role, { label: string; description: string; required: boolean; none: string }> = {
   coder: { label: '编码', description: '读代码、改代码、跑命令的主力模型。', required: true, none: '未选择' },
   planner: { label: '规划', description: '用 /计划 先出计划时由它拆解任务。', required: false, none: '沿用编码模型' },
-  reviewer: { label: '评审', description: '用新的上下文审查改动。', required: false, none: '沿用编码模型' },
+  reviewer: { label: '评审', description: '深度扫描时用新的上下文审查改动。', required: false, none: '沿用编码模型' },
   fallback: { label: '备用', description: '编码模型卡住或连续失败时换它接手。', required: false, none: '不使用' },
 }
 

@@ -242,15 +242,6 @@ export class ArchitectureService {
     return this.readJson<TargetArchitecture>(join(this.projectDir(id), 'target.json'))
   }
 
-  // 任务里检查用：这个目录有目标架构、打开了「任务里检查」、也分析过
-  async enforcedTarget(root: string): Promise<{ analysis: ArchitectureAnalysis; target: TargetArchitecture } | null> {
-    const id = projectIdOf(root)
-    const target = await this.target(id)
-    if (!target?.enforceInTasks) return null
-    const analysis = await this.analysis(id)
-    return analysis ? { analysis, target } : null
-  }
-
   // 打开着一个项目时盯着它的文件（v2 · M9）：代码改了就告诉界面过期，开了自动更新就在改动停下后重新分析（增量，只解析改过的文件）。
   // 界面离开项目时关掉；同时最多盯几个，多了关最早的。auto 记在项目列表里，下次打开照旧
   async watch(id: string, enabled: boolean, auto: boolean): Promise<void> {

@@ -46,18 +46,13 @@ const rulePackSchema = z.object({
 
 const providerSchema = z.object({ id: z.string().min(1), name: z.string().min(1) }).nullable()
 
+// 旧客户端还会传结束时检查的开关（staticCheck、lightScan、review 等），zod 默认去掉多余字段
 const securitySchema = z.object({
-  staticCheck: z.boolean(),
-  lightScan: z.boolean(),
   deepScan: z.boolean().optional(),
-  taint: z.boolean().optional(),
-  licenses: z.boolean().optional(),
-  semgrep: z.boolean().optional(),
 })
 
 export const checkSwitchesSchema = securitySchema.extend({
-  review: z.boolean(),
-  projects: z.record(z.string().max(4096), securitySchema.extend({ review: z.boolean() }).partial()).optional(),
+  projects: z.record(z.string().max(4096), securitySchema.partial()).optional(),
 })
 
 export const modelConfigSchema = z.object({
@@ -77,7 +72,7 @@ export const sessionConfigSchema = z.object({
   fallbackModel: modelConfigSchema.nullable(),
   checks: z.object({ afterEdit: checkCommandSchema, beforeFinish: checkCommandSchema }),
   readOnlyPaths: z.array(z.string().trim().min(1)),
-  rules: z.object({ packs: z.array(rulePackSchema), review: z.boolean() }),
+  rules: z.object({ packs: z.array(rulePackSchema) }),
   permissionMode: z.enum(['ask', 'auto', 'full']),
   security: securitySchema,
   allowedCommands: z.array(z.string().trim().min(1).max(200)).max(200).optional(),

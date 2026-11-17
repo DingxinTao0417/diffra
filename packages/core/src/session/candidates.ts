@@ -60,7 +60,7 @@ export function runCardUpdate(run: CandidateRun, first: boolean): SessionUpdate 
 // 候选自己的过程：工具调用挂在它的卡片下面（和子智能体一样），文字只留最后一段当总结；
 // 它的任务状态、结论、提示不进主任务，结论记下来；几个候选同时要确认时排队，一个一个问
 interface CandidateState {
-  // 正在说的这一段；last 是上一段说完的（完成门禁的卡片在最后一段话之后才出）
+  // 正在说的这一段；last 是上一段说完的
   text: string
   last: string
   outcome: TurnOutcome | null
@@ -160,7 +160,7 @@ export async function runCandidates(session: Session, host: CandidateHost, turn:
       turnId: turn.id,
       status: 'running',
       appliedId: null,
-      candidates: turn.specs.map((spec, index) => ({ id: LETTERS[index]!, name: spec.name, approach: spec.approach, status: 'running', verification: null, summary: null, error: null, stats: null, paths: [] })),
+      candidates: turn.specs.map((spec, index) => ({ id: LETTERS[index]!, name: spec.name, approach: spec.approach, status: 'running', summary: null, error: null, stats: null, paths: [] })),
       repoRoot: baseline.repoRoot,
       subdir: baseline.subdir,
       baseTree: null,
@@ -210,9 +210,7 @@ export async function runCandidates(session: Session, host: CandidateHost, turn:
           if (signal.aborted || stopReason === 'cancelled') candidate.status = 'cancelled'
           else {
             const outcome = state.outcome
-            const failedGate = outcome?.stop === 'gate-exhausted' || outcome?.stop === 'check-exhausted'
-            candidate.verification = failedGate ? 'failed' : (outcome?.finish ?? null)
-            candidate.status = outcome?.stop && !failedGate ? 'failed' : 'done'
+            candidate.status = outcome?.stop ? 'failed' : 'done'
             if (candidate.status === 'failed') candidate.error = state.error ?? `停在了 ${outcome?.stop}`
           }
         } catch (error) {
@@ -329,7 +327,7 @@ export async function applyCandidate(session: Session, applyTurnId: string, run:
       role: 'user',
       content: `[Note from Diffra] The user applied candidate "${candidate.name}" (${candidate.approach}). It was built in a separate copy of the project and merged into the project files. Changed files: ${candidate.paths.join(', ')}. Read them again before editing further.`,
     })
-    session.taskState = { ...session.taskState, status: 'blocked', needsVerification: true, reason: '应用了候选方案，还没在项目里跑检查。' }
+    session.taskState = { ...session.taskState, status: 'blocked', reason: '应用了候选方案，还没在项目里跑检查。' }
     run.status = 'applied'
     run.appliedId = candidate.id
     await cleanupRun(run)
