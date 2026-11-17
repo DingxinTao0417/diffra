@@ -977,10 +977,20 @@ function Thought({ text, running = false }: { text: string; running?: boolean })
     <div className="text-sm text-muted-foreground" data-testid="thought">
       <DisclosureRow open={open} onToggle={() => setOpen(!open)} className="hover:text-foreground">
         <StatusIcon status={running ? 'in_progress' : 'completed'} />
-        <span className="shrink-0">{running ? '思考中' : '已思考'}</span>
-        {preview && !open && <span className="min-w-0 truncate">· {preview}</span>}
+        {/* 正在思考时标签有一道光扫过（和过程组标题同一套），停下来就回到普通文字 */}
+        <span className={cn('shrink-0', running && 'motion-safe:text-shimmer')}>{running ? '思考中' : '已思考'}</span>
+        {preview && !open && (
+          <span key={preview.slice(0, 24)} className={cn('min-w-0 truncate', running && 'motion-safe:animate-soft-in')}>
+            · {preview}
+          </span>
+        )}
       </DisclosureRow>
-      {open && <div className="mt-1.5 ml-5 border-l-2 pl-3 leading-relaxed whitespace-pre-wrap">{text}</div>}
+      {open && (
+        <div className="mt-1.5 ml-5 border-l-2 pl-3 leading-relaxed whitespace-pre-wrap">
+          {text}
+          {running && <span aria-hidden className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[0.15em] bg-muted-foreground/60 motion-safe:animate-pulse" />}
+        </div>
+      )}
     </div>
   )
 }
@@ -1056,7 +1066,7 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
             </>
           )}
           {activity && (
-            <span className="min-w-0 truncate" data-testid="tool-group-activity">
+            <span className={cn('min-w-0 truncate', live && 'motion-safe:text-shimmer')} data-testid="tool-group-activity">
               · {activity}
             </span>
           )}
@@ -1065,7 +1075,12 @@ function ProcessGroup({ items, edits, projectPath, live, locate, showEditDetails
       </div>
       <BrowserSummary items={tools} />
       <div hidden={!open} className="flex flex-col gap-0.5 pl-5">
-        {items.map((item) => step(item, false))}
+        {items.map((item, index) => (
+          // 运行中新的一步从下面浮上来；跑完再看这组就不再动（端到端测试量高度时也稳定）
+          <div key={item.id} className={live ? 'motion-safe:animate-rise' : undefined} style={live ? { animationDelay: `${Math.min(index, 8) * 40}ms` } : undefined}>
+            {step(item, false)}
+          </div>
+        ))}
       </div>
     </div>
   )

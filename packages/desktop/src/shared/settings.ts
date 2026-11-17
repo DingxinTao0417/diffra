@@ -79,7 +79,7 @@ export interface ProjectSettings {
 }
 
 export const THEME_MODES = ['light', 'dark', 'system'] as const
-export const PALETTES = ['forest', 'indigo', 'amber', 'graphite'] as const
+export const PALETTES = ['forest', 'indigo', 'amber', 'graphite', 'cinnabar', 'violet', 'cyan', 'rose'] as const
 export const FONT_STYLES = ['sans', 'serif'] as const
 export const FONT_SIZES = ['sm', 'md', 'lg'] as const
 export const CONTENT_WIDTHS = ['standard', 'wide'] as const

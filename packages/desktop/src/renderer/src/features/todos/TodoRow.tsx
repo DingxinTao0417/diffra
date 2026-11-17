@@ -121,7 +121,7 @@ export function TodoRow({
         >
           <span className="flex min-w-0 items-start gap-1.5">
             {todo.priority !== undefined && todo.priority !== null && <PriorityBadge priority={todo.priority} className="mt-0.5" />}
-            <span className={cn('min-w-0 text-sm break-words', expanded ? 'whitespace-pre-wrap' : 'truncate', todo.done && 'text-muted-foreground line-through')} data-testid="todo-title">
+            <span className={cn('min-w-0 text-sm break-words transition-colors', expanded ? 'whitespace-pre-wrap' : 'truncate', todo.done && 'text-muted-foreground line-through')} data-testid="todo-title">
               {title}
             </span>
           </span>

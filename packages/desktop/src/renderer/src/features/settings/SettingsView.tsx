@@ -278,6 +278,10 @@ const PALETTE_LABELS: Record<Appearance['palette'], { label: string; swatch: str
   indigo: { label: '靛蓝', swatch: '#3b4ba8', swatchDark: '#8c98e6', side: '#f3f4f8' },
   amber: { label: '琥珀', swatch: '#9a5b13', swatchDark: '#d49a52', side: '#f8f5ee' },
   graphite: { label: '石墨', swatch: '#3a3a3a', swatchDark: '#d0d0d0', side: '#f3f3f3' },
+  cinnabar: { label: '朱红', swatch: '#a3362b', swatchDark: '#ef8a7d', side: '#f7f2f0' },
+  violet: { label: '紫罗兰', swatch: '#6b3fa0', swatchDark: '#b79ae0', side: '#f5f1f9' },
+  cyan: { label: '天青', swatch: '#0f6b7f', swatchDark: '#5fc3d8', side: '#f0f5f6' },
+  rose: { label: '玫红', swatch: '#a63663', swatchDark: '#ec93b3', side: '#f8f1f4' },
 }
 const FONT_LABELS: Record<Appearance['fontSize'], string> = { sm: '小', md: '标准', lg: '大' }
 const WIDTH_LABELS: Record<Appearance['contentWidth'], string> = { standard: '标准', wide: '宽' }

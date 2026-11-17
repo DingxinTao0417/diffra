@@ -74,6 +74,10 @@ export function TodosView() {
   )
   const groups = useMemo(() => groupTodos(visible, now), [visible, now])
   const openCount = visible.filter((todo) => !todo.done).length
+  const doneCount = groups.done.length
+  const total = openCount + doneCount
+  // 完成情况：未完成几条、已完成几条，下面一条进度条（第 693 步）。进度只用中性色，不算「下一步动作」
+  const progress = total === 0 ? 0 : Math.round((doneCount / total) * 100)
   const toggleSelected = (id: string) => setSelected((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
   const rowProps = (todo: Todo) => ({
     todo,
@@ -187,9 +191,21 @@ export function TodosView() {
         ) : (
           <div className={cn('grid items-start gap-6', todos !== null && activeTodos.length > 0 && 'lg:grid-cols-[minmax(0,1fr)_17rem]')}>
           <div className="flex flex-col gap-4" data-testid="todo-list">
+            {visible.length > 0 && (
+              <section className="rounded-2xl border bg-card px-4 py-3 shadow-card" data-testid="todo-summary" aria-label="完成情况">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-bold tabular-nums">{openCount}</span>
+                  <span className="text-sm text-muted-foreground">条未完成</span>
+                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">已完成 {doneCount}</span>
+                </div>
+                <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="待办完成进度" aria-valuemin={0} aria-valuemax={total} aria-valuenow={doneCount}>
+                  <div className="h-full rounded-full bg-foreground/70 transition-[width] duration-300 ease-out" style={{ width: `${progress}%` }} />
+                </div>
+              </section>
+            )}
             {OPEN_GROUPS.map((group) =>
               groups[group].length === 0 ? null : (
-                <section key={group} className="overflow-hidden rounded-xl border bg-card" data-testid="todo-group" data-group={group} aria-label={GROUP_LABELS[group]}>
+                <section key={group} className="overflow-hidden rounded-2xl border bg-card shadow-card" data-testid="todo-group" data-group={group} aria-label={GROUP_LABELS[group]}>
                   <h2 className={cn('flex items-center gap-2 border-b px-4 py-2 text-xs font-bold', group === 'overdue' ? 'bg-warning-soft text-warning' : 'text-muted-foreground')}>
                     {GROUP_LABELS[group]}
                     <span className="font-normal tabular-nums">{groups[group].length}</span>
@@ -203,7 +219,7 @@ export function TodosView() {
               ),
             )}
             {groups.done.length > 0 && (
-              <section className="overflow-hidden rounded-xl border bg-card">
+              <section className="overflow-hidden rounded-2xl border bg-card shadow-card">
                 <button type="button" className="flex w-full items-center gap-1 px-4 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowDone(!showDone)}>
                   {showDone ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   已完成 {groups.done.length}
@@ -218,7 +234,7 @@ export function TodosView() {
               </section>
             )}
             {archivedTodos.length > 0 && (
-              <section className="overflow-hidden rounded-xl border bg-card">
+              <section className="overflow-hidden rounded-2xl border bg-card shadow-card">
                 <button type="button" className="flex w-full items-center gap-1 px-4 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowArchived(!showArchived)}>
                   {showArchived ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   已归档 {archivedTodos.length}
